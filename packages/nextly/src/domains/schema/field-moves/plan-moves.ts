@@ -110,17 +110,19 @@ function placed(
     up: [...forth.copy, ...forth.clearSource, ...beside.up],
     down: [...back.copy, ...back.clearSource, ...beside.undo, ...beside.down],
   };
+  // Each way's stop on a value the copy would not keep runs first, before the file changes
+  // anything: on MySQL, whose schema changes stand as they run, a later stop would leave them.
   if (move.from.kind === "column") {
     // Into a group: copied before the column is dropped; back after the way down adds it again.
     return {
       up: { first: way.up, last: [] },
-      down: { first: [], last: way.down },
+      down: { first: back.stop, last: way.down },
     };
   }
   if (move.to.kind === "column") {
     // Out of a group: copied after the column is added; back before the way down drops it.
     return {
-      up: { first: [], last: way.up },
+      up: { first: forth.stop, last: way.up },
       down: { first: way.down, last: [] },
     };
   }

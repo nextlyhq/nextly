@@ -36,6 +36,12 @@ export interface MoveColumn {
 }
 
 export interface MoveDataStatements {
+  /**
+   * Stops the run, before the file changes anything, where an entry of the database it runs on
+   * holds a value the copy would not keep as it is (`unkeptValuesStop`); empty where every value
+   * is kept.
+   */
+  stop: string[];
   /** Writes each entry's value where the field now is; runs once that place exists. */
   copy: string[];
   /** Clears a key the field left; a column it left is dropped by the schema change instead. */
@@ -410,35 +416,142 @@ function emptyAtDestination(
 }
 
 /**
- * On SQLite, statements that stop a run before dates are copied out of a group into `column` where
- * an entry holds one its column cannot keep: one SQLite does not read, or one with milliseconds,
- * which its whole seconds would drop. Each held date's seconds go into a temporary table's NOT
- * NULL column, NULL where it cannot be kept, so the run stops on that constraint, its transaction
- * undone and every value where it was. The table and column are named to say why. The check the
- * save makes first (`movesAsTheSameDate`) reads the database the file is written from; this one
- * reads the database the file runs on. Other dialects need none: PostgreSQL reads every form the
- * check lets through, and MySQL stops on a value it cannot read or its TIMESTAMP cannot hold,
- * before the group's key is cleared.
+ * Statements that stop a run where an entry of the database the file runs on holds a value the
+ * copy out of a group would not keep as it is: the save's own check (`keptValuesOf`) reads the
+ * database the file is written from, and a deploy's may hold values that one never did. Each held
+ * value is judged by the same rule, in SQL (`KEPT_TESTS`); a value that fails puts NULL into a
+ * temporary table's NOT NULL column, so the run stops on that constraint, naming the field in the
+ * table and column, before any statement has changed anything. The file places these first.
+ *
+ * On SQLite a date keeps its own names (`nextly_unreadable_date_<field>`), as released.
  */
-function unkeptDatesStop(
+function unkeptValuesStop(
   target: MoveColumn,
   table: string,
   from: Extract<StoragePlace, { kind: "json" }>,
   column: string
 ): string[] {
-  if (target.dialect !== "sqlite" || target.kind !== "timestamp") return [];
-  const q = (name: string) => quoteIdent(name, "sqlite");
-  // Unqualified: SQLite looks a name up in the temp schema first, and the migration's
-  // deletion check reads a table the file creates as TEMP as the file's own.
-  const guard = q(`nextly_unreadable_date_${column}`);
-  const reason = q("an_entry_holds_a_date_sqlite_cannot_keep");
-  const value = `json_extract(${q(from.column)}, ${dollarPath(from.keys)})`;
+  const q = (name: string) => quoteIdent(name, target.dialect);
+  const source = q(from.column);
+  const held = heldValueAt(from.column, from.keys, target.dialect);
+  const holds = DIALECTS[target.dialect].holds(source, from.keys);
+  const sqliteDate = target.dialect === "sqlite" && target.kind === "timestamp";
+  // Unqualified: SQLite and PostgreSQL look a name up among temporary tables first, and the
+  // migration's deletion check reads a table the file creates as temporary as the file's own.
+  const guard = q(
+    sqliteDate ? `nextly_unreadable_date_${column}` : `nextly_unkept_${column}`
+  );
+  const reason = q(
+    sqliteDate
+      ? "an_entry_holds_a_date_sqlite_cannot_keep"
+      : `cannot_keep_${column}`
+  );
+  const kept = sqliteDate
+    ? `substr(strftime('%f', ${held.text}), 4) = '000' AND strftime('%s', ${held.text}) IS NOT NULL`
+    : KEPT_TESTS[target.dialect](target, held);
+  if (kept === undefined) return [];
+  const temporary = target.dialect === "mysql" ? "TEMPORARY" : "TEMP";
   return [
-    `CREATE TEMP TABLE ${guard} (${reason} INTEGER NOT NULL);`,
-    `INSERT INTO ${guard} (${reason}) SELECT CASE WHEN substr(strftime('%f', ${value}), 4) <> '000' THEN NULL ELSE CAST(strftime('%s', ${value}) AS INTEGER) END FROM ${table} WHERE ${SQLITE.holds(q(from.column), from.keys)};`,
-    `DROP TABLE ${guard};`,
+    `CREATE ${temporary} TABLE ${guard} (${reason} INTEGER NOT NULL);`,
+    `INSERT INTO ${guard} (${reason}) SELECT CASE WHEN ${kept} THEN 1 END FROM ${table} WHERE ${holds};`,
+    target.dialect === "mysql"
+      ? `DROP TEMPORARY TABLE ${guard};`
+      : `DROP TABLE ${guard};`,
   ];
 }
+
+/** A JSON number's text, as each dialect's cast reads it; no backslash, so one spelling fits all. */
+const SQL_JSON_NUMBER = "'^-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'";
+const SQL_WHOLE_NUMBER = "'^-?[0-9]{1,10}$'";
+
+/**
+ * Each dialect's rule, in SQL, for whether the copy keeps a held value as it is: the same rules
+ * the save checks first (`keptValuesOf` in `kept-values.ts`), for the kinds whose cast would
+ * round, cut, clamp or misread a value there. Undefined where the copy keeps every value.
+ */
+const KEPT_TESTS: Record<
+  SupportedDialect,
+  (
+    target: MoveColumn,
+    held: { type: string; text: string }
+  ) => string | undefined
+> = {
+  postgresql: (target, { type, text }) => {
+    const numeric = `(${text})::numeric`;
+    switch (target.kind) {
+      case "integer":
+        return `(CASE WHEN ${text} ~ ${SQL_WHOLE_NUMBER} THEN (${text})::bigint BETWEEN -2147483648 AND 2147483647 ELSE FALSE END)`;
+      case "double":
+        return `(${text} ~ ${SQL_JSON_NUMBER})`;
+      case "decimal":
+        return target.precision === undefined || target.scale === undefined
+          ? undefined
+          : `(CASE WHEN ${text} ~ ${SQL_JSON_NUMBER} THEN ${numeric} = round(${numeric}, ${target.scale}) AND abs(${numeric}) < power(10::numeric, ${target.precision - target.scale}) ELSE FALSE END)`;
+      case "boolean":
+        return `(${type} = 'boolean' OR (${type} = 'number' AND ${text} IN ('0', '1')) OR (${type} = 'string' AND ${text} IN ('true', 'false')))`;
+      default:
+        return widthTest(target, `char_length(${text})`, undefined);
+    }
+  },
+  mysql: (target, { type, text }) => {
+    const decimal = `CAST(${text} AS DECIMAL(65, 30))`;
+    // Compared byte for byte, as the save's check does: MySQL's own collation would match `True`.
+    const exact = `${text} COLLATE utf8mb4_bin`;
+    switch (target.kind) {
+      case "integer":
+        return `(CASE WHEN ${text} REGEXP ${SQL_WHOLE_NUMBER} THEN CAST(${text} AS SIGNED) BETWEEN -2147483648 AND 2147483647 ELSE FALSE END)`;
+      case "double":
+        return `(${text} REGEXP ${SQL_JSON_NUMBER})`;
+      case "decimal":
+        return target.precision === undefined || target.scale === undefined
+          ? undefined
+          : `(CASE WHEN ${text} REGEXP ${SQL_JSON_NUMBER} THEN ${decimal} = ROUND(${decimal}, ${target.scale}) AND ABS(${decimal}) < POW(10, ${target.precision - target.scale}) ELSE FALSE END)`;
+      case "boolean":
+        return `(${type} = 'BOOLEAN' OR (${type} = 'INTEGER' AND ${text} IN ('0', '1')) OR (${type} = 'STRING' AND ${exact} IN ('true', 'false')))`;
+      case "timestamp": {
+        // Whole seconds, at an instant its TIMESTAMP holds; a form it cannot read stops it too.
+        const instant = MYSQL_READS.timestamp?.(text, text, target) ?? text;
+        return `(CASE WHEN ${text} REGEXP '[.][0-9]*[1-9]' THEN FALSE ELSE ${instant} BETWEEN '1970-01-01 00:00:01' AND '2038-01-19 03:14:07' END)`;
+      }
+      default:
+        return widthTest(target, `CHAR_LENGTH(${text})`, `LENGTH(${text})`);
+    }
+  },
+  sqlite: (target, { type, text }) =>
+    // SQLite stores a number or a text as it is; only a checkbox's value is read as another.
+    target.kind === "boolean"
+      ? `(${type} IN ('true', 'false') OR (${type} = 'integer' AND ${text} IN (0, 1)) OR (${type} = 'text' AND ${text} IN ('true', 'false')))`
+      : undefined,
+};
+
+/**
+ * Whether a string column of a bounded width keeps a held value: a `varchar(N)`'s characters, or
+ * (with `bytes`, MySQL's `text`) its 65 535 bytes. Undefined for a column of any width.
+ */
+function widthTest(
+  target: MoveColumn,
+  characters: string,
+  bytes: string | undefined
+): string | undefined {
+  const width = /^(?:varchar|char)\((\d+)\)$/i.exec(target.columnType)?.[1];
+  if (width !== undefined) return `(${characters} <= ${width})`;
+  if (bytes !== undefined && target.columnType.toLowerCase() === "text") {
+    return STRING_COLUMN_KINDS.has(target.kind)
+      ? `(${bytes} <= 65535)`
+      : undefined;
+  }
+  return undefined;
+}
+
+/** The kinds stored as a string, whose column may bound its width. */
+const STRING_COLUMN_KINDS: ReadonlySet<ColumnKind> = new Set<ColumnKind>([
+  "text",
+  "longText",
+  "shortText",
+  "varchar",
+  "char",
+  "fkSingle",
+]);
 
 /**
  * Statements putting a group back as it was where a move into it is undone: the way in sets the
@@ -550,12 +663,13 @@ export function moveDataStatements(
           asJson: json.valueAt(q(from.column), from.keys),
         };
 
+  const stop =
+    to.kind === "column" && from.kind === "json"
+      ? unkeptValuesStop(target, table, from, to.column)
+      : [];
   const copy =
     to.kind === "column"
       ? [
-          ...(from.kind === "json"
-            ? unkeptDatesStop(target, table, from, to.column)
-            : []),
           `UPDATE ${table} SET ${q(to.column)} = ${
             from.kind === "json"
               ? json.fromJson(q(from.column), from.keys, target)
@@ -581,5 +695,5 @@ export function moveDataStatements(
         ]
       : [];
 
-  return { copy, clearSource };
+  return { stop, copy, clearSource };
 }

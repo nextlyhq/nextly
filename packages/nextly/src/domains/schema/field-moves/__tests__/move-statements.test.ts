@@ -245,7 +245,7 @@ describe("moveDataStatements on SQLite", () => {
         { from: key("meta", "published"), to: column("published") },
         sqlite("timestamp", "integer")
       );
-      expect(() => run(db, out.copy), unkept).toThrow(
+      expect(() => run(db, [...out.stop, ...out.copy]), unkept).toThrow(
         "NOT NULL constraint failed: nextly_unreadable_date_published.an_entry_holds_a_date_sqlite_cannot_keep"
       );
       expect(
@@ -261,6 +261,33 @@ describe("moveDataStatements on SQLite", () => {
     }
   });
 
+  it("stops before it writes where an entry holds a checkbox value other than true or false", () => {
+    const out = moveDataStatements(
+      { from: key("meta", "featured"), to: column("featured") },
+      sqlite("boolean", "integer")
+    );
+    for (const unkept of ['"yes"', "2", '"True"']) {
+      const db = table("featured integer");
+      db.exec(
+        `INSERT INTO dc_posts (id, meta) VALUES (1, '{"featured":${unkept}}'), (2, '{"featured":true}');`
+      );
+      expect(() => run(db, [...out.stop, ...out.copy]), unkept).toThrow(
+        "NOT NULL constraint failed: nextly_unkept_featured.cannot_keep_featured"
+      );
+      expect(
+        db.prepare("SELECT featured FROM dc_posts ORDER BY id").all()
+      ).toEqual([{ featured: null }, { featured: null }]);
+    }
+    const db = table("featured integer");
+    db.exec(
+      `INSERT INTO dc_posts (id, meta) VALUES (1, '{"featured":true}'), (2, '{"featured":0}'), (3, '{"featured":"false"}');`
+    );
+    run(db, [...out.stop, ...out.copy]);
+    expect(
+      db.prepare("SELECT featured FROM dc_posts ORDER BY id").all()
+    ).toEqual([{ featured: 1 }, { featured: 0 }, { featured: 0 }]);
+  });
+
   it("copies dates SQLite keeps, whole seconds written with milliseconds among them", () => {
     const db = table("published integer");
     db.exec(
@@ -270,8 +297,7 @@ describe("moveDataStatements on SQLite", () => {
       { from: key("meta", "published"), to: column("published") },
       sqlite("timestamp", "integer")
     );
-    run(db, out.copy);
-    run(db, out.clearSource);
+    run(db, [...out.stop, ...out.copy, ...out.clearSource]);
     expect(
       db.prepare("SELECT id, published, meta FROM dc_posts ORDER BY id").all()
     ).toEqual([
@@ -446,20 +472,20 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
 
   it("stops a SQLite copy of dates out of a group, before it writes, where one cannot be kept", () => {
     const out = { from: key("meta", "published"), to: column("published") };
-    const copy = moveDataStatements(out, {
+    const moved = moveDataStatements(out, {
       table: "dc_posts",
       dialect: "sqlite",
       kind: "timestamp",
       columnType: "integer",
-    }).copy;
-    // The guard table's NOT NULL column takes each held date's seconds, NULL where SQLite reads
-    // none or would drop its milliseconds: the run stops there, its transaction undone.
-    expect(copy.slice(0, 3)).toEqual([
+    });
+    // The guard table's NOT NULL column takes 1 for each held date SQLite keeps, NULL where it
+    // reads none or would drop its milliseconds: the run stops there, its transaction undone.
+    expect(moved.stop).toEqual([
       `CREATE TEMP TABLE "nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep" INTEGER NOT NULL);`,
-      `INSERT INTO "nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep") SELECT CASE WHEN substr(strftime('%f', json_extract("meta", '$."published"')), 4) <> '000' THEN NULL ELSE CAST(strftime('%s', json_extract("meta", '$."published"')) AS INTEGER) END FROM "dc_posts" WHERE json_type("meta", '$."published"') IS NOT NULL AND json_type("meta", '$."published"') <> 'null';`,
+      `INSERT INTO "nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep") SELECT CASE WHEN substr(strftime('%f', json_extract("meta", '$."published"')), 4) = '000' AND strftime('%s', json_extract("meta", '$."published"')) IS NOT NULL THEN 1 END FROM "dc_posts" WHERE json_type("meta", '$."published"') IS NOT NULL AND json_type("meta", '$."published"') <> 'null';`,
       `DROP TABLE "nextly_unreadable_date_published";`,
     ]);
-    expect(copy[3]).toMatch(/^UPDATE "dc_posts" SET "published" = /);
+    expect(moved.copy[0]).toMatch(/^UPDATE "dc_posts" SET "published" = /);
   });
 
   it("counts PostgreSQL's spelled-out timestamp without time zone as holding UTC, not as zoned", () => {

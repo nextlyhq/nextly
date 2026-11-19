@@ -1100,6 +1100,102 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    describe("replayed on a deploy's database, holding values the save never saw", () => {
+      const views: Field = { name: "views", type: "number" };
+      const featured: Field = { name: "featured", type: "checkbox" };
+      const price: Field = {
+        name: "price",
+        type: "number",
+        dbType: "decimal",
+        precision: 10,
+        scale: 2,
+      };
+      const headline: Field = {
+        name: "headline",
+        type: "text",
+        options: { variant: "short" },
+        validation: { maxLength: 40 },
+      };
+      const kept = [views, featured, price, headline];
+      const inside = [group("meta", [NOTE, ...kept])];
+      const outside = [...kept, group("meta", [NOTE])];
+      const out = kept.map(field => ({
+        from: ["meta", String(field.name)],
+        to: [String(field.name)],
+      }));
+
+      /** The move-out file written on a first database, the files before it run on a second. */
+      async function deployed(): Promise<TestNextly> {
+        const first = await boot(dialect);
+        await createPosts(first, SLUG, { fields: inside });
+        const created = await filesWritten();
+        await save(first, outside, out);
+        await first.destroy();
+        instance = undefined;
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await second.nextly.create({
+          collection: SLUG,
+          data: { title: "One", slug: "one" },
+        });
+        return second;
+      }
+
+      async function holding(t: TestNextly, meta: Record<string, unknown>) {
+        await run(
+          t,
+          `UPDATE ${q(TABLE)} SET ${q("meta")} = '${JSON.stringify(meta)}' WHERE ${q("slug")} = 'one'`
+        );
+      }
+
+      // SQLite keeps a number or a text as it is: only a checkbox's value is read as another there.
+      const unkept: [string, unknown][] = [
+        ["featured", "yes"],
+        ...(dialect === "sqlite"
+          ? []
+          : ([
+              ["views", 2147483648],
+              ["price", 1.239],
+              ["headline", "x".repeat(100)],
+            ] as [string, unknown][])),
+      ];
+
+      it.each(unkept)(
+        "stops the file before it changes anything, naming %s, where an entry holds %j",
+        async (field, value) => {
+          const t = await deployed();
+          await holding(t, { [field]: value });
+          const groups = await storedGroups(t);
+          const columns = await columnsOf(t);
+
+          await expect(migrateFolder(t)).rejects.toThrow(
+            new RegExp(`cannot_keep_${field}`)
+          );
+
+          expect(await storedGroups(t)).toEqual(groups);
+          expect(await columnsOf(t)).toEqual(columns);
+        }
+      );
+
+      it("applies the file where every value fits its column", async () => {
+        const t = await deployed();
+        await holding(t, {
+          views: 2147483647,
+          featured: true,
+          price: 1.23,
+          headline: "y".repeat(40),
+        });
+        await migrateFolder(t);
+        const [row] = await run<Record<string, unknown>>(
+          t,
+          `SELECT ${q("views")} AS views, ${q("price")} AS price, ${q("headline")} AS headline FROM ${q(TABLE)} WHERE ${q("slug")} = 'one'`
+        );
+        expect(Number(row?.views)).toBe(2147483647);
+        expect(Number(row?.price)).toBe(1.23);
+        expect(row?.headline).toBe("y".repeat(40));
+      });
+    });
+
     // MySQL runs each statement as it comes: the run stops at the copy, the column it added
     // before stays, and the group keeps every date, since the key is cleared only after.
     it.runIf(dialect === "mysql")(
