@@ -1,13 +1,12 @@
 /**
- * The questions a Schema Builder dialog's push asks before it changes anything, asked of every
- * dialog save before anything is written: a pair of columns the change may rename, and a column
+ * The questions a Schema Builder dialog's push asks before it changes anything, asked of a save
+ * that runs its own migration file instead: a pair of columns the change may rename, and a column
  * holding values that the change removes the field of. The push refuses a request that leaves
- * either unanswered, rather than drop a column's values on a question nobody answered
- * (`BrowserPromptDispatcher`); a file written from the same request would drop them, so that save
- * is refused the same way. The push asks only of the main table's columns, so the drops it does
- * not see are asked too, on either road: a translated field's values in the translations table,
- * and a relationship's links in a link table. The admin's dialog answers each pair it shows and
- * confirms each drop it warns of, so only a request that leaves one out is refused.
+ * either unanswered, rather
+ * than drop a column's values on a question nobody answered (`BrowserPromptDispatcher`); a file
+ * written from the same request would drop them, so that save is refused the same way, before
+ * anything is written. The admin's dialog answers each pair it shows and confirms each drop, so
+ * only a request that leaves one out is refused.
  *
  * @module domains/schema/builder-save/dialog-questions
  */
