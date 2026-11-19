@@ -34,9 +34,9 @@ Two accessibility fixes in the builder's Design panels.
 - A colour pair's "Low contrast" ratio in a variable's details was drawn in the
   admin's red fill colour, which read about 3.7:1 as small text. It now uses
   the admin's red text colour: 6.4:1 in the light theme and 9.6:1 in the dark.
-- The rows of Fonts' font variables, Variables and Shared styles carried a
-  label that replaced what they show, so a speech-input user saying the words
-  on screen might not reach the row. Each row is now named by the words it
-  shows, followed by the values, marks and counts in words only a screen
-  reader hears. What a screen reader says is unchanged, except that a font
-  variable now names the family its chip shows rather than the whole stack.
+- The rows of Fonts' font variables and catalogue, Variables and Shared styles
+  carried an aria-label that replaced what they draw, while their drawn words
+  included a decorative "Aa" specimen or a preview sentence. Each row is now
+  named by one piece of text that only a screen reader reads, starting with
+  the words it shows, and the drawn words are hidden from screen readers. What
+  a screen reader says for each row is unchanged.

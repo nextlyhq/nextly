@@ -1051,15 +1051,17 @@ function VariableRow({
       >
         Aa
       </span>
-      <span className="nx-vars__name" title={label}>
+      <span className="nx-vars__name" title={label} aria-hidden="true">
         {label}
       </span>
-      {/* The row is named by what it shows: the name, then the family the
-          chip draws, heard apart as the eye reads them apart. The comma and the
-          space after it sit inside the chip, so the space stays. */}
-      <span className="nx-vars__chip">
-        <span className="nx-sr-only">,</span> {first}
+      <span className="nx-vars__chip" aria-hidden="true">
+        {first}
       </span>
+      {/* The row's name, in one element: the name it shows, then the stack
+          its chip begins. Text rather than an aria-label, which must hold
+          every drawn word, the "Aa" included; one element, so no browser
+          puts a space before its comma. */}
+      <span className="nx-sr-only">{`${label}, ${row.token.values.light}`}</span>
     </>
   );
   return (

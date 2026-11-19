@@ -265,11 +265,13 @@ function RowTrigger({
             marked={marked}
             builtIn={builtIn}
           />
-          {/* Named by what it shows, then these words, which say what the
-              hidden swatch and chips show. Not an aria-label over the row:
-              its visible name must stay part of its accessible one. */}
+          {/* The row's whole name, in one element: its visible name first,
+              then what the hidden swatch and chips show. Text rather than an
+              aria-label, which must hold every drawn word, the decorative
+              ones included; one element, so no browser puts a space before
+              its commas. */}
           <span className="nx-sr-only">
-            {rowDetails({
+            {rowLabel({
               entry,
               token,
               tokens,
@@ -356,10 +358,10 @@ function moveBy(event: React.KeyboardEvent): -1 | 1 | undefined {
 }
 
 /**
- * What a screen reader hears after the row's visible name: "new" while it is
- * marked so, the values the swatch shows, and how widely it is used.
+ * The row's name as a screen reader hears it: the visible name, "new" while
+ * it is marked so, the values the swatch shows, and how widely it is used.
  */
-function rowDetails({
+function rowLabel({
   entry,
   token,
   tokens,
@@ -378,7 +380,7 @@ function rowDetails({
 }): string {
   const fresh = marked ? ", new" : "";
   const supplied = builtIn ? ", built-in" : "";
-  return `${fresh}${supplied}${describe(entry, token, tokens, mode)}${countWords(reach)}`;
+  return `${shownName(entry)}${fresh}${supplied}${describe(entry, token, tokens, mode)}${countWords(reach)}`;
 }
 
 /**
@@ -420,18 +422,16 @@ function RowFace({
   );
 }
 
-/** The row's name, and its kind where another row shares the name. */
+/**
+ * The row's name, and its kind where another row shares the name: drawn
+ * only, since the row's screen-reader name starts with the same words.
+ */
 function RowName({ entry }: { entry: VariableEntry }): React.JSX.Element {
   return (
-    <span className="nx-vars__name">
+    <span className="nx-vars__name" aria-hidden="true">
       {entry.label}
-      {/* The space outside the kind's own element: the row is named by this
-          text, and a name drops the spaces at an element's edges. */}
       {entry.kindWord === undefined ? null : (
-        <>
-          {" "}
-          <span className="nx-vars__name-kind">{`· ${entry.kindWord}`}</span>
-        </>
+        <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
       )}
     </span>
   );
