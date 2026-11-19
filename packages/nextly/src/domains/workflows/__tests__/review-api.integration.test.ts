@@ -37,7 +37,7 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { apiKeyScope } from "../../../auth/authenticated-scope";
 import { buildClaims } from "../../../auth/jwt/claims";
@@ -53,6 +53,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { listRoleSlugsForUserOrRefuse } from "../../../services/lib/permissions";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
+import { storedSchemaSeq } from "../../schema/stored-schema-seq";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
 import { REVIEW_API_ERROR_CODES } from "../review-api";
@@ -1464,13 +1465,20 @@ describe.each(getConfiguredTestDialects())(
         };
         const SAM: Who = { kind: "person", id: "sam" };
         const statements = async () => {
-          // Once to warm what a first call caches, then counted.
-          await door.waiting(SAM, { page: 1, limit: 50 });
-          return (
-            await statementsOf(dialect, () =>
+          // The stored schema count is read again once SCHEMA_VERSION_READ_INTERVAL_MS has passed,
+          // so a slower call could count that read too. Its clock is frozen and the count read once
+          // on it, so neither call below reads it again.
+          vi.useFakeTimers({ toFake: ["performance"] });
+          try {
+            await storedSchemaSeq(app().adapter, { fresh: true });
+            // Once to warm what a first call caches, then counted.
+            await door.waiting(SAM, { page: 1, limit: 50 });
+            return await statementsOf(dialect, () =>
               door.waiting(SAM, { page: 1, limit: 50 })
-            )
-          ).length;
+            );
+          } finally {
+            vi.useRealTimers();
+          }
         };
 
         await seed(3);
@@ -1480,7 +1488,11 @@ describe.each(getConfiguredTestDialects())(
         expect(
           (await door.waiting(SAM, { page: 1, limit: 50 })).meta
         ).toMatchObject({ total: 15 });
-        expect(many).toBe(few);
+        // Both lists in the message, so a failure names the statement that differs.
+        expect(
+          many.length,
+          `3 parts:\n${few.join("\n")}\n\n15 parts:\n${many.join("\n")}`
+        ).toBe(few.length);
       });
 
       it("reads exactly as many parts as it may whole, and cuts nothing it read in full", async () => {
