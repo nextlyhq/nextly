@@ -61,6 +61,7 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 afterEach(() => {
+  getQueuedEmailDetail.mockReset();
   vi.useRealTimers();
   listDeliveryActivity.mockReset();
   listQueuedEmailActivity.mockReset();
@@ -164,5 +165,27 @@ describe("useActivityDetail", () => {
     });
     await waitFor(() => expect(getQueuedEmailDetail).toHaveBeenCalledTimes(2));
     second.unmount();
+  });
+
+  it("reads it afresh when the same sheet closes and reopens on a row, without remounting", async () => {
+    // The screen keeps one sheet mounted and only changes which row is open.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5 * 60_000 } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    getQueuedEmailDetail.mockReset();
+    getQueuedEmailDetail.mockResolvedValue({ ...queued("sent") });
+    const row = { source: "queued" as const, id: "q1" };
+    const sheet = renderHook(
+      ({ open }: { open: typeof row | null }) => useActivityDetail(open),
+      { wrapper: shared, initialProps: { open: row as typeof row | null } }
+    );
+    await waitFor(() => expect(getQueuedEmailDetail).toHaveBeenCalledTimes(1));
+    sheet.rerender({ open: null });
+    sheet.rerender({ open: row });
+    await waitFor(() => expect(getQueuedEmailDetail).toHaveBeenCalledTimes(2));
+    sheet.unmount();
   });
 });

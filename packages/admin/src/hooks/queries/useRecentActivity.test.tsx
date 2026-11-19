@@ -198,7 +198,9 @@ describe("a search of the email delivery log", () => {
     const activity = activityFromRow(search);
     expect(activity).toBeDefined();
     expect(activity?.type).toBe("read");
-    expect(activity?.action).toBe("searched email deliveries");
+    expect(activity?.action).toBe("searched");
+    expect(activity?.target).toBe("email deliveries");
+    expect(activity?.collectionLabel).toBeUndefined();
     expect(activity?.category).toBe("info");
   });
 

@@ -77,7 +77,7 @@ const ACTION_LABELS: Record<string, string> = {
   create: "created",
   update: "updated",
   delete: "deleted",
-  read: "searched email deliveries",
+  read: "searched",
 };
 
 const ACTION_CATEGORIES: Record<string, ActivityCategory> = {
@@ -88,6 +88,12 @@ const ACTION_CATEGORIES: Record<string, ActivityCategory> = {
 };
 
 function mapEntry(entry: ActivityLogEntry): Activity {
+  // A search of the email delivery log is about no entry and no collection:
+  // its subject is what was searched, so the row reads "Ana searched email
+  // deliveries", with no collection on its meta line.
+  if (entry.action === "read") {
+    return { ...shared(entry), target: "email deliveries" };
+  }
   const entryTitle = entry.entryTitle ?? undefined;
   // A Single's row is headed by the Single's label alone. Its `collection` is
   // the Single's slug, not a collection, so showing it as the collection the
