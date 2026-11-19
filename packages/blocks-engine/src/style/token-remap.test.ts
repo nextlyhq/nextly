@@ -95,6 +95,26 @@ describe("remapTokenReferences", () => {
     ).toBe("var(--other, var(--site-space-m))");
   });
 
+  it("points a local declaration of a carried property with its reads, so the override still holds", () => {
+    expect(
+      remapTokenReferences(
+        "selector { --acme-color-brand: red; color: var(--acme-color-brand); }",
+        acme
+      )
+    ).toBe(
+      "selector { --site-color-brand-2: red; color: var(--site-color-brand-2); }"
+    );
+    // Escaped as the browser reads it, like a read.
+    expect(
+      remapTokenReferences(String.raw`selector { --acme-sp\61 ce-m: 2px }`, acme)
+    ).toBe("selector { --site-space-m: 2px }");
+    // A declaration names no variable the file carries: the export lists
+    // only what the CSS reads.
+    expect(
+      cssTextProperties("selector { --site-color-brand: red }").size
+    ).toBe(0);
+  });
+
   it("points each reference once, never along a chain of renames", () => {
     const swap: TokenRemap = {
       ids: new Map([

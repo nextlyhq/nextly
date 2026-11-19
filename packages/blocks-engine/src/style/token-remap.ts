@@ -25,7 +25,9 @@ export function cssTextProperties(text: string): Set<string> {
   const found = new Set<string>();
   if (!text.includes("(")) return found;
   for (const reference of customPropertyReferences(text) ?? []) {
-    found.add(reference.name);
+    // Only what the CSS reads needs a variable carried; a local
+    // declaration supplies its own value.
+    if (reference.kind === "read") found.add(reference.name);
   }
   return onlySiteProperties(found);
 }
@@ -90,8 +92,9 @@ function walkFor(remap: TokenRemap): (value: unknown) => unknown {
   if (table.size === 0 && remap.ids.size === 0) return value => value;
   const walk = (node: unknown): unknown => {
     if (typeof node === "string") {
-      // Text with no `(` holds no function, so no reference to point.
-      return table.size === 0 || !node.includes("(")
+      // Text with no `(` holds no function to read a property, and text
+      // with no `--` no declaration of one: neither has anything to point.
+      return table.size === 0 || !(node.includes("(") || node.includes("--"))
         ? node
         : pointedIn(node, table);
     }
@@ -110,8 +113,9 @@ function walkFor(remap: TokenRemap): (value: unknown) => unknown {
 }
 
 /**
- * `text` with each `var()` reference `table` names written as the property
- * it maps to, in place, and every other character as it was. A reference
+ * `text` with each `var()` reference `table` names, and each local
+ * declaration of one (so an override in custom CSS still holds), written as
+ * the property it maps to, in place, and every other character as it was. A reference
  * whose place doesn't hold a spelling of its name is left alone rather than
  * spliced blind. Text that can't be read whole is left as written.
  */

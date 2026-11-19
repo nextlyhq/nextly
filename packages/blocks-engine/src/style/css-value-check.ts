@@ -81,29 +81,33 @@ export function referencesCustomProperty(value: string): boolean {
 export function customPropertiesReferenced(
   value: string
 ): readonly string[] | undefined {
-  return readVarCalls(parseValue(value, { positions: true }))?.at.map(
-    reference => reference.name
+  return readVarCalls(parseValue(value, { positions: true }))?.at.flatMap(
+    reference => (reference.kind === "read" ? [reference.name] : [])
   );
 }
 
 /**
- * One custom property CSS text reads through `var()`: the name CSS reads it
- * as, and where its spelling (escapes and all) sits in the text, so a caller
- * can point it elsewhere without touching anything around it.
+ * One custom property CSS text names: read through `var()`, or declared
+ * (`--name: …`, in a stylesheet), with the name CSS reads it as and where its
+ * spelling (escapes and all) sits in the text, so a caller can point it
+ * elsewhere without touching anything around it.
  */
 export interface CustomPropertyReference {
+  readonly kind: "read" | "declared";
   readonly name: string;
   readonly start: number;
   readonly end: number;
 }
 
 /**
- * Every custom property CSS text reads through `var()`, by the same walk
- * {@link customPropertiesReferenced} asks: a style value, or where the text
- * is no value, a stylesheet (a page's or a block's custom CSS), read as a
- * browser reads it. So quoted strings, comments and URLs name nothing, and a
- * name or a `var` spelled with escapes is read decoded. `undefined` where the
- * text cannot be read whole, as for a value.
+ * Every custom property CSS text reads through `var()` or declares, by the
+ * same walk {@link customPropertiesReferenced} asks: a style value, or where
+ * the text is no value, a stylesheet (a page's or a block's custom CSS), read
+ * as a browser reads it. So quoted strings, comments and URLs name nothing,
+ * and a name or a `var` spelled with escapes is read decoded. A declaration
+ * is named so that a caller pointing a property's reads elsewhere points a
+ * local override of it too. `undefined` where the text cannot be read whole,
+ * as for a value.
  */
 export function customPropertyReferences(
   text: string
@@ -169,22 +173,43 @@ function collectVarCalls(
     const at = base + (node.loc?.start.offset ?? 0);
     return inner === null || collectVarCalls(inner, depth, at, found);
   }
+  recordNames(node, base, found);
+  const inner = opensLevel(node) ? depth + 1 : depth;
+  for (const child of childrenOf(node)) {
+    if (!collectVarCalls(child, inner, base, found)) return false;
+  }
+  return true;
+}
+
+/**
+ * What THIS node names, if anything: a `var()` call (counted, with the
+ * property it reads) or a custom property's declaration.
+ */
+function recordNames(node: CssNode, base: number, found: VarCalls): void {
   if (isVarCall(node)) {
     found.calls += 1;
     const head = customPropertyHeadOf(node);
     if (head !== undefined) {
       found.at.push({
+        kind: "read",
         name: head.name,
         start: base + (head.loc?.start.offset ?? 0),
         end: base + (head.loc?.end.offset ?? 0),
       });
     }
   }
-  const inner = opensLevel(node) ? depth + 1 : depth;
-  for (const child of childrenOf(node)) {
-    if (!collectVarCalls(child, inner, base, found)) return false;
+  // A declaration's name is where it begins, spelled as written.
+  if (node.type === "Declaration" && node.loc != null) {
+    const name = decodeIdentifier(node.property);
+    if (!name.startsWith("--")) return;
+    const start = base + node.loc.start.offset;
+    found.at.push({
+      kind: "declared",
+      name,
+      start,
+      end: start + node.property.length,
+    });
   }
-  return true;
 }
 
 /** Whether THIS node is the substitution, as CSS reads its name. */
