@@ -362,7 +362,14 @@ export type CommandSeparatorProps = ComponentPropsWithoutRef<
 
 /**
  * CommandSeparator - Visual divider between command groups.
- * 1px line with  border border-border color, 8px margin top/bottom.
+ * 1px line in the border colour, 8px margin top/bottom.
+ *
+ * Hidden from screen readers by default. It usually sits inside the list, which is a `listbox`,
+ * and a listbox may own only options and their groups: the library's separator sets
+ * `role="separator"` after the props it is given, so the role cannot be swapped out, and a
+ * screen reader meeting it there finds a child the list should not have (axe-core's
+ * `aria-required-children`). Groups already carry their own headings, so the line adds nothing
+ * to what is announced. Placed outside the list, pass `aria-hidden={false}` to announce it.
  * @experimental
  */
 const CommandSeparator: ForwardRefExoticComponent<
@@ -371,10 +378,11 @@ const CommandSeparator: ForwardRefExoticComponent<
 > = forwardRef<
   ElementRef<typeof CommandPrimitive.Separator>,
   CommandSeparatorProps
->(({ className, ...props }, ref) => (
+>(({ className, "aria-hidden": ariaHidden = true, ...props }, ref) => (
   <CommandPrimitive.Separator
     ref={ref}
     className={cn("h-px bg-border my-2", className)}
+    aria-hidden={ariaHidden}
     {...props}
   />
 ));

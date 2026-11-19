@@ -452,8 +452,8 @@ function withSiteLock(
 
 /**
  * A text style without its values for breakpoints the site doesn't define,
- * each one left out said in `notes`. Unchanged where the site's breakpoints
- * aren't known.
+ * nor the fluid sizes they were made from, each one left out said in
+ * `notes`. Unchanged where the site's breakpoints aren't known.
  */
 function withinBreakpoints(
   style: NamedClass,
@@ -482,7 +482,25 @@ function withinBreakpoints(
       `“${name}”'s values for the “${breakpoint}” breakpoint were left out: this site has no such breakpoint.`
     );
   }
-  return { ...style, styles };
+  return withoutFluidSizesAt({ ...style, styles }, left);
+}
+
+/**
+ * A text style without the fluid sizes of the breakpoints `left`, whose
+ * values were left out: sizes beside no size would be taken for the ones a
+ * size typed there later was made from.
+ */
+function withoutFluidSizesAt(
+  style: NamedClass,
+  left: ReadonlySet<string>
+): NamedClass {
+  const { fluidSizes, ...rest } = style;
+  const sizes = Object.entries(fluidSizes ?? {}).filter(
+    ([breakpoint]) => !left.has(breakpoint)
+  );
+  return sizes.length === 0
+    ? rest
+    : { ...rest, fluidSizes: Object.fromEntries(sizes) };
 }
 
 /**
