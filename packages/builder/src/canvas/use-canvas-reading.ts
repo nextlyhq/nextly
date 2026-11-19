@@ -32,6 +32,7 @@
 import * as React from "react";
 
 import type { EditorState } from "../editor-state";
+import { RENDERED_TEXT_SIZES } from "../rendered-lengths";
 import {
   orientationOfElement,
   siteOrientationOf,
@@ -112,15 +113,6 @@ export interface CanvasReading {
   readonly lengths?: Readonly<Record<string, string>> | undefined;
 }
 
-/**
- * The computed text sizes a field may show for a variable reaching it, by
- * CSS property, with the style declaration's name for each.
- */
-const READ_LENGTHS = {
-  "font-size": "fontSize",
-  "line-height": "lineHeight",
-} as const;
-
 /** The node's computed text sizes, or `undefined` when it isn't drawn. */
 function lengthsOf(
   element: Element | undefined | null
@@ -129,7 +121,7 @@ function lengthsOf(
   const computed = element.ownerDocument.defaultView?.getComputedStyle(element);
   if (computed === undefined) return undefined;
   const lengths: Record<string, string> = {};
-  for (const [property, name] of Object.entries(READ_LENGTHS)) {
+  for (const [property, name] of Object.entries(RENDERED_TEXT_SIZES)) {
     // Read by name, as the axes are: a declaration missing one gives none.
     const value: unknown = computed[name];
     if (typeof value === "string" && value !== "") lengths[property] = value;
@@ -142,7 +134,7 @@ function sameLengths(
   a: Readonly<Record<string, string>> | undefined,
   b: Readonly<Record<string, string>> | undefined
 ): boolean {
-  return Object.keys(READ_LENGTHS).every(
+  return Object.keys(RENDERED_TEXT_SIZES).every(
     property => a?.[property] === b?.[property]
   );
 }

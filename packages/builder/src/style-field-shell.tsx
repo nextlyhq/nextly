@@ -25,7 +25,11 @@ import type { EditorState } from "./editor-state";
 import { FieldPathWrites } from "./field-path-writes";
 import { InheritedValue } from "./inherited-value";
 import { LabelScrubRow, useLabelScrubProps } from "./label-scrub";
-import { RenderedLengths, type RenderedLengthsValue } from "./rendered-lengths";
+import {
+  RENDERED_TEXT_SIZES,
+  RenderedLengths,
+  type RenderedLengthsValue,
+} from "./rendered-lengths";
 import { CompactSides, fieldDescribedBy, sideKeysFor } from "./spacing-box";
 import { SpacingSide } from "./spacing-side";
 import { contrastObscuredAbove, contrastObscuredIn } from "./style-colour";
@@ -154,10 +158,12 @@ function readsVariable(value: string): boolean {
  * What reaches a control from another tier, shown in it while nothing is set
  * here. Read from the same answer as the dot, so the two never disagree.
  *
- * A size that reads a variable (Site text's heading sizes) is shown as the
- * size the canvas draws it at, at the device being edited, and not at all
- * where the canvas hasn't measured it: an author never sees the CSS. The dot
- * beside the label says where it comes from ("From Site text: Heading 2").
+ * A text size that reads a variable (Site text's heading sizes) is shown as
+ * the size the canvas draws it at, at the device being edited, and not at
+ * all where the canvas hasn't measured it: an author never sees the CSS. The
+ * dot beside the label says where it comes from ("From Site text: Heading
+ * 2"). Other values pass as they are: a spacing side names the variable it
+ * reads from the value itself.
  */
 function inheritedShown(
   stored: StyleValue | undefined,
@@ -169,8 +175,8 @@ function inheritedShown(
     return undefined;
   }
   const value = answer.provenance.entry.value;
-  const isSize = leaf.kind === "dimension" || leaf.kind === "number";
-  if (!isSize || !readsVariable(value)) return value;
+  const read = Object.hasOwn(RENDERED_TEXT_SIZES, leaf.cssProperty);
+  if (!read || !readsVariable(value)) return value;
   return rendered[leaf.cssProperty];
 }
 

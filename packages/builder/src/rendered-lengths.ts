@@ -14,8 +14,18 @@
 import * as React from "react";
 
 /**
- * Computed values by CSS property, as the canvas resolved them: `font-size`
- * and `line-height`. A property absent here was not read.
+ * The text sizes the canvas reads, by CSS property, with the style
+ * declaration's name for each: the one list both the reading and the fields
+ * showing it go by.
+ */
+export const RENDERED_TEXT_SIZES = {
+  "font-size": "fontSize",
+  "line-height": "lineHeight",
+} as const;
+
+/**
+ * Computed values by CSS property, as the canvas resolved them, for the
+ * properties in `RENDERED_TEXT_SIZES`. A property absent here was not read.
  */
 export type RenderedLengthsValue = Readonly<Record<string, string>>;
 
