@@ -1024,14 +1024,19 @@ describe.each(getConfiguredTestDialects())(
      * the translations table standing, its key to the main table dropped by
      * the CASCADE.
      */
+    /** Each delete file `asAnOlderDeleteFile` rewrote, with the text the Builder's own database applied. */
+    const olderDeleteOriginals = new Map<string, string>();
+
     function asAnOlderDeleteFile(): void {
       const migrations = join(dir, "migrations");
       const drop = `DROP TABLE IF EXISTS "${notes.table}_locales" CASCADE`;
+      olderDeleteOriginals.clear();
       for (const name of readdirSync(migrations)) {
         if (!name.endsWith(".sql")) continue;
         const path = join(migrations, name);
         const text = readFileSync(path, "utf8");
         if (!text.includes(drop)) continue;
+        olderDeleteOriginals.set(path, text);
         // Each statement ends in `;`, with a blank line between them (`formatMigrationFile`).
         writeFileSync(
           path,
@@ -1092,7 +1097,17 @@ describe.each(getConfiguredTestDialects())(
       async () => {
         const { own, deployed } =
           await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
-        // Made again in the Builder, untranslated, and the file it writes left pending.
+        // Made again in the Builder, untranslated, and the file it writes left pending. The
+        // Builder's own database applied the delete file as written, so it sees that text while it
+        // saves; the deployed database, which applied the older one, sees that one again after.
+        const older = new Map(
+          [...olderDeleteOriginals.keys()].map(path => [
+            path,
+            readFileSync(path, "utf8"),
+          ])
+        );
+        for (const [path, written] of olderDeleteOriginals)
+          writeFileSync(path, written);
         reach(dialect, own.url);
         await start(own.adapter);
         await builder(async () => {
@@ -1103,6 +1118,7 @@ describe.each(getConfiguredTestDialects())(
             { name: NOTES, label: NOTES, fields: [text({ name: "title" })] }
           );
         });
+        for (const [path, written] of older) writeFileSync(path, written);
         reach(dialect, deployed.url);
         await start(deployed.adapter);
 
