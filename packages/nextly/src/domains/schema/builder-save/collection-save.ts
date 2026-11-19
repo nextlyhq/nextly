@@ -2136,15 +2136,16 @@ async function runWritten(
     // cannot name (a column restated through a prepared statement) was taken
     // as part-way, and a refusal that ran nothing was reported as a failure
     // whose statements stayed applied, its files kept for `migrate:resolve`.
-    await refuseBeforeAnyStatement(filename);
-    running = filename;
     try {
+      await refuseBeforeAnyStatement(filename);
+      running = filename;
       await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
     } catch (error) {
-      // A file failing after one of this save was applied, which only a run file by file meets
-      // (MySQL, or a file outside a transaction): the database holds part of the save. The files
-      // already run stay recorded applied, this one and those after it are kept, recorded nowhere,
-      // and the failure says so with what to run next, as a push that failed part way says it.
+      // A file failing, or refused before its first statement, after one of this save was applied,
+      // which only a run file by file meets (MySQL, or a file outside a transaction): the database
+      // holds part of the save. The files already run stay recorded applied, this one and those
+      // after it are kept, recorded nowhere, and the failure says so with what to run next, as a
+      // push that failed part way says it.
       if (applied.length > 0) {
         throw partlyAppliedChange(error, ordered.slice(applied.length));
       }

@@ -63,6 +63,32 @@ vi.mock("../../busy-table/run-unit", async original => {
   };
 });
 
+// The test's seam on the check a file's statements get before any runs (a column made Required over
+// rows that hold none): from the call `refuseFrom` counts to, the check refuses.
+const requiredGuard = vi.hoisted(() => ({
+  calls: 0,
+  refuseFrom: undefined as number | undefined,
+}));
+vi.mock("../../migrate/required-column-guard", async original => {
+  const actual =
+    await original<typeof import("../../migrate/required-column-guard")>();
+  return {
+    ...actual,
+    refuseRequiredColumnsOverNulls: async (
+      ...args: Parameters<typeof actual.refuseRequiredColumnsOverNulls>
+    ) => {
+      requiredGuard.calls += 1;
+      if (
+        requiredGuard.refuseFrom !== undefined &&
+        requiredGuard.calls >= requiredGuard.refuseFrom
+      ) {
+        throw new Error("a column made Required over rows that hold none");
+      }
+      return actual.refuseRequiredColumnsOverNulls(...args);
+    },
+  };
+});
+
 const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
 const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
 type Field = Record<string, unknown>;
@@ -85,6 +111,8 @@ for (const dialect of getConfiguredTestDialects()) {
 
     afterEach(async () => {
       fileFailure.matches = undefined;
+      requiredGuard.calls = 0;
+      requiredGuard.refuseFrom = undefined;
       await t?.destroy();
       vi.unstubAllEnvs();
       await rm(basePath, { recursive: true, force: true });
@@ -178,6 +206,54 @@ for (const dialect of getConfiguredTestDialects()) {
         expect(said).toContain("The database now holds part of this change");
         for (const name of kept) expect(said).toContain(name);
         expect(said).toContain("nextly migrate:resolve --applied");
+      },
+      120_000
+    );
+
+    // A later file refused before its first statement, after the save's first file applied, is the
+    // same part-held save as one failing at a statement.
+    it.skipIf(dialect !== "mysql")(
+      "tells a later file's refusal before its first statement as part held",
+      async () => {
+        const heading: Field = {
+          name: "heading",
+          type: "text",
+          localized: true,
+        };
+        await dispatchSingles(
+          "createSingle",
+          {},
+          { slug: "hero", label: "Hero", fields: [heading], localized: true }
+        );
+        const filesBefore = files();
+        const appliedBefore = await applied();
+        requiredGuard.calls = 0;
+        requiredGuard.refuseFrom = 2;
+
+        const failed = await dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "hero" },
+          {
+            fields: [heading, { name: "extra", type: "text", localized: true }],
+            confirmed: true,
+            schemaVersion: await versionOf("dynamic_singles", "hero"),
+          }
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        requiredGuard.refuseFrom = undefined;
+
+        const written = files().filter(name => !filesBefore.includes(name));
+        const recorded = (await applied()).filter(
+          name => !appliedBefore.includes(name)
+        );
+        expect(recorded.length).toBeGreaterThan(0);
+        const kept = written.filter(name => !recorded.includes(name));
+        expect(kept.length).toBeGreaterThan(0);
+        const said = (failed as { publicMessage?: string }).publicMessage ?? "";
+        expect(said).toContain("The database now holds part of this change");
+        for (const name of kept) expect(said).toContain(name);
       },
       120_000
     );
