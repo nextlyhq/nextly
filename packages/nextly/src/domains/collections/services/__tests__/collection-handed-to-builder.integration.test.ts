@@ -18,7 +18,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
-import { CollectionRegistryService } from "../collection-registry-service";
+import {
+  CollectionRegistryService,
+  DEMOTED_FROM_CODE,
+} from "../collection-registry-service";
 import { calculateSchemaHash } from "../../../schema/services/schema-hash";
 import { toCodeFirstCollectionConfig } from "../collection-sync-service";
 
@@ -120,7 +123,7 @@ describe.each(getConfiguredTestDialects())(
       await registry.syncCodeFirstCollections([coded(slug)]);
       await registry.updateCollection(
         slug,
-        { source: "ui", locked: false },
+        { source: "ui", locked: false, configPath: DEMOTED_FROM_CODE },
         { handOver: "builder" }
       );
       await registry.updateCollection(
@@ -132,7 +135,7 @@ describe.each(getConfiguredTestDialects())(
 
       await registry.updateCollection(
         slug,
-        { source: "ui", locked: false },
+        { source: "ui", locked: false, configPath: DEMOTED_FROM_CODE },
         { handOver: "builder" }
       );
       expect(await owner(slug)).toEqual({ source: "ui", locked: false });
@@ -148,7 +151,7 @@ describe.each(getConfiguredTestDialects())(
       });
       await registry.assertUpdatable(
         slug,
-        { source: "ui", locked: false },
+        { source: "ui", locked: false, configPath: DEMOTED_FROM_CODE },
         { handOver: "builder" }
       );
       expect(await owner(slug)).toEqual({ source: "code", locked: true });
@@ -179,7 +182,7 @@ describe.each(getConfiguredTestDialects())(
       await registry.syncCodeFirstCollections([coded(slug)]);
       await registry.updateCollection(
         slug,
-        { source: "ui", locked: false },
+        { source: "ui", locked: false, configPath: DEMOTED_FROM_CODE },
         { handOver: "builder" }
       );
       warnings.length = 0;
@@ -210,12 +213,36 @@ describe.each(getConfiguredTestDialects())(
       expect(said[0]).toContain("nextly.config");
     });
 
+    it("a collection made in the Builder, never demoted, is still synced from a code entry under its address", async () => {
+      // Not a hand-over: nothing moved this row from code, so the configuration's entry is
+      // applied to it as it always was.
+      const slug = "chb_made_in_builder";
+      await registry.registerCollection({
+        slug,
+        labels: { singular: "Made", plural: "Made" },
+        tableName: `dc_${slug}`,
+        fields: [],
+        source: "ui",
+        schemaHash: "made-in-builder",
+      } as never);
+      warnings.length = 0;
+
+      const config = coded(slug);
+      expect(
+        (await registry.planCodeFirstCollections([config])).updated
+      ).toContain(slug);
+      const synced = await registry.syncCodeFirstCollections([config]);
+      expect(synced.errors).toEqual([]);
+      expect(synced.updated).toContain(slug);
+      expect(warnings.filter(message => message.includes(slug))).toEqual([]);
+    });
+
     it("a plugin's entry under a Builder collection's address is handled as before, and not blamed on the configuration", async () => {
       const slug = "chb_plugin_over_builder";
       await registry.syncCodeFirstCollections([coded(slug)]);
       await registry.updateCollection(
         slug,
-        { source: "ui", locked: false },
+        { source: "ui", locked: false, configPath: DEMOTED_FROM_CODE },
         { handOver: "builder" }
       );
       warnings.length = 0;

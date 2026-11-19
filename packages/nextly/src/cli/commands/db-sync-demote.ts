@@ -14,6 +14,7 @@ import {
   toCodeFirstCollectionConfig,
   type CodeFirstCollectionSource,
 } from "../../domains/collections/services/collection-sync-service";
+import { DEMOTED_FROM_CODE } from "../../domains/collections/services/collection-registry-service";
 import { assertNoMigrationInFlight } from "../../domains/field-groups/migration/sync-guard";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { serializeCollection } from "../../domains/schema/services/code-generator";
@@ -167,9 +168,6 @@ type DemotedWrite =
       data: Parameters<CollectionRegistryService["updateCollection"]>[1];
     }
   | { kind: "register"; record: DynamicCollectionInsert };
-
-/** Where a demoted record says it came from, in place of the configuration file's path. */
-const DEMOTED_FROM_CODE = "demoted-from-code";
 
 /**
  * How a demote updates a record the registry already holds: as the hand-over of the

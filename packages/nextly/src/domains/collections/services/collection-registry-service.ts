@@ -70,6 +70,13 @@ export interface UpdateCollectionOptions {
 }
 
 /**
+ * What a record handed from the configuration to the Schema Builder carries as its path, in
+ * place of the configuration file's: the mark that tells such a record from a collection made in
+ * the Builder, whose address a code entry may later take.
+ */
+export const DEMOTED_FROM_CODE = "demoted-from-code";
+
+/**
  * Whether an update hands a collection to the Schema Builder: asked for, of a row the app's
  * configuration made or one that is the Builder's already. A plugin registers its collection
  * again at every start, so its row has nobody to be handed over by.
@@ -85,15 +92,24 @@ function handsOverToBuilder(
 }
 
 /**
- * Whether a collection the app's configuration declares is one the Schema Builder owns: its row
- * says so, and the entry is the app's own. The sync then writes nothing to the row, in a real run
- * and in the plan of one alike. A plugin's entry under such an address is not this case.
+ * Whether a collection the app's configuration declares is one that was handed to the Schema
+ * Builder: its row is the Builder's and carries the hand-over's mark, and the entry is the app's
+ * own. The sync then writes nothing to the row, in a real run and in the plan of one alike. A
+ * collection made in the Builder carries no such mark, and a code entry under its address is
+ * applied to it as before; so is a plugin's entry.
  */
 function builderOwnsDeclared(
   config: Pick<CodeFirstCollectionConfig, "source">,
-  existing: Pick<DynamicCollectionRecord, "source"> | null | undefined
+  existing:
+    | Pick<DynamicCollectionRecord, "source" | "configPath">
+    | null
+    | undefined
 ): boolean {
-  return existing?.source === "ui" && (config.source ?? "code") === "code";
+  return (
+    existing?.source === "ui" &&
+    existing.configPath === DEMOTED_FROM_CODE &&
+    (config.source ?? "code") === "code"
+  );
 }
 
 /** Input for registering a code-first collection during sync. */
@@ -889,8 +905,9 @@ export class CollectionRegistryService extends BaseRegistryService<
     if (handsOverToBuilder(existing, options)) {
       updateData.source = "ui";
       updateData.locked = false;
-    }
-    if (data.configPath !== undefined) {
+      // Marked as handed over, whatever path the caller sent: what a later sync knows it by.
+      updateData.config_path = DEMOTED_FROM_CODE;
+    } else if (data.configPath !== undefined) {
       updateData.config_path = data.configPath;
     }
     if (data.hooks !== undefined) {
