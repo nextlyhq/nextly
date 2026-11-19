@@ -23,7 +23,7 @@ import { Input, Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { offeredTiers } from "../../canvas/canvas-width";
-import { chainedStyleOp, COLUMNS_ROW } from "../../columns-layout";
+import { chainedStyleOp, COLUMNS_ROW } from "../../canvas/columns-layout";
 import type { EditorState } from "../../editor-state";
 import {
   LAYOUT_CSS_NAMES,

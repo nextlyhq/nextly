@@ -29,8 +29,8 @@ import {
 } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { isElement } from "../../dom-kind";
-import { useAskedSharedVerbs } from "../../selection-offer";
+import { isElement } from "../../canvas/dom-kind";
+import { useAskedSharedVerbs } from "../../canvas/selection-offer";
 import { keyHint } from "../../shell/key-hint";
 import type { SharedBlockVerbs } from "../../shell/keyboard-actions";
 

@@ -25,7 +25,7 @@ import {
   COLUMNS_ROW,
   stackOf,
   stackTiers,
-} from "../columns-layout";
+} from "../canvas/columns-layout";
 import {
   childAxisRows,
   LAYOUT_CSS_NAMES,

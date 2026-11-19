@@ -16,7 +16,7 @@
 import { Search, X } from "lucide-react";
 import * as React from "react";
 
-import { isElement } from "../dom-kind";
+import { isElement } from "../canvas/dom-kind";
 import type { ParentArrangement } from "../plain-layout";
 
 import {

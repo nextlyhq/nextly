@@ -103,6 +103,7 @@ import * as React from "react";
 import { BlockIconMark } from "../../block-icon";
 import { DRAG_SOURCE_ATTRIBUTE } from "../../canvas/canvas";
 import { useHoveredBlockSetter } from "../../canvas/hovered-block";
+import type { MoveDirection } from "../../canvas/keyboard-move";
 import { revealNode } from "../../canvas/reveal-node";
 import type { EditorState } from "../../editor-state";
 import { EDITOR_WORDS } from "../../editor-words";
@@ -115,7 +116,6 @@ import {
   lockViewOf,
   renameOp,
 } from "../../inspector/inspector";
-import type { MoveDirection } from "../../keyboard-move";
 import { lockRefusalWording } from "../../lock-refusal";
 import { refusalAnnouncement } from "../../move-refusal";
 import type { BuilderOp } from "../../op-vocabulary";

@@ -28,7 +28,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { BindingPicker } from "./binding-picker";
 import type { BindingFieldSource, ListSample } from "./binding-services";
-import { forgetClickedEntries, rememberClickedEntries } from "../clicked-entry";
+import {
+  forgetClickedEntries,
+  rememberClickedEntries,
+} from "../canvas/clicked-entry";
 import type {
   ContentServices,
   LoopCollection,

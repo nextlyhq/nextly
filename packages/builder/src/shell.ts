@@ -269,8 +269,8 @@ export type {
   VariantUse,
 } from "./panels/components/component-variants";
 // The variant open in a component's view, previewed on the host's canvas.
-export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
-export type { VariantPreviewState } from "./variant-preview";
+export { useVariantPreview, VariantPreviewTag } from "./canvas/variant-preview";
+export type { VariantPreviewState } from "./canvas/variant-preview";
 // The one row of tags over the canvas: the variant previewed.
 export { CanvasPreviewTags } from "./canvas/canvas-preview-tags";
 export type { CanvasPreviewTagsProps } from "./canvas/canvas-preview-tags";
@@ -602,12 +602,12 @@ export {
   PreviewedEntryProvider,
   usePreviewedCollection,
   usePreviewedEntry,
-} from "./previewed-entry";
+} from "./canvas/previewed-entry";
 export type {
   PreviewedBlocksField,
   PreviewedCollection,
   PreviewedEntry,
-} from "./previewed-entry";
+} from "./canvas/previewed-entry";
 /**
  * @experimental Visibility conditions applied for the entry a template is
  * previewed with: what the host hands the canvas (`conditionsApplied`) and
@@ -728,8 +728,8 @@ export { useInlineEditing } from "./canvas/use-inline-editing";
  *
  * @experimental
  */
-export { createOpenPassages } from "./open-passages";
-export type { OpenPassages } from "./open-passages";
+export { createOpenPassages } from "./canvas/open-passages";
+export type { OpenPassages } from "./canvas/open-passages";
 export type { UseInlineEditingResult } from "./canvas/use-inline-editing";
 /**
  * What a host says when a double-click lands on text a component does not

@@ -19,7 +19,7 @@ import { Button } from "@nextlyhq/ui";
 import { Plus } from "lucide-react";
 import * as React from "react";
 
-import { stackTiers } from "../../columns-layout";
+import { stackTiers } from "../../canvas/columns-layout";
 import type { EditorState } from "../../editor-state";
 import { HeldByLock } from "../held-by-lock";
 import type { PanelSection } from "../panel-section";

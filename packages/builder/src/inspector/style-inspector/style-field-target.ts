@@ -19,7 +19,7 @@ import {
   batchStyleWriteOps,
   batchStyleWritesOps,
 } from "../../batch-style";
-import { isElement } from "../../dom-kind";
+import { isElement } from "../../canvas/dom-kind";
 import type { EditorState } from "../../editor-state";
 import {
   moveToSharedStyleClear,

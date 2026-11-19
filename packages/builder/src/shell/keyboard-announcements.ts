@@ -6,8 +6,8 @@
  * @module keyboard-announcements
  */
 
+import type { MoveDirection, MoveEffect } from "../canvas/keyboard-move";
 import type { EditorState } from "../editor-state";
-import type { MoveDirection, MoveEffect } from "../keyboard-move";
 import { lockRefusalWording } from "../lock-refusal";
 import { refusalAnnouncement } from "../move-refusal";
 import type { BuilderOp } from "../op-vocabulary";

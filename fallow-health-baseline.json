@@ -1522,7 +1522,7 @@
         "count": 1
       }
     },
-    "packages/builder/src/keyboard-move.ts": {
+    "packages/builder/src/canvas/keyboard-move.ts": {
       "complexity_moderate": {
         "count": 1
       }
