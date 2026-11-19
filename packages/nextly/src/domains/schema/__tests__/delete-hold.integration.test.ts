@@ -107,7 +107,9 @@ const NOTED: unknown[] = [
  */
 function boxed(fields: readonly Record<string, unknown>[]): unknown[] {
   return fields.map(field =>
-    field.name === "note" ? { type: "group", label: "Box", fields: [field] } : field
+    field.name === "note"
+      ? { type: "group", label: "Box", fields: [field] }
+      : field
   );
 }
 
@@ -309,7 +311,10 @@ describe.each(getConfiguredTestDialects())(
     async function layOutNoteInAGroup(t: TestNextly): Promise<void> {
       const file = join(t.basePath, "schema", "builder.json");
       const definition = JSON.parse(readFileSync(file, "utf8")) as {
-        collections?: Array<{ slug: string; fields: Record<string, unknown>[] }>;
+        collections?: Array<{
+          slug: string;
+          fields: Record<string, unknown>[];
+        }>;
       };
       const entity = definition.collections?.find(
         collection => collection.slug === SLUG
