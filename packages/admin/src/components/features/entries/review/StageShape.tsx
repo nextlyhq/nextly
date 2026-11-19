@@ -2,8 +2,9 @@
  * A workflow stage as the admin shows it wherever it names one: its words, with a small shape
  * for the kind of stage it is, so the stage never rests on colour alone. A dashed ring for a
  * stage still being written, a half-filled circle for one in review, a ticked ring for one that
- * allows publishing, a triangle where changes were asked for, and a dashed square for a stage the
- * workflow no longer has.
+ * allows publishing, and a triangle where changes were asked for. A stage the workflow no longer
+ * has never reaches here: the review state reads a part stored in one as the workflow's first
+ * stage, so it is drawn as that stage is.
  *
  * The shape is drawn in the text's own colour and hidden from assistive technology: the words
  * are what is read. It is never a control, so a stage reads as a fact and not as something to
@@ -22,13 +23,12 @@ export type StageShapeKind =
   | "drafting"
   | "in-review"
   | "approved"
-  | "changes-requested"
-  | "removed";
+  | "changes-requested";
 
 /** What a part's shape is read from: its stage, what the stage allows, and its last move. */
 export type StagedPart = Pick<
   PartReview,
-  "stage" | "stageLabel" | "publishable" | "steps" | "lastMove"
+  "stage" | "publishable" | "steps" | "lastMove"
 >;
 
 /**
@@ -36,7 +36,6 @@ export type StagedPart = Pick<
  * nothing waiting). Read from what the review state says of the stage rather than from its
  * name, since a workflow names its stages as it likes:
  *
- * - a stage the review state has no label for is one the workflow no longer has;
  * - a part sent back with a request for changes, and not moved since, is waiting on them;
  * - a stage that allows publishing has been approved;
  * - a stage with an approval leaving it is in review;
@@ -44,7 +43,6 @@ export type StagedPart = Pick<
  */
 export function stageShapeOf(part: StagedPart): StageShapeKind | null {
   if (part.stage === null) return null;
-  if (part.stageLabel === null) return "removed";
   if (
     part.lastMove?.kind === "workflow-request-changes" &&
     part.lastMove.to === part.stage
@@ -113,15 +111,6 @@ function StageGlyph({ shape }: { shape: StageShapeKind }): JSX.Element {
       ) : null}
       {shape === "changes-requested" ? (
         <path d="M6 1.4l4.9 8.6H1.1z" strokeLinejoin="round" />
-      ) : null}
-      {shape === "removed" ? (
-        <rect
-          x="1.75"
-          y="1.75"
-          width="8.5"
-          height="8.5"
-          strokeDasharray="2.2 1.6"
-        />
       ) : null}
     </svg>
   );

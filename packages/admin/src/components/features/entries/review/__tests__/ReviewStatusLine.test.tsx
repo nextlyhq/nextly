@@ -206,8 +206,6 @@ describe("ReviewStatusLine", () => {
         },
       }),
     ],
-    // A stage the workflow no longer has: the review state names no label for it.
-    ["removed", part({ stage: "legal", stageLabel: null })],
   ])(
     "draws the %s stage as words with its shape, never as a button",
     (shape, given) => {
