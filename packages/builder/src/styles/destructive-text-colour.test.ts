@@ -117,48 +117,25 @@ const NAMED: Record<string, Rgb> = {
   white: { r: 255, g: 255, b: 255, a: 1 },
 };
 
+/** A colour stop of a mix: the colour, and its weight where one is written. */
+function mixStop(part: string): { colour: string; weight: number | null } {
+  const weight = /\s([\d.]+)%$/.exec(part);
+  return weight === null
+    ? { colour: part, weight: null }
+    : { colour: part.slice(0, weight.index), weight: Number(weight[1]) / 100 };
+}
+
 /**
- * A colour in a theme, through `var()`, `oklch()` and `color-mix(in srgb,
- * …)`: the forms the destructive tokens and the surfaces are written in. Any
- * other form throws rather than being guessed at.
+ * A `color-mix(in srgb, …)` of two colours, weighted as CSS Color 5 says: a
+ * stop with no weight takes what the other leaves.
  */
-function resolve(value: string, theme: Theme): Rgb {
-  const text = value.trim();
-  const reference = /^var\((--[\w-]+)\)$/.exec(text);
-  if (reference !== null) {
-    const name = reference[1] ?? "";
-    const declared = TOKENS[theme].get(name);
-    if (declared === undefined) throw new Error(`${name} is not declared`);
-    return resolve(declared, theme);
-  }
-  const named = NAMED[text];
-  if (named !== undefined) return named;
-  const oklch = /^oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\)$/.exec(text);
-  if (oklch !== null) {
-    const { r, g, b } = oklchToRgb({
-      l: Number(oklch[1]),
-      c: Number(oklch[2]),
-      h: Number(oklch[3]),
-    });
-    return { r: r * 255, g: g * 255, b: b * 255, a: 1 };
-  }
-  const mix = /^color-mix\(([\s\S]*)\)$/.exec(text);
-  if (mix === null) throw new Error(`cannot resolve ${text}`);
-  const [space, first, second] = splitArguments(mix[1] ?? "");
+function mixSrgb(inner: string, theme: Theme): Rgb {
+  const [space, first, second] = splitArguments(inner);
   if (space !== "in srgb" || first === undefined || second === undefined) {
-    throw new Error(`a mix this cannot resolve: ${text}`);
+    throw new Error(`a mix this cannot resolve: color-mix(${inner})`);
   }
-  const stop = (part: string): { colour: string; weight: number | null } => {
-    const weight = /\s([\d.]+)%$/.exec(part);
-    return weight === null
-      ? { colour: part, weight: null }
-      : {
-          colour: part.slice(0, weight.index),
-          weight: Number(weight[1]) / 100,
-        };
-  };
-  const a = stop(first);
-  const b = stop(second);
+  const a = mixStop(first);
+  const b = mixStop(second);
   const wa = a.weight ?? 1 - (b.weight ?? 0.5);
   const wb = b.weight ?? 1 - wa;
   const ca = resolve(a.colour, theme);
@@ -171,6 +148,44 @@ function resolve(value: string, theme: Theme): Rgb {
     b: channel(ca.b, cb.b),
     a: 1,
   };
+}
+
+/** An `oklch(L C H)` literal, converted by the design system's own conversion. */
+function oklchLiteral(text: string): Rgb | undefined {
+  const match = /^oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\)$/.exec(text);
+  if (match === null) return undefined;
+  const { r, g, b } = oklchToRgb({
+    l: Number(match[1]),
+    c: Number(match[2]),
+    h: Number(match[3]),
+  });
+  return { r: r * 255, g: g * 255, b: b * 255, a: 1 };
+}
+
+/**
+ * A colour in a theme, through `var()`, `oklch()` and `color-mix(in srgb,
+ * …)`: the forms the destructive tokens and the surfaces are written in. Any
+ * other form throws rather than being guessed at.
+ *
+ * Local glue rather than `@nextlyhq/ui`'s contrast resolver: that module is
+ * not exported, and this package's type check (`rootDir: src`) refuses a
+ * relative import of another package's source. The conversion and the ratio
+ * are the shared ones, `@nextlyhq/ui/color`'s and the block engine's.
+ */
+function resolve(value: string, theme: Theme): Rgb {
+  const text = value.trim();
+  const reference = /^var\((--[\w-]+)\)$/.exec(text);
+  if (reference !== null) {
+    const name = reference[1] ?? "";
+    const declared = TOKENS[theme].get(name);
+    if (declared === undefined) throw new Error(`${name} is not declared`);
+    return resolve(declared, theme);
+  }
+  const literal = NAMED[text] ?? oklchLiteral(text);
+  if (literal !== undefined) return literal;
+  const mix = /^color-mix\(([\s\S]*)\)$/.exec(text);
+  if (mix === null) throw new Error(`cannot resolve ${text}`);
+  return mixSrgb(mix[1] ?? "", theme);
 }
 
 /** AA for small text. */
