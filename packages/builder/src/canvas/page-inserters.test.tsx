@@ -275,6 +275,38 @@ describe("an empty page", () => {
     expect(onStarter).toHaveBeenCalledWith("landing");
   });
 
+  it("names a starter by its title alone, not the words drawn in its picture", async () => {
+    const onStarter = vi.fn();
+    mount(page([]), {
+      starters: [
+        {
+          id: "coming-soon",
+          title: "Coming soon",
+          picture: (
+            <span>
+              <span>Email (required)</span>
+              <span>Leave this empty</span>
+            </span>
+          ),
+        },
+        {
+          id: "contact",
+          title: "Contact",
+          picture: <span>Your message</span>,
+          unavailable: "Uses the Form block, which this site doesn't have.",
+        },
+      ],
+      onStarter,
+    });
+    await act(async () => undefined);
+    // The picture is still drawn on the tile; only the name leaves it out.
+    const tile = screen.getByRole("button", { name: "Coming soon" });
+    expect(tile.textContent).toContain("Leave this empty");
+    expect(screen.getByRole("button", { name: "Contact" })).toBeTruthy();
+    fireEvent.click(tile);
+    expect(onStarter).toHaveBeenCalledWith("coming-soon");
+  });
+
   it("dims a starter the site can't use, says why, and starts nothing from it", async () => {
     const onStarter = vi.fn();
     const reason = "Uses the Form block, which this site doesn't have.";
