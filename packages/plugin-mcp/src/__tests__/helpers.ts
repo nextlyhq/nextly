@@ -37,7 +37,9 @@ export const ALLOWED = "cms.example.com";
 export type Handlers = ReturnType<typeof createDynamicHandlers>;
 
 /** The catch-all route's params for a path under the Nextly mount. */
-export function params(...segments: string[]) {
+export function params(...segments: string[]): {
+  params: Promise<{ params: string[] }>;
+} {
   return { params: Promise.resolve({ params: segments }) };
 }
 
@@ -110,7 +112,9 @@ export async function payloadOf<S = unknown>(
 }
 
 /** The headers a key authenticates with. */
-export const bearer = (key: string) => ({ authorization: `Bearer ${key}` });
+export const bearer = (key: string): Record<string, string> => ({
+  authorization: `Bearer ${key}`,
+});
 
 /** One protocol method, after the opening request, as a client makes it. */
 async function rpc<S>(
@@ -179,7 +183,7 @@ export function refusalOf(body: RpcBody): ToolRefusal {
 }
 
 /** The text of a result's content, joined. */
-export const textOf = (body: RpcBody) =>
+export const textOf = (body: RpcBody): string =>
   (body.result?.content ?? []).map(c => c.text).join("\n");
 
 /** The Direct API members key minting uses, typed as they are called here. */
@@ -298,7 +302,7 @@ export async function keyGranting(
  * comment, and approval and changes-requested steps that need `sign-off`. One submit step
  * (`send`), so a submit with no step named takes it.
  */
-export const editorial = defineWorkflow({
+export const editorial: ReturnType<typeof defineWorkflow> = defineWorkflow({
   slug: "editorial",
   label: "Editorial",
   stages: [
@@ -363,7 +367,9 @@ const drafts = { status: true, versions: { drafts: true } } as const;
  * - `letters`: the same, but read in every language except Spanish, so a Spanish part is one
  *   its reader may not be told about.
  */
-export const reviewCollections = [
+export const reviewCollections: NonNullable<
+  CreateTestNextlyOptions["collections"]
+> = [
   defineCollection({
     slug: "posts",
     localized: true,
@@ -405,7 +411,9 @@ export async function bootMcp(
 }
 
 /** An install of the review suites: English and Spanish, `posts` and `letters`. */
-export function bootReview(dialect: TestDialect) {
+export function bootReview(
+  dialect: TestDialect
+): Promise<{ handle: TestNextly; handlers: Handlers }> {
   return bootMcp({
     dialect,
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -474,13 +482,20 @@ export async function trustedPart(
   return (review.parts as unknown as PartState[]).find(p => p.part === part);
 }
 
+/** A part as a step says it saw it. */
+export interface SeenPart {
+  part: string | null;
+  revision: number;
+  version: string;
+}
+
 /** What a step says it saw of `parts`, as the trusted read tells them now. */
 export async function trustedSeen(
   handle: TestNextly,
   document: DocRef,
   parts: (string | null)[]
-) {
-  const seen = [];
+): Promise<SeenPart[]> {
+  const seen: SeenPart[] = [];
   for (const part of parts) {
     const state = await trustedPart(handle, document, part);
     expect(state?.version, `no version of part ${part}`).toEqual(
@@ -489,7 +504,7 @@ export async function trustedSeen(
     seen.push({
       part,
       revision: state?.revision ?? 0,
-      version: state?.version as string,
+      version: String(state?.version),
     });
   }
   return seen;

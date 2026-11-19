@@ -9,10 +9,17 @@
  *
  * @module tools/inputs
  */
+import type {
+  PluginWorkflowDocumentRef,
+  PluginWorkflowSeenPart,
+} from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
 /** A document, as the review tools name it: an entry of a collection, or a Single. */
-export const DocumentRef = z
+// Each shape is typed as the service's own input type: a schema whose output drifted from what
+// `ctx.services.workflows` takes fails to compile here, and the published declarations need the
+// type written out.
+export const DocumentRef: z.ZodType<PluginWorkflowDocumentRef> = z
   .union([
     z
       .object({
@@ -29,14 +36,14 @@ export const DocumentRef = z
   );
 
 /** A part of a document: a language's code, or null for the part every language shares. */
-export const Part = z
+export const Part: z.ZodType<string | null> = z
   .string()
   .min(1)
   .nullable()
   .describe("A language code, or null for the part every language shares");
 
 /** A part as the caller saw it, read from `get_review_state`. */
-export const SeenPart = z
+export const SeenPart: z.ZodType<PluginWorkflowSeenPart> = z
   .object({
     part: Part,
     revision: z

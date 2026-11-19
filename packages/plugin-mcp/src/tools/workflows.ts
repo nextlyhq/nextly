@@ -12,6 +12,8 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import type { ToolCaller } from "./answer";
 import { registerGetReviewState } from "./get-review-state";
 import { registerGetWorkflow } from "./get-workflow";
+import { registerListWaitingForReview } from "./list-waiting-for-review";
+import { registerSubmitForReview } from "./submit-for-review";
 
 /** Register every review tool, each closed over the caller the server was built for. */
 export function registerWorkflowTools(
@@ -20,4 +22,6 @@ export function registerWorkflowTools(
 ): void {
   registerGetWorkflow(server, caller);
   registerGetReviewState(server, caller);
+  registerListWaitingForReview(server, caller);
+  registerSubmitForReview(server, caller);
 }

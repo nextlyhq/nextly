@@ -22,6 +22,7 @@ import type {
 } from "@nextlyhq/plugin-sdk";
 
 import { registerInitialContext } from "../tools/initial-context";
+import { registerWorkflowTools } from "../tools/workflows";
 
 import { callerNow, whileServing } from "./caller";
 import { refuseUnlessAddressedHere } from "./guard";
@@ -51,17 +52,15 @@ const SERVER_NAME = "nextly";
 /**
  * Build the protocol server for one request.
  *
- * It carries one tool and no resources or prompts, so a client sees a server
- * advertising `tools` alone. Built per request rather than once, because the
- * tool answers for the caller and a server shared between them would answer for
- * whichever one built it.
+ * It carries five tools and no resources or prompts, so a client sees a server
+ * advertising `tools` alone: `get_initial_context` and the review tools, of
+ * which only `submit_for_review` writes. Built per request rather than once,
+ * because every tool answers for the caller and a server shared between them
+ * would answer for whichever one built it.
  *
  * The caller is resolved HERE, before anything is constructed, so a request
  * whose caller cannot be established is refused rather than served a server
- * built for nobody. Nothing reads the value yet, which is exactly why the
- * refusal is worth having now: the first tool to read it will find the
- * guarantee already in place rather than have to establish it while also
- * being the first thing to depend on it.
+ * built for nobody: every tool is closed over the caller resolved here.
  *
  * Exported for its own test rather than only through a request, because a
  * precondition whose rejection branch nothing reaches is a guard nobody has
@@ -75,6 +74,9 @@ export function buildServer(options: EndpointOptions): McpServer {
   // ambient scope instead would run when the callback fires rather than when
   // the server was built, and the two are not the same request.
   registerInitialContext(server, ctx);
+  // The review tools, closed over the same caller: each calls
+  // `ctx.services.workflows` as this request's user and key.
+  registerWorkflowTools(server, ctx);
   return server;
 }
 
@@ -103,8 +105,8 @@ const ENDPOINT_METHODS: readonly RouteMethod[] = ["POST", "GET", "DELETE"];
  * No `requiredPermission` is named beyond that, deliberately: a route-level
  * permission would be a second gate in front of tools that already authorize
  * their own reads, and the coarser of two gates is the one that goes stale.
- * `get_initial_context` decides per entity, and the read tools will do the same
- * per document.
+ * `get_initial_context` decides per entity, and the review tools per document,
+ * through the same service checks the REST routes make.
  *
  * ## What that costs, stated rather than left to be found
  *
@@ -149,8 +151,9 @@ export function mcpEndpointRoutes(options: EndpointOptions): PluginRoute[] {
     // The address an operator publishes to an agent, not one buried under this
     // plugin's own name.
     mount: "root" as const,
-    // Read-only, and each tool answers what this caller may read: the handler
-    // judges every caller, so signing in is required and nothing more is.
+    // Each tool answers for this caller, and the one that writes is held to the
+    // same step rules as a REST request: the handler judges every caller, so
+    // signing in is required and nothing more is.
     checksAccess: true as const,
     handler: serve,
   }));

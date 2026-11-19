@@ -90,13 +90,22 @@ describe("tools/list", () => {
 
   it("takes no input that reaches past review or the access check", async () => {
     const tools = await listed();
+    // Every input each tool declares, nested ones included, named `<tool>.<input>`.
     const declared = tools.flatMap(tool =>
       propertyNames(tool.inputSchema).map(name => `${tool.name}.${name}`)
     );
 
-    // The control: the walk finds the inputs tools do declare, so finding none of the keys
-    // below is not a walk that finds nothing.
-    expect(declared.length).toBeGreaterThan(0);
+    // The control, over the tools that do take inputs: the walk finds the one that writes'
+    // own inputs, and one nested inside its document's alternatives, which is as deep as a
+    // bypass key could hide. Finding none of the keys below is then not a walk that sees nothing.
+    expect(declared).toEqual(
+      expect.arrayContaining([
+        "submit_for_review.comment",
+        "submit_for_review.seen",
+        "submit_for_review.collection",
+        "get_workflow.single",
+      ])
+    );
     expect(
       declared.filter(name => BYPASS_KEYS.includes(name.split(".")[1] ?? ""))
     ).toEqual([]);
