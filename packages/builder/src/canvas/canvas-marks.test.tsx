@@ -37,7 +37,7 @@ import { EXPOSED_ATTRIBUTE } from "./exposed-outline";
 import { markLookReach } from "../inspector/style-inspector/look-reach";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
 import { PreviewedEntryProvider } from "../previewed-entry";
-import { VisitorUnreadableBadges } from "../visitor-unreadable-badges";
+import { VisitorUnreadableBadges } from "../shell/visitor-unreadable-badges";
 
 /**
  * The selection ring and its halo are drawn for EVERY selected rendering, by

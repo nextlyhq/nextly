@@ -303,7 +303,7 @@ export { revealNode } from "./canvas/reveal-node";
  *
  * @experimental
  */
-export { keyHint } from "./key-hint";
+export { keyHint } from "./shell/key-hint";
 
 /**
  * @experimental Whether the editor may move or delete a block the author has

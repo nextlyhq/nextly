@@ -36,9 +36,9 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import { keyHint } from "../../key-hint";
+import { keyHint } from "../../shell/key-hint";
 import { labelNotInName } from "../../label-in-name.fixture";
-import { MOVE_KEYS } from "../../keyboard-actions";
+import { MOVE_KEYS } from "../../shell/keyboard-actions";
 import { LAYERS_DEPTH_PX } from "./layers-drop";
 import { LayersPanel } from "./layers-panel";
 import { useEditorState, type EditorState } from "../../editor-state";

@@ -20,7 +20,7 @@ import {
   useEditingTarget,
   type RegionEditing,
 } from "./editing-target";
-import { useEditorState } from "./editor-state";
+import { useEditorState } from "../editor-state";
 
 function node(id: string): BlockNode {
   return { id, type: "core/box", version: 1, props: {} };

@@ -10,7 +10,7 @@ import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { useEditorState } from "./editor-state";
+import { useEditorState } from "../editor-state";
 import { applyStarterPage, planStarterPage } from "./starter-page";
 
 function node(id: string, children?: BlockNode[]): BlockNode {

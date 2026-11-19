@@ -16,7 +16,7 @@ import {
 } from "./docs-links";
 
 /** The repository's `docs/` folder, which the site publishes. */
-const DOCS = fileURLToPath(new URL("../../../docs/", import.meta.url));
+const DOCS = fileURLToPath(new URL("../../../../docs/", import.meta.url));
 
 /** The headings of a published page, as written. */
 function headingsIn(page: string): string[] {

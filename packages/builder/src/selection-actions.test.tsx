@@ -20,7 +20,7 @@ import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
-import { BlockKeyboardActions } from "./keyboard-actions";
+import { BlockKeyboardActions } from "./shell/keyboard-actions";
 import { useSelectionActions } from "./selection-actions";
 import { toolbarActions, type ToolbarAction } from "./canvas/toolbar-actions";
 

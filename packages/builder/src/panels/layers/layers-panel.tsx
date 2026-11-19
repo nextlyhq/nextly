@@ -115,13 +115,13 @@ import {
   lockViewOf,
   renameOp,
 } from "../../inspector/inspector";
-import { keyHint } from "../../key-hint";
-import { MOVE_KEYS, type SharedBlockVerbs } from "../../keyboard-actions";
 import type { MoveDirection } from "../../keyboard-move";
 import { lockRefusalWording } from "../../lock-refusal";
 import { refusalAnnouncement } from "../../move-refusal";
 import type { BuilderOp } from "../../op-vocabulary";
 import { deviceLabel } from "../../shell/breakpoint-switcher";
+import { keyHint } from "../../shell/key-hint";
+import { MOVE_KEYS, type SharedBlockVerbs } from "../../shell/keyboard-actions";
 
 import {
   EntryContentRowFact,

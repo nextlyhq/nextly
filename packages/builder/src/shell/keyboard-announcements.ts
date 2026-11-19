@@ -6,11 +6,11 @@
  * @module keyboard-announcements
  */
 
-import type { EditorState } from "./editor-state";
-import type { MoveDirection, MoveEffect } from "./keyboard-move";
-import { lockRefusalWording } from "./lock-refusal";
-import { refusalAnnouncement } from "./move-refusal";
-import type { BuilderOp } from "./op-vocabulary";
+import type { EditorState } from "../editor-state";
+import type { MoveDirection, MoveEffect } from "../keyboard-move";
+import { lockRefusalWording } from "../lock-refusal";
+import { refusalAnnouncement } from "../move-refusal";
+import type { BuilderOp } from "../op-vocabulary";
 
 /**
  * The bindings, and why these keys.

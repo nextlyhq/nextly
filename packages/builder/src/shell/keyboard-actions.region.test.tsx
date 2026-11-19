@@ -12,7 +12,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { EditorState } from "./editor-state";
+import type { EditorState } from "../editor-state";
 import { BlockKeyboardActions } from "./keyboard-actions";
 
 afterEach(cleanup);

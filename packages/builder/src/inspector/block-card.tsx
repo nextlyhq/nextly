@@ -36,8 +36,8 @@ import * as React from "react";
 
 import { BlockIconMark } from "../block-icon";
 import type { ToolbarActionId } from "../canvas/toolbar-actions";
-import type { SharedBlockVerbs } from "../keyboard-actions";
 import { useAskedSharedVerbs } from "../selection-offer";
+import type { SharedBlockVerbs } from "../shell/keyboard-actions";
 
 import { layersLockChangeable, type BlockLockStatus } from "./inspector";
 

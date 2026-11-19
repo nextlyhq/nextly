@@ -43,12 +43,12 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { LoopCollection } from "./inspector/content/content-controls";
-import { useEditorState, type EditorState } from "./editor-state";
-import { finishFieldEdit } from "./field-edit";
-import { InspectorPanel } from "./inspector/inspector-panel";
-import type { CustomSource } from "./inspector/content/named-query-model";
-import { LayersPanel } from "./panels/layers/layers-panel";
+import type { LoopCollection } from "../inspector/content/content-controls";
+import { useEditorState, type EditorState } from "../editor-state";
+import { finishFieldEdit } from "../field-edit";
+import { InspectorPanel } from "../inspector/inspector-panel";
+import type { CustomSource } from "../inspector/content/named-query-model";
+import { LayersPanel } from "../panels/layers/layers-panel";
 
 beforeAll(() => {
   // Radix measures and scrolls, and the Layers tree virtualizes; jsdom has

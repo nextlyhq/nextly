@@ -36,7 +36,7 @@ import {
   useEditorState,
   type EditorState,
   type UseEditorStateArgs,
-} from "./editor-state";
+} from "../editor-state";
 
 /** What the host says about a region while it is edited. */
 export interface RegionEditingWords {

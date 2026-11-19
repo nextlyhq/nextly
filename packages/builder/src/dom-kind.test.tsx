@@ -52,7 +52,7 @@ import {
   isTextArea,
 } from "./dom-kind";
 import type { EditorState } from "./editor-state";
-import { BlockKeyboardActions } from "./keyboard-actions";
+import { BlockKeyboardActions } from "./shell/keyboard-actions";
 import {
   commitsFor,
   supersedes,
