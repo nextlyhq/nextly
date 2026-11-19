@@ -66,6 +66,8 @@ export interface EditorReview {
   binding: DocumentReviewBinding | undefined;
   /** The part on screen, while it stands in a stage of an attached workflow. */
   part: PartReview | undefined;
+  /** Every part of the document the caller may read, whatever its stage. */
+  parts: readonly PartReview[];
   /** The dialog a step needing a comment asks with. */
   dialog: ReactNode;
 }
@@ -96,9 +98,10 @@ export function useEditorReview({
   // speaks for.
   const onScreen = partsOnScreen(query.data, locale ?? defaultLocale);
   const part = onScreen[0];
+  const parts = document === undefined ? [] : (query.data?.parts ?? []);
 
   if (document === undefined || part === undefined) {
-    return { binding: undefined, part: undefined, dialog: null };
+    return { binding: undefined, part: undefined, parts, dialog: null };
   }
 
   // Offered only where every part it moves may take it.
@@ -126,7 +129,7 @@ export function useEditorReview({
     ...stepHold(isDirty, onScreen),
   };
 
-  return { binding: { state, takeStep }, part, dialog: taker.dialog };
+  return { binding: { state, takeStep }, part, parts, dialog: taker.dialog };
 }
 
 /** Why no step can be taken at this moment, where something holds them. */

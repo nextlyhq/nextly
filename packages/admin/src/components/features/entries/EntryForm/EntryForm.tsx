@@ -1844,6 +1844,7 @@ export function EntryForm({
                                           editedStatus.hasWorkingDraft
                                         }
                                         part={review.part}
+                                        parts={review.parts}
                                         className={DOCUMENT_COLUMN_INSET}
                                       />
                                       <EntryMetaStrip

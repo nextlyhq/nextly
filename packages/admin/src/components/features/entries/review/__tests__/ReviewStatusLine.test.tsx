@@ -58,6 +58,34 @@ describe("ReviewStatusLine", () => {
     );
   });
 
+  it("tells the writer of changes asked for on the shared fields alone, from another language", () => {
+    const shared = part({
+      part: null,
+      stage: "drafting",
+      stageLabel: "Drafting",
+      lastMove: {
+        kind: "workflow-request-changes",
+        actor: { kind: "person", id: "rita", name: "Rita" },
+        at: "2026-11-19T09:00:00.000Z",
+        from: "inReview",
+        to: "drafting",
+        comment: "The price is wrong.",
+      },
+    });
+    const english = part({ part: "en", stage: null, stageLabel: null });
+    render(
+      <ReviewStatusLine
+        status="published"
+        hasWorkingDraft={false}
+        part={undefined}
+        parts={[english, shared]}
+      />
+    );
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Changes requested on the shared fields by Rita: “The price is wrong.”"
+    );
+  });
+
   it("says nothing of a comment that came with any other move", () => {
     render(
       <ReviewStatusLine
