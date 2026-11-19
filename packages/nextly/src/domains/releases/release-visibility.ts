@@ -134,24 +134,36 @@ async function withoutHeld(
     })),
     query.now
   );
-  if (reached.releases.length === 0 && reached.unbounded.length === 0) {
-    return due;
-  }
   const plan = planReleaseMaterialisation({
     releases: reached.releases,
     members: reached.members,
     now: query.now,
   });
   const decided = new Set([...due.reveal, ...due.hide]);
+  const inScope = (action: (typeof plan.actions)[number]) =>
+    action.ref.scopeKind === query.scopeKind &&
+    action.ref.scopeSlug === query.scopeSlug;
   // A component past the walk's bound is not guessed at: its documents project nothing, as a
   // held component's do, and every other component keeps its decisions.
   const withheld = new Set(reached.unbounded.map(document => document.entryId));
+  // The decisions and the plan are two reads, and the schedule can move between them. A decision
+  // the plan, read second, no longer makes of the document as a whole (its release stopped or
+  // ran meanwhile, or another release now wins it) is not projected, so the read answers as one
+  // snapshot would and never reveals a document no due release still publishes.
+  const planned = new Map(
+    plan.actions
+      .filter(action => inScope(action) && action.ref.locale === null)
+      .map(action => [action.ref.entryId, action.effect])
+  );
+  for (const entryId of due.reveal) {
+    if (planned.get(entryId) !== "publish") withheld.add(entryId);
+  }
+  for (const entryId of due.hide) {
+    if (planned.get(entryId) !== "unpublish") withheld.add(entryId);
+  }
   for (const actions of actionsByComponent(plan)) {
     const here = actions.filter(
-      action =>
-        action.ref.scopeKind === query.scopeKind &&
-        action.ref.scopeSlug === query.scopeSlug &&
-        decided.has(action.ref.entryId)
+      action => inScope(action) && decided.has(action.ref.entryId)
     );
     if (here.length === 0) continue;
     if (

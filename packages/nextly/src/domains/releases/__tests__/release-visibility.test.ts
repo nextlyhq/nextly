@@ -113,7 +113,12 @@ describe("createReleaseVisibility", () => {
     }));
     const visibility = createReleaseVisibility({
       cache: { mayHaveDue: async () => true },
-      repository: { findDueDecisions, ...NOTHING_DUE },
+      repository: {
+        findDueDecisions,
+        // The releases those decisions come from, still due when they are planned.
+        scheduledMembersFor: TWO_RELEASES.scheduledMembersFor,
+        listMembersOf: TWO_RELEASES.listMembersOf,
+      },
     });
 
     // BOTH directions reach the caller. A seam that forwarded only `reveal`
@@ -284,6 +289,79 @@ describe("createReleaseVisibility with a hold on going live", () => {
       hide: ["e3"],
     });
     expect(held).not.toHaveBeenCalled();
+  });
+});
+
+describe("createReleaseVisibility over a schedule that moves between its reads", () => {
+  it("projects only what the due releases it plans still decide, never a decision they no longer make", async () => {
+    // Read after the decisions: e1's release is no longer due (stopped meanwhile), and e3, decided
+    // a takedown, is now won by a publish due since. Only e2 is decided alike by both reads.
+    const holds = new Map<string, DrainMemberRow[]>([
+      ["r2", [member("r2", "e2", "publish")]],
+      ["r3", [member("r3", "e3", "publish")]],
+    ]);
+    const visibility = createReleaseVisibility({
+      cache: { mayHaveDue: async () => true },
+      repository: {
+        findDueDecisions: async () => ({ reveal: ["e1", "e2"], hide: ["e3"] }),
+        scheduledMembersFor: async (target: {
+          documents?: readonly { entryId: string }[];
+        }) => {
+          const asked = new Set(
+            (target.documents ?? []).map(document => document.entryId)
+          );
+          return [...holds]
+            .filter(([, members]) => members.some(m => asked.has(m.entryId)))
+            .map(([id]) => ({ release: release(id), members: [] }));
+        },
+        listMembersOf: async (ids: string[]) =>
+          ids.flatMap(id => holds.get(id) ?? []),
+      },
+      hold: () => ({ held: async () => new Set<string>() }),
+    });
+
+    expect(await visibility.decisions(QUERY)).toEqual({
+      reveal: ["e2"],
+      hide: [],
+    });
+  });
+
+  it("keeps the decisions of every component whose question was answered when another's fails", async () => {
+    // r3 takes e4 down on its own; the question about r2's component fails. The run writes none of
+    // r2's component and all of r3's, so a reader keeps r3's takedown.
+    const visibility = createReleaseVisibility({
+      cache: { mayHaveDue: async () => true },
+      repository: {
+        findDueDecisions: async () => ({
+          reveal: ["e1", "e2"],
+          hide: ["e3", "e4"],
+        }),
+        scheduledMembersFor: async () => [
+          { release: release("r1"), members: [] },
+          { release: release("r2"), members: [] },
+          { release: release("r3"), members: [] },
+        ],
+        listMembersOf: async () => [
+          member("r1", "e1", "publish"),
+          member("r2", "e2", "publish"),
+          member("r2", "e3", "unpublish"),
+          member("r3", "e4", "unpublish"),
+        ],
+      },
+      hold: () => ({
+        held: async documents => {
+          if (documents.some(d => d.entryId === "e2")) {
+            throw new Error("connection reset");
+          }
+          return new Set<string>();
+        },
+      }),
+    });
+
+    expect(await visibility.decisions(QUERY)).toEqual({
+      reveal: ["e1"],
+      hide: ["e4"],
+    });
   });
 });
 
