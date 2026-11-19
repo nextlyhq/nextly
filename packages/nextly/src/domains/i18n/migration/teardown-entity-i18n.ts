@@ -23,6 +23,8 @@
  * @module domains/i18n/migration/teardown-entity-i18n
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
+
 import { q } from "./ddl-types";
 import { ensureI18nArchive, runI18nSchemaStatements } from "./ensure-archive";
 import {
@@ -97,11 +99,17 @@ export interface TeardownEntityI18nResult {
  * there, and answers whether it was. Guarded so an entity that never had one
  * is a no-op rather than relying on IF EXISTS semantics that differ across
  * dialects. `change` names, in a busy-table refusal, what the drop is part of.
+ *
+ * `cascade: false` drops nothing but the table: where another table's key or a
+ * view depends on it, the drop is refused, naming them, and they stay. A table
+ * left standing by an older delete is dropped so, since only the table was
+ * consented to.
  */
 export async function dropTranslationsTable(
   adapter: TeardownI18nAdapter,
   tableName: string,
-  change: string
+  change: string,
+  options: { cascade?: boolean } = {}
 ): Promise<boolean> {
   const companionTable = `${tableName}_locales`;
   if (!(await adapter.tableExists(companionTable))) return false;
@@ -109,17 +117,27 @@ export async function dropTranslationsTable(
   // Postgres needs CASCADE to also remove the FK constraint the companion owns; MySQL and
   // SQLite reject the keyword. IF EXISTS keeps the statement safe against a concurrent drop.
   const dropSql =
-    adapter.dialect === "postgresql"
+    adapter.dialect === "postgresql" && options.cascade !== false
       ? `DROP TABLE IF EXISTS ${quoted} CASCADE`
       : `DROP TABLE IF EXISTS ${quoted}`;
   // Waits for a companion another database session holds in short tries, then stops with
   // `NEXTLY_TABLE_BUSY` naming it and its holder, rather than holding the delete without bound.
-  await runI18nSchemaStatements(
-    adapter,
-    [dropSql],
-    change,
-    () => `the drop of table ${JSON.stringify(companionTable)}`
-  );
+  try {
+    await runI18nSchemaStatements(
+      adapter,
+      [dropSql],
+      change,
+      () => `the drop of table ${JSON.stringify(companionTable)}`
+    );
+  } catch (error) {
+    const dependents = dependentObjects(error);
+    if (dependents === undefined) throw error;
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `Table ${JSON.stringify(companionTable)} was not dropped: other objects depend on it (${dependents}). Drop or change them by hand, then run \`nextly migrate\` again.`,
+      ...(error instanceof Error ? { cause: error } : {}),
+    });
+  }
   // Readiness remembers only that a companion exists, and this is one of the two things that
   // makes that false. Forgetting it here rather than at the call sites keeps the memory tied to
   // the statement that invalidates it.
@@ -128,6 +146,29 @@ export async function dropTranslationsTable(
   );
   forgetCompanionReadiness(adapter, companionTable);
   return true;
+}
+
+/**
+ * What PostgreSQL names as depending on a table it refused to drop without CASCADE (SQLSTATE
+ * `2BP01`, its detail listing them), read through the error's causes; undefined for any other
+ * failure.
+ */
+function dependentObjects(error: unknown): string | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 6 && current !== undefined; depth++) {
+    const found = current as {
+      code?: unknown;
+      detail?: unknown;
+      cause?: unknown;
+    };
+    if (found?.code === "2BP01") {
+      return typeof found.detail === "string" && found.detail !== ""
+        ? found.detail.replace(/\s+/g, " ").trim()
+        : "the database names them in its own message";
+    }
+    current = found?.cause;
+  }
+  return undefined;
 }
 
 /**

@@ -43,6 +43,7 @@ import type {
   SettingsEntityKind,
 } from "../migrate-create/entity-settings";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
+import { readForeignKeyTargets } from "../pipeline/live-table-facts";
 import {
   assertSchemaLockHeld,
   isSchemaLockLost,
@@ -124,7 +125,8 @@ export async function removeDroppedEntityLeftovers(args: {
         adapter,
         entity,
         args.dropTranslations,
-        dropped
+        dropped,
+        logger
       );
       const removed = await adapter.transaction(async tx => {
         const scoped = teardownAdapterIn(adapter, tx);
@@ -190,16 +192,27 @@ async function dropCoveredTranslations(
   adapter: DrizzleAdapter,
   entity: DroppedEntity,
   covered: ReadonlySet<string> | undefined,
-  dropped: string[]
+  dropped: string[],
+  logger: Logger
 ): Promise<void> {
   for (const table of entity.tables) {
     const translations = `${table}_locales`;
     if (covered?.has(translations) !== true) continue;
+    // Proven again right before the drop, as the run was asked about it: a migration of this run
+    // may have dropped that table and made another under its name.
+    if (!(await keyedAsTranslations(adapter, translations))) {
+      logger.warn(
+        `Left table ${JSON.stringify(translations)} as it is: it is no longer the translations table the deleted ${KIND_WORDS[entity.kind]} "${entity.slug}" left, which the run was asked about.`
+      );
+      continue;
+    }
     if (
       await dropTranslationsTable(
         adapter,
         table,
-        "the removal of what a deleted entity left"
+        "the removal of what a deleted entity left",
+        // Only the table was consented to: a view or another table's key on it refuses the drop.
+        { cascade: false }
       )
     ) {
       dropped.push(translations);
@@ -261,7 +274,10 @@ export async function leftoverTranslationsTables(args: {
   return out;
 }
 
-/** Whether live `table` is keyed as a translations table, by `_parent` and `_locale` alone; one that cannot be read is not. */
+/**
+ * Whether live `table` is a translations table an older delete left: keyed by `_parent` and
+ * `_locale` alone, with no key from `_parent` to any table. One that cannot be read is not.
+ */
 async function keyedAsTranslations(
   adapter: DrizzleAdapter,
   table: string
@@ -280,10 +296,20 @@ async function keyedAsTranslations(
         .filter(column => column.primaryKey === true)
         .map(column => column.name)
     );
-    return (
-      key.size === COMPANION_KEY_COLUMNS.length &&
-      COMPANION_KEY_COLUMNS.every(column => key.has(column))
+    if (
+      key.size !== COMPANION_KEY_COLUMNS.length ||
+      !COMPANION_KEY_COLUMNS.every(column => key.has(column))
+    ) {
+      return false;
+    }
+    // And no key from `_parent` to any table: an older delete's drop of the main table took the
+    // one it had, so a table of this name whose `_parent` points somewhere was made since.
+    const keys = await readForeignKeyTargets(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      table
     );
+    return (keys.get(COMPANION_KEY_COLUMNS[0] ?? "_parent") ?? []).length === 0;
   } catch {
     return false;
   }
