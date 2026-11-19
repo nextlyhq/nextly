@@ -83,6 +83,11 @@ export async function writeEntitySave(
      * `apply` still runs once they are written.
      */
     runsFile?: boolean;
+    /**
+     * With `runsFile`, work done inside the last file's transaction, after its ledger row (the
+     * writer's `inLastTransaction`): a registry write that commits or rolls back with the file.
+     */
+    inLastTransaction?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult | undefined> {
   if (deps === undefined) {
@@ -90,7 +95,12 @@ export async function writeEntitySave(
     return undefined;
   }
   if (deps.applies && options.runsFile === true) {
-    return writeCollectionSave(deps, save, { historyChecked: true });
+    return writeCollectionSave(deps, save, {
+      historyChecked: true,
+      ...(options.inLastTransaction === undefined
+        ? {}
+        : { inLastTransaction: options.inLastTransaction }),
+    });
   }
   // Only a part-way failure is the writer's to know; anything else `apply`
   // answers is the caller's.

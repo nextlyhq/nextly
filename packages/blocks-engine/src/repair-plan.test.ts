@@ -14,6 +14,7 @@ import { DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode } from "./document";
 import { DEFAULT_LIMITS, documentBytes } from "./limits";
 import { lockBreaksIn } from "./lock-breaks";
+import { documentWork } from "./measure-bytes";
 import { lockRepairRule, planRepair, type RepairRule } from "./repair-plan";
 import {
   clearBlocks,
@@ -518,5 +519,51 @@ describe("planRepair", () => {
     repaired(page(row), [lockRepairRule, later]);
     // The later rule received the document with the lock already repaired.
     expect(seen).toEqual([["row", "extra"]]);
+  });
+
+  it("answers a page no rule finds anything in without surveying or copying it", () => {
+    const doc = page(placed("acme/fixed-row"), placed("acme/sealed-card"));
+    const before = documentWork().walks;
+    const plan = planRepair(doc, sources());
+    // No size survey ran: the planner surveys a page twice when it plans.
+    expect(documentWork().walks).toBe(before);
+    expect(plan.result).toBe(doc);
+    expect(plan.steps).toEqual([]);
+    expect(plan.remaining).toEqual([]);
+  });
+
+  it("runs a rule that cannot say whether it finds anything", () => {
+    const seen: string[] = [];
+    const unsure: RepairRule = {
+      name: "test/unsure",
+      apply(document) {
+        seen.push(document.nodes[0]!.id);
+        return { document, steps: [] };
+      },
+    };
+    repaired(page(placed("acme/fixed-row", "row")), [lockRepairRule, unsure]);
+    expect(seen).toEqual(["row"]);
+  });
+
+  it("still names the breaks a page holds when the rules it was given find nothing", () => {
+    const row = placed("acme/fixed-row", "row");
+    row.slots!.items!.push({ ...placed("acme/divider"), id: "extra" });
+    const idle: RepairRule = {
+      name: "test/idle",
+      finds: () => false,
+      apply: document => ({ document, steps: [] }),
+    };
+    const plan = planRepair(page(row), sources(), [idle]);
+    expect(plan.steps).toEqual([]);
+    expect(plan.remaining).toEqual(lockBreaksIn(page(row), sources()));
+    expect(plan.remaining.length).toBeGreaterThan(0);
+  });
+
+  it("finds a lock break, and nothing on a page every lock allows", () => {
+    const row = placed("acme/fixed-row", "row");
+    const context = { sources: sources() };
+    expect(lockRepairRule.finds?.(page(row), context)).toBe(false);
+    row.slots!.items!.push({ ...placed("acme/divider"), id: "extra" });
+    expect(lockRepairRule.finds?.(page(row), context)).toBe(true);
   });
 });

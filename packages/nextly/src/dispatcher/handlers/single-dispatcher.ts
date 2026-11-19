@@ -107,7 +107,10 @@ import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-s
 import { assertAddressAllowed } from "../../shared/address-rule";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { consoleLogger } from "../../shared/types";
-import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
+import {
+  registryInFileTransaction,
+  writeAppliedFieldsRow,
+} from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -1794,7 +1797,19 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 })
               : undefined,
           };
-          await writeBuilderSchemaChange(
+          const newSchemaVersion = currentVersion + 1;
+          // The registry's row of the save: the fields it applied, whether it is translated, and
+          // the advanced schema version, written with the stored version in one transaction and the
+          // cached rows cleared after it (`writeAppliedFieldsRow`).
+          const writeRow = () =>
+            writeAppliedFieldsRow(adapter, {
+              table: "dynamic_singles",
+              slug,
+              fields: fields as FieldConfig[],
+              localized: isLocalized,
+              schemaVersion: newSchemaVersion,
+            });
+          const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
             () => pushAndReconcileCompanion(push, desired, "single", companion),
             {
@@ -1841,10 +1856,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   tableName,
                 }),
               afterFile: () => reconcileBuilderCompanion("single", companion),
+              // On the file road the row is written in the file's own transaction, so a failed
+              // write leaves the save as it was and is answered as the failure it is. Not where the
+              // translations table is reconciled after the file: the row would then record the
+              // change before that step holds it, so it is written after it, as before.
+              ...(registryInFileTransaction(layout)
+                ? { registry: writeRow }
+                : {}),
             }
           );
-
-          const newSchemaVersion = currentVersion + 1;
 
           // Post-apply: update dynamic_singles fields JSON + schema_hash, advance
           // schema_version so the optimistic-lock check above sees a new value on the
@@ -1855,15 +1875,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // version the database did not persist.
           let versionPersisted = true;
           try {
-            // The row and the stored schema version in one transaction, and the
-            // cached rows cleared after it (`writeAppliedFieldsRow`).
-            await writeAppliedFieldsRow(adapter, {
-              table: "dynamic_singles",
-              slug,
-              fields: fields as FieldConfig[],
-              localized: isLocalized,
-              schemaVersion: newSchemaVersion,
-            });
+            // Written already, in the file's transaction, where the save ran its file.
+            if (!registryWritten) await writeRow();
           } catch (err) {
             versionPersisted = false;
             const msg = err instanceof Error ? err.message : String(err);

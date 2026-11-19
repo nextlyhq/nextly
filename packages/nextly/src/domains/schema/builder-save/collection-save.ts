@@ -333,6 +333,15 @@ export async function writeCollectionSave(
      * that was refused; `"partly-applied"` keeps them, recorded nowhere.
      */
     appliedAfter?: () => Promise<void | "partly-applied">;
+    /**
+     * In development, where the file runs, work done inside the last file's own transaction, after
+     * its ledger row: a caller's registry write, so the change, its ledger row and the registry row
+     * commit or roll back together, and a failed write is withdrawn as a failed statement is
+     * (`undoUnapplied`). It joins that transaction through the adapter, as `nextly migrate`'s
+     * registry rows do (`writesInFileTransaction`); a file run outside a transaction has none to
+     * join, and the work then runs on its own after the file.
+     */
+    inLastTransaction?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult> {
   const bounds = boundsFor(deps);
@@ -363,7 +372,13 @@ export async function writeCollectionSave(
           deps.adapter.getCapabilities().dialect
         );
       }
-      await runWritten(deps, written.files, written.table, bounds);
+      await runWritten(
+        deps,
+        written.files,
+        written.table,
+        bounds,
+        options.inLastTransaction
+      );
     } else if (options.appliedAfter !== undefined) {
       await options.appliedAfter();
       pushed = true;
@@ -519,6 +534,8 @@ async function refuseSaveTypeChanges(
   const renamed = new Map(
     (save.renamedFields ?? []).map(r => [r.from, r.to] as const)
   );
+  // A field group keeps its fields on its component rows, where a many-to-many has a column.
+  const componentRow = kind.kind === "fieldGroup" ? { componentRow: true } : {};
   // Asked only of a save that changes a field's type, so no other save reads its folder.
   const changes = fieldTypeChangesOf({
     previous,
@@ -526,6 +543,7 @@ async function refuseSaveTypeChanges(
     renamed,
     dialect,
     builtBy: kind.builtBy,
+    ...componentRow,
   });
   if (changes.length === 0) return;
   await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
@@ -539,6 +557,7 @@ async function refuseSaveTypeChanges(
     // No consent is taken here: a lossy type change is refused until the save clears the
     // consented values before it converts the column.
     builtBy: kind.builtBy,
+    ...componentRow,
   });
 }
 
@@ -1992,7 +2011,8 @@ async function runWritten(
   deps: CollectionSaveDeps,
   files: SaveFiles,
   table: string,
-  boundsRead: BusyTableBounds | undefined
+  boundsRead: BusyTableBounds | undefined,
+  inLastTransaction?: () => Promise<void>
 ): Promise<void> {
   const db = deps.adapter.getDrizzle();
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -2001,6 +2021,8 @@ async function runWritten(
   // The record of a file a busy table stopped waits for the ledger table one try at most.
   const recordStopped = boundedStopRecord(deps.adapter, bounds.tryMs);
   const applied: string[] = [];
+  // The file being run, so the last one's transaction also takes `inLastTransaction`.
+  let running: string | undefined;
   const executeSql = (
     sql: string,
     unit: { source: string; transaction: boolean },
@@ -2010,7 +2032,12 @@ async function runWritten(
       deps.adapter,
       splitSqlStatements(sql, dialect, unit),
       unit,
-      after,
+      inLastTransaction !== undefined && running === ordered.at(-1)
+        ? async (handle: unknown, statementsExecuted: number) => {
+            await after(handle, statementsExecuted);
+            await inLastTransaction();
+          }
+        : after,
       {
         bounds,
         notify: line => deps.logger.warn(line),
@@ -2035,6 +2062,7 @@ async function runWritten(
     // as part-way, and a refusal that ran nothing was reported as a failure
     // whose statements stayed applied, its files kept for `migrate:resolve`.
     await refuseBeforeAnyStatement(filename);
+    running = filename;
     await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
     applied.push(filename);
   }
