@@ -1,52 +1,65 @@
 /**
  * What Activity's template and provider filters offer: the hub's own lists
- * by name where the reader may read them, else what the loaded rows name, a
- * provider without a stored id as "not stored", and the chosen one always.
+ * by name where the reader may read them, else what the loaded rows name,
+ * providers by type, and the chosen one always.
  *
  * @module components/features/email-hub/activity/__tests__/activity-choices.test
  */
 import { describe, expect, it } from "vitest";
 
-import { providerChoices, templateChoices } from "../activity-choices";
-import { deliveryRow, queuedRow, type ActivityRow } from "../activity-model";
+import type { ActivityProvider } from "@admin/services/emailActivityApi";
+
+import { providerTypeChoices, templateChoices } from "../activity-choices";
+import { activityRow, type ActivityRow } from "../activity-model";
 
 function sent(
   id: string,
-  slug: string | null,
-  provider: { id: string | null; type: string }
+  template: { slug: string } | "none",
+  provider: ActivityProvider
 ): ActivityRow {
-  return deliveryRow({
+  return activityRow({
+    kind: "delivery",
     id,
     createdAt: "2026-11-16T11:00:00.000Z",
-    outcome: "sent",
-    templateSlug: slug,
+    status: "sent",
+    template,
     provider,
-    recipientKind: "to",
+    recipientKinds: ["to"],
     failureReason: null,
-    namedPerson: false,
+    attempts: null,
+    nextAttemptAt: null,
     erased: false,
   });
 }
 
 const ROWS: ActivityRow[] = [
-  sent("d1", "password-reset", {
-    id: "11111111-aaaa-bbbb-cccc-000000000000",
-    type: "resend",
-  }),
-  sent("d2", "order-shipped", { id: null, type: "smtp" }),
-  sent("d3", null, { id: null, type: "smtp" }),
-  queuedRow({
+  sent(
+    "d1",
+    { slug: "password-reset" },
+    {
+      id: "11111111-aaaa-bbbb-cccc-000000000000",
+      type: "resend",
+      origin: "stored",
+    }
+  ),
+  sent(
+    "d2",
+    { slug: "order-shipped" },
+    { id: null, type: "smtp", origin: "code" }
+  ),
+  sent("d3", "none", { id: null, type: "smtp", origin: "deleted" }),
+  activityRow({
+    kind: "queued",
     id: "q1",
     createdAt: "2026-11-16T10:00:00.000Z",
-    updatedAt: "2026-11-16T10:00:00.000Z",
-    settledAt: null,
-    state: "waiting",
+    status: "waiting",
+    template: { slug: "welcome" },
+    provider: null,
+    recipientKinds: null,
+    failureReason: null,
     attempts: 0,
     nextAttemptAt: null,
-    lastFailure: null,
-    messageHeld: true,
-    templateSlug: "welcome",
-    queuedBy: "site",
+    erased: false,
   }),
 ];
 
@@ -98,39 +111,30 @@ describe("templateChoices", () => {
   });
 });
 
-describe("providerChoices", () => {
-  it("offers stored providers by name, and for one not stored every provider of its type, never as deleted", () => {
+describe("providerTypeChoices", () => {
+  it("offers each stored provider's type and each type the rows name, once, as every provider of it", () => {
     expect(
-      providerChoices(
-        [{ id: "11111111-aaaa-bbbb-cccc-000000000000", name: "Resend (main)" }],
+      providerTypeChoices(
+        [{ type: "sendlayer" }, { type: "resend" }],
         ROWS,
         undefined
       )
     ).toEqual([
-      {
-        choice: { id: "11111111-aaaa-bbbb-cccc-000000000000" },
-        label: "Resend (main)",
-      },
-      { choice: { type: "smtp" }, label: "Every smtp provider" },
+      { type: "resend", label: "Every resend provider" },
+      { type: "sendlayer", label: "Every sendlayer provider" },
+      { type: "smtp", label: "Every smtp provider" },
     ]);
   });
 
-  it("offers the providers the rows name to a reader who may read deliveries alone", () => {
-    expect(providerChoices(undefined, ROWS, undefined)).toEqual([
-      {
-        choice: { id: "11111111-aaaa-bbbb-cccc-000000000000" },
-        label: "resend · 11111111",
-      },
-      { choice: { type: "smtp" }, label: "Every smtp provider" },
-    ]);
-  });
-
-  it("keeps offering the chosen provider when no row names it", () => {
-    expect(providerChoices(undefined, [], { type: "postmark" })).toEqual([
-      { choice: { type: "postmark" }, label: "Every postmark provider" },
-    ]);
+  it("offers the types the rows name to a reader who may read deliveries alone", () => {
     expect(
-      providerChoices(undefined, [], { id: "p9" }).map(option => option.choice)
-    ).toEqual([{ id: "p9" }]);
+      providerTypeChoices(undefined, ROWS, undefined).map(option => option.type)
+    ).toEqual(["resend", "smtp"]);
+  });
+
+  it("keeps offering the chosen type when no row names it", () => {
+    expect(providerTypeChoices(undefined, [], "postmark")).toEqual([
+      { type: "postmark", label: "Every postmark provider" },
+    ]);
   });
 });
