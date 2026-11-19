@@ -36,6 +36,11 @@ import {
 } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { readUniqueColumns } from "../pipeline/live-table-facts";
+import {
+  MYSQL_LIVE_RUN_LENGTH,
+  mysqlLiveRunAt,
+  plainMysqlStatement,
+} from "../pipeline/sql-templates/mysql-live-restate";
 import type { RequiredColumnEntity } from "../required-column-refusal";
 import { requiredColumnRegistries } from "../required-column-registries";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
@@ -364,7 +369,18 @@ function liveOrigin(
     renamed: new Set(),
   };
   for (let at = target.at - 1; at >= 0; at -= 1) {
-    if (!stepBack(statements[at], dialect, walk)) return AT_STATEMENT;
+    // Walking back, a MySQL run `migrate:create` writes (`mysqlLiveRunAt`) is met at its last
+    // statement, the DEALLOCATE: it is read as the one plain statement it amounts to, a column's
+    // rename among them, and the walk goes on before its first.
+    const start = at - (MYSQL_LIVE_RUN_LENGTH - 1);
+    const run =
+      dialect === "mysql" && start >= 0
+        ? mysqlLiveRunAt(statements, start)
+        : undefined;
+    const statement =
+      run === undefined ? statements[at] : plainMysqlStatement(run);
+    if (!stepBack(statement, dialect, walk)) return AT_STATEMENT;
+    if (run !== undefined) at = start;
   }
   return walk.filledWith === undefined
     ? { kind: "live", ...walk.place }
