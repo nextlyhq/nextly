@@ -121,7 +121,7 @@ async function call(
 
 describe("a review tool that fails tells the agent nothing of the failure", () => {
   it.each(CALLS)(
-    "%s: answers a non-Nextly error with the constant sentence, and logs the original",
+    "%s: answers a non-Nextly error with the constant sentence, and logs it without its message",
     async (name, args) => {
       const { caller, logged } = callerFailingWith(new Error(RAW));
 
@@ -139,17 +139,23 @@ describe("a review tool that fails tells the agent nothing of the failure", () =
       // Nothing of the raw message reaches the wire, in any field.
       expect(raw).not.toContain("hunter2");
       expect(raw).not.toContain("ECONNREFUSED");
-      // The control: the service was reached and failed, and the operator can find it.
+      // The control: the service was reached and failed, and the operator can find it by the
+      // id the answer names and the kind of error. A driver's message can quote a connection
+      // string or a token, so the log never carries the message, and so neither does the stack's
+      // first line, which repeats it.
       expect(logged).toHaveLength(1);
-      expect(JSON.stringify(logged[0])).toContain("hunter2");
-      expect(JSON.stringify(logged[0])).toContain(
+      const entry = JSON.stringify(logged[0]);
+      expect(entry).toContain(
         String(body.result?.structuredContent?.error?.requestId)
       );
+      expect(entry).toContain('"name":"Error"');
+      expect(entry).not.toContain("hunter2");
+      expect(entry).not.toContain("ECONNREFUSED");
     }
   );
 
-  it("answers a thrown value that is not an Error alike", async () => {
-    const { caller } = callerFailingWith(RAW);
+  it("answers a thrown value that is not an Error alike, and logs none of it", async () => {
+    const { caller, logged } = callerFailingWith(RAW);
 
     const { raw, body } = await call(caller, "get_workflow", {
       collection: "posts",
@@ -158,6 +164,8 @@ describe("a review tool that fails tells the agent nothing of the failure", () =
     expect(body.result?.isError).toBe(true);
     expect(body.result?.content?.[0]?.text).toBe(INTERNAL_ERROR_TEXT);
     expect(raw).not.toContain("hunter2");
+    expect(logged).toHaveLength(1);
+    expect(JSON.stringify(logged[0])).not.toContain("hunter2");
   });
 
   it.each(CALLS)(

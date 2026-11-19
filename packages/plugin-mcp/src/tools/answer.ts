@@ -66,6 +66,17 @@ export function answered<T extends object>(
 }
 
 /**
+ * The call frames of `error`'s stack (`    at …` lines): where it was thrown, without the
+ * message line V8 puts first, which can quote a secret.
+ */
+function callFramesOf(error: Error): string[] {
+  return (error.stack ?? "")
+    .split("\n")
+    .filter(line => /^\s+at\s/.test(line))
+    .map(line => line.trim());
+}
+
+/**
  * A refusal for whatever `error` is: the public JSON of a `NextlyError`, or one constant sentence
  * for anything else, logged with the id the answer names so an operator can find it.
  */
@@ -78,12 +89,16 @@ function refused(caller: ToolCaller, error: unknown): CallToolResult {
       isError: true,
     };
   }
+  // Logged by kind and by where it was thrown, never by what it says: a driver's or a network
+  // error's message can quote a connection string or a token, and a stack's first line repeats
+  // that message, so only its call frames are kept. A thrown value that is not an Error is
+  // named by its type alone, for the same reason.
   caller.logger.error("@nextlyhq/plugin-mcp: a tool failed", {
     requestId,
     error:
       error instanceof Error
-        ? { name: error.name, message: error.message, stack: error.stack }
-        : String(error),
+        ? { name: error.name, frames: callFramesOf(error) }
+        : { type: typeof error },
   });
   return {
     content: [{ type: "text", text: INTERNAL_ERROR_TEXT }],
