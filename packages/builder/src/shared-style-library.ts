@@ -27,7 +27,7 @@ import {
   usableSiteClasses,
 } from "./class-library";
 import { EDITOR_WORDS } from "./editor-words";
-import type { TokenMode } from "./font-library";
+import type { TokenMode } from "./panels/design/font-library";
 import { colourHexOf, contrastOf } from "./style-colour";
 
 /** The kinds of document a shared style is counted on. */

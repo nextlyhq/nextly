@@ -1522,7 +1522,7 @@
         "count": 1
       }
     },
-    "packages/builder/src/keyboard-move.ts": {
+    "packages/builder/src/canvas/keyboard-move.ts": {
       "complexity_moderate": {
         "count": 1
       }
@@ -4376,7 +4376,7 @@
     "packages/admin/src/components/features/schema-builder/RelationshipEditor.tsx:complexity",
     "packages/nextly/src/cli/commands/permissions-cleanup.ts:circular dependency",
     "packages/admin/src/types/translations/worklist.ts:hidden coupling",
-    "packages/builder/src/font-library.ts:hidden coupling",
+    "packages/builder/src/panels/design/font-library.ts:hidden coupling",
     "packages/admin/src/components/features/versions/__tests__/VersionTimelineRail.test.tsx:hidden coupling",
     "packages/admin/src/components/features/entries/fields/structured/ComponentRow.tsx:hidden coupling",
     "packages/blocks-react/src/blocks/embed.tsx:hidden coupling",
@@ -4402,13 +4402,13 @@
     "packages/eslint-plugin/src/vocabulary.js:hidden coupling",
     "packages/ui/scripts/check-server-safe-artifacts.ts:complexity",
     "packages/admin/src/components/features/dashboard/OnboardingChecklist.test.tsx:hidden coupling",
-    "packages/builder/src/font-library.test.ts:hidden coupling",
+    "packages/builder/src/panels/design/font-library.test.ts:hidden coupling",
     "packages/plugin-form-builder/src/utils/redirect-target.test.ts:hidden coupling",
     "packages/builder/src/inspector/custom-attributes.ts:hidden coupling",
     "packages/nextly/src/domains/media/__tests__/media-revalidation.integration.test.ts:hidden coupling",
     "packages/builder/src/canvas/use-inline-editing.test.tsx:hidden coupling",
     "packages/nextly/src/domains/releases/__tests__/releases-service.test.ts:hidden coupling",
-    "packages/builder/src/fonts-panel.tsx:hidden coupling",
+    "packages/builder/src/panels/design/fonts-panel.tsx:hidden coupling",
     "packages/builder/src/inspector/advanced-panel.tsx:hidden coupling",
     "packages/admin/src/components/shared/search-bar/call-site-classes.test.ts:complexity",
     "packages/admin/src/components/features/widgets/__tests__/layout-editor.test.ts:hidden coupling",
@@ -4436,7 +4436,7 @@
     "packages/plugin-page-builder/src/class-usage-reconcile.test.ts:hidden coupling",
     "packages/admin/src/lib/rich-text/inline-editor.ts:hidden coupling",
     "packages/builder/src/inspector/custom-attributes.test.ts:hidden coupling",
-    "packages/builder/src/fonts-panel.test.tsx:hidden coupling",
+    "packages/builder/src/panels/design/fonts-panel.test.tsx:hidden coupling",
     "packages/admin/src/components/features/widgets/archetypes/chart-frame.tsx:hidden coupling",
     "packages/nextly/src/route-handler/__tests__/route-parser.versions.test.ts:hidden coupling",
     "packages/admin/src/lib/rich-text/__tests__/inline-editor.test.ts:hidden coupling",

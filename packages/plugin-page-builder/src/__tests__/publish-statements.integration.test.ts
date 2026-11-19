@@ -70,11 +70,15 @@ type Route = "direct" | "rest";
  * page's code and CSS as a stored form holds them, and nothing else a publish
  * judges reads the live row. Each stored form is read once for every check
  * of the field's write, so the checks share the draft the Layers lock reads.
+ *
+ * On MySQL, two more than before its transactions took savepoints: the
+ * version a publish records is inserted under a savepoint of its own, taken
+ * and released, as it is on PostgreSQL.
  */
 const PINS: Readonly<Record<TestDialect, Readonly<Record<Route, number>>>> = {
   sqlite: { direct: 67, rest: 68 },
   postgresql: { direct: 70, rest: 72 },
-  mysql: { direct: 70, rest: 71 },
+  mysql: { direct: 72, rest: 73 },
 };
 
 /**

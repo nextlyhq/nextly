@@ -23,7 +23,7 @@ import {
 
 import { EditorCommandPalette } from "./editor-command-palette";
 import type { EditorState } from "../editor-state";
-import { BlockKeyboardActions } from "../keyboard-actions";
+import { BlockKeyboardActions } from "./keyboard-actions";
 import { ShellActiveContext } from "./shell-active";
 
 // The command primitives observe their list to size it and scroll the active

@@ -22,7 +22,7 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { chainedStyleOp, type StackTiers } from "../../columns-layout";
+import { chainedStyleOp, type StackTiers } from "../../canvas/columns-layout";
 import type { BuilderOp } from "../../op-vocabulary";
 import { readStyleValue, type StyleAddress } from "../../style-values";
 

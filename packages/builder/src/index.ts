@@ -103,7 +103,7 @@ export { frameInsetOf } from "./canvas/geometry-dom";
  * `instanceof HTMLElement` check fails for the frame's nodes, and the host
  * document's `activeElement` names the iframe rather than what is focused in it.
  */
-export { deepActiveElement, isHTMLElement } from "./dom-kind";
+export { deepActiveElement, isHTMLElement } from "./canvas/dom-kind";
 
 /**
  * @experimental The op store: the vocabulary every edit is expressed in, and
@@ -303,7 +303,7 @@ export { revealNode } from "./canvas/reveal-node";
  *
  * @experimental
  */
-export { keyHint } from "./key-hint";
+export { keyHint } from "./shell/key-hint";
 
 /**
  * @experimental Whether the editor may move or delete a block the author has
@@ -361,7 +361,7 @@ export {
   blockDuplication,
   COPY_SUFFIX,
   type BlockDuplication,
-} from "./duplicate-block";
+} from "./canvas/duplicate-block";
 
 /**
  * @experimental Delete, duplicate and lock across a whole selection.
@@ -383,7 +383,7 @@ export {
   type SelectionMovePlan,
   type SelectionPlan,
   type SelectionRefusal,
-} from "./selection-ops";
+} from "./canvas/selection-ops";
 
 /**
  * @experimental What "the selection" is once it can hold more than one block.
@@ -402,7 +402,7 @@ export {
   rangeBetween,
   type BlockSelection,
   type SelectionMode,
-} from "./selection";
+} from "./canvas/selection";
 
 /**
  * @experimental The palette's command list, as a plain function over state.
@@ -457,7 +457,10 @@ export {
  * phrasing of one cause is how an author is told two different things about one
  * refusal.
  */
-export { compositionRefusalReason, isPlanProblem } from "./composition-refusal";
+export {
+  compositionRefusalReason,
+  isPlanProblem,
+} from "./canvas/composition-refusal";
 
 /**
  * @experimental Who owns Escape while the editor is on screen.

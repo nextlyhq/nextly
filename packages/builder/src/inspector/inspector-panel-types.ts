@@ -19,10 +19,10 @@ import type { BlockResolver, PageStyleCascade } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import type { CanvasPassage } from "../canvas/canvas-passage";
-import type { ComponentFieldsHost } from "../component-fields";
-import type { ComponentVariantsHost } from "../component-variants";
 import type { EditorState } from "../editor-state";
 import type { SavedComponent } from "../panels/add/inserter";
+import type { ComponentFieldsHost } from "../panels/components/component-fields";
+import type { ComponentVariantsHost } from "../panels/components/component-variants";
 import type { StylePolicy } from "../style-values";
 
 import type { CardVerbs } from "./block-card";

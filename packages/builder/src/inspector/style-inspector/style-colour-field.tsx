@@ -26,15 +26,22 @@ import {
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
-import { HiddenColours } from "../../built-in-colours";
+import { isElement } from "../../canvas/dom-kind";
 import { ChoiceList } from "../../choice-list";
-import { isElement } from "../../dom-kind";
 import { useLiveGesture } from "../../live-gesture";
+import { HiddenColours } from "../../panels/design/built-in-colours";
 import {
   RecentColoursStore,
   rememberColour,
   useRecentColours,
-} from "../../recent-colours";
+} from "../../panels/design/recent-colours";
+import {
+  focusAfterUnlink,
+  UnlinkButton,
+  VariableTipped,
+  variableTip,
+} from "../../panels/design/variable-choice";
+import { ColourPair, swatchStyle } from "../../panels/design/variable-swatch";
 import type { PreferenceStore } from "../../shell-state";
 import {
   activeTokenMode,
@@ -50,13 +57,6 @@ import {
 } from "../../style-colour";
 import type { StyleControl } from "../../style-controls";
 import { readStyleValue, type StyleAddress } from "../../style-values";
-import {
-  focusAfterUnlink,
-  UnlinkButton,
-  VariableTipped,
-  variableTip,
-} from "../../variable-choice";
-import { ColourPair, swatchStyle } from "../../variable-swatch";
 import { useFieldDescription } from "../css-hint";
 
 import { InheritedValue } from "./inherited-value";

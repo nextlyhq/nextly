@@ -31,7 +31,7 @@ import type { BindingFieldSource, UnbindPlanAnswer } from "./binding-services";
 import type { ContentServices } from "../inspector/content/content-controls";
 import type { EditorState } from "../editor-state";
 import { InspectorPanel } from "../inspector/inspector-panel";
-import { VisitorUnreadableProvider } from "../visitor-unreadable-context";
+import { VisitorUnreadableProvider } from "../shell/visitor-unreadable-context";
 
 beforeAll(() => {
   // What Radix's menus ask of an element, which jsdom does not draw.

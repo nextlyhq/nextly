@@ -29,7 +29,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import type { ComponentFieldsHost } from "../component-fields";
+import type { ComponentFieldsHost } from "../panels/components/component-fields";
 import { useEditorState, type EditorState } from "../editor-state";
 import { InspectorPanel } from "./inspector-panel";
 

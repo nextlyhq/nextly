@@ -20,7 +20,7 @@ import {
   ColumnsLayoutControl,
   columnsContentSection,
 } from "./columns-layout-field";
-import type { AppliedAt } from "../../columns-layout";
+import type { AppliedAt } from "../../canvas/columns-layout";
 import type { EditorState } from "../../editor-state";
 
 beforeAll(() => {

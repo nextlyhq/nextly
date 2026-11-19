@@ -52,8 +52,8 @@ import {
   type RefusalWording,
 } from "../../canvas/drag-refusal";
 import { movingSubtree } from "../../canvas/drop-targets";
+import { indentSlot } from "../../canvas/keyboard-move";
 import type { Point } from "../../geometry";
-import { indentSlot } from "../../keyboard-move";
 import {
   lockedBlockWording,
   lockRefusalWording,

@@ -23,6 +23,12 @@ import {
 import * as React from "react";
 
 import { useCanvasTokenMode } from "../../canvas/prefers-dark";
+import {
+  focusVariableAfterPick,
+  pickedVariable,
+  useOfferedVariables,
+  VariableSelectItems,
+} from "../../panels/design/variable-choice";
 import type { SiteVariable } from "../../style-colour";
 import type { StyleControl } from "../../style-controls";
 import {
@@ -36,12 +42,6 @@ import {
   withDefaultUnit,
   withUnit,
 } from "../../style-numeric";
-import {
-  focusVariableAfterPick,
-  pickedVariable,
-  useOfferedVariables,
-  VariableSelectItems,
-} from "../../variable-choice";
 import { useFieldDescription } from "../css-hint";
 
 import { InheritedValue } from "./inherited-value";
