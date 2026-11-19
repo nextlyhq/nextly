@@ -21,7 +21,7 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { COOKIE_NAMES } from "../../auth/cookies/cookie-config";
 import { buildClaims } from "../../auth/jwt/claims";
@@ -535,6 +535,30 @@ describe.each(getConfiguredTestDialects())(
         ]);
         expect(unlink.status, await unlink.clone().text()).toBe(200);
         expect((await heldBy(managerId)).map(i => i.id)).not.toContain(own.id);
+      });
+
+      it("is authenticated once per request, so a key's rate limit is spent once", async () => {
+        const own = await identityFor(managerId, "listed and unlinked once");
+        const key = await keyOf(managerId);
+        const apiKeys = t.getService(
+          "apiKeyService"
+        ) as unknown as ApiKeyService;
+        const authentications = vi.spyOn(apiKeys, "authenticateApiKey");
+        try {
+          const listing = await restWithKey(key, "GET", ["me", "identities"]);
+          expect(listing.status, await listing.clone().text()).toBe(200);
+          expect(authentications).toHaveBeenCalledTimes(1);
+
+          const unlink = await restWithKey(key, "DELETE", [
+            "me",
+            "identities",
+            own.id,
+          ]);
+          expect(unlink.status, await unlink.clone().text()).toBe(200);
+          expect(authentications).toHaveBeenCalledTimes(2);
+        } finally {
+          authentications.mockRestore();
+        }
       });
 
       it("is refused through the Direct API without the grants, and allowed with them", async () => {

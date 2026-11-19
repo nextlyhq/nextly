@@ -1846,9 +1846,6 @@ async function serveServiceRequest(
         req,
         service,
         method,
-        operation,
-        routeParams,
-        httpMethod,
         authResult
       );
       if (keyRefusal) return keyRefusal;
@@ -2467,27 +2464,21 @@ function gateRuleCouldNotRun(req: Request, error: unknown): Response {
  * manages their identities with no permission; a key is a credential its
  * holder scoped, and acting on its maker's account does not lift that
  * scope, as it does not for any other route a key reaches.
+ *
+ * The caller the `/api/me` gate already authenticated is judged as it is,
+ * so the key is authenticated, and its rate limit spent, once.
  */
 async function refuseKeyWithoutIdentityGrant(
   req: Request,
   service: string,
   method: string,
-  operation: string,
-  routeParams: Record<string, string> | undefined,
-  httpMethod: string,
   caller: AuthContext
 ): Promise<Response | null> {
   if (service !== "identities" || caller.authMethod !== "api-key") {
     return null;
   }
-  const granted = await resolveAuthorization(
-    req,
-    service,
-    method,
-    operation,
-    routeParams,
-    httpMethod
-  );
+  const action = method === "listUserIdentities" ? "read" : "update";
+  const granted = await authorizeCaller(caller, action, "users");
   return isErrorResponse(granted) ? refuseRequest(req, method, granted) : null;
 }
 
