@@ -148,7 +148,27 @@ const migrateStep = vi.hoisted(() => ({
    * which also judges the process's own config against the database this case does not hold.
    */
   byFiles: false,
+  /** Stand in for the migrate step by running nothing, so a pending save stays pending. */
+  runsNothing: false,
 }));
+
+/** Make the settle's last step, the removal of stale markers, throw, where a case asks. */
+const staleMarkers = vi.hoisted(() => ({ fail: false }));
+
+vi.mock("../save-in-progress", async original => {
+  const actual = await original<typeof import("../save-in-progress")>();
+  return {
+    ...actual,
+    removeStaleMarkers: (async (
+      ...args: Parameters<typeof actual.removeStaleMarkers>
+    ) => {
+      if (staleMarkers.fail) {
+        throw new Error("the save-in-progress folder could not be read");
+      }
+      return actual.removeStaleMarkers(...args);
+    }) as typeof actual.removeStaleMarkers,
+  };
+});
 
 // The start's registration of entities from snapshots, counted where a case watches the start.
 vi.mock("../../migrate/metadata-register", async original => {
@@ -184,6 +204,13 @@ vi.mock("../../../../cli/commands/migrate", async original => {
     ...actual,
     migrateCore: (async (...args: Parameters<typeof actual.migrateCore>) => {
       if (migrateStep.watch) migrateStep.runs += 1;
+      if (migrateStep.runsNothing) {
+        return {
+          applied: 0,
+          pluginModulesApplied: 0,
+          metadata: { collectionsRegistered: 0, singlesRegistered: 0 },
+        } as never;
+      }
       if (!migrateStep.byFiles) return actual.migrateCore(...args);
       const [deps] = args as unknown as [
         {
@@ -246,6 +273,8 @@ afterEach(async () => {
   migrateStep.runs = 0;
   migrateStep.registrations = 0;
   migrateStep.byFiles = false;
+  migrateStep.runsNothing = false;
+  staleMarkers.fail = false;
   kill.at = undefined;
   kill.reached = undefined;
   kill.release?.();
@@ -1248,6 +1277,33 @@ describe.each(getConfiguredTestDialects())(
     // The Builder save's settle (`settleBeforeBuilderSave`, run inside its schema-change
     // exclusion), asked directly: the stopped save still holds this process's exclusion, which
     // only its process ending would release.
+    // A settle that throws after it judged a record left (here, its last step, the removal of stale
+    // markers) is taken as unsettled: the start runs no pending migration and registers nothing.
+    it("holds back a start whose settle throws after leaving a record", async () => {
+      const t = await boot();
+      await createdTranslated();
+      await stopSave(
+        t,
+        translatedAdd,
+        point =>
+          point.startsWith(`file:${HISTORY_DIR()}`) && point.endsWith(".sql"),
+        true
+      );
+      lockPassesThrough.on = true;
+      bootFolder.dir = HISTORY_DIR();
+      migrateStep.watch = true;
+      staleMarkers.fail = true;
+
+      await runBootTimeApplyIfDev({ caller: "settle test" });
+
+      expect(migrateStep.runs, "the start's migrate step ran").toBe(0);
+      expect(
+        migrateStep.registrations,
+        "the start registered entities from the snapshots"
+      ).toBe(0);
+      expect(await recordRow(t), "the record stays").toBeDefined();
+    }, 300_000);
+
     // A start keeps a pending save's record until the save's remaining files are recorded applied:
     // its migrate step reads the process's own folder, which here is not the one the save wrote to,
     // so they do not run, and the record stays to refuse a Builder save over them.
@@ -1278,6 +1334,39 @@ describe.each(getConfiguredTestDialects())(
         for (const file of unrun) {
           expect(await repo.isFileApplied(file), file).toBe(false);
         }
+      },
+      300_000
+    );
+
+    // A save still pending once the start's migrate step has had its run (its files not among
+    // the ones it ran) holds back the start's registration from snapshots, as one left does.
+    it.skipIf(dialect === "mysql")(
+      "registers nothing from snapshots while a save stays pending after the start's migrate step",
+      async () => {
+        const t = await boot();
+        await created(t);
+        const filesBefore = sqlFiles();
+        await stopSave(
+          t,
+          [text("heading", { localized: true })],
+          point => point.startsWith("unit:") && point.includes("localization"),
+          true
+        );
+        const written = sqlFiles().filter(f => !filesBefore.includes(f));
+        await firstFileAlone(t, written);
+        lockPassesThrough.on = true;
+        bootFolder.dir = HISTORY_DIR();
+        migrateStep.watch = true;
+        migrateStep.runsNothing = true;
+
+        await runBootTimeApplyIfDev({ caller: "settle test" });
+
+        expect(migrateStep.runs, "the start's migrate step never ran").toBe(1);
+        expect(
+          migrateStep.registrations,
+          "the start registered entities from the snapshots"
+        ).toBe(0);
+        expect(await recordRow(t), "the record stays").toBeDefined();
       },
       300_000
     );

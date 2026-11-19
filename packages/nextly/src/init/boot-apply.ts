@@ -85,6 +85,9 @@ export async function runBootTimeApplyIfDev(opts?: {
     // save of this host stays unsettled: its files may be among the pending ones, and running them
     // over a save nothing could judge would change the database its record describes.
     let registeredByMigrate = 0;
+    // Whether a save's files stay unrun at the end of step 1: unsettled from the start, or still
+    // pending or left once the migrate step has had its run.
+    let held = settled.unsettled;
     if (settled.unsettled) {
       consoleLogger.warn(
         `${label} Pending migrations were not applied at this start: a Builder save left part-way is not settled (named above), and its files may be among them. Clear its record by hand as the warning says, then start again.`
@@ -97,6 +100,7 @@ export async function runBootTimeApplyIfDev(opts?: {
       // the ones it wrote), the record stays, refusing a Builder save until they run.
       if (settled.pending.length > 0) {
         const again = await settleLeftSavesAtStart(label, settled.pending);
+        held = again.unsettled || again.pending.length > 0;
         if (again.pending.length > 0) {
           consoleLogger.warn(
             `${label} A Builder save stopped between its migration files, and the rest of them did not run at this start, so its record stays. Run \`nextly migrate\` from the project the save was made in.`
@@ -114,7 +118,7 @@ export async function runBootTimeApplyIfDev(opts?: {
     // Any metadata-table-to-physical-table mismatch self-heals on next boot.
     // Not while a save stays unsettled: this takes every snapshot as applied, and the ones of
     // the files step 1 held back are not, so an entity would be registered for tables not there.
-    const registeredFromSnapshots = settled.unsettled
+    const registeredFromSnapshots = held
       ? 0
       : await registerMigrationMetadata(label);
 
@@ -240,8 +244,8 @@ export function checkRelationsBeforePlugins(
  * logged and the start goes on: the records stay, refusing what they refuse, and the next start
  * tries again. Answers whether a save stays unsettled (one left as it is, or one whose own settle
  * failed, or a settle that never had the lock), which keeps the start from running the pending
- * migrations its files may be among. A settle that fails before it reaches any record (its
- * database or setup not read) names none: the start goes on as it would, the warning saying why.
+ * migrations its files may be among. A settle that throws, wherever it stopped, is taken as
+ * unsettled too: a record it judged left before the throw would otherwise go unanswered.
  * Also answers the records left pending, kept until their remaining files run; `only` settles
  * those again once the start's migrate step has had its run.
  */
@@ -314,7 +318,7 @@ async function settleLeftSavesAtStart(
     consoleLogger.warn(
       `${label} A Builder save left part-way could not be settled (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start tries again.`
     );
-    return none;
+    return { unsettled: true, pending: [] };
   }
 }
 
