@@ -133,6 +133,32 @@ type Bypass =
   | { kind: "allowed"; reason: string }
   | { kind: "refused"; message: string };
 
+/**
+ * Whether `caller` may publish `slug`'s documents without review: trusted code, or a person
+ * holding "Publish without review" on it. Never an API key, which may act for an agent, whatever
+ * it holds, nor a visitor. The one judgement a publish without review is let through by, and the
+ * one the review-state read reports, so the two never disagree. `holds` asks whether a person
+ * holds the permission, on the pool unless a transaction is given.
+ *
+ * @experimental
+ */
+export async function mayPublishWithoutReview(
+  caller: PublishCaller,
+  slug: string,
+  holds: HoldsWithoutReview = async userId =>
+    holdsWithoutReview(await actorForUser(userId), slug)
+): Promise<boolean> {
+  switch (caller.kind) {
+    case "trusted":
+      return true;
+    case "user":
+      return holds(caller.userId);
+    case "api-key":
+    case "visitor":
+      return false;
+  }
+}
+
 async function bypassOf(
   question: PublishGateQuestion,
   holds: HoldsWithoutReview
@@ -146,16 +172,17 @@ async function bypassOf(
     };
   }
   const { caller } = question;
+  if (await mayPublishWithoutReview(caller, question.scope.slug, holds)) {
+    return { kind: "allowed", reason };
+  }
+  // Why not, by who asked.
   switch (caller.kind) {
     case "trusted":
-      return { kind: "allowed", reason };
     case "user":
-      return (await holds(caller.userId))
-        ? { kind: "allowed", reason }
-        : {
-            kind: "refused",
-            message: `Publishing without review needs the permission "${PUBLISH_WITHOUT_REVIEW}-${question.scope.slug}".`,
-          };
+      return {
+        kind: "refused",
+        message: `Publishing without review needs the permission "${PUBLISH_WITHOUT_REVIEW}-${question.scope.slug}".`,
+      };
     case "api-key":
       // An emergency publish is a person's act, and a key may act for an agent.
       return {

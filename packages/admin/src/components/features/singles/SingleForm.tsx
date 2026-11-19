@@ -121,6 +121,9 @@ import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLoc
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
+import { storedStampOf } from "@admin/components/features/entries/review/review-words";
+import { ReviewStatusLine } from "@admin/components/features/entries/review/ReviewStatusLine";
+import { useEditorReview } from "@admin/components/features/entries/review/useEditorReview";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
@@ -1781,6 +1784,19 @@ export function SingleForm({
     pendingOfferAt: recovery.offer?.savedAt ?? null,
   };
 
+  // The workflow's next step, where a workflow holds this Single's
+  // publishing, in the language being edited.
+  const review = useEditorReview({
+    document: {
+      scopeKind: "single",
+      scopeSlug: schema.slug,
+      entryId: String(document.id),
+    },
+    locale,
+    isDirty: hasUnsavedWork,
+    storedStamp: storedStampOf(document),
+  });
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode: "edit",
     hasStatus,
@@ -1814,6 +1830,7 @@ export function SingleForm({
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,
     onCancel: handleCancel,
+    ...(review.binding === undefined ? {} : { review: review.binding }),
     ...(onViewApi === undefined ? {} : { onViewApi }),
   };
 
@@ -2080,6 +2097,14 @@ export function SingleForm({
                                       // instead.
                                       isSubmitting={writePending}
                                     />
+                                    <ReviewStatusLine
+                                      status={editedStatus.status}
+                                      hasWorkingDraft={
+                                        editedStatus.hasWorkingDraft
+                                      }
+                                      part={review.part}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                    />
                                     <EntryMetaStrip
                                       panelCarriesId={panel.docked}
                                       documentId={document.id}
@@ -2193,6 +2218,7 @@ export function SingleForm({
           onLoadCurrent={() => lock.now.keepEditsAndLoad()}
           onSaveAnyway={saveAnyway}
         />
+        {review.dialog}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

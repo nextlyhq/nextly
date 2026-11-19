@@ -17,8 +17,14 @@
  *   key the database assigns (`generatesKey`), and an identity column reads the same in either
  *   of its modes (`identityMode`).
  *
- * Read-only: one query on PostgreSQL, two on MySQL (the first asks whether the catalog has the
- * spatial-reference column), none on SQLite.
+ * A snapshot also records a constraint's and an index's name and columns, and not whether a MySQL
+ * check is enforced (`checkEnforced`), how a PostgreSQL foreign key defers its check
+ * (`keyDeferrability`), an index's method and key order (`indexShape`), or a SQLite table's
+ * AUTOINCREMENT counter (`counterCovers`).
+ *
+ * Read-only. Three queries on PostgreSQL; on MySQL three, and two more that ask whether the
+ * catalog has a column another server of the dialect lacks; on SQLite up to four small ones for
+ * each table.
  *
  * @module domains/schema/migrate/live-column-facts
  */
@@ -27,6 +33,8 @@ import { sql, type SQL } from "drizzle-orm";
 import type { SupportedDialect } from "../../../database/schema-registry";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../pipeline/pg-visible-relation";
+
+import { cursorOf } from "./statement-cursor";
 
 /** The column facts a proof asks for. Names are compared without regard to case. */
 export interface LiveColumnFacts {
@@ -57,6 +65,34 @@ export interface LiveColumnFacts {
    * `STORAGE`): nothing then shows what a column holds, and an empty answer is not "none".
    */
   settingsReadable(table: string): boolean;
+  /**
+   * Whether a MySQL check constraint is enforced: false for one made or altered `NOT ENFORCED`,
+   * which is there and checks nothing. Undefined for a check the read did not find.
+   */
+  checkEnforced(table: string, name: string): boolean | undefined;
+  /**
+   * How a PostgreSQL foreign key defers its check: `not` deferrable, deferrable and checked at
+   * once (`immediate`), or `deferred` to the end of the transaction. Undefined for a key the read
+   * did not find, and on MySQL, which has no deferrable keys, and SQLite, whose keys keep it only
+   * in the table's stored text, which is not read.
+   */
+  keyDeferrability(
+    table: string,
+    name: string
+  ): "not" | "immediate" | "deferred" | undefined;
+  /**
+   * Whether an index is a plain one: built by the dialect's default method, a B-tree. `other` for
+   * one built by another (hash, GIN, full-text), undefined for one the read did not find. A
+   * snapshot records an index's columns and not its method. The direction of its keys is not
+   * read: Nextly's own tables carry a descending index where a migration file writes it plain.
+   */
+  indexShape(table: string, name: string): "plain" | "other" | undefined;
+  /**
+   * Whether a SQLite table's AUTOINCREMENT counter covers its rows, so no key the table used is
+   * given out again: the table is declared AUTOINCREMENT, and its counter is at least its highest
+   * key, or it has no counter yet and no rows. False for any other table, one not read included.
+   */
+  counterCovers(table: string): boolean;
 }
 
 /** A connection that runs a query and answers its rows, as PostgreSQL and MySQL drivers do. */
@@ -115,7 +151,38 @@ function mysqlUntrackedSettings(row: MysqlColumnRow): string[] {
     [row.srid !== null && row.srid !== undefined, "SRID"],
     [text(row.comment) !== "", "COMMENT"],
   ];
-  return held.filter(([holds]) => holds).map(([, word]) => word);
+  return [
+    ...held.filter(([holds]) => holds).map(([, word]) => word),
+    ...unknownFlags(extra),
+  ];
+}
+
+/**
+ * The flags `EXTRA` reports of a column that this read knows: the ones named above, and the ones
+ * that say only how a default or a generated column is kept (`GENERATION_EXPRESSION` and the
+ * snapshot's default say the rest).
+ */
+const KNOWN_FLAGS: readonly RegExp[] = [
+  /on update \S+/g,
+  /default_generated/g,
+  /auto_increment/g,
+  /(?:virtual|stored) generated/g,
+  /invisible/g,
+];
+
+/**
+ * What `EXTRA` reports beyond the flags known here, as one word to look for (`NOT SECONDARY`,
+ * which another engine's server reports): a plain restatement would take it off like any other
+ * setting, so it is named and not passed over. None on a server that reports only known flags.
+ */
+function unknownFlags(extra: string): string[] {
+  const rest = KNOWN_FLAGS.reduce(
+    (left, flag) => left.replace(flag, " "),
+    extra
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+  return rest === "" ? [] : [rest.toUpperCase()];
 }
 
 /**
@@ -138,13 +205,263 @@ async function mysqlCatalogHasSrid(runner: QueryRunner): Promise<boolean> {
   return Number(row?.found ?? 0) > 0;
 }
 
+/**
+ * Whether this server's `information_schema.TABLE_CONSTRAINTS` has `ENFORCED`: MySQL's has, and
+ * a server of the same dialect without it (MariaDB, which enforces every check) refuses a query
+ * naming it.
+ */
+async function mysqlCatalogHasEnforced(runner: QueryRunner): Promise<boolean> {
+  const [row] = rowsOf(
+    await runner.execute(
+      sql`SELECT COUNT(*) AS found
+          FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = 'information_schema'
+            AND TABLE_NAME = 'TABLE_CONSTRAINTS'
+            AND COLUMN_NAME = 'ENFORCED'`
+    )
+  );
+  return Number(row?.found ?? 0) > 0;
+}
+
 /** What the reads gather, keyed by `keyOf` (columns) or the lower-cased table name. */
 interface GatheredFacts {
   settings: Map<string, readonly string[]>;
   generated: Set<string>;
   identities: Map<string, "always" | "by-default">;
   unreadable: Set<string>;
+  /** Each check read, with whether it is enforced. */
+  enforcement: Map<string, boolean>;
+  deferrability: Map<string, "not" | "immediate" | "deferred">;
+  indexShapes: Map<string, "plain" | "other">;
+  /** Each SQLite table read, with whether its counter covers its rows. */
+  counters: Map<string, boolean>;
 }
+
+/** The rows of a read that name a table and an object on it, the others left out. */
+function namedRows(
+  rows: ReadonlyArray<Record<string, unknown>>
+): Array<Record<string, unknown> & { table: string; name: string }> {
+  return rows.filter(
+    (row): row is Record<string, unknown> & { table: string; name: string } =>
+      typeof row.table === "string" && typeof row.name === "string"
+  );
+}
+
+/** Whether a catalog answers yes: PostgreSQL a boolean, MySQL and SQLite 1, a number or a text. */
+const yes = (value: unknown): boolean =>
+  value === true || Number(value) > 0 || value === "t";
+
+/** PostgreSQL's foreign keys of the tables, each with how it defers its check. */
+async function gatherPostgresKeys(
+  runner: QueryRunner,
+  namesIn: SQL,
+  facts: GatheredFacts
+): Promise<void> {
+  const rows = rowsOf(
+    await runner.execute(
+      sql`SELECT t.relname AS "table", c.conname AS name,
+                 c.condeferrable AS deferrable, c.condeferred AS deferred
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+            AND t.relname IN (${namesIn})
+            AND c.contype = 'f'`
+    )
+  );
+  for (const row of namedRows(rows)) {
+    const immediate = yes(row.deferrable) ? "immediate" : "not";
+    facts.deferrability.set(
+      keyOf(row.table, row.name),
+      yes(row.deferred) ? "deferred" : immediate
+    );
+  }
+}
+
+/** PostgreSQL's indexes of the tables: plain where built as a B-tree. */
+async function gatherPostgresIndexes(
+  runner: QueryRunner,
+  namesIn: SQL,
+  facts: GatheredFacts
+): Promise<void> {
+  const rows = rowsOf(
+    await runner.execute(
+      sql`SELECT t.relname AS "table", i.relname AS name,
+                 (am.amname <> 'btree') AS other
+          FROM pg_index ix
+          JOIN pg_class i ON i.oid = ix.indexrelid
+          JOIN pg_class t ON t.oid = ix.indrelid
+          JOIN pg_am am ON am.oid = i.relam
+          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+            AND t.relname IN (${namesIn})`
+    )
+  );
+  for (const row of namedRows(rows)) {
+    facts.indexShapes.set(
+      keyOf(row.table, row.name),
+      yes(row.other) ? "other" : "plain"
+    );
+  }
+}
+
+/** MySQL's check constraints of the tables, each with whether it is enforced. */
+async function gatherMysqlChecks(
+  runner: QueryRunner,
+  namesIn: SQL,
+  facts: GatheredFacts
+): Promise<void> {
+  // A server without the column enforces every check it holds.
+  const enforced = (await mysqlCatalogHasEnforced(runner))
+    ? sql`tc.ENFORCED <> 'NO'`
+    : sql`1`;
+  const rows = rowsOf(
+    await runner.execute(
+      sql`SELECT tc.TABLE_NAME AS \`table\`, tc.CONSTRAINT_NAME AS name,
+                 ${enforced} AS enforced
+          FROM information_schema.TABLE_CONSTRAINTS tc
+          WHERE tc.TABLE_SCHEMA = DATABASE()
+            AND tc.TABLE_NAME IN (${namesIn})
+            AND tc.CONSTRAINT_TYPE = 'CHECK'`
+    )
+  );
+  for (const row of namedRows(rows)) {
+    facts.enforcement.set(keyOf(row.table, row.name), yes(row.enforced));
+  }
+}
+
+/** MySQL's indexes of the tables: plain where a B-tree. */
+async function gatherMysqlIndexes(
+  runner: QueryRunner,
+  namesIn: SQL,
+  facts: GatheredFacts
+): Promise<void> {
+  const rows = rowsOf(
+    await runner.execute(
+      sql`SELECT s.TABLE_NAME AS \`table\`, s.INDEX_NAME AS name,
+                 MAX(s.INDEX_TYPE <> 'BTREE') AS other
+          FROM information_schema.STATISTICS s
+          WHERE s.TABLE_SCHEMA = DATABASE()
+            AND s.TABLE_NAME IN (${namesIn})
+          GROUP BY s.TABLE_NAME, s.INDEX_NAME`
+    )
+  );
+  for (const row of namedRows(rows)) {
+    facts.indexShapes.set(
+      keyOf(row.table, row.name),
+      yes(row.other) ? "other" : "plain"
+    );
+  }
+}
+
+/** A SQLite connection, which answers a query's rows from `all`. */
+interface SqliteReader {
+  all(query: unknown): unknown[] | Promise<unknown[]>;
+}
+
+/** The rows a SQLite query answers, each as a record. */
+async function sqliteRows(
+  db: SqliteReader,
+  query: SQL
+): Promise<Array<Record<string, unknown>>> {
+  return (await db.all(query)) as Array<Record<string, unknown>>;
+}
+
+/** One SQLite table's indexes: each plain, since SQLite builds an index one way. */
+async function gatherSqliteIndexes(
+  db: SqliteReader,
+  table: string,
+  facts: GatheredFacts
+): Promise<void> {
+  const rows = await sqliteRows(
+    db,
+    sql`SELECT il.name AS name FROM pragma_index_list(${table}) il`
+  );
+  for (const row of rows) {
+    if (typeof row.name !== "string") continue;
+    facts.indexShapes.set(keyOf(table, row.name), "plain");
+  }
+}
+
+/**
+ * Whether one SQLite table's AUTOINCREMENT counter covers its rows (`counterCovers`). The counter
+ * and the highest key are read only for a table whose stored definition declares its key
+ * AUTOINCREMENT (`declaresAutoincrement`), in a database that has `sqlite_sequence` (it exists
+ * only once such a table does). The highest key is read from the key column itself.
+ */
+async function sqliteCounterCovers(
+  db: SqliteReader,
+  table: string
+): Promise<boolean> {
+  const [stored] = await sqliteRows(
+    db,
+    sql`SELECT m.sql AS text,
+               (SELECT p.name FROM pragma_table_info(m.name) p WHERE p.pk = 1) AS key_column,
+               EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence') AS counters
+        FROM sqlite_master m WHERE m.type = 'table' AND m.name = ${table}`
+  );
+  const key = stored?.key_column;
+  if (
+    typeof key !== "string" ||
+    !yes(stored?.counters) ||
+    !declaresAutoincrement(stored?.text)
+  ) {
+    return false;
+  }
+  const [counter] = await sqliteRows(
+    db,
+    sql`SELECT seq FROM sqlite_sequence WHERE name = ${table}`
+  );
+  // Read from the key column by name: `rowid` reads a column of that name where a table has one.
+  const [top] = await sqliteRows(
+    db,
+    sql`SELECT MAX(${sql.identifier(key)}) AS top FROM ${sql.identifier(table)}`
+  );
+  const highest = top?.top;
+  // No counter yet: SQLite makes it at the first insert, so the table must hold no row.
+  if (counter === undefined) return highest === null || highest === undefined;
+  return Number(counter.seq) >= Number(highest ?? 0);
+}
+
+/**
+ * Whether a table's stored `CREATE TABLE` declares its key `PRIMARY KEY [ASC | DESC]
+ * AUTOINCREMENT`, read as words: the word in a string, a quoted name or an expression declares
+ * nothing.
+ */
+function declaresAutoincrement(createSql: unknown): boolean {
+  if (typeof createSql !== "string") return false;
+  const words = cursorOf(createSql, "sqlite").rest();
+  return words.some(
+    (word, at) =>
+      word === "AUTOINCREMENT" &&
+      [words[at - 1], words[at - 2]].includes("KEY") &&
+      (words[at - 1] === "KEY" ||
+        ["ASC", "DESC"].includes(String(words[at - 1])))
+  );
+}
+
+/** SQLite's indexes and counters of the tables, one table at a time. */
+async function gatherSqlite(
+  db: SqliteReader,
+  tableNames: readonly string[],
+  facts: GatheredFacts
+): Promise<void> {
+  for (const table of tableNames) {
+    await gatherSqliteIndexes(db, table, facts);
+    facts.counters.set(
+      table.toLowerCase(),
+      await sqliteCounterCovers(db, table)
+    );
+  }
+}
+
+/** What is read on PostgreSQL and on MySQL, each read given the tables as one list. */
+const GATHERERS = {
+  postgresql: [
+    gatherPostgresIdentities,
+    gatherPostgresKeys,
+    gatherPostgresIndexes,
+  ],
+  mysql: [gatherMysqlColumns, gatherMysqlChecks, gatherMysqlIndexes],
+} as const;
 
 /** PostgreSQL's identity columns of the tables, each with its mode. */
 async function gatherPostgresIdentities(
@@ -243,16 +560,22 @@ export async function readLiveColumnFacts(
     generated: ownedSequenceColumns(snapshot),
     identities: new Map(),
     unreadable: new Set(),
+    enforcement: new Map(),
+    deferrability: new Map(),
+    indexShapes: new Map(),
+    counters: new Map(),
   };
   const read = new Set(tableNames.map(name => name.toLowerCase()));
-  if (tableNames.length > 0 && dialect !== "sqlite") {
+  if (dialect === "sqlite") {
+    await gatherSqlite(db as SqliteReader, tableNames, facts);
+  } else if (tableNames.length > 0) {
     const namesIn = sql.join(
       tableNames.map(name => sql`${name}`),
       sql`, `
     );
-    const gather =
-      dialect === "postgresql" ? gatherPostgresIdentities : gatherMysqlColumns;
-    await gather(db as QueryRunner, namesIn, facts);
+    for (const gather of GATHERERS[dialect]) {
+      await gather(db as QueryRunner, namesIn, facts);
+    }
   }
   return {
     untrackedSettings: (table, column) =>
@@ -261,6 +584,11 @@ export async function readLiveColumnFacts(
     identityMode: (table, column) => facts.identities.get(keyOf(table, column)),
     // On MySQL only a table that was read, and read whole, has settings to answer with: a table
     // the read never reached holds whatever it holds.
+    checkEnforced: (table, name) => facts.enforcement.get(keyOf(table, name)),
+    keyDeferrability: (table, name) =>
+      facts.deferrability.get(keyOf(table, name)),
+    indexShape: (table, name) => facts.indexShapes.get(keyOf(table, name)),
+    counterCovers: table => facts.counters.get(table.toLowerCase()) === true,
     settingsReadable: table =>
       dialect !== "mysql" ||
       (read.has(table.toLowerCase()) &&
