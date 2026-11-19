@@ -73,6 +73,8 @@ test("an edit to an approved note sends it back to review and holds Publish, and
       "Draft · In review · waiting for "
     );
     expect((await sharedPartOf(writer, id)).approval).toBeNull();
+    // The editor back in review, with the side panel beside it.
+    await expectEditorAccessible(writer.page);
     // The writer leaves, so the publisher finds the note free.
     await leaveNote(writer, page, id);
 
@@ -91,10 +93,10 @@ test("an edit to an approved note sends it back to review and holds Publish, and
       .getByRole("list", { name: "History, newest first" });
     await expect(history).toBeVisible({ timeout: 30_000 });
     await expect(history).toContainText(/approval withdrawn/i);
+    // The history takes the side panel's place here: it is held to AA on its own.
     await expectNoAxeViolations(writer.page, {
       include: "[data-history-panel]",
     });
-    await expectEditorAccessible(writer.page);
 
     // Approved again, a save that changes nothing keeps the approval.
     await step(page, id, "approve");
