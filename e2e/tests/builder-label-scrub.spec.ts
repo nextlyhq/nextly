@@ -3,9 +3,10 @@
  *
  * - The label shows the resize cursor, and a plain click on it still focuses
  *   the field.
- * - A drag shows the value live in the field and on the canvas only once
- *   released, and one Undo takes the whole drag back; two drags are two
- *   steps, each Undo taking back one, on the canvas too.
+ * - A drag shows the value live in the field and on the canvas
+ *   (`builder-live-drag.spec.ts` reads the canvas part-way through), and one
+ *   Undo takes the whole drag back; two drags are two steps, each Undo
+ *   taking back one, on the canvas too.
  * - Escape during a drag puts the value back and writes nothing.
  * - Shift drags in steps of ten, and the result is what the page saves.
  *
@@ -128,7 +129,7 @@ test("a number field's label drags its value, as one undo step", async ({
   await expect(field).toBeFocused();
   await expect(undo).toBeDisabled();
 
-  // Live in the field while the pointer is down; written once on release.
+  // Live in the field while the pointer is down; one step once released.
   await pressAndMove(page, label, 10);
   await expect(field).toHaveValue("26");
   await page.mouse.up();

@@ -49,6 +49,7 @@ import {
   TextField,
   storedText,
   placeholderFor,
+  useTypesLive,
 } from "./style-text-field";
 import {
   focusVariableAfterPick,
@@ -132,6 +133,7 @@ export function NumericField({
   tokens,
   describedBy,
   onCommit,
+  onType,
   seed,
   offerVariables = true,
 }: {
@@ -160,6 +162,14 @@ export function NumericField({
   actionName: string;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /**
+   * The write a keystroke or a label drag makes where the panel writes as it
+   * is typed, where it differs from the commit: a Design value is drawn on
+   * the canvas meanwhile and stored once, by the commit, when the edit ends.
+   * `onCommit` when omitted. Given the value as the commit would be: a bare
+   * number with the unit shown.
+   */
+  onType?: ((value: StyleValue | null) => CommitOutcome) | undefined;
 }): React.JSX.Element {
   // The refusal, and the CSS names while they are shown.
   const described = useFieldDescription(describedBy);
@@ -227,6 +237,7 @@ export function NumericField({
   // doing something. Offered verbatim as its own item, which is what the
   // keyword select above already does for a value outside its vocabulary.
   const extraUnit = unlistedUnit(measurement, units);
+  const typed = typedWrite(onType, control, unit);
   const commitText = useNumericLabelScrub({
     control,
     stored,
@@ -235,6 +246,7 @@ export function NumericField({
     setDraft,
     setTyping,
     onCommit,
+    onType: typed.onType,
   });
 
   return (
@@ -256,6 +268,7 @@ export function NumericField({
         // With no menu drawn there is nothing to hold for: its refs are empty.
         editing={{ holdBlur: hold.holdBlur, typing, setTyping }}
         live={live}
+        {...typed}
         onCommit={commitText}
         // The unit shown in the suffix is left out of the field.
         {...suffixedText(control, unit, unitMenu.isKeyword, showUnits)}
@@ -288,6 +301,22 @@ export function NumericField({
       />
     </div>
   );
+}
+
+/**
+ * Each keystroke's and each drag move's write where it is not the commit
+ * (`NumericField`'s `onType`), given the unit the field shows, as the commit
+ * is: as props for the text field, empty where there is none.
+ */
+function typedWrite(
+  onType: ((value: StyleValue | null) => CommitOutcome) | undefined,
+  control: StyleControl,
+  unit: string
+): { onType?: (value: StyleValue | null) => CommitOutcome } {
+  if (onType === undefined) return {};
+  return {
+    onType: value => onType(withDefaultUnit(control.leaf, value, unit)),
+  };
 }
 
 /** No variables, as one value, for a field that offers none. */
@@ -528,8 +557,9 @@ function unlistedUnit(
 
 /**
  * The number field's value, offered to its row's label to drag: shown in the
- * field while the pointer is down, and written once on release through the
- * same commit as a typed value, so one drag is one undo step.
+ * field while the pointer is down, written as it moves where the panel writes
+ * as it is typed, and written on release through the same commit as a typed
+ * value, the whole drag one undo step.
  *
  * @returns the field's own commit for its text: a bare number given the unit
  *   the field shows ("24" is 24px), and nothing written while a drag owns the
@@ -543,6 +573,7 @@ function useNumericLabelScrub({
   setDraft,
   setTyping,
   onCommit,
+  onType,
 }: {
   control: StyleControl;
   stored: StyleValue | undefined;
@@ -551,11 +582,31 @@ function useNumericLabelScrub({
   setDraft: (value: string) => void;
   setTyping: (typing: boolean) => void;
   onCommit: (value: StyleValue | null) => CommitOutcome;
+  /** A move's write where it is not the commit; see `NumericField`. */
+  onType: ((value: StyleValue | null) => CommitOutcome) | undefined;
 }): (value: StyleValue | null) => CommitOutcome {
   const inherited = React.useContext(InheritedValue);
   const mode = useCanvasTokenMode();
   const commitText = (value: StyleValue | null): CommitOutcome =>
     onCommit(withDefaultUnit(control.leaf, value, unit));
+  const typesLive = useTypesLive();
+  const writeWith =
+    (commit: (value: StyleValue | null) => CommitOutcome) =>
+    (value: string | number): void => {
+      commitDraft({
+        draft: String(value),
+        stored,
+        kind: control.kind,
+        leaf: control.leaf,
+        // A drag writes a quantity, never a variable's name, so no variable
+        // is matched against it.
+        tokens: undefined,
+        mode,
+        onCommit: commit,
+        setDraft,
+      });
+    };
+  const write = writeWith(commitText);
   const owning = useLabelScrub({
     origin: scrubOrigin(control.leaf, draft, unit, inherited),
     at: (from, delta) => scrubbedValue(control.leaf, from, delta),
@@ -569,19 +620,13 @@ function useNumericLabelScrub({
       setTyping(false);
       setDraft(storedText(stored));
     },
-    commit: value =>
-      commitDraft({
-        draft: String(value),
-        stored,
-        kind: control.kind,
-        leaf: control.leaf,
-        // A drag writes a quantity, never a variable's name, so no variable
-        // is matched against it.
-        tokens: undefined,
-        mode,
-        onCommit: commitText,
-        setDraft,
-      }),
+    commit: write,
+    // Through the same commit as the release, past the field's own writes,
+    // which wait while the drag owns the value.
+    // A move is the field's own write unless it has one of its own.
+    ...(typesLive
+      ? { preview: onType === undefined ? write : writeWith(onType) }
+      : {}),
   });
   // "refused" keeps the text on screen, which is the drag's live value.
   return value => (owning() ? "refused" : commitText(value));
