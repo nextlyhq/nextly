@@ -387,6 +387,15 @@ describeEachDialect(
           )
         )
       ).toBeUndefined();
+      // Dropped and added on the companion too: no step renamed its column.
+      const folder = join(basePath, HISTORY);
+      const newest = readdirSync(folder)
+        .filter(file => file.endsWith(".sql"))
+        .sort()
+        .at(-1)!;
+      expect(
+        readFileSync(join(folder, newest), "utf-8").split("-- DOWN")[0]
+      ).not.toMatch(/RENAME COLUMN/i);
     });
   }
 );
