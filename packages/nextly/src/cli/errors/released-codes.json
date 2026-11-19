@@ -225,5 +225,7 @@
   "MIGRATIONS_WRITER_OVERTAKEN": "Another run wrote a migration for this project while the command was part-way, so the command wrote no migration and no snapshot.",
   "UPGRADE_WORK_MOVED": "`nextly upgrade` was run for the database work it used to do, which `nextly migrate` and `nextly i18n:convert-zoned-dates` now do, so it changed nothing.",
   "DATA_STEPS_BACKUP_NOT_CONFIRMED": "A command would change data an earlier Nextly release stored, and no backup was confirmed, with no terminal attached to ask.",
-  "DATA_STEPS_BACKUP_DECLINED": "A command would change data an earlier Nextly release stored, and its backup question was answered no."
+  "DATA_STEPS_BACKUP_DECLINED": "A command would change data an earlier Nextly release stored, and its backup question was answered no.",
+  "BUILDER_SAVE_LEFT_PART_WAY": "A Schema Builder save stopped part-way and its record still stands, so the command refused to go on until the save is settled.",
+  "RECORD_SNAPSHOT_HAS_CHANGES": "`nextly migrate:create --record-snapshot` was run with a config that has table changes to migrate, which the snapshot would take in without a migration."
 }

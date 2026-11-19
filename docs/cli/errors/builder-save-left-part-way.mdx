@@ -1,0 +1,26 @@
+---
+title: BUILDER_SAVE_LEFT_PART_WAY
+description: "A Schema Builder save stopped part-way and its record still stands, so the command refused to go on until the save is settled."
+---
+
+## Cause
+
+A Schema Builder save stopped part-way and its record still stands, so the command refused to go on until the save is settled.
+
+A Schema Builder save writes its definition file, then its migration files and, in development, its database changes. Before its first write it records that it has started, in a `nextly_meta` row and in a marker file under `.nextly/save-in-progress/`, and it clears that record once its outcome is recorded. A record that still stands belongs to a save whose process stopped between two of those writes, so the definition, the migration files and the database may describe different schemas.
+
+The same code is printed when a later save finds such a record and cannot read it, since which save it stands for cannot be told.
+
+## Fix
+
+- Take the step the message names to settle the save, then run the command again.
+- For a record that cannot be read, first check that no Builder save is running, then remove the one row the message names from the `nextly_meta` table. The next save records its own.
+
+## Example
+
+```text
+✗ A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T07:42:10.000Z on build-box.
+  Why:  A Builder save writes its definition, its migration files and its database changes in turn, and a process that stopped between them left those describing different schemas.
+  Next: To settle it, start the app in development (`next dev`) on this project: its start settles the save.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-left-part-way  (BUILDER_SAVE_LEFT_PART_WAY)
+```

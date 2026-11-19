@@ -127,6 +127,19 @@ export const SCHEMA_CASES = {
         command: "nextly migrate",
       },
     }),
+  // As `refuseWhileSaveInProgress` in `domains/schema/builder-save/save-in-progress.ts` throws it
+  // for one record in `nextly_meta`, left by a process that stopped part-way through a collection's
+  // save. That refusal reads the database, so the error is built here as it builds it.
+  BUILDER_SAVE_LEFT_PART_WAY: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        'A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T07:42:10.000Z on build-box. To settle it, start the app in development (`next dev`) on this project: its start settles the save.',
+      logContext: {
+        reason: "builder-save-left-part-way",
+        saves: ["builder-save-in-progress:collection:posts"],
+      },
+    }),
   // As a Schema Builder save throws it: the text `nextly migrate` prints for the same state.
   NEXTLY_MIGRATION_HISTORY_REFUSED: () =>
     new NextlyError({

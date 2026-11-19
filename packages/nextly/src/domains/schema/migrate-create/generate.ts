@@ -1805,7 +1805,11 @@ function refuseChangesToRecord(tables: readonly string[]): void {
     publicMessage:
       `--record-snapshot records the config as it was at the last migration, and the config has changes to ${named} to migrate. Nothing was written. ` +
       "Put the changes aside, run `nextly migrate:create --record-snapshot`, then make them again and run `nextly migrate:create --name <name>`.",
-    logContext: { tables: [...new Set(tables)].sort() },
+    // The reason the CLI reads this refusal by, as its own code rather than a config declaration.
+    logContext: {
+      reason: "record-snapshot-has-changes",
+      tables: [...new Set(tables)].sort(),
+    },
   });
 }
 

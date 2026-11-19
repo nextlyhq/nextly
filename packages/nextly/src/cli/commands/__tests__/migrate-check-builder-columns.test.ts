@@ -481,11 +481,19 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       const before = sqlFiles();
 
       // `code` was never in the companion, so it does not leave translation: it is a new column
-      // on the main table, which the main table's diff adds.
+      // on the main table, which the main table's diff adds. The width judgement runs first and
+      // passes over it; what refuses is adding a column in the run that turns translation off,
+      // which `migrate:create` takes in two runs. On MySQL a `code` judged as leaving would be
+      // refused for its width instead, before that refusal is reached.
       const disabled = await create(false, [note, code]);
 
-      expect(disabled.code, disabled.said.join("\n")).toBeUndefined();
-      expect(sqlFiles().length).toBeGreaterThan(before.length);
+      expect(disabled.code).toBe(1);
+      const said = disabled.said.join("\n");
+      expect(said).toContain(
+        "turns translation off and changes its table in other ways"
+      );
+      expect(said).not.toContain("states no width");
+      expect(sqlFiles()).toEqual(before);
     });
   }
 );
