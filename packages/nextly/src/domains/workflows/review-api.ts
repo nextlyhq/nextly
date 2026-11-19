@@ -312,6 +312,11 @@ export interface WaitingQuery {
    * round trip apiece.
    */
   readable: (items: readonly WaitingReadable[]) => Promise<readonly boolean[]>;
+  /**
+   * How many review states one request may read at most; {@link WAITING_SCAN_CEILING} where it
+   * names none. Neither door names one: it exists so a test can reach the ceiling with few rows.
+   */
+  scanCeiling?: number;
 }
 
 /** A document a waiting list asks the read check of, in the language its part names. */
@@ -364,12 +369,17 @@ function attachedStages(): ScopedStage[] {
 
 /**
  * How many review states a list reads of each share (the caller's own work, and the rest of the
- * stages) in one window, and how far past the page a request may read: a request reads windows
- * until it holds one more readable part than its page needs, or has read its page's depth and this
- * many more. Past that its count is a floor (`totalCapped`), never a number that took in a part the
- * caller may not read, and a later page reads further.
+ * stages) in one window. A request reads windows until it holds one more readable part than its
+ * page needs, or everything is read.
  */
 const WAITING_SCAN_LIMIT = 1000;
+
+/**
+ * The most review states one request reads, however many it passes over (parts the caller may not
+ * move or read): a ceiling, so one request's cost stays bounded. Past it the count is a floor
+ * (`totalCapped`) and more may wait, never "nothing more".
+ */
+const WAITING_SCAN_CEILING = 20_000;
 
 /**
  * What waits for a caller: the parts whose next step they may take, by its permission on the
@@ -407,14 +417,14 @@ export async function waitingFor(
     ),
   };
   // Windows read until the list holds one part more than the page needs (so it knows there is a
-  // next page), everything is read, or the request has read its page's depth and a window more.
+  // next page), everything is read, or the request reaches its ceiling.
   const need = query.offset + query.limit + 1;
-  const budget = query.offset + query.limit + WAITING_SCAN_LIMIT;
+  const ceiling = query.scanCeiling ?? WAITING_SCAN_CEILING;
   const scan = waitingScan(adapter, terms);
   const waiting: WaitingPart[] = [];
-  while (waiting.length < need && !scan.done() && scan.read < budget) {
+  while (waiting.length < need && !scan.done() && scan.read < ceiling) {
     const window = await scan.next(
-      Math.min(WAITING_SCAN_LIMIT, budget - scan.read)
+      Math.min(WAITING_SCAN_LIMIT, ceiling - scan.read)
     );
     waiting.push(...(await waitingIn(window, decided)));
   }
@@ -439,9 +449,6 @@ async function waitingIn(
   window: readonly ReviewState[],
   { query, isMine, deciderOf, accountable, stageOfRow }: WaitingContext
 ): Promise<WaitingPart[]> {
-  // Who each part's assignee or default reviewer is, asked in batches per collection or Single
-  // before any part is decided, so a long queue of distinct assignees costs a few reads.
-  await primeDeciders(window, stageOfRow, deciderOf);
   const movable: ReviewState[] = [];
   for (const row of window) {
     const scoped = stageOfRow.get(
@@ -450,7 +457,7 @@ async function waitingIn(
     if (!scoped) continue;
     // Whom this part waits for, by the rule its read names: the caller, one of their roles, or
     // every holder, which the caller is, by the stage's permission asked in `takeableStages`.
-    const waits = await deciderOf(scoped).decide(row);
+    const waits = await deciderOf(scoped)(row);
     if (waits === null || (waits.kind === "one" && !isMine(waits.who))) {
       continue;
     }

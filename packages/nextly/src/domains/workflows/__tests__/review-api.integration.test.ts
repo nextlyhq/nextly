@@ -1628,42 +1628,56 @@ describe.each(getConfiguredTestDialects())(
         expect(page.meta.totalCapped).toBeUndefined();
       });
 
-      it("marks the total a floor when there is more waiting than it reads", async () => {
-        // More parts wait than one request reads (its page's depth and 1,000 more): the total counts
-        // those read, and says it is a floor. None of these documents exists, so none is readable,
-        // and the total read is 0, yet more may wait past what was read, which `totalCapped` says
-        // rather than a bare 0.
+      it("marks the total a floor when it stops before reading everything", async () => {
+        // 6 parts Sam may move come first, then 1,000 no one may read. Page 1 needs 6 (its 5 and one
+        // more, to know there is a next), which the first window holds, so it stops there: the
+        // total it found is a floor, and there is a next page. Page 2 reads to the end: exact.
         current = await bootSteps(dialect);
         await people();
         await person(app(), "sam", [
           ["read", PAGES],
           ["sign-off", PAGES],
         ]);
-        for (let n = 0; n < 1015; n += 1) {
+        const earlier = new Date("2026-11-01T10:00:00.000Z");
+        for (let n = 0; n < 6; n += 1) {
+          await seedState(
+            app(),
+            partOf(PAGES, await entry(app(), PAGES), null),
+            "legal",
+            { definitionHash: HASH, enteredAt: earlier }
+          );
+        }
+        for (let n = 0; n < 1000; n += 1) {
           await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
             definitionHash: HASH,
           });
         }
+        const SAM: Who = { kind: "person", id: "sam" };
 
-        const page = await door.waiting(
-          { kind: "person", id: "sam" },
-          { page: 1, limit: 10 }
-        );
-        expect(page.items).toEqual([]);
-        expect(page.meta).toMatchObject({ total: 0, totalCapped: true });
+        const first = await door.waiting(SAM, { page: 1, limit: 5 });
+        expect(first.items).toHaveLength(5);
+        expect(first.meta).toMatchObject({
+          total: 6,
+          totalCapped: true,
+          hasNext: true,
+        });
+        const second = await door.waiting(SAM, { page: 2, limit: 5 });
+        expect(second.items).toHaveLength(1);
+        expect(second.meta).toMatchObject({ total: 6, hasNext: false });
+        expect(second.meta.totalCapped).toBeUndefined();
       });
 
       it("reaches every page of work past what one request reads", async () => {
-        // 995 parts no one may read come first, then 10 Sam may. A first read of 1,000 holds only 5
-        // of them: the list reads on, a window at a time, so both pages of 5 are reachable and the
-        // first says there is a next.
+        // 1,005 parts no one may read come first, then 10 Sam may: more hidden parts than one window
+        // holds. The list reads on, a window at a time, until it has the page and one more, so both
+        // pages of 5 are reachable and the first says there is a next.
         current = await bootSteps(dialect);
         await people();
         await person(app(), "sam", [
           ["read", PAGES],
           ["sign-off", PAGES],
         ]);
-        for (let n = 0; n < 995; n += 1) {
+        for (let n = 0; n < 1005; n += 1) {
           await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
             definitionHash: HASH,
           });
@@ -1684,6 +1698,8 @@ describe.each(getConfiguredTestDialects())(
         const second = await door.waiting(SAM, { page: 2, limit: 5 });
         expect(first.items).toHaveLength(5);
         expect(first.meta).toMatchObject({ hasNext: true });
+        expect(second.items).toHaveLength(5);
+        expect(second.meta).toMatchObject({ total: 10, hasNext: false });
         expect(
           [...first.items, ...second.items]
             .map(item => (item.document as Doc).entryId)

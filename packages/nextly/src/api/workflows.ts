@@ -662,7 +662,8 @@ export const workflowOperations = {
         page: query.page,
         limit: query.limit,
         totalPages,
-        hasNext: query.page < totalPages,
+        // A list that stopped before reading everything may have more, past its last page too.
+        hasNext: query.page < totalPages || totalCapped,
         hasPrev: query.page > 1,
         // More may wait than the list read: its total is a floor ("1000+"), as a capped count's is.
         ...(totalCapped ? { totalCapped: true as const } : {}),
