@@ -17,8 +17,8 @@ import type { DocumentActionOutcome } from "../EntryForm/useDocumentActionBindin
 
 import { useStepTaker, type StepTaker } from "./useStepTaker";
 
-/** The id of the one region workflow steps are said through. */
-export const REVIEW_ANNOUNCER_ID = "nextly-review-announcer";
+/** The id of the one region workflow steps are said through; the browser specs find it by it. */
+const REVIEW_ANNOUNCER_ID = "nextly-review-announcer";
 
 /**
  * Says `message` through the review's region: for a step taken somewhere other than through
