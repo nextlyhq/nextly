@@ -162,6 +162,8 @@ export interface ReconcileMetadataResult {
    * pass commits (`retireDroppedEntities`). Their registry rows are left in this pass.
    */
   entitiesRetiring?: OwningEntity[];
+  /** Entities an applied migration dropped whose registry could not be read (`unretired`). */
+  entitiesUnretired?: string[];
   /** Rows moved from `pending`/`generated` to `applied`. */
   marked: number;
   /**
@@ -620,6 +622,7 @@ async function registerRows(
         rowsNotWritten: written.failed,
         rowsRemoved: written.removed,
         entitiesRetiring: written.retiring ?? [],
+        entitiesUnretired: written.unretired ?? [],
       },
       complete: written.failed.length === 0,
     };
@@ -714,6 +717,7 @@ type RegisteredRows = Pick<
   | "rowsNotWritten"
   | "rowsRemoved"
   | "entitiesRetiring"
+  | "entitiesUnretired"
 >;
 
 /**

@@ -108,6 +108,12 @@ export interface RegistryWriteResult {
    * whose retirement stops part-way is still found owed by the next run.
    */
   retiring?: OwningEntity[];
+  /**
+   * Entities an applied migration dropped whose registry could not be read, as `<kind> <slug>`:
+   * nothing they own can be removed this run, so the run fails, naming them, as for any entity
+   * that still holds rows.
+   */
+  unretired?: string[];
 }
 
 /**
@@ -269,11 +275,14 @@ export async function writeRegistryFromSource(
       // migration applied with consent dropped it, so a row whose table still
       // stands is no drop's and is left with it. The rest are retired by the
       // run once this pass commits.
-      result.retiring = await retiringEntities(
-        droppedEntities(chain),
-        stored,
-        deps,
-        result
+      const dropped = droppedEntities(chain);
+      result.retiring = await retiringEntities(dropped, stored, deps, result);
+      result.unretired = RECORDED_KINDS.flatMap(([kind]) =>
+        stored[kind] === undefined
+          ? [...dropped[kind]]
+              .filter(slug => !isReservedResourceSlug(slug))
+              .map(slug => `${kind} ${slug}`)
+          : []
       );
     }
   } finally {

@@ -31,8 +31,8 @@ import { clearRegistryRowCache } from "../../dynamic-collections/services/collec
 import { dropEntityTranslationsTable } from "../../i18n/migration/teardown-entity-i18n";
 import type { BuilderSaveSetup } from "../../schema/builder-save/collection-save";
 import {
+  removeBeforeTheDrop,
   removeFieldGroupRegistryRow,
-  removeRowsBeforeTheDrop,
 } from "../../schema/services/remove-entity-owned-data";
 import {
   calculateSchemaHash,
@@ -986,13 +986,11 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     // direction, so the nested rows are this delete's responsibility.
     // Removed as every delete removes them, a deployed one through `nextly migrate` included
     // (`removeRowsBeforeTheDrop`): the nested values, then the translation rows.
-    await removeRowsBeforeTheDrop(adapter, {
-      kind: "fieldGroup",
-      slug,
-      table: tableName,
-    });
-
-    await dropEntityTranslationsTable(adapter, tableName);
+    await removeBeforeTheDrop(
+      adapter,
+      { kind: "fieldGroup", slug, table: tableName },
+      () => dropEntityTranslationsTable(adapter, tableName)
+    );
 
     // Drop the data table after its dependents, since both hold references into it.
     // IF EXISTS so the delete is safe where the table was never created; CASCADE on

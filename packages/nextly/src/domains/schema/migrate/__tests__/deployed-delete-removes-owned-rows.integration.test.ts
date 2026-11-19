@@ -22,6 +22,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../../__tests__/helpers/fresh-database";
+import {
+  NEXTLY_RUN_TIMEOUT,
+  runNextly,
+} from "../../../../cli/__tests__/helpers/run-nextly";
 import { runMigrate } from "../../../../cli/commands/migrate";
 import { runMigrateResolve } from "../../../../cli/commands/migrate-resolve";
 import type { CommandContext } from "../../../../cli/program";
@@ -53,7 +58,7 @@ import { ensureI18nArchive } from "../../../i18n/migration/ensure-archive";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 import { setNonInteractive } from "../can-prompt";
-import { withStopPoints } from "../stop-points";
+import { KILL_AT_VARIABLE, withStopPoints } from "../stop-points";
 
 /** The configuration the commands load. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -471,7 +476,7 @@ describe.each(getConfiguredTestDialects())(
 
       reach(dialect, deployed.url);
       await start(deployed.adapter);
-      return { deployed: deployed.adapter, notes, other };
+      return { deployed: deployed.adapter, url: deployed.url, notes, other };
     }
 
     const notesLeft = (adapter: DrizzleAdapter) =>
@@ -529,6 +534,128 @@ describe.each(getConfiguredTestDialects())(
         expect(await ledgerOf(deployed, dialect)).toBe(ledger);
       },
       240_000
+    );
+
+    /**
+     * `nextly migrate` as a real process over the deployed database, as a deploy runs it, killing
+     * itself at `killAt` where one is named (`stop-points.ts`).
+     */
+    function migrateProcess(url: string, killAt?: string) {
+      // The project's configuration as a deploy reads it: the commands in this process load it
+      // through the mock above instead.
+      writeFileSync(
+        join(dir, "nextly.config.ts"),
+        `export default ${JSON.stringify({
+          collections: [],
+          localization: LOCALIZATION,
+          db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION },
+        })};\n`
+      );
+      return runNextly(
+        ["migrate", `--accept-data-loss=${NOTES_TABLE}`, "--non-interactive"],
+        dir,
+        {
+          DATABASE_URL: url,
+          DB_DIALECT: dialect,
+          NODE_ENV: "test",
+          [KILL_AT_VARIABLE]: killAt,
+        }
+      );
+    }
+
+    it(
+      "finishes, with nothing pending, a run whose process was killed after the file was recorded",
+      async () => {
+        const { deployed, url, other } = await readyToDelete();
+        const { name } = deleteFile();
+        let ledger: number | undefined;
+        for (const at of [
+          `${name}: recorded applied`,
+          ...STEPS.map(step => `collection ${NOTES}: removed ${step}`),
+        ]) {
+          const killed = await migrateProcess(url, at);
+          const seen = `${at}\n${killed.stdout}\n${killed.stderr}`;
+          expect(killed.status, seen).not.toBe(0);
+          // Killed with the file recorded: its tables are gone, the registry row still stands,
+          // and no later run records anything new.
+          expect(await deployed.tableExists(NOTES_TABLE), seen).toBe(false);
+          expect((await notesLeft(deployed)).registryRow, seen).toBe(1);
+          ledger ??= await ledgerOf(deployed, dialect);
+          expect(await ledgerOf(deployed, dialect), seen).toBe(ledger);
+          expect(await otherLeft(deployed), seen).toEqual(other);
+        }
+
+        const finished = await migrateProcess(url);
+        const seen = `${finished.stdout}\n${finished.stderr}`;
+        expect(finished.status, seen).toBe(0);
+        expect(await notesLeft(deployed), seen).toEqual(NONE);
+        expect(await otherLeft(deployed), seen).toEqual(other);
+        expect(await ledgerOf(deployed, dialect), seen).toBe(ledger);
+      },
+      12 * NEXTLY_RUN_TIMEOUT
+    );
+
+    it(
+      "removes no row when the process is killed inside the file, and finishes later",
+      async () => {
+        const { deployed, url, notes, other } = await readyToDelete();
+        const { name, drops } = deleteFile();
+        // MySQL keeps each drop as it runs: one kill there, after the first drop, is resolved below.
+        const points =
+          dialect === "mysql"
+            ? ["after statement 1"]
+            : [
+                "before statement 1",
+                ...Array.from(
+                  { length: drops },
+                  (_, i) => `after statement ${i + 1}`
+                ),
+              ];
+        for (const at of points) {
+          const killed = await migrateProcess(url, `${name}: ${at}`);
+          const seen = `${at}\n${killed.stdout}\n${killed.stderr}`;
+          expect(killed.status, seen).not.toBe(0);
+          expect(await notesLeft(deployed), seen).toEqual(notes);
+          expect(await otherLeft(deployed), seen).toEqual(other);
+          if (dialect !== "mysql") {
+            // The file rolled back: the collection stands whole.
+            expect(await deployed.tableExists(NOTES_TABLE), seen).toBe(true);
+          }
+        }
+
+        if (dialect === "mysql") {
+          // The next run refuses, naming the attempt, and removes nothing.
+          const refused = await migrateProcess(url);
+          expect(refused.status, refused.stdout).not.toBe(0);
+          expect(await notesLeft(deployed)).toEqual(notes);
+          // The remaining drops finished by hand, and the file recorded applied.
+          const left = (await deployed.listTables()).filter(
+            table =>
+              table === NOTES_TABLE || table.startsWith(`${NOTES_TABLE}_`)
+          );
+          for (const table of left) {
+            await deployed.executeQuery(`DROP TABLE IF EXISTS \`${table}\``);
+          }
+          loaded.config = PROJECT;
+          const resolved = await command(context =>
+            runMigrateResolve(
+              { cwd: dir, applied: name } as Parameters<
+                typeof runMigrateResolve
+              >[0],
+              context
+            )
+          );
+          expect(resolved.code, resolved.said).toBeUndefined();
+        }
+
+        const finished = await migrateProcess(url);
+        const seen = `${finished.stdout}\n${finished.stderr}`;
+        expect(finished.status, seen).toBe(0);
+        expect(await deployed.tableExists(NOTES_TABLE), seen).toBe(false);
+        expect(await notesLeft(deployed), seen).toEqual(NONE);
+        expect(await otherLeft(deployed), seen).toEqual(other);
+      },
+      12 * NEXTLY_RUN_TIMEOUT
     );
 
     it("leaves every row, and finishes later, when the run fails inside the file", async () => {

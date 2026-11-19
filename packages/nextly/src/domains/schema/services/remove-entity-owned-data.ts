@@ -104,15 +104,23 @@ export async function removeOwnedRows(
 }
 
 /**
- * Removes every kind of row `entity`'s delete removes before its tables go, in order, through
- * `adapter`: what a development delete runs before its drops, in their transaction.
+ * Removes what `entity`'s delete removes before its main table goes, through `adapter`, in the
+ * declaration's order: what a development delete runs before its drops, in their transaction. The
+ * translations table is dropped where the declaration places it (`dropTranslationsTable`): after
+ * the field-group values and before the translation rows, so on MySQL, where the drop commits what
+ * ran before it, a drop that fails has removed no translation row.
  */
-export async function removeRowsBeforeTheDrop(
+export async function removeBeforeTheDrop(
   adapter: TeardownComponentDataAdapter,
-  entity: OwningEntity
+  entity: OwningEntity,
+  dropTranslationsTable: () => Promise<unknown>
 ): Promise<void> {
-  for (const data of rowsRemovedBeforeTheDrop(entity.kind)) {
-    await removeOwnedRows(adapter, entity, data);
+  for (const { data, removed } of ENTITY_OWNED_DATA[entity.kind]) {
+    if (removed !== "beforeTheDrop") continue;
+    if (data === "translations") await dropTranslationsTable();
+    else if (isRemovedBeforeTheDrop(data)) {
+      await removeOwnedRows(adapter, entity, data);
+    }
   }
 }
 

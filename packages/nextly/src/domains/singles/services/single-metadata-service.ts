@@ -942,21 +942,19 @@ export class SingleMetadataService {
     // through `nextly migrate` included (`removeRowsBeforeTheDrop`): its embedded field-group
     // instances, which point back at this table by a plain string with no foreign key, so the drop
     // below cascades nothing and would strand them, and its translation rows.
-    const [{ removeRowsBeforeTheDrop }, { dropEntityTranslationsTable }] =
+    // The companion `_locales` table goes among them, before the main table: it holds a foreign
+    // key to `<main>.id`, so it must go first or the main drop orphans it on PostgreSQL and is
+    // rejected by the constraint on MySQL.
+    const [{ removeBeforeTheDrop }, { dropEntityTranslationsTable }] =
       await Promise.all([
         import("../../schema/services/remove-entity-owned-data"),
         import("../../i18n/migration/teardown-entity-i18n"),
       ]);
-    await removeRowsBeforeTheDrop(adapter, {
-      kind: "single",
-      slug,
-      table: tableName,
-    });
-
-    // Remove the companion `_locales` table before the main table. The companion holds a foreign
-    // key to `<main>.id`, so it must go first or the main drop orphans it on PostgreSQL and is
-    // rejected by the constraint on MySQL.
-    await dropEntityTranslationsTable(adapter, tableName);
+    await removeBeforeTheDrop(
+      adapter,
+      { kind: "single", slug, table: tableName },
+      () => dropEntityTranslationsTable(adapter, tableName)
+    );
 
     // PostgreSQL needs CASCADE to drop dependent objects: the companion's foreign key makes the
     // main table a target, and a non-cascading drop raises rather than proceeding. The other two

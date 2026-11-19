@@ -51,7 +51,7 @@ import {
   applyCollectionSchemaChange,
   refuseNewCollectionIndexNamesTaken,
 } from "../../schema/services/collection-schema-apply";
-import { removeRowsBeforeTheDrop } from "../../schema/services/remove-entity-owned-data";
+import { removeBeforeTheDrop } from "../../schema/services/remove-entity-owned-data";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { loadUiSchema } from "../../schema/ui-schema/loader";
 import { withSystemTextFields } from "../system-text-fields";
@@ -1711,15 +1711,13 @@ export class CollectionMetadataService extends BaseService {
     // values, keyed by a plain `_parent_table` string with no FK, so dropping this collection's
     // table cascades nothing and would strand them, and its translation rows in the shared
     // archive and records, DML that no migration file should carry.
-    await removeRowsBeforeTheDrop(adapter, {
-      kind: "collection",
-      slug,
-      table: collection.tableName,
-    });
-
-    // Its translations table, before the main table goes: the companion holds an FK to
-    // `<main>.id`, so dropping the child first is safe in every environment.
-    await dropEntityTranslationsTable(adapter, collection.tableName);
+    // Its translations table among them, before the main table goes: the companion holds an FK
+    // to `<main>.id`, so dropping the child first is safe in every environment.
+    await removeBeforeTheDrop(
+      adapter,
+      { kind: "collection", slug, table: collection.tableName },
+      () => dropEntityTranslationsTable(adapter, collection.tableName)
+    );
   }
 
   /**
