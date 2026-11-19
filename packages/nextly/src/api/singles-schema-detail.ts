@@ -35,6 +35,7 @@ import {
   schemaDraftSplit,
 } from "../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../domains/webhooks/builder-webhooks";
+import { attachedWorkflowSummary } from "../domains/workflows/registry";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
@@ -127,6 +128,12 @@ export const GET = withErrorHandler(
       ...single,
       fields: enrichedFields,
       ...draftSplitResponseFields(draftSplit),
+      // The workflow that holds this Single's publishing, as the dispatcher's
+      // read names it.
+      workflow: attachedWorkflowSummary(
+        "single",
+        String((single as { slug?: string }).slug ?? "")
+      ),
     } as unknown as typeof single);
   }
 );

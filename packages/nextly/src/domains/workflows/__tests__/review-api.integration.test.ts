@@ -51,6 +51,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { defineCollection, text } from "../../../config";
+import { getSchema } from "../../../api/singles-detail";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { listRoleSlugsForUserOrRefuse } from "../../../services/lib/permissions";
@@ -713,6 +714,53 @@ describe.each(getConfiguredTestDialects())(
             {
               params: Promise.resolve({
                 params: ["collections", "schema", PAGES],
+              }),
+            }
+          );
+          expect(anonymous.status).toBe(401);
+          expect(await anonymous.text()).not.toContain("editorial");
+        }
+      );
+
+      it.runIf(door.name === "REST")(
+        "names a Single's workflow in its schema read, and never to a visitor",
+        async () => {
+          current = await bootSteps(dialect);
+          await person(app(), "dana", [["read", "banner"]]);
+
+          const read = await rest("GET", ["singles", "banner", "schema"], {
+            kind: "person",
+            id: "dana",
+          });
+
+          expect(read.workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+          // The exported schema helper a site can mount names it the same way.
+          const mounted = await getSchema(
+            new Request("http://localhost/api/singles/banner/schema", {
+              headers: {
+                ...(await headersFor({ kind: "person", id: "dana" })),
+                origin: "http://localhost",
+              },
+            }),
+            "banner"
+          );
+          expect(mounted.status).toBe(200);
+          expect(((await mounted.json()) as Doc).workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+
+          // A visitor is refused the read, so the workflow is never named to one.
+          const anonymous = await createDynamicHandlers().GET(
+            new Request("http://localhost/api/singles/banner/schema", {
+              headers: { origin: "http://localhost" },
+            }),
+            {
+              params: Promise.resolve({
+                params: ["singles", "banner", "schema"],
               }),
             }
           );
