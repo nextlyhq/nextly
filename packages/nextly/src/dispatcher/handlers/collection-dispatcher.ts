@@ -369,6 +369,31 @@ function readConfirmedDeletions(
   }
 }
 
+/**
+ * The dialog's confirmations by field name, as its questions read them
+ * (`refuseUnansweredDialogQuestions`): each field's own resolution, and each removed field whose
+ * count of values the person confirmed deleting (`confirmedDeletions`), a count being its drop
+ * confirmed. Nothing where the body sends neither.
+ */
+function dialogConfirmations(
+  tableName: string,
+  resolutions: Record<string, FieldResolution> | undefined,
+  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
+): {
+  legacy?: { tableName: string; byFieldName: Record<string, FieldResolution> };
+} {
+  const counted = (confirmedDeletions ?? []).map(
+    deletion => [deletion.field, { action: "confirm_drop" as const }] as const
+  );
+  if (resolutions === undefined && counted.length === 0) return {};
+  return {
+    legacy: {
+      tableName,
+      byFieldName: { ...Object.fromEntries(counted), ...resolutions },
+    },
+  };
+}
+
 /** The save's answer of the counts confirmed, where the body sent them; nothing otherwise. */
 function confirmedDeletionsAnswer(
   confirmedDeletions: z.infer<
@@ -1358,9 +1383,11 @@ const COLLECTIONS_METHODS: Record<
                 isLocalized,
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
-                ...(resolutions
-                  ? { legacy: { tableName, byFieldName: resolutions } }
-                  : {}),
+                ...dialogConfirmations(
+                  tableName,
+                  resolutions,
+                  confirmedDeletions
+                ),
               }),
             // Whether the push applies the change in development, the writer recording its
             // migration once the push has run: a translated collection, or one turning

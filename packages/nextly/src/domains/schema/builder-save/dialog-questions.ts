@@ -14,6 +14,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { appLocalization } from "../../i18n/configured-locales";
 import { offeredCompanionRename } from "../../i18n/migration/companion-rename";
@@ -132,7 +133,8 @@ export async function refuseUnansweredDialogQuestions(args: {
   const unconfirmedLinks = relationshipsDroppingLinks(
     args.oldFields,
     args.newFields,
-    args.builtBy
+    args.builtBy,
+    args.dialect
   ).filter(field => !confirmedByName(field));
   const unconfirmed = [...unconfirmedTranslated, ...unconfirmedLinks];
   if (unconfirmed.length > 0) {
@@ -205,13 +207,21 @@ function fieldsLosingTheirColumn(
 function relationshipsDroppingLinks(
   oldFields: readonly FieldDefinition[],
   newFields: readonly FieldDefinition[],
-  builtBy: ColumnOrigin
+  builtBy: ColumnOrigin,
+  dialect: SupportedDialect
 ): FieldDefinition[] {
   if (builtBy === "fieldGroup") return [];
-  const after = new Map(
-    fieldsStoredOnRow(newFields).map(field => [field.name, field] as const)
-  );
-  return fieldsStoredOnRow(oldFields).filter(field => {
+  const before = fieldsStoredOnRow(oldFields);
+  const now = fieldsStoredOnRow(newFields);
+  const after = new Map(now.map(field => [field.name, field] as const));
+  // A many-to-many renamed under the same target is carried: its link table is renamed with every
+  // link, by the save's own pairing (`detectJunctionRename`), so it drops none.
+  const carried = new DynamicCollectionSchemaService(
+    undefined,
+    dialect
+  ).detectJunctionRename(before, now)?.from.name;
+  return before.filter(field => {
+    if (field.name === carried) return false;
     const kept = after.get(field.name);
     return kept === undefined
       ? usesJunctionTable(field)

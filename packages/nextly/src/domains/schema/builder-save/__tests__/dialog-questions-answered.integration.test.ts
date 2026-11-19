@@ -600,6 +600,21 @@ for (const dialect of getConfiguredTestDialects()) {
       60_000
     );
 
+    // Renamed under the same collection, a many-to-many keeps its links: the save renames its link
+    // table with them, so nothing is asked.
+    it("saves a many-to-many renamed under the same collection unconfirmed, keeping every link", async () => {
+      const renamed = { ...related, name: "linked" };
+      const renamedLink = junctionTableNameFor("dc_posts", renamed as never);
+
+      await save([text("heading"), renamed, pick], {});
+
+      const [row] = await exec<{ n: number | string }>(
+        t,
+        `SELECT COUNT(*) AS n FROM ${renamedLink}`
+      );
+      expect(Number(row?.n ?? 0)).toBe(1);
+    }, 60_000);
+
     // A single link moved into a link table drops its column and starts an empty table: nothing
     // carries the link over, so its drop is confirmed by name too.
     it("refuses a single link moved into a link table unconfirmed, keeping its link, and goes through once confirmed by name", async () => {
