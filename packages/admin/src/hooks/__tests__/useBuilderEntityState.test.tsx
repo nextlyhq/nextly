@@ -515,7 +515,11 @@ describe("a collection's title Unique", () => {
     rerender({ e: entity });
 
     expect(
-      sentFields(builder, "collection", result.current.pending.savedBuiltIns)?.[0]
+      sentFields(
+        builder,
+        "collection",
+        result.current.pending.savedBuiltIns
+      )?.[0]
     ).toMatchObject({ name: "title", unique: true, localized: false });
   });
 
@@ -603,7 +607,11 @@ describe("a collection's title Unique", () => {
       )
     );
     expect(
-      sent(single.builder, "single", single.result.current.pending.savedBuiltIns)
+      sent(
+        single.builder,
+        "single",
+        single.result.current.pending.savedBuiltIns
+      )
     ).toEqual([["body", false]]);
   });
 });
