@@ -36,6 +36,7 @@ import {
   getQueuedEmailDetail,
   getQueuedEmailOverdue,
   listActivity,
+  searchActivityByAddress,
   type DeliveryDetail,
   type QueuedEmailDetail,
   type QueuedEmailOverdue,
@@ -63,6 +64,13 @@ const emailActivityKeys = {
   all: () => ["emailActivity"] as const,
   list: (query: ReturnType<typeof activityQuery>, window: TimeWindow) =>
     [...emailActivityKeys.all(), "list", query, window] as const,
+  // A search is keyed by the screen's count of searches, never the address,
+  // so the address is in no cache key a devtool or a log could show.
+  search: (
+    query: ReturnType<typeof activityQuery>,
+    window: TimeWindow,
+    searchId: number
+  ) => [...emailActivityKeys.all(), "search", query, window, searchId] as const,
   overdue: () => [...emailActivityKeys.all(), "overdue"] as const,
   detail: (source: "delivery" | "queued", id: string) =>
     [...emailActivityKeys.all(), "detail", source, id] as const,
@@ -78,11 +86,22 @@ interface ActivityCursor {
   from: string;
 }
 
-/** One page: its rows, where the next starts, and the window it was read in. */
+/**
+ * One page: its rows, where the next starts, the window it was read in, and,
+ * for a search by address, the server's notice of what a search can't reach.
+ */
 interface ActivityPage {
   rows: ActivityRow[];
   next: string | null;
   from: string;
+  notice: string | null;
+}
+
+/** A search by address the screen has made: its count, and the address. */
+export interface AddressSearchRequest {
+  /** Bumped by each search, so the same address searched again reads again. */
+  id: number;
+  address: string;
 }
 
 /**
@@ -93,19 +112,31 @@ interface ActivityPage {
 async function readActivityPage(
   query: ReturnType<typeof activityQuery>,
   window: TimeWindow,
-  cursor: ActivityCursor | null
+  cursor: ActivityCursor | null,
+  address: string | undefined
 ): Promise<ActivityPage> {
   const from = cursor?.from ?? windowStart(window, new Date());
-  const page = await listActivity({
+  const asked = {
     ...query,
     from,
     ...(cursor ? { before: cursor.before } : {}),
     limit: ACTIVITY_PAGE_SIZE,
-  });
+  };
+  if (address === undefined) {
+    const page = await listActivity(asked);
+    return {
+      rows: page.items.map(activityRow),
+      next: page.meta.nextBefore ?? null,
+      from,
+      notice: null,
+    };
+  }
+  const page = await searchActivityByAddress({ ...asked, address });
   return {
     rows: page.items.map(activityRow),
     next: page.meta.nextBefore ?? null,
     from,
+    notice: page.notice,
   };
 }
 
@@ -126,6 +157,8 @@ function refreshEvery(
 /** The merged list, and the paging the screen drives. */
 export interface EmailActivityResult {
   rows: ActivityRow[];
+  /** A search's notice of the records it can't reach; null for the list. */
+  notice: string | null;
   isLoading: boolean;
   isError: boolean;
   error: Error | null;
@@ -136,12 +169,18 @@ export interface EmailActivityResult {
 }
 
 /**
- * The merged Activity, newest first, narrowed by `filter`. Its window ends
+ * The merged Activity, newest first, narrowed by `filter`, or, given a
+ * `search`, only what went to that one exact address. The list's window ends
  * when its first page is read, and moves forward with each refresh.
+ *
+ * A search is read only when asked: every read of one is recorded as a
+ * search in the activity log, so it never polls, refetches on focus or
+ * retries by itself, and its rows are dropped from the cache once nothing
+ * shows them.
  */
 export function useEmailActivity(
   filter: ActivityFilter,
-  options: { enabled?: boolean } = {}
+  options: { enabled?: boolean; search?: AddressSearchRequest } = {}
 ): EmailActivityResult {
   const filterKey = JSON.stringify(activityQuery(filter));
   // Read back from the key, so the memo depends on the filter's value and
@@ -151,17 +190,21 @@ export function useEmailActivity(
     [filterKey]
   );
   const window = filter.window;
+  const search = options.search;
 
   const read = useInfiniteQuery<
     ActivityPage,
     Error,
     InfiniteData<ActivityPage, ActivityCursor | null>,
-    ReturnType<typeof emailActivityKeys.list>,
+    readonly unknown[],
     ActivityCursor | null
   >({
-    queryKey: emailActivityKeys.list(query, window),
+    queryKey: search
+      ? emailActivityKeys.search(query, window, search.id)
+      : emailActivityKeys.list(query, window),
     initialPageParam: null,
-    queryFn: ({ pageParam }) => readActivityPage(query, window, pageParam),
+    queryFn: ({ pageParam }) =>
+      readActivityPage(query, window, pageParam, search?.address),
     getNextPageParam: last =>
       last.next === null ? undefined : { before: last.next, from: last.from },
     enabled: options.enabled ?? true,
@@ -169,9 +212,14 @@ export function useEmailActivity(
     // itself, and every minute otherwise, for email sent or queued since.
     // Only while one page is loaded: a refetch reads every loaded page again,
     // so a reader who loaded more keeps what they loaded until they reload.
-    refetchInterval: current => refreshEvery(current.state.data?.pages),
+    // A search never reads again by itself: each read is a recorded search.
+    refetchInterval: current =>
+      search ? false : refreshEvery(current.state.data?.pages),
     refetchOnWindowFocus: current =>
-      (current.state.data?.pages.length ?? 0) <= 1,
+      !search && (current.state.data?.pages.length ?? 0) <= 1,
+    refetchOnReconnect: !search,
+    refetchOnMount: !search,
+    ...(search ? { retry: false, staleTime: Infinity, gcTime: 0 } : {}),
   });
 
   const pages = read.data?.pages;
@@ -179,6 +227,7 @@ export function useEmailActivity(
 
   return {
     rows,
+    notice: pages?.[0]?.notice ?? null,
     isLoading: read.isLoading,
     isError: read.isError,
     error: read.error,

@@ -235,6 +235,31 @@ export function listActivity(
   );
 }
 
+/**
+ * One page of a search by address: the merged Activity's rows that went to
+ * the address, and the server's notice of which records a search can't reach
+ * (those written under a secret no longer configured).
+ */
+export interface AddressSearchPage extends ListResponse<ActivityEntry> {
+  notice: string;
+}
+
+/**
+ * The merged Activity narrowed to one exact address, under its filters and
+ * cursor. The address goes in the JSON body and never the URL, so it is kept
+ * in no address bar, history, server log or cache key along the way; the
+ * server records that a search was made, and by whom, never the address.
+ */
+export function searchActivityByAddress(
+  search: ActivityQuery & { address: string }
+): Promise<AddressSearchPage> {
+  return fetcher<AddressSearchPage>(
+    "/email-deliveries/search",
+    { method: "POST", body: JSON.stringify(search) },
+    true
+  );
+}
+
 /** Whether queued email is overdue because the jobs trigger is not running. */
 export function getQueuedEmailOverdue(): Promise<QueuedEmailOverdue> {
   return fetcher<QueuedEmailOverdue>("/email-deliveries/overdue", {}, true);

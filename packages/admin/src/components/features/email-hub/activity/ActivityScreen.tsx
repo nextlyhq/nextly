@@ -2,7 +2,7 @@
 
 import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AlertCircle } from "@admin/components/icons";
 import {
@@ -16,6 +16,7 @@ import {
   useEmailActivity,
   useQueuedEmailOverdue,
   type EmailActivityResult,
+  type AddressSearchRequest,
   type OpenActivity,
 } from "@admin/hooks/queries/useEmailActivity";
 import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
@@ -33,6 +34,7 @@ import {
   isFiltered,
 } from "./ActivityFilters";
 import { ActivityList, type ActivityNames } from "./ActivityList";
+import { AddressSearch } from "./AddressSearch";
 import { OverdueBanner } from "./OverdueBanner";
 
 /** The most providers the name lookup and the provider filter read at once. */
@@ -57,7 +59,8 @@ export function useTickingNow(intervalMs = CLOCK_TICK_MS): Date {
 
 /**
  * The Email hub's Activity tab: the late-queue banner, the filters and the
- * newest-first merged Activity of queued email and unqueued sends.
+ * newest-first merged Activity of queued email and unqueued sends, or, after
+ * a search by one exact address, only what went to it, under the same filters.
  *
  * Templates and providers are named from the hub's own lists when the reader
  * may read them, and by their slug or type otherwise; the filters offer them
@@ -65,7 +68,12 @@ export function useTickingNow(intervalMs = CLOCK_TICK_MS): Date {
  */
 export function ActivityScreen(): JSX.Element {
   const [filter, setFilter] = useState<ActivityFilter>(DEFAULT_ACTIVITY_FILTER);
-  const activity = useEmailActivity(filter);
+  // The search the list shows, if any. Each search gets its own number, so
+  // the same address searched again is read again, and the address itself
+  // is held only here, never in the page's address or a cache key.
+  const [search, setSearch] = useState<AddressSearchRequest | null>(null);
+  const searches = useRef(0);
+  const activity = useEmailActivity(filter, { search: search ?? undefined });
   const overdue = useQueuedEmailOverdue();
   const lists = useActivityLists();
   const now = useTickingNow();
@@ -75,6 +83,14 @@ export function ActivityScreen(): JSX.Element {
   return (
     <div className="space-y-4">
       <OverdueBanner overdue={overdue.data} />
+      <AddressSearch
+        searching={search !== null}
+        onSearch={address => {
+          searches.current += 1;
+          setSearch({ id: searches.current, address });
+        }}
+        onClear={() => setSearch(null)}
+      />
       <ActivityFilters
         filter={filter}
         onChange={setFilter}
@@ -89,9 +105,16 @@ export function ActivityScreen(): JSX.Element {
           filter.providerType
         )}
       />
+      {search && activity.notice && (
+        // The server's word on which records a search by address can't reach.
+        <Alert variant="info" role="note">
+          <AlertDescription>{activity.notice}</AlertDescription>
+        </Alert>
+      )}
       <ActivityCount
         shown={activity.rows.length}
         more={activity.hasMore}
+        searching={search !== null}
         filtered={filtered}
         onClear={() =>
           setFilter({ ...DEFAULT_ACTIVITY_FILTER, window: filter.window })
@@ -102,6 +125,7 @@ export function ActivityScreen(): JSX.Element {
         names={lists.names}
         now={now}
         filtered={filtered}
+        searching={search !== null}
         onOpen={setOpen}
       />
       <ActivityDetailSheet
@@ -176,15 +200,20 @@ function useActivityLists(): {
   };
 }
 
-/** How many rows are shown, whether filtered, and the way to clear the filters. */
+/**
+ * How many rows are shown, whether they are a search's, whether filtered,
+ * and the way to clear the filters.
+ */
 function ActivityCount({
   shown,
   more,
+  searching,
   filtered,
   onClear,
 }: {
   shown: number;
   more: boolean;
+  searching: boolean;
   filtered: boolean;
   onClear: () => void;
 }): JSX.Element {
@@ -192,7 +221,8 @@ function ActivityCount({
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
       <span>
         {shown}
-        {more ? "+" : ""} shown, newest first
+        {more ? "+" : ""} {searching ? "found for this address" : "shown"},
+        newest first
         {filtered ? " · filtered" : ""}
       </span>
       {filtered && (
@@ -219,19 +249,25 @@ function ActivityBody({
   names,
   now,
   filtered,
+  searching,
   onOpen,
 }: {
   activity: EmailActivityResult;
   names: ActivityNames;
   now: Date;
   filtered: boolean;
+  searching: boolean;
   onOpen: (open: OpenActivity) => void;
 }): JSX.Element {
   if (activity.isError && activity.rows.length === 0) {
     return (
       <Alert variant="destructive">
         <AlertCircle className="h-4 w-4" aria-hidden />
-        <AlertTitle>Activity couldn’t be loaded</AlertTitle>
+        <AlertTitle>
+          {searching
+            ? "The search couldn’t be made"
+            : "Activity couldn’t be loaded"}
+        </AlertTitle>
         <AlertDescription>
           <p>{activity.error?.message ?? "Try again in a moment."}</p>
           <Button
@@ -271,6 +307,7 @@ function ActivityBody({
         now={now}
         isLoading={activity.isLoading}
         filtered={filtered}
+        searching={searching}
         hasMore={activity.hasMore}
         isLoadingMore={activity.isLoadingMore}
         onLoadMore={activity.loadMore}

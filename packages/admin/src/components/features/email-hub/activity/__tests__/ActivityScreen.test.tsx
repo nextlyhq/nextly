@@ -57,6 +57,7 @@ const ROW = activityRow({
 function activity(over: Partial<ReturnType<typeof useEmailActivity>>) {
   vi.mocked(useEmailActivity).mockReturnValue({
     rows: [],
+    notice: null,
     isLoading: false,
     isError: false,
     error: null,
@@ -175,5 +176,49 @@ describe("Fix template", () => {
     expect(screen.queryByRole("link", { name: "Fix template" })).toBeNull();
     held.delete("read-email-templates");
     cachedTemplates.data = undefined;
+  });
+});
+
+describe("searching by address", () => {
+  function searchFor(address: string) {
+    fireEvent.change(
+      screen.getByLabelText("Find what was sent to an address"),
+      { target: { value: address } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Search" }));
+  }
+
+  it("lists what went to the address, with the server's notice and a count that says so", () => {
+    activity({ rows: [ROW], notice: "Older records can't be found this way." });
+    render(<ActivityScreen />);
+    // The whole Activity first: no notice, no search asked for.
+    expect(
+      screen.queryByText("Older records can't be found this way.")
+    ).toBeNull();
+    searchFor("ada@example.test");
+    expect(vi.mocked(useEmailActivity)).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { search: { id: 1, address: "ada@example.test" } }
+    );
+    expect(
+      screen.getByText("Older records can't be found this way.")
+    ).toBeTruthy();
+    expect(screen.getByText(/found for this address/)).toBeTruthy();
+  });
+
+  it("searches the same address again as a new search, and clears back to the whole Activity", () => {
+    activity({ rows: [ROW] });
+    render(<ActivityScreen />);
+    searchFor("ada@example.test");
+    searchFor("ada@example.test");
+    expect(vi.mocked(useEmailActivity)).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { search: { id: 2, address: "ada@example.test" } }
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(vi.mocked(useEmailActivity)).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { search: undefined }
+    );
   });
 });

@@ -206,6 +206,13 @@ describe("the Activity list", () => {
     expect(screen.queryByRole("table")).toBeNull();
   });
 
+  it("says nothing went to the address when a search finds nothing", () => {
+    renderList({ rows: [], filtered: true, searching: true });
+    expect(
+      screen.getByText("Nothing was sent to this address in this time.")
+    ).toBeTruthy();
+  });
+
   it("says nothing matches when filters leave it empty", () => {
     renderList({ rows: [], filtered: true });
     expect(screen.getByText("Nothing matches these filters.")).toBeTruthy();
