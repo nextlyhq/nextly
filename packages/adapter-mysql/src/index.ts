@@ -457,6 +457,15 @@ export class MySqlAdapter extends DrizzleAdapter {
   private serverVersion: string | undefined;
 
   /**
+   * Whether a transaction context sets savepoints, read from the server's
+   * variant at connect. TiDB refuses `SAVEPOINT` before 6.2, and in a
+   * pessimistic transaction unless `tidb_constraint_check_in_place_pessimistic`
+   * is on, so on TiDB the context offers none and its callers run their work
+   * without one. MySQL and the other variants take them.
+   */
+  private takesSavepoints = true;
+
+  /**
    * Creates a new MySQL adapter instance.
    *
    * @param config - Adapter configuration
@@ -566,6 +575,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         // and ignores it, and the variants are not spoken for.
         this.enforcesCheckConstraints = enforcesCheckConstraints;
         this.serverVersion = serverVersion;
+        this.takesSavepoints = variant !== "tidb";
         this.connected = true;
 
         if (this.config.logger?.info) {
@@ -1857,22 +1867,30 @@ export class MySqlAdapter extends DrizzleAdapter {
 
       // InnoDB's savepoints, on this transaction's connection, so a part of the transaction can be
       // undone alone (a failed item of a batch, say) and the rest kept, as on PostgreSQL and SQLite.
-      // A transaction opened inside this one's work still joins it flat: see `joinSteps`.
-      savepoint: async (name: string): Promise<void> => {
-        await connection.query(`SAVEPOINT ${this.escapeIdentifier(name)}`);
-      },
+      // A transaction opened inside this one's work still joins it flat: see `joinSteps`. Left
+      // undefined on a server that may refuse them (`takesSavepoints`), so a caller runs its work
+      // without one rather than fail on the SAVEPOINT.
+      ...(this.takesSavepoints
+        ? {
+            savepoint: async (name: string): Promise<void> => {
+              await connection.query(
+                `SAVEPOINT ${this.escapeIdentifier(name)}`
+              );
+            },
 
-      rollbackToSavepoint: async (name: string): Promise<void> => {
-        await connection.query(
-          `ROLLBACK TO SAVEPOINT ${this.escapeIdentifier(name)}`
-        );
-      },
+            rollbackToSavepoint: async (name: string): Promise<void> => {
+              await connection.query(
+                `ROLLBACK TO SAVEPOINT ${this.escapeIdentifier(name)}`
+              );
+            },
 
-      releaseSavepoint: async (name: string): Promise<void> => {
-        await connection.query(
-          `RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`
-        );
-      },
+            releaseSavepoint: async (name: string): Promise<void> => {
+              await connection.query(
+                `RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`
+              );
+            },
+          }
+        : {}),
     };
   }
 

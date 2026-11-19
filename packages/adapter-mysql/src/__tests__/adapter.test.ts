@@ -1251,6 +1251,26 @@ describe("@nextly/adapter-mysql", () => {
         "RELEASE SAVEPOINT `nextly_item``1`"
       );
     });
+
+    it("offers no savepoint methods on a TiDB transaction, which may refuse them", async () => {
+      mockConnection.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql.toLowerCase().includes("version()")
+            ? [[{ version: "8.0.11-TiDB-v8.5.1" }], []]
+            : [[], []]
+        )
+      );
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      await adapter.transaction(async tx => {
+        expect(tx.savepoint).toBeUndefined();
+        expect(tx.rollbackToSavepoint).toBeUndefined();
+        expect(tx.releaseSavepoint).toBeUndefined();
+      });
+    });
   });
 
   // ============================================================
