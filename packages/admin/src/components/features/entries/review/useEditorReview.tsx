@@ -158,7 +158,8 @@ export function useEditorReview({
   const sharedHold =
     hidden && sharedApproves(onScreen) ? SHARED_APPROVAL_HELD : undefined;
   const stepsHold = held ?? (isDirty ? SAVE_FIRST : undefined);
-  const stepReason = stepHold(isDirty, onScreen).stepReason ?? sharedHold;
+  const stepReason =
+    stepHold(isDirty, taker.pending, onScreen).stepReason ?? sharedHold;
   const hold =
     stepsHold ??
     stepReason ??
@@ -219,12 +220,18 @@ export function useEditorReview({
 /** Why a step waits while the page holds edits a step would not carry. */
 const SAVE_FIRST = "Save your changes first.";
 
-/** Why no step can be taken at this moment, where something holds them. */
+/**
+ * Why no step can be taken at this moment, where something holds them: a step
+ * already on its way holds the others, so a second click sends no second step
+ * with the revision the first is about to move.
+ */
 function stepHold(
   isDirty: boolean,
+  stepPending: boolean,
   parts: readonly PartReview[]
 ): { stepReason?: string } {
   if (isDirty) return { stepReason: SAVE_FIRST };
+  if (stepPending) return { stepReason: "Taking the step…" };
   if (parts.some(part => part.version === null)) {
     return { stepReason: "Save the document first." };
   }

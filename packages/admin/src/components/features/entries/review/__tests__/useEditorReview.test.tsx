@@ -205,6 +205,31 @@ describe("the editor's next step under a workflow", () => {
     expect(submit).toHaveAttribute("title", "Save your changes first.");
   });
 
+  it("holds every step while one is on its way, so a second click sends nothing", async () => {
+    held.slugs = new Set(["approve-posts"]);
+    let answer: (value: unknown) => void = () => undefined;
+    stepSpy.mockReturnValue(
+      new Promise(resolve => {
+        answer = resolve;
+      })
+    );
+    fetchSpy.mockResolvedValue(attached(part(inReview(true))));
+    render(<Editor canEdit={false} />);
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    await userEvent.click(approve);
+    await waitFor(() => expect(approve).toBeDisabled());
+    expect(approve).toHaveAttribute("title", "Taking the step…");
+    expect(
+      screen.getByRole("button", { name: "Request changes" })
+    ).toBeDisabled();
+    await userEvent.click(approve);
+    expect(stepSpy).toHaveBeenCalledTimes(1);
+
+    // Answered, the steps are offered again.
+    answer({ message: "Step taken.", item: {} });
+    await waitFor(() => expect(approve).toBeEnabled());
+  });
+
   it("leads a reviewer with Approve, and asks a comment before requesting changes", async () => {
     held.slugs = new Set(["approve-posts"]);
     fetchSpy.mockResolvedValue(attached(part(inReview(true))));
