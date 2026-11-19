@@ -178,7 +178,7 @@ function readingOptions(
 }
 
 /** Whether a save that rewrites the values writes `from`'s values as `to` reads them. */
-export function rewritesPair(
+function rewritesPair(
   from: FieldTypeOnDialect,
   to: FieldTypeOnDialect
 ): boolean {
