@@ -281,4 +281,46 @@ describe("ReviewSection", () => {
       })
     );
   });
+
+  it("draws each part's stage as words with a shape, never as a button", async () => {
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    const stage = section.querySelector("[data-stage-shape]");
+    expect(stage).toHaveAttribute("data-stage-shape", "in-review");
+    expect(stage).toHaveTextContent("In review");
+    expect(stage?.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    expect(stage?.closest("button")).toBeNull();
+  });
+
+  it("says a step taken to assistive technology, not only in a toast", async () => {
+    stepSpy.mockResolvedValue({ message: "Step taken.", item: {} });
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Approve" })
+    );
+    await waitFor(() => expect(announced()).toContain("Approve: done."));
+  });
+
+  it("says a refused step to assistive technology, with why", async () => {
+    stepSpy.mockRejectedValue(new Error("Someone else moved it first."));
+    fetchSpy.mockResolvedValue(answer(part()));
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    await userEvent.click(
+      within(section).getByRole("button", { name: "Approve" })
+    );
+    await waitFor(() =>
+      expect(announced()).toContain("Someone else moved it first.")
+    );
+  });
 });
+
+/** What every polite status region on the page says now. */
+function announced(): string[] {
+  return Array.from(
+    document.querySelectorAll('[role="status"][aria-live="polite"]')
+  ).map(region => region.textContent?.trim() ?? "");
+}

@@ -31,11 +31,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
-import { ChevronDown, Loader2, MoreHorizontal } from "lucide-react";
-import { Fragment, type JSX } from "react";
+import { ChevronDown, Loader2, Lock, MoreHorizontal } from "lucide-react";
+import { Fragment, useId, type JSX } from "react";
 
 import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
 import { cn } from "@admin/lib/utils";
+
+import { PUBLISH_PARTS_ACTION_ID } from "../publish-parts/usePublishPartsAction";
 
 import { BAR_CONTROLS_GAP, BAR_ICON_CONTROL } from "./bar-controls";
 import {
@@ -267,6 +269,125 @@ export function reasonFor(
   return action.disabledReason ?? binding.disabledReason;
 }
 
+/**
+ * The reason a Publish the workflow holds gives, or undefined where nothing
+ * holds it or something else does. Its reason is the action's own, the
+ * review's; a binding's transient reason never stands in for it.
+ */
+function reviewHoldOf(action: EditorDocumentAction): string | undefined {
+  return action.heldForReview === true ? action.disabledReason : undefined;
+}
+
+/**
+ * What pressing a Publish the workflow holds does: opens "Choose what to
+ * publish…", which lists what holds each part and who can unblock it, where
+ * that is wired and usable here; otherwise nothing.
+ */
+function readyToPublishOpener(
+  available: readonly EditorDocumentAction[],
+  bindings: DocumentActionBarProps["bindings"]
+): (() => void) | undefined {
+  const choose = bound(
+    available.filter(action => action.id === PUBLISH_PARTS_ACTION_ID),
+    bindings
+  )[0];
+  if (choose === undefined) return undefined;
+  return reasonFor(choose.action, choose.binding) === undefined
+    ? choose.binding.onSelect
+    : undefined;
+}
+
+/**
+ * The props that make a press a Publish the workflow holds until the document
+ * is approved: greyed and marked `aria-disabled` rather than `disabled`, so it
+ * stays in the Tab order and is read with its reason (`reasonId`, drawn by
+ * {@link HeldReason}), and pressed it opens "Choose what to publish…". A
+ * refusal for want of a permission is drawn as a disabled control instead: a
+ * control that cannot fire is worth more there than one that explains itself.
+ *
+ * Props on the one press rather than a press of its own, so the control is
+ * the same element held or not, and a hold that starts or ends never takes
+ * the keyboard's focus with it.
+ */
+function reviewHeldProps(
+  reasonId: string,
+  onOpenReady: (() => void) | undefined
+) {
+  return {
+    type: "button" as const,
+    "aria-disabled": "true" as const,
+    "aria-describedby": reasonId,
+    onClick: () => onOpenReady?.(),
+  };
+}
+
+/**
+ * Greyed as a disabled control is, by opacity rather than a colour of its
+ * own, so it reads alike in either colour scheme.
+ */
+const REVIEW_HELD_CLASS = "cursor-not-allowed opacity-50";
+
+/**
+ * Why Publish is held, as words on screen beside it, so it is read without
+ * hovering. Folded out of sight on a narrow editor, where the bar has no room
+ * for it, and still read there: the press names it as its description, and
+ * pressing opens the panel that says it in full.
+ */
+function HeldReason({ id, reason }: { id: string; reason: string }) {
+  return (
+    <span
+      id={id}
+      className="min-w-0 max-w-56 truncate text-xs text-muted-foreground max-md:sr-only"
+    >
+      {reason}
+    </span>
+  );
+}
+
+/**
+ * A toolbar action: its press, and where the workflow holds it, the reason
+ * before it. Its own component so each action has an id for its reason.
+ */
+function ToolbarAction({
+  action,
+  binding,
+  pending,
+  onOpenReady,
+}: {
+  action: EditorDocumentAction;
+  binding: ActionBinding;
+  pending: boolean;
+  onOpenReady: (() => void) | undefined;
+}): JSX.Element {
+  const reasonId = useId();
+  const held = reviewHoldOf(action);
+  const reason = reasonFor(action, binding);
+  return (
+    <>
+      {held === undefined ? null : <HeldReason id={reasonId} reason={held} />}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={held === undefined && reason !== undefined}
+        title={reason ?? action.label}
+        onClick={binding.onSelect}
+        {...(held === undefined ? {} : reviewHeldProps(reasonId, onOpenReady))}
+        className={cn(held !== undefined && REVIEW_HELD_CLASS)}
+        data-action={action.id}
+      >
+        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+        {held === undefined ? null : (
+          <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+        )}
+        {/* Its words at every width: the button draws no other icon, so a
+            label that collapsed would leave it empty. */}
+        {action.label}
+      </Button>
+    </>
+  );
+}
+
 /** An action and what it is wired to. */
 export type Bound = { action: EditorDocumentAction; binding: ActionBinding };
 
@@ -330,6 +451,8 @@ export function DocumentActionBar({
       ? [...publishItems, ...bound(groups.document, bindings)]
       : bound(groups.document, bindings);
   const dangerItems = bound(groups.danger, bindings);
+  // Where a Publish the workflow holds leads to when pressed.
+  const openReady = readyToPublishOpener(available, bindings);
   const wideMenu = documentItems.length > 0 || dangerItems.length > 0;
   // A menu is drawn when it has a row to hold, folded controls included.
   const hasMenu = wideMenu || narrowItems.length > 0;
@@ -356,21 +479,13 @@ export function DocumentActionBar({
         confirming action is looked for.
       */}
       {toolbar.map(({ action, binding }) => (
-        <Button
+        <ToolbarAction
           key={action.id}
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={reasonFor(action, binding) !== undefined}
-          title={reasonFor(action, binding) ?? action.label}
-          onClick={binding.onSelect}
-          data-action={action.id}
-        >
-          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-          {/* Its words at every width: the button draws no icon, so a label
-            that collapsed would leave it empty. */}
-          {action.label}
-        </Button>
+          action={action}
+          binding={binding}
+          pending={pending}
+          onOpenReady={openReady}
+        />
       ))}
 
       {primary === undefined ? null : (
@@ -378,6 +493,7 @@ export function DocumentActionBar({
           primary={primary}
           options={arrowItems}
           pending={pending}
+          onOpenReady={openReady}
         />
       )}
 
@@ -429,6 +545,7 @@ function PrimaryAction({
   optionsLabel = PUBLISH_OPTIONS_LABEL,
   pending,
   menuClassName,
+  onOpenReady,
 }: {
   primary: Bound;
   options: Bound[];
@@ -439,15 +556,24 @@ function PrimaryAction({
   pending: boolean;
   /** Extra classes for the arrow's menu, for a surface with its own density. */
   menuClassName?: string;
+  /** What a Publish the workflow holds opens when pressed, where anything. */
+  onOpenReady?: (() => void) | undefined;
 }) {
   const reason = reasonFor(primary.action, primary.binding);
+  const held = reviewHoldOf(primary.action);
+  const reasonId = useId();
+  const joined = options.length + dangerOptions.length > 0;
   const press = (
     <Button
       size="sm"
-      {...(primary.binding.submitForm === undefined
-        ? { type: "button" as const, onClick: primary.binding.onSelect }
-        : { type: "submit" as const, form: primary.binding.submitForm })}
-      disabled={reason !== undefined}
+      {...(held !== undefined
+        ? reviewHeldProps(reasonId, onOpenReady)
+        : primary.binding.submitForm === undefined
+          ? { type: "button" as const, onClick: primary.binding.onSelect }
+          : { type: "submit" as const, form: primary.binding.submitForm })}
+      // A Publish the workflow holds stays focusable (`reviewHeldProps`);
+      // any other reason disables the control.
+      disabled={held === undefined && reason !== undefined}
       /*
         The reason is the title when there is one, so a control an author
         cannot use says why. Three separate permissions and several document
@@ -458,15 +584,20 @@ function PrimaryAction({
       data-action={primary.action.id}
       data-primary="true"
       className={cn(
-        options.length + dangerOptions.length > 0 && "rounded-r-none"
+        joined && "rounded-r-none",
+        held !== undefined && REVIEW_HELD_CLASS
       )}
     >
       {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+      {held === undefined ? null : (
+        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+      )}
       {primary.action.label}
     </Button>
   );
-  if (options.length + dangerOptions.length === 0) return press;
-  return (
+  const drawn = !joined ? (
+    press
+  ) : (
     <div className="flex items-center" data-publish-split="">
       {press}
       <ActionOptionsMenu
@@ -476,6 +607,15 @@ function PrimaryAction({
         {...(menuClassName === undefined ? {} : { menuClassName })}
       />
     </div>
+  );
+  // A held Publish's reason sits before the split, never inside it, so the
+  // press and its arrow stay one control; its slot is kept either way, so
+  // the press is the same element whether held or not.
+  return (
+    <>
+      {held === undefined ? null : <HeldReason id={reasonId} reason={held} />}
+      {drawn}
+    </>
   );
 }
 

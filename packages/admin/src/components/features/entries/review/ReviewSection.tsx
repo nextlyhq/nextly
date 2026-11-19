@@ -41,7 +41,9 @@ import { leadingReviewStep } from "../EntryForm/document-actions";
 import { PanelSection } from "../EntryForm/panels/PanelSection";
 
 import { waitingForWords } from "./review-words";
-import { useStepTaker, type StepTaker } from "./useStepTaker";
+import { StageShape, stageShapeOf } from "./StageShape";
+import { useAnnouncedStepTaker } from "./step-announcement";
+import type { StepTaker } from "./useStepTaker";
 
 export interface ReviewSectionProps {
   document: ReleaseDocumentRef;
@@ -55,7 +57,8 @@ export function ReviewSection({
 }: ReviewSectionProps): JSX.Element | null {
   const { data } = useReviewState(document);
   const { defaultLocale, getLocale } = useLocalization();
-  const taker = useStepTaker(document);
+  // Each step said to assistive technology as well as in a toast.
+  const taker = useAnnouncedStepTaker(document);
   const language = locale ?? defaultLocale;
   if (data === undefined || !data.attached) return null;
   const own = data.review.parts.find(part => part.part === language);
@@ -110,9 +113,9 @@ function PartBlock({
         <p className="text-xs font-medium text-muted-foreground">{title}</p>
       )}
       <p className="font-medium text-foreground">
-        {part.stage === null
-          ? "Live, nothing waiting for review"
-          : (part.stageLabel ?? part.stage)}
+        {/* The stage as words with the shape of its kind, as the line under
+            the title draws it, so the two read alike. */}
+        <PartStage part={part} />
       </p>
       {part.stage === null ? null : (
         <>
@@ -131,6 +134,15 @@ function PartBlock({
       <LastMove part={part} />
     </div>
   );
+}
+
+/** The part's stage, with its shape; a live part with nothing waiting says so. */
+function PartStage({ part }: { part: PartReview }): JSX.Element {
+  const shape = stageShapeOf(part);
+  if (shape === null || part.stage === null) {
+    return <>Live, nothing waiting for review</>;
+  }
+  return <StageShape shape={shape} label={part.stageLabel ?? part.stage} />;
 }
 
 /** The steps this person may take on the part alone, primary first. */

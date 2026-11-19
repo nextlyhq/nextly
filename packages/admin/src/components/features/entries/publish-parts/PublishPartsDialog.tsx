@@ -280,18 +280,21 @@ export function PublishPartsDialog({
             Checking what this does to each part…
           </p>
         ) : null}
+        {/* Refusals in the status text colour, which reads at AA on the
+            dialog in both schemes; the destructive action's red is lighter
+            than text may be. */}
         {[...general, ...(otherRefusal ? [otherRefusal] : [])].map(message => (
           <p
             key={message}
             role="alert"
-            className="flex items-start gap-2 text-sm text-destructive"
+            className="flex items-start gap-2 text-sm text-danger-text"
           >
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             {message}
           </p>
         ))}
         {changedSince ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-sm text-danger-text">
             This document changed since you opened it. Review the latest
             version, then try again.
           </p>
@@ -398,8 +401,9 @@ function PartRow({
         <div id={describedBy} className="text-sm text-muted-foreground">
           {hint ? <p>{hint}</p> : null}
           {sentence ? <p>{sentence}</p> : null}
+          {/* In the status text colour, as the dialog's other refusals. */}
           {refusals.map(message => (
-            <p key={message} className="text-destructive">
+            <p key={message} className="text-danger-text">
               {message}
             </p>
           ))}

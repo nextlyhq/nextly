@@ -211,6 +211,34 @@ describe("the next step, per person and stage", () => {
     }
   });
 
+  it("marks a Publish the workflow holds as held for review, and nothing else", () => {
+    const leading = lead(state({ ...publisher, review: inReview(false) }))[0];
+    expect(leading).toMatchObject({ id: "publish", heldForReview: true });
+    const beside = documentActions(
+      state({ ...publisher, review: drafting(true) })
+    ).find(action => action.id === "publish");
+    expect(beside).toMatchObject({ placement: "toolbar", heldForReview: true });
+    // A past version holds Publish for another reason, which is no review's.
+    const history = documentActions(
+      state({ ...publisher, readingHistory: true, review: inReview(false) })
+    ).find(action => action.id === "publish");
+    expect(history?.disabledReason).toMatch(/past version/);
+    expect(history?.heldForReview).toBeUndefined();
+    // A held step, and an approved stage's Publish, are not held for review.
+    const writing = documentActions(
+      state({
+        ...writer,
+        review: { ...drafting(true), stepReason: "Save your changes first." },
+      })
+    );
+    expect(writing.some(action => action.heldForReview === true)).toBe(false);
+    expect(
+      documentActions(state({ ...publisher, review: approved(false) })).some(
+        action => action.heldForReview === true
+      )
+    ).toBe(false);
+  });
+
   it("offers no step where every write is refused", () => {
     const s = state({
       ...publisher,

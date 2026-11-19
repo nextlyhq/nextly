@@ -2,9 +2,9 @@
 
 /**
  * The line under a document's title that says where it stands in its
- * workflow: "Published · Changes in review · waiting for Editors". While the
- * page is live and its changes wait for approval, a strip under it says what
- * readers see meanwhile.
+ * workflow: "Published · Changes in review · waiting for Editors", the stage
+ * drawn with the shape of its kind. While the page is live and its changes
+ * wait for approval, a strip under it says what readers see meanwhile.
  *
  * Draws nothing where no workflow holds the part on screen, so a document
  * without one keeps the title block it has always had.
@@ -18,6 +18,7 @@ import { cn } from "@admin/lib/utils";
 import type { PartReview } from "@admin/types/workflows";
 
 import { waitingForWords } from "./review-words";
+import { StageShape, stageShapeOf } from "./StageShape";
 
 export interface ReviewStatusLineProps {
   /** The status in the language being edited. */
@@ -50,18 +51,20 @@ export function ReviewStatusLine({
   // Once its stage allows publishing nobody is waited for: what is left is
   // the publish itself.
   const waiting = part.publishable ? null : waitingForWords(part.waitingFor);
-  const words = [
-    live ? "Published" : "Draft",
-    live ? changesIn(label) : label,
-    ...(waiting === null ? [] : [`waiting for ${waiting}`]),
-  ];
+  // The stage is words with a shape beside them, so it never rests on colour,
+  // and plain text, never a control.
+  const shape = stageShapeOf(part);
+  const stage = live ? changesIn(label) : label;
   return (
     <div className={cn("mt-1 space-y-2", className)}>
       <p
         className="text-xs text-muted-foreground"
         data-testid="review-status-line"
       >
-        {words.join(" · ")}
+        {live ? "Published" : "Draft"}
+        {" · "}
+        {shape === null ? stage : <StageShape shape={shape} label={stage} />}
+        {waiting === null ? null : ` · waiting for ${waiting}`}
       </p>
       {live && hasWorkingDraft && !part.publishable ? (
         <p

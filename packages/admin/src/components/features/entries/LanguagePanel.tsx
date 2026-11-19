@@ -36,6 +36,8 @@ import { useCopyFromLanguageScope } from "./CopyFromLanguageScope";
 import { useEntryLocale } from "./EntryLocaleContext";
 import { StateDot } from "./LanguageStateDot";
 import { PublishAllConfirm } from "./PublishAllConfirmDialog";
+import { StageShape } from "./review/StageShape";
+import type { LanguageReviewStage } from "./review/useLanguageReviewStages";
 import {
   languageState,
   languageStateLabel,
@@ -88,7 +90,7 @@ export interface LanguagePanelProps {
    * Each language's stage in the workflow that holds publishing, by language
    * code. Absent, or empty, where no workflow is attached.
    */
-  reviewStages?: Readonly<Record<string, string>>;
+  reviewStages?: Readonly<Record<string, LanguageReviewStage>>;
   className?: string;
 }
 
@@ -327,7 +329,7 @@ function LanguageRows({
     | ((code: string, options?: { seedFrom?: string }) => void)
     | undefined;
   /** Each language's workflow stage, by code; undefined where none holds it. */
-  reviewStages: Readonly<Record<string, string>> | undefined;
+  reviewStages: Readonly<Record<string, LanguageReviewStage>> | undefined;
 }) {
   if (shown.length === 0) {
     // Said rather than shown as an empty list. A list with no rows under a
@@ -580,7 +582,7 @@ function LanguageRow({
   actionsDisabled: boolean;
   navigationDisabled: boolean;
   /** The language's stage in the workflow holding publishing, where one does. */
-  reviewStage: string | undefined;
+  reviewStage: LanguageReviewStage | undefined;
 }) {
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2 border-b border-border last:border-b-0">
@@ -623,12 +625,14 @@ function LanguageRow({
         )}
         {/* Beside the state rather than in place of it: the status says what
             readers see, the stage what the language waits for. */}
+        {/* Words with the shape of the stage's kind, so it never rests on
+            colour, and plain text, never a control. */}
         {reviewStage === undefined ? null : (
           <span
-            className="whitespace-nowrap text-xs text-muted-foreground"
-            data-review-stage={reviewStage}
+            className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground"
+            data-review-stage={reviewStage.label}
           >
-            · {reviewStage}
+            · <StageShape shape={reviewStage.shape} label={reviewStage.label} />
           </span>
         )}
       </div>
