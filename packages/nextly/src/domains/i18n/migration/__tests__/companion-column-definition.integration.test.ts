@@ -552,12 +552,15 @@ describeEachDialect(
       const refusal = await saveInSettings("cdef_posts", [HEADING], false);
 
       if (dialect === "sqlite") {
-        // On SQLite the collation rides on a column the migration history does not record, so the
-        // save is refused as drift first, with the way on, before the move is judged.
-        const told = `${refusal instanceof Error ? refusal.message : String(refusal)}`;
-        expect(told).toContain("schema drift detected");
-        expect(told).toContain("+ dc_cdef_posts_locales.note present in DB");
-        expect(told).toContain("put the table back as the history records it");
+        // The settings save's push judges the move before anything runs: the field's companion
+        // column has a collation of its own, which the new column would not have.
+        expect(errorsOf(refusal)).toEqual([
+          expect.objectContaining({
+            path: "fields.heading",
+            code: "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
+            message: expect.stringMatching(/own collation/),
+          }),
+        ]);
       } else {
         expect(errorsOf(refusal)).toEqual([
           expect.objectContaining({
