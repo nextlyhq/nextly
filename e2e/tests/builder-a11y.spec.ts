@@ -110,6 +110,48 @@ const OPEN_BUILDER_ACTION = /^Open in builder$/;
  */
 const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
+const HOMEPAGE = "/admin/api/singles/homepage";
+
+/**
+ * Give the homepage one block before the editor opens.
+ *
+ * An editor that opens on a page with no blocks opens Add by itself, so a
+ * press on Add would close it again. The tests that open Add from the rail
+ * set the page they open, rather than inherit what the last spec holding
+ * the homepage left, so the press is the one that opens the panel.
+ */
+async function homepageWithABlock(page: Page): Promise<void> {
+  const stored = await page.request.patch(HOMEPAGE, {
+    data: {
+      layout: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "a11y-heading",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Scanned with Add open", level: "h2" },
+          },
+        ],
+      },
+      _overwrite: true,
+    },
+  });
+  expect(stored.ok(), `seeding the homepage: ${stored.status()}`).toBe(true);
+}
+
+/** Open the Add panel from the rail, as an author does. */
+async function openAddPanel(page: Page): Promise<void> {
+  const add = page
+    .getByRole("navigation", { name: "Editor panels" })
+    .getByRole("button", { name: "Add", exact: true });
+  // Closed until pressed: the page has a block, so nothing opened it.
+  await expect(add).toHaveAttribute("aria-pressed", "false");
+  await add.click();
+  await expect(add).toHaveAttribute("aria-pressed", "true");
+}
+
 /** Open a document and put its page builder on screen. */
 async function openEditor(page: Page): Promise<void> {
   await gotoAdmin(page, "/singles/homepage");
@@ -139,11 +181,9 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
   test("has no violations with a panel open", async ({ page }) => {
     // The inserter is a different tree from the canvas — a list of options with
     // its own roles — and a scan of the closed editor never reaches it.
+    await homepageWithABlock(page);
     await openEditor(page);
-    await page
-      .getByRole("navigation", { name: "Editor panels" })
-      .getByRole("button", { name: "Add", exact: true })
-      .click();
+    await openAddPanel(page);
     await expect(page.getByRole("option").first()).toBeVisible({
       timeout: 15_000,
     });
@@ -165,11 +205,9 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
       ([key, value]) => window.localStorage.setItem(key, value),
       ["nextly-theme", "dark"] as const
     );
+    await homepageWithABlock(page);
     await openEditor(page);
-    await page
-      .getByRole("navigation", { name: "Editor panels" })
-      .getByRole("button", { name: "Add", exact: true })
-      .click();
+    await openAddPanel(page);
     await expect(page.getByRole("option").first()).toBeVisible({
       timeout: 15_000,
     });

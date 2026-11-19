@@ -11,7 +11,12 @@
  * @module tests/builder-page-checks.spec
  */
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import {
+  expect,
+  type APIRequestContext,
+  type Page,
+  type Response,
+} from "@playwright/test";
 
 import { pressSave, selection } from "./canvas/editor-driver";
 import { gotoAdmin } from "./support/admin";
@@ -77,6 +82,18 @@ async function openBuilder(page: Page, id: string): Promise<void> {
   });
 }
 
+/**
+ * Whether `response` is the plugins' page checks answering for the page: the
+ * route the editor asks once the page opens, whose findings are listed beside
+ * the builder's own.
+ */
+function providedChecksAnswer(response: Response): boolean {
+  return (
+    new URL(response.url()).pathname.endsWith("/page-checks/provided") &&
+    response.request().method() === "POST"
+  );
+}
+
 const topBarEnd = (page: Page) => page.locator('[data-topbar="end"]');
 const chip = (page: Page) =>
   topBarEnd(page).getByRole("button", { name: /^(\d+ checks?|Checks)\b/ });
@@ -95,7 +112,12 @@ test("lists the page's checks by group, beside Publish", async ({ page }) => {
     { id: "team", name: "Team photo" },
     { id: "office", name: "Office photo" },
   ]);
+  // The plugins' checks are asked once the page opens. Waited for, so the
+  // count and the groups are read once every check has answered, not before
+  // the plugins' have.
+  const provided = page.waitForResponse(providedChecksAnswer);
   await openBuilder(page, id);
+  expect((await provided).ok()).toBe(true);
 
   await expect(chip(page)).toHaveText("2 checks");
   // Beside Publish: the count comes just before Save and Publish.
@@ -115,15 +137,15 @@ test("lists the page's checks by group, beside Publish", async ({ page }) => {
 
   await chip(page).click();
   await expect(list(page)).toBeVisible();
+  // Search is a plugin's group, listed only where one offers checks: this
+  // suite's server runs the SEO plugin, which does. It finds nothing on a
+  // draft, so the count above is the two pictures alone.
   await expect(list(page).getByRole("heading", { level: 3 })).toHaveText([
     /^Accessibility/,
     /^Content and data/,
     /^Publishing/,
+    /^Search/,
   ]);
-  // Search is a plugin's group, listed only where one offers checks.
-  await expect(list(page).getByRole("region", { name: "Search" })).toHaveCount(
-    0
-  );
   await expect(item(page, "Team photo")).toContainText(
     "Screen readers can’t describe the picture"
   );
