@@ -54,6 +54,10 @@ export function asDeclaredFields(
  * Both are SHARED (`localized: false`): localizing the title or slug is a deliberate opt-in
  * through a field the author declares, not a side effect of text fields localizing by default,
  * which would move the identity columns into the companion `_locales` table.
+ *
+ * The `define*` function records the ones it added on the entity (`markDeclaredByDefine`), so
+ * the configuration's check can tell an entity that declares no field of its own from one whose
+ * plugin added a field of that name.
  */
 export function systemFieldsBeside(
   fields: readonly AuthorableFieldConfig[]
