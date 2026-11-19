@@ -1167,6 +1167,79 @@ describe.each(getConfiguredTestDialects())(
       180_000
     );
 
+    // Only the table was consented to: a view made on it since is not dropped with it. The drop is
+    // refused, naming the view, and the table and the view stay for the operator.
+    it.skipIf(dialect !== "postgresql")(
+      "leaves the translations table an older delete left, and the view on it, where a view depends on it",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        const view = "dpl_notes_translations_view";
+        await deployed.adapter.executeQuery(
+          `CREATE VIEW "${view}" AS SELECT * FROM "${notes.table}_locales"`
+        );
+
+        const later = await migrate();
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+        expect(await deployed.adapter.tableExists(view)).toBe(true);
+        expect(later.said).toContain("other objects depend on it");
+        expect(later.said).toContain(view);
+        expect(later.said).toContain(
+          `Could not remove what the deleted collection "${NOTES}" left`
+        );
+      },
+      180_000
+    );
+
+    // A pending migration of the run that drops the table the run was asked about and makes
+    // another of its name, keyed into a table that stands, leaves a table the consent was not for:
+    // it is left as it is, with what it holds.
+    it.skipIf(dialect !== "postgresql")(
+      "leaves a table of the translations table's name that a pending migration made in its place",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        const translations = `${notes.table}_locales`;
+        const [idType] = await deployed.adapter.executeQuery<{ t: string }>(
+          `SELECT format_type(atttypid, atttypmod) AS t FROM pg_attribute WHERE attrelid = '"dc_${KEPT}"'::regclass AND attname = 'id'`
+        );
+        const [kept] = await deployed.adapter.executeQuery<{ id: string }>(
+          `SELECT "id" AS id FROM "dc_${KEPT}" LIMIT 1`
+        );
+        const name = "29991231_000000_000_dpl_remake_translations";
+        writeFileSync(
+          join(dir, "migrations", `${name}.sql`),
+          [
+            `-- Migration: ${name}`,
+            "",
+            "-- UP",
+            `DROP TABLE "${translations}";`,
+            "",
+            `CREATE TABLE "${translations}" ("_parent" ${idType?.t ?? "text"} NOT NULL REFERENCES "dc_${KEPT}" ("id"), "_locale" varchar(10) NOT NULL, "title" text, PRIMARY KEY ("_parent", "_locale"));`,
+            "",
+            `INSERT INTO "${translations}" ("_parent", "_locale", "title") VALUES ('${kept?.id ?? ""}', 'es', 'Nuevo');`,
+            "",
+            "-- DOWN",
+            "",
+          ].join("\n")
+        );
+
+        const later = await migrate();
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(later.said).toContain(
+          `Left table "${translations}" as it is: it is no longer the translations table`
+        );
+        const [rows] = await deployed.adapter.executeQuery<{ n: unknown }>(
+          `SELECT COUNT(*) AS n FROM "${translations}"`
+        );
+        expect(Number(rows?.n)).toBe(1);
+      },
+      180_000
+    );
+
     it.skipIf(dialect !== "postgresql")(
       "takes it under a consent naming the deleted collection's table",
       async () => {
