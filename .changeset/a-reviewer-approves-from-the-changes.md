@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A reviewer's request for changes is shown on the document, under the title, with who asked and what they said; a request on the shared fields shows from every language. The comment wraps at any width.
+A reviewer approves a document from its changes, or sends them back with a reason. Where a part waits for their approval, the editor shows its changes since the last approval (or, with none, since it was last published), the shared fields beside the language they are approved with. "Approve all languages" lists each waiting part with its changes and approves them in one step for exactly the versions shown; a part that changed meanwhile refuses the step and is shown again, and the parts left out are named. A person who may approve but not edit opens the document read-only with Approve and Request changes. A refused step says why where it was taken, naming the fields an approval covers that the reviewer cannot read and who could approve. A reviewer's request for changes is shown on the document, under the title, with who asked and what they said; a request on the shared fields shows from every language.
