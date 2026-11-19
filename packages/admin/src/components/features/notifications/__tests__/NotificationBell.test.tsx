@@ -35,6 +35,11 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import { journalApi } from "@admin/services/journalApi";
 import type { JournalRow } from "@admin/services/journalApi";
 
+import {
+  drawnText,
+  nameHoldsDrawnText,
+} from "@admin/__tests__/helpers/label-in-name";
+
 import { LAST_SEEN_KEY } from "../useUnreadCount";
 
 import { NotificationBell } from "../NotificationBell";
@@ -220,8 +225,40 @@ describe("NotificationBell", () => {
     await waitFor(() => {
       expect(screen.getByTestId("notification-bell")).toHaveAttribute(
         "aria-label",
-        "Notifications (1 unread)"
+        "Notifications, 1 unread"
       );
     });
   });
+
+  // Label in Name: the count the badge draws is what a person using speech
+  // input says to press the bell, so the name holds it, outside parentheses,
+  // which the check sets aside.
+  it.each([
+    { unread: 1, drawn: "1" },
+    { unread: 12, drawn: "9+" },
+  ])(
+    "names the bell with the $drawn its badge draws",
+    async ({ unread, drawn }) => {
+      mockedPermissions.mockReturnValue({
+        isSuperAdmin: true,
+        isLoading: false,
+      });
+      mockedList.mockResolvedValue({
+        rows: Array.from({ length: unread }, (_, i) =>
+          rowAt(`id-${i}`, new Date(2026, 3, 30, 10, 0, 12 - i).toISOString())
+        ),
+        hasMore: false,
+      });
+
+      render(<NotificationBell />, { wrapper: makeWrapper() });
+      const badge = await screen.findByTestId("notification-bell-badge");
+      expect(badge.textContent).toBe(drawn);
+      const bell = screen.getByTestId("notification-bell");
+      const name = bell.getAttribute("aria-label") ?? "";
+      expect(
+        nameHoldsDrawnText(name, drawnText(bell)),
+        `"${name}" against the drawn "${drawnText(bell)}"`
+      ).toBe(true);
+    }
+  );
 });

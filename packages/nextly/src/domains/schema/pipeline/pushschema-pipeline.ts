@@ -1290,6 +1290,7 @@ export class PushSchemaPipeline {
           db: args.db,
           dialect: args.dialect,
           desired: args.desired,
+          live: { tables: [...liveSnapshot.tables, ...switches.tables] },
           operations: resolvedOps,
         });
         await refuseSeveralReferencesForOne({

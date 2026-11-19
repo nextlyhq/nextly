@@ -273,11 +273,31 @@ describe("the Header & footer group", () => {
     ).toBeNull();
   });
 
-  it("opens a new set's form without leaving the builder", () => {
+  it("asks for a new set's name and start, offering a copy of the site default", async () => {
     render(<HeaderFooterGroup folds={folds} />);
-    const add = screen.getByRole("link", { name: /New header & footer/ });
-    expect(add.getAttribute("href")).toBe("/admin/collections/layouts/create");
-    expect(add.getAttribute("target")).toBe("_blank");
+    await userEvent.click(
+      screen.getByRole("button", { name: /New header & footer/ })
+    );
+    const dialog = screen.getByRole("dialog", { name: "New header & footer" });
+    expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeTruthy();
+    expect(
+      within(dialog)
+        .getAllByRole("radio")
+        .map(radio => radio.closest("div")?.textContent)
+    ).toEqual([
+      expect.stringContaining("A copy of Main"),
+      expect.stringContaining("The starter header and footer"),
+      expect.stringContaining("Empty"),
+    ]);
+  });
+
+  it("offers no new set to an author who may not make one", () => {
+    rights.create = false;
+    answer([set("main", "Main")]);
+    render(<HeaderFooterGroup folds={folds} />);
+    expect(
+      screen.queryByRole("button", { name: /New header & footer/ })
+    ).toBeNull();
   });
 
   it("asks both reads again when the author comes back from a set's form", () => {

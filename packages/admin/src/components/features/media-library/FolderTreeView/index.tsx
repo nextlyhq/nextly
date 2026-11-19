@@ -262,19 +262,26 @@ function LibraryRow({
     >
       {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {count !== undefined &&
-        (emphasize ? (
-          <Badge
-            variant="warning"
-            className="text-xs font-semibold tabular-nums"
-          >
-            {count}
-          </Badge>
-        ) : (
-          <span className="text-xs tabular-nums text-muted-foreground">
-            {count}
-          </span>
-        ))}
+      {/* A real space between the name and its count, which the row's flex
+          layout does not draw: without it the two read as one word, "All
+          media18", which the name "All media, 18" never says. */}
+      {count !== undefined && (
+        <>
+          {" "}
+          {emphasize ? (
+            <Badge
+              variant="warning"
+              className="text-xs font-semibold tabular-nums"
+            >
+              {count}
+            </Badge>
+          ) : (
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {count}
+            </span>
+          )}
+        </>
+      )}
       {count === undefined && countHint && (
         <span
           className="text-xs text-muted-foreground"
@@ -414,10 +421,15 @@ function FolderTreeItem({
             aria-hidden="true"
           />
           <span className="min-w-0 flex-1 truncate text-xs">{folder.name}</span>
+          {/* A real space between the name and its count, as on the rows
+              above, so the two never read as one word. */}
           {counts && (
-            <span className="text-xs font-medium tabular-nums text-muted-foreground">
-              {counts[folder.id] ?? 0}
-            </span>
+            <>
+              {" "}
+              <span className="text-xs font-medium tabular-nums text-muted-foreground">
+                {counts[folder.id] ?? 0}
+              </span>
+            </>
           )}
         </button>
 

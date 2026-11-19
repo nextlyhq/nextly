@@ -74,7 +74,7 @@ describe("the settings drawer's Save", () => {
     const items = () =>
       screen.getByRole("spinbutton", { name: /Number of items/ });
     const reset = () =>
-      screen.getByRole("button", { name: "Reset Display to defaults" });
+      screen.getByRole("button", { name: "Reset to defaults, Display" });
     expect(items()).toBeEnabled();
     await userEvent.click(done());
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));

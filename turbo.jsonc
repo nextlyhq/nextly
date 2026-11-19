@@ -659,10 +659,13 @@
       // E2E_DEV_SPECS_ONLY runs only the specs that need the dev server.
       // E2E_FONT_CATALOGUE_PORT: where the stand-in font catalogue the fonts
       // spec reads is served, beside E2E_PORT by default.
+      // E2E_HEADER_FOOTER_IN_CODE_ONLY runs only the specs of a site that
+      // draws its header and footer in code.
       "env": [
         "CI",
         "E2E_DEV_SPECS_ONLY",
         "E2E_FONT_CATALOGUE_PORT",
+        "E2E_HEADER_FOOTER_IN_CODE_ONLY",
         "E2E_PORT",
         "E2E_PROD_PORT",
         "E2E_PRODUCTION_PREBUILT",

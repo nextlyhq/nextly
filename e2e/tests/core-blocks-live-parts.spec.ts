@@ -24,6 +24,7 @@ import {
   expect,
   type APIRequestContext,
   type Browser,
+  type Locator,
   type Page,
 } from "@playwright/test";
 
@@ -31,6 +32,9 @@ import { uploadImage } from "./support/media-upload";
 import { test } from "./support/test";
 
 const PAGES = "/admin/api/collections/pages/entries";
+
+/** What one axe scan answers. */
+type AxeResults = Awaited<ReturnType<AxeBuilder["analyze"]>>;
 
 let counter = 0;
 const id = () =>
@@ -182,6 +186,44 @@ async function shortTargets(page: Page): Promise<string[]> {
   });
 }
 
+/**
+ * A disclosure a visitor taps, there and visible, at least 44px tall: found
+ * by what it is (a `summary`), so a title that stops folding fails here.
+ */
+async function tallEnough(
+  control: Locator,
+  what: string,
+  problems: string[]
+): Promise<void> {
+  await expect(control).toBeVisible();
+  const box = await control.boundingBox();
+  if (box === null || box.height < 44) {
+    problems.push(`${what} ${Math.round(box?.height ?? 0)}px tall`);
+  }
+}
+
+/**
+ * A contrast scan's failures. Text axe could not decide (its colours behind
+ * an image, or the same as its background) is counted too, as unverified:
+ * the parts on this page sit on plain colours, so axe can decide each one,
+ * and one it cannot is a change to look at. The scan must also have judged
+ * some text, so a scan that saw nothing does not pass.
+ */
+function contrastProblems(results: AxeResults, at: string): string[] {
+  const judged = results.passes.flatMap(rule => rule.nodes).length;
+  return [
+    ...(judged === 0 ? [`${at}: contrast judged no text`] : []),
+    ...results.violations.flatMap(rule =>
+      rule.nodes.map(node => `${at}: contrast ${node.target.join(" ")}`)
+    ),
+    ...results.incomplete.flatMap(rule =>
+      rule.nodes.map(
+        node => `${at}: contrast unverified ${node.target.join(" ")}`
+      )
+    ),
+  ];
+}
+
 test.describe("the core blocks' live parts", () => {
   test.describe.configure({ timeout: 240_000 });
 
@@ -198,12 +240,27 @@ test.describe("the core blocks' live parts", () => {
         const live = await visitor(browser, baseURL, width, scheme);
         const response = await live.goto(`/${slug}`);
         expect(response?.ok(), `${at}: the page answers`).toBe(true);
-        await expect(
-          live.getByRole("navigation", { name: "On this page" })
-        ).toBeVisible();
         // Every part measured below is there, so a part that stops drawing
-        // fails here rather than quietly leaving the checks below.
-        await expect(live.getByText("How long does it take?")).toBeVisible();
+        // fails here rather than quietly leaving the checks below. The
+        // contents' folding title and the accordion's question are each
+        // found as the disclosure a visitor taps, and measured as such.
+        const contents = live.getByRole("navigation", { name: "On this page" });
+        await expect(contents).toBeVisible();
+        await tallEnough(
+          contents.locator("summary[data-nx-toc-toggle]"),
+          `${at}: the contents' folding title`,
+          problems
+        );
+        await tallEnough(
+          live.locator("summary").filter({ hasText: "How long does it take?" }),
+          `${at}: the accordion's question`,
+          problems
+        );
+        for (const item of ["A plan", "A price"]) {
+          await expect(
+            live.getByRole("listitem").filter({ hasText: item })
+          ).toBeVisible();
+        }
         // The poster is a document of its own, in its frame; its play link
         // is the one control a visitor taps there.
         const play = live
@@ -234,11 +291,7 @@ test.describe("the core blocks' live parts", () => {
         const contrast = await new AxeBuilder({ page: live })
           .withRules(["color-contrast"])
           .analyze();
-        for (const violation of contrast.violations) {
-          for (const node of violation.nodes) {
-            problems.push(`${at}: contrast ${node.target.join(" ")}`);
-          }
-        }
+        problems.push(...contrastProblems(contrast, at));
 
         for (const target of await shortTargets(live)) {
           problems.push(`${at}: ${target}`);
@@ -284,11 +337,7 @@ test.describe("the core blocks' live parts", () => {
           .include("[data-nx-lightbox]")
           .withRules(["color-contrast"])
           .analyze();
-        for (const violation of lightboxContrast.violations) {
-          for (const node of violation.nodes) {
-            problems.push(`${at}: lightbox contrast ${node.target.join(" ")}`);
-          }
-        }
+        problems.push(...contrastProblems(lightboxContrast, `${at}: lightbox`));
         await live.context().close();
       }
     }

@@ -291,15 +291,22 @@ export function overlaySpaceOf(
   const root = frame?.contentDocument?.querySelector(`.${rootClass}`);
   if (frame === null || !isHTMLElement(root)) return null;
   if (root.ownerDocument.defaultView === null) return null;
-  const scale = framePaintedScale(frame);
-  // The layer's content box is laid over the root, so the root's origin is
-  // the chrome's: only the scale is left to apply.
-  const mapping = { origin: { x: 0, y: 0 }, scale };
+  // Measured when first read, then kept for this space. Reading the frame's
+  // box lays the editor out, and many callers want only the root: a check run
+  // on every render that the layer is still over the same canvas laid the page
+  // out each time, between React's commit and the paint.
+  let measured: number | undefined;
+  const scaleNow = (): number => (measured ??= framePaintedScale(frame));
   return {
     root,
     frame,
-    scale,
-    place: rect => rectToHost(rect, mapping),
+    get scale(): number {
+      return scaleNow();
+    },
+    // The layer's content box is laid over the root, so the root's origin is
+    // the chrome's: only the scale is left to apply.
+    place: rect =>
+      rectToHost(rect, { origin: { x: 0, y: 0 }, scale: scaleNow() }),
     // The chrome is not scaled, so its layout size is its size on screen.
     sizeOf: chrome => ({
       width: chrome.offsetWidth,

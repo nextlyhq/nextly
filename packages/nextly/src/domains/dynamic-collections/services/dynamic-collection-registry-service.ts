@@ -28,8 +28,6 @@ import {
 } from "../../../shared/lib/registry-listing-page";
 import type { Logger } from "../../../shared/types";
 import type { DatabaseAdapter } from "../../../shared/types/database-adapter";
-import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
-import { transactionTableProbe } from "../../dashboard/table-presence";
 import {
   moveWebhookRecording,
   renameEntity,
@@ -38,7 +36,7 @@ import { flushContentChange } from "../../flush-content-change";
 import { writeRegistryRows } from "../../schema/schema-version";
 import {
   deleteEntityRegistryRow,
-  mediaUsageTablePresent,
+  entityTablesOn,
 } from "../../versions/entity-teardown";
 import {
   clearWebhookRecording,
@@ -800,21 +798,8 @@ export class DynamicCollectionRegistryService extends BaseService {
     slug: string
   ): Promise<UnregisteredCollectionRow> {
     // Whether the dashboard's and the media library's tables exist, asked on
-    // `tx`'s own connection: a statement against a missing one would abort the
-    // transaction on PostgreSQL, and the pool may have no second connection.
-    const probe = transactionTableProbe(this.adapter, tx);
-    const tables = {
-      dashboardPinsPresent: await dashboardPinsPresent(
-        this.adapter,
-        this.logger,
-        probe
-      ),
-      mediaUsagePresent: await mediaUsageTablePresent(
-        this.adapter,
-        this.logger,
-        probe
-      ),
-    };
+    // `tx`'s own connection (`entityTablesOn`).
+    const tables = await entityTablesOn(this.adapter, this.logger, tx);
     // Counts the registry write and clears the cached rows as the row goes,
     // so a read later in `tx` does not find it; the recording decision stays
     // the caller's to forget once `tx` commits.
