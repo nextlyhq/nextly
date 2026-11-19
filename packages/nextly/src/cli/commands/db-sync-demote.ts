@@ -167,6 +167,14 @@ type DemotedWrite =
     }
   | { kind: "register"; record: DynamicCollectionInsert };
 
+/**
+ * How a demote updates a record the registry already holds: as the hand-over of the
+ * configuration's own collection to the Schema Builder, which the registry takes for a record the
+ * code-first sync made and locked, writing its source and lock together. A record that is the
+ * Builder's already is updated as any other; a plugin's is refused.
+ */
+const HAND_OVER = { handOver: "builder" } as const;
+
 /** The write a demote of `collection` makes over `current`, the record the registry holds now. */
 function demotedWrite(
   collection: DemotedCollection,
@@ -179,7 +187,9 @@ function demotedWrite(
     return {
       kind: "update",
       slug: collection.slug,
-      data: { ...options, source: "ui" },
+      // Unlocked with it: a record the code-first sync made is locked, and the Schema Builder's
+      // is not (`HAND_OVER`).
+      data: { ...options, source: "ui", locked: false },
     };
   }
   return {
@@ -205,7 +215,7 @@ async function assertDemotedWriteAllowed(
   write: DemotedWrite
 ): Promise<void> {
   if (write.kind === "update") {
-    await registry.assertUpdatable(write.slug, write.data);
+    await registry.assertUpdatable(write.slug, write.data, HAND_OVER);
     return;
   }
   await registry.assertRegistrable(write.record.slug);
@@ -244,7 +254,7 @@ async function writeDemotedRecord(
 ): Promise<void> {
   const write = demotedWrite(collection, current);
   if (write.kind === "update") {
-    await registry.updateCollection(write.slug, write.data);
+    await registry.updateCollection(write.slug, write.data, HAND_OVER);
     logger.info(`Updated existing UI record for '${write.slug}'.`);
     return;
   }

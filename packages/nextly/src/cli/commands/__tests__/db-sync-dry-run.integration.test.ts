@@ -445,10 +445,14 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
       );
       expect(promoteCoded).not.toMatch(/^ℹ Would /m);
       const demoteCoded = await dryRun("demote coded", ["--demote", POSTS]);
+      // A collection the sync registered and locked: the demote hands it to the Schema Builder,
+      // and says so as the record it would set.
       expect(demoteCoded).toContain(
-        "A real run would refuse: This collection is defined in code, so it can't be changed here."
+        `Would set the registry record of collection '${POSTS}' in the collection registry to:`
       );
-      expect(demoteCoded).not.toMatch(/^ℹ Would /m);
+      expect(demoteCoded).toContain(`"source": "ui"`);
+      expect(demoteCoded).toContain(`"locked": false`);
+      expect(demoteCoded).not.toContain("A real run would refuse");
       const demoteMissing = await dryRun("demote missing", [
         "--demote",
         "dsd_nowhere",

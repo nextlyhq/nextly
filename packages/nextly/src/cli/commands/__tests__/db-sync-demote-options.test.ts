@@ -35,6 +35,7 @@ async function demoted(
 ) {
   const registered: DynamicCollectionInsert[] = [];
   const updated: Partial<DynamicCollectionInsert>[] = [];
+  const updateOptions: unknown[] = [];
   let shown = "";
   const registry = {
     getCollectionBySlug: async () => existing,
@@ -44,9 +45,11 @@ async function demoted(
     },
     updateCollection: async (
       _slug: string,
-      data: Partial<DynamicCollectionInsert>
+      data: Partial<DynamicCollectionInsert>,
+      options?: unknown
     ) => {
       updated.push(data);
+      updateOptions.push(options);
       return data;
     },
   } as unknown as CollectionRegistryService;
@@ -61,7 +64,7 @@ async function demoted(
     },
   });
   expect(outcome).toBe("demoted");
-  return { registered, updated, shown };
+  return { registered, updated, updateOptions, shown };
 }
 
 /** The one record a demote with nothing registered writes. */
@@ -115,6 +118,29 @@ describe("a demoted collection's record", () => {
     const record = await registeredFor(coded({ status: true }));
     expect(record.status).toBe(true);
     expect(record.versions).toEqual(resolveVersionsConfig(undefined, true));
+  });
+
+  it("hands a record the code-first sync made to the Schema Builder: its source and lock in the one update", async () => {
+    const synced = {
+      ...asRecord({
+        slug: "articles",
+        labels: { singular: "Article", plural: "Articles" },
+        tableName: "dc_articles",
+        fields: [],
+        source: "code",
+        schemaHash: "older",
+      }),
+      locked: true,
+    };
+    const { registered, updated, updateOptions } = await demoted(
+      coded(),
+      synced
+    );
+    expect(registered).toEqual([]);
+    expect(updated).toHaveLength(1);
+    expect(updated[0]).toMatchObject({ source: "ui", locked: false });
+    // Asked of the registry as a hand-over, which is what lets a locked record be written.
+    expect(updateOptions).toEqual([{ handOver: "builder" }]);
   });
 
   it("keeps the lifecycle when it replaces a record already registered", async () => {
