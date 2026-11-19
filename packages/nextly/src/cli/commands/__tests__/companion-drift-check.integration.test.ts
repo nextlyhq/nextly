@@ -14,7 +14,13 @@
  * - a file written by hand, which has nothing to be checked against, no longer said to be so.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -238,14 +244,75 @@ describeEachDialect(
 
       const run = await migrate(configWith(["title", "summary"]));
 
-      expect(run.code, run.said).toBe(2);
-      expect(run.said).toContain("NEXTLY_MIGRATION_DRIFT");
+      // The exit a main file's drift ends with.
+      expect(run.code, run.said).toBe(1);
+      expect(run.said).toContain("(MIGRATION_DRIFT)");
       expect(run.said).toContain(String(companionFile).replace(/\.sql$/, ""));
       expect(run.said).toContain(COMPANION);
       expect(run.said).toMatch(/- .*title/);
       // Nothing applied: every file is still pending, and the new column is not there.
       expect((await pendingFiles()).map(file => file.name)).toEqual(pending);
       expect(await companionColumns()).not.toContain("summary");
+    }, 240_000);
+
+    /** One translated field applied, a second captured in files not yet applied. */
+    async function secondFieldPending(): Promise<string[]> {
+      await migrateCreate(configWith(["title"]), "posts");
+      expect((await migrate(configWith(["title"]))).code).toBeUndefined();
+      await migrateCreate(configWith(["title", "summary"]), "summary");
+      return (await pendingFiles()).map(file => file.name);
+    }
+
+    it("a column added to the companion table by hand is drift", async () => {
+      const pending = await secondFieldPending();
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(COMPANION)} ADD COLUMN ${q("by_hand")} TEXT`
+      );
+
+      const run = await migrate(configWith(["title", "summary"]));
+
+      expect(run.code, run.said).toBe(1);
+      expect(run.said).toContain("(MIGRATION_DRIFT)");
+      expect(run.said).toMatch(new RegExp(`\\+ .*${COMPANION}\\.by_hand`));
+      expect((await pendingFiles()).map(file => file.name)).toEqual(pending);
+    }, 240_000);
+
+    it("a companion table dropped by hand is drift", async () => {
+      const pending = await secondFieldPending();
+      await adapter().executeQuery(`DROP TABLE ${q(COMPANION)}`);
+
+      const run = await migrate(configWith(["title", "summary"]));
+
+      expect(run.code, run.said).toBe(1);
+      expect(run.said).toMatch(new RegExp(`- table ${COMPANION}`));
+      expect((await pendingFiles()).map(file => file.name)).toEqual(pending);
+    }, 240_000);
+
+    it("a table no applied file made is applied, saying why it was not checked", async () => {
+      const pending = await secondFieldPending();
+      const companionFile = pending.find(name => name.includes("localization"));
+      // The applied companion files leave the folder and the ledger, as in a project whose
+      // table a development sync made: no file in hand says how the table came to be.
+      const folder = join(dir, "migrations");
+      const applied = readdirSync(folder).filter(
+        name =>
+          name.includes("localization") &&
+          !pending.includes(name.replace(/\.sql$/, ""))
+      );
+      expect(applied.length).toBeGreaterThan(0);
+      for (const name of applied) rmSync(join(folder, name));
+      await adapter().executeQuery(
+        `DELETE FROM ${q("nextly_schema_events")} WHERE ${q("filename")} LIKE '%localization%'`
+      );
+
+      const run = await migrate(configWith(["title", "summary"]));
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(run.said).toContain(
+        `${String(companionFile)}.sql is applied without a drift check: the translations table ${COMPANION} is already there, and no applied migration file made it.`
+      );
+      expect(run.said).not.toMatch(MISSING_SNAPSHOT);
+      expect(await companionColumns()).toContain("summary");
     }, 240_000);
 
     it("applying a localized collection's generated files prints no missing-snapshot warning", async () => {

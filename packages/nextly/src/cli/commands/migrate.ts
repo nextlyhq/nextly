@@ -84,6 +84,10 @@ import {
   reconcileCore,
 } from "../../domains/schema/migrate/core-reconcile";
 import {
+  checkCompanionFiles,
+  snapshotlessNotice,
+} from "../../domains/schema/migrate/companion-drift";
+import {
   consentToCover,
   describeDeletion,
   resolveDataLossConsent,
@@ -4960,6 +4964,14 @@ export async function runFileMigrations(args: {
     all.filter(m => plan.runs.has(m)),
     args.judged
   );
+  // The translations tables the pending companion files are about, compared with what the
+  // applied ones left, before any file applies: a difference is drift and ends the run here.
+  const companions = await checkCompanionFiles({
+    db,
+    dialect,
+    applied: all.filter(m => plan.done.has(m)),
+    pending: all.filter(m => plan.runs.has(m)),
+  });
 
   // The last file this run applied, which a run that lost the schema lock names, so the operator
   // knows where the database stands.
@@ -5070,10 +5082,10 @@ export async function runFileMigrations(args: {
         return executeSql(...statement);
       };
       if (!target) {
-        // No paired snapshot (hand-written migration): run verbatim + record.
-        logger.warn(
-          `No snapshot for ${filename}; applying verbatim without drift checks.`
-        );
+        // No paired snapshot: run verbatim + record. A hand-written file is said to have no
+        // drift check; a companion file had its table checked before the run's first file.
+        const notice = snapshotlessNotice(filename, companions);
+        if (notice !== undefined) logger.warn(notice);
         // With no snapshot to place the database, a failed attempt that may
         // have left statements applied is refused here as the reconcile
         // refuses it, rather than run again on top of what stayed.
