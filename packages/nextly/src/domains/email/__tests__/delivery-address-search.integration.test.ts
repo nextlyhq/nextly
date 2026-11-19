@@ -675,13 +675,25 @@ for (const dialect of getConfiguredTestDialects()) {
             where(condition: unknown): Promise<unknown>;
           };
         };
+        // The prune is another flow, as a real one is: started here, outside
+        // the search, it resumes in its own context when the gate opens, and
+        // its delete commits on a connection of its own, outside the
+        // search's transaction.
+        let openGate!: () => void;
+        const gate = new Promise<void>(resolve => {
+          openGate = resolve;
+        });
+        const pruned = (async () => {
+          await gate;
+          await db.delete(queue).where(eq(queue.id as never, queued.id));
+        })();
         const original = deliveries.list.bind(deliveries);
         const list = vi
           .spyOn(deliveries, "list")
           .mockImplementationOnce(async options => {
-            // The queue half has been read: the prune commits now, on a
-            // connection of its own.
-            await db.delete(queue).where(eq(queue.id as never, queued.id));
+            // The queue half has been read: the prune commits now.
+            openGate();
+            await pruned;
             return original(options);
           });
         try {
@@ -693,6 +705,8 @@ for (const dialect of getConfiguredTestDialects()) {
             `queued:${queued.id}`,
           ]);
         } finally {
+          openGate();
+          await pruned;
           list.mockRestore();
         }
       }
