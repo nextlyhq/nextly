@@ -609,25 +609,44 @@ async function runAndRecord(
   >,
   id: string | undefined
 ): Promise<void> {
-  const { file, repo } = args;
+  const { file } = args;
   await args.executeSql(
     file.sql,
     { source: file.filename, transaction: file.transaction ?? true },
-    async (db, statementsExecuted) => {
-      await args.beforeRecorded?.();
-      const bound = repo.boundTo(db);
-      await markAppliedOrRefuse(
-        bound,
-        id ?? (await bound.recordStart(attemptStart(file))),
-        {
-          filename: file.filename,
-          statementsExecuted,
-          partial: failedAttemptMayBePartial(file, args.dialect),
-        }
-      );
-      await args.recordApplied?.(db, false);
+    (db, statementsExecuted) =>
+      recordRunInTransaction(args, db, statementsExecuted, id)
+  );
+}
+
+/**
+ * A unit's run recorded on the handle its statements ran on (`db`), in their transaction where they
+ * have one: its attempt started, where it was not recorded first (`id` absent), then marked applied
+ * (`markAppliedOrRefuse`), with whatever else the caller records. What `runAndRecord` records once
+ * a unit's statements have run; a Builder save that runs its files as one unit records each of them
+ * so.
+ */
+export async function recordRunInTransaction(
+  args: Pick<
+    ReconcileFileArgs,
+    "file" | "dialect" | "repo" | "recordApplied" | "beforeRecorded"
+  >,
+  db: unknown,
+  statementsExecuted: number,
+  id: string | undefined
+): Promise<void> {
+  const { file, repo } = args;
+  await args.beforeRecorded?.();
+  const bound = repo.boundTo(db);
+  await markAppliedOrRefuse(
+    bound,
+    id ?? (await bound.recordStart(attemptStart(file))),
+    {
+      filename: file.filename,
+      statementsExecuted,
+      partial: failedAttemptMayBePartial(file, args.dialect),
     }
   );
+  await args.recordApplied?.(db, false);
 }
 
 /**

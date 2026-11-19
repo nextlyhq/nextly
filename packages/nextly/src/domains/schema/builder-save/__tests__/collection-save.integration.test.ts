@@ -1364,7 +1364,12 @@ describe.each(getConfiguredTestDialects())(
       expect(await appliedRows()).toEqual(applied);
     });
 
-    it("keeps every file and the new definition when an earlier file applied and a later one failed", async () => {
+    // The save's second file, its translations table's, is refused at its first statement. On
+    // SQLite and PostgreSQL the save's files run as one unit, in one transaction, so the first goes
+    // back with it: no file is applied or left, and the definition is as it was. MySQL commits each
+    // schema statement as it runs, so there the files run one by one: the first stays applied, the
+    // rest are kept, recorded nowhere, and the failure says the database holds part of the change.
+    it("leaves a save whose later file failed whole on SQLite and PostgreSQL, and part held on MySQL", async () => {
       await writeCollectionSave(translatedDeps(), {
         slug: "posts",
         previous: null,
@@ -1374,19 +1379,42 @@ describe.each(getConfiguredTestDialects())(
       await adapter.executeQuery(
         "INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('p1', 'Hello', 'p1', '2026-11-06 00:00:00', '2026-11-06 00:00:00')"
       );
-      // The save's second file refused, after its first applied.
       const before = migrationFiles();
+      const appliedBefore = (await appliedRows()).map(row => row.filename);
+      const definedBefore = definition();
       fault.seen = 0;
-      fault.pick = (_statements, nth) => (nth === 2 ? 0 : undefined);
+      fault.pick = statements => {
+        const first = statements.findIndex(statement =>
+          statement.includes("dc_posts_locales")
+        );
+        return first === -1 ? undefined : first;
+      };
 
-      await expect(
-        writeCollectionSave(translatedDeps(), enableTitle)
-      ).rejects.toBeDefined();
+      const failed = await writeCollectionSave(
+        translatedDeps(),
+        enableTitle
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
 
+      expect(failed).toBeDefined();
       const written = migrationFiles().filter(f => !before.includes(f));
+      const applied = (await appliedRows())
+        .map(row => row.filename)
+        .filter(f => !appliedBefore.includes(f));
+      if (dialect !== "mysql") {
+        expect(written).toEqual([]);
+        expect(applied).toEqual([]);
+        expect(definition()).toEqual(definedBefore);
+        return;
+      }
       expect(written.length).toBeGreaterThan(1);
-      const applied = (await appliedRows()).map(row => row.filename);
       expect(written.some(f => applied.includes(f))).toBe(true);
+      const kept = written.filter(f => !applied.includes(f));
+      const said = (failed as { publicMessage?: string }).publicMessage ?? "";
+      expect(said).toContain("The database now holds part of this change");
+      for (const name of kept) expect(said).toContain(name);
       expect(
         (
           JSON.parse(definition() ?? "{}") as {
