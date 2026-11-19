@@ -109,11 +109,12 @@ export async function translatePipelinePreviewToLegacy(
     fieldsStoredOnRow(currentFields),
     fieldsStoredOnRow(newFields),
     {
-    localized: storesPerLanguage({ localized }),
-    newLocalized: storesPerLanguage({
-      localized: context.requestedLocalized ?? localized,
-    }),
-  });
+      localized: storesPerLanguage({ localized }),
+      newLocalized: storesPerLanguage({
+        localized: context.requestedLocalized ?? localized,
+      }),
+    }
+  );
 
   if (!diff.hasChanges) {
     return {
