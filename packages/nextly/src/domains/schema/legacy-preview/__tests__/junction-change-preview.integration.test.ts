@@ -141,25 +141,6 @@ describeEachDialect(
       );
     }
 
-    // A group with no name only lays fields out: the many-to-many inside it is a field of the row,
-    // and making it a single link drops its links as at the top.
-    it("calls a many-to-many inside a group with no name made a single link destructive", async () => {
-      const laidOut = (field: Record<string, unknown>) => ({
-        type: "group",
-        label: "Details",
-        fields: [field],
-      });
-      await createPosts(laidOut(TAGS));
-
-      const preview = await previewOf([laidOut(ONE_TAG)]);
-      const report = JSON.stringify(preview, null, 2);
-      expect(
-        preview.changes.changed.find(row => row.name === "tags"),
-        report
-      ).toMatchObject({ classification: "destructive" });
-      expect(preview.warnings.join(" "), report).toMatch(/tags/);
-    });
-
     it("calls a many-to-many made a single link destructive, counting the links it drops", async () => {
       await createPosts(TAGS);
       // Two links in its link table, as the junction's own columns name them.

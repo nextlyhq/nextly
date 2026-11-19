@@ -449,16 +449,18 @@ for (const dialect of getConfiguredTestDialects()) {
   describe(`a collection's many-to-many leaving its link table (${dialect})`, () => {
     let t: TestNextly;
     let basePath: string;
+    // A many-to-many as the admin makes one: Allow multiple on.
     const related = {
       name: "related",
       type: "relationship",
+      hasMany: true,
       options: { relationType: "manyToMany", target: "tags" },
     };
     // One link, kept in the row's own column.
     const pick = {
       name: "pick",
       type: "relationship",
-      options: { target: "tags" },
+      options: { target: "tags", relationType: "manyToOne" },
     };
     const link = junctionTableNameFor("dc_posts", related as never);
     let tagId: string;
@@ -609,7 +611,13 @@ for (const dialect of getConfiguredTestDialects()) {
     it("saves Allow multiple turned off once the dialog confirms what its preview warned of", async () => {
       const fields = [
         text("heading"),
-        { name: "related", type: "relationship", options: { target: "tags" } },
+        // As the admin saves it (`relationshipOptionsToSave`): one entry, kept in its column.
+        {
+          name: "related",
+          type: "relationship",
+          hasMany: false,
+          options: { target: "tags", relationType: "manyToOne" },
+        },
         pick,
       ];
       const answer = await dispatchCollections(

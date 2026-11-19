@@ -526,6 +526,56 @@ describe("a removal the preview cannot count, and where it counts", () => {
     }
   });
 
+  // A group with no name only lays fields out: a relationship inside it is a field of the row, so a
+  // change to it is classed and warned of as at the top.
+  it("classes a relationship's change inside a group with no name as at the top", async () => {
+    const laidOut = (field: Record<string, unknown>) =>
+      ({ type: "group", label: "Details", fields: [field] }) as FieldDefinition;
+    const cases = [
+      {
+        change: "a hasMany toggle",
+        before: { name: "authors", type: "relationship", relationTo: "users" },
+        after: {
+          name: "authors",
+          type: "relationship",
+          relationTo: "users",
+          hasMany: true,
+        },
+        warned: "between one and many related entries",
+      },
+      {
+        change: "a many-to-many made a single link",
+        before: {
+          name: "authors",
+          type: "relationship",
+          relationTo: "users",
+          options: { target: "users", relationType: "manyToMany" },
+        },
+        after: {
+          name: "authors",
+          type: "relationship",
+          relationTo: "users",
+          options: { target: "users", relationType: "manyToOne" },
+        },
+        warned: "authors",
+      },
+    ];
+    for (const { change, before, after, warned } of cases) {
+      const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+        tableName: "dc_posts",
+        currentFields: [laidOut(before)],
+        newFields: [laidOut(after)],
+        db: {},
+        dialect: "sqlite",
+      });
+      expect(
+        result.changes.changed.find(row => row.name === "authors"),
+        change
+      ).toMatchObject({ classification: "destructive" });
+      expect(result.warnings.join(" "), change).toContain(warned);
+    }
+  });
+
   it("keeps the type-change warning when a hasMany toggle comes with it", async () => {
     const before = {
       name: "count",
