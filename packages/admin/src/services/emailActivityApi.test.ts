@@ -19,7 +19,7 @@ describe("searchActivityByAddress", () => {
   });
 
   it("posts the address and the filters in the body, and never puts the address in the URL", async () => {
-    const answer = { items: [], meta: {}, notice: "Older records…" };
+    const answer = { items: [], meta: { notice: "Older records…" } };
     fetcherSpy.mockResolvedValue(answer);
     const result = await searchActivityByAddress({
       address: "ada@example.test",

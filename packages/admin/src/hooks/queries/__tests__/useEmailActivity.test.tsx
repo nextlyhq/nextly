@@ -252,8 +252,7 @@ describe("useEmailActivity searching by address", () => {
   it("searches the address under the list's filters, and passes the server's notice on", async () => {
     searchActivityByAddress.mockResolvedValue({
       items: [entry("sent")],
-      meta: EMPTY_META,
-      notice: NOTICE,
+      meta: { ...EMPTY_META, notice: NOTICE },
     });
     const { result } = renderHook(
       () =>
@@ -277,8 +276,7 @@ describe("useEmailActivity searching by address", () => {
     // A queued email still waiting would make the list poll every 30 s.
     searchActivityByAddress.mockResolvedValue({
       items: [entry("waiting")],
-      meta: EMPTY_META,
-      notice: NOTICE,
+      meta: { ...EMPTY_META, notice: NOTICE },
     });
     const { result } = renderHook(
       () => useEmailActivity({ outcome: "any", window: "7d" }, { search }),
@@ -301,8 +299,7 @@ describe("useEmailActivity searching by address", () => {
     );
     searchActivityByAddress.mockResolvedValue({
       items: [entry("sent")],
-      meta: EMPTY_META,
-      notice: NOTICE,
+      meta: { ...EMPTY_META, notice: NOTICE },
     });
     const { result } = renderHook(
       () => useEmailActivity({ outcome: "any", window: "7d" }, { search }),
@@ -322,8 +319,7 @@ describe("useEmailActivity searching by address", () => {
   it("reads with the filters it was made with, so a filter edit alone never searches", async () => {
     searchActivityByAddress.mockResolvedValue({
       items: [entry("sent")],
-      meta: EMPTY_META,
-      notice: NOTICE,
+      meta: { ...EMPTY_META, notice: NOTICE },
     });
     const { rerender, result } = renderHook(
       ({ outcome }: { outcome: "any" | "failed" }) =>
@@ -344,8 +340,7 @@ describe("useEmailActivity searching by address", () => {
   it("reads the same address again when it is searched again", async () => {
     searchActivityByAddress.mockResolvedValue({
       items: [entry("sent")],
-      meta: EMPTY_META,
-      notice: NOTICE,
+      meta: { ...EMPTY_META, notice: NOTICE },
     });
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },

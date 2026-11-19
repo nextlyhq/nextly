@@ -236,12 +236,13 @@ export function listActivity(
 }
 
 /**
- * One page of a search by address: the merged Activity's rows that went to
- * the address, and the server's notice of which records a search can't reach
- * (those written under a secret no longer configured).
+ * One page of a search by address, in the list envelope: the merged
+ * Activity's rows that went to the address, and in `meta.notice` the
+ * server's word on which records a search can't reach (those written under a
+ * secret no longer configured).
  */
 export interface AddressSearchPage extends ListResponse<ActivityEntry> {
-  notice: string;
+  meta: ListResponse<ActivityEntry>["meta"] & { notice: string };
 }
 
 /**

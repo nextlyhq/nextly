@@ -138,7 +138,7 @@ async function readActivityPage(
     rows: page.items.map(activityRow),
     next: page.meta.nextBefore ?? null,
     from,
-    notice: page.notice,
+    notice: page.meta.notice,
   };
 }
 
