@@ -52,12 +52,15 @@ describe("planEntityMoves", () => {
   it("copies a field out of a group after the file adds its column, then clears the key", () => {
     const planned = planEntityMoves({
       ...base,
-      before: [group("meta", [text("title")])],
-      after: [text("title"), group("meta", [])],
-      moves: [{ from: ["meta", "title"], to: ["title"] }],
+      // A name no system column holds: the table's own `title` is refused as a destination.
+      before: [group("meta", [text("subtitle")])],
+      after: [text("subtitle"), group("meta", [])],
+      moves: [{ from: ["meta", "subtitle"], to: ["subtitle"] }],
     });
     expect(planned.up.first).toEqual([]);
-    expect(planned.up.last.join("\n")).toContain(`SET "title" = json_extract`);
+    expect(planned.up.last.join("\n")).toContain(
+      `SET "subtitle" = json_extract`
+    );
     expect(planned.up.last.join("\n")).toContain(`json_remove`);
     // Down: before the file's down drops the column again, its value goes back into the group.
     expect(planned.down.first.join("\n")).toContain(`SET "meta" = json_set`);
@@ -537,6 +540,95 @@ describe("planEntityMoves", () => {
     }
     expect(() =>
       moveTitle({ useAsTitle: "slug", defaultColumns: ["slug"] })
+    ).not.toThrow();
+  });
+
+  it("refuses moving into a group a top-level field an enabled stored hook names", () => {
+    // The executor hands a hook its stored config, whose settings name top-level fields.
+    const moveSummary = (
+      hooks: {
+        hookId: string;
+        enabled: boolean;
+        config: Record<string, unknown>;
+      }[]
+    ) =>
+      planEntityMoves({
+        ...base,
+        before: [text("summary"), group("meta", [])],
+        after: [group("meta", [text("summary")])],
+        moves: [{ from: ["summary"], to: ["meta", "summary"] }],
+        hooks,
+      });
+    expect(() =>
+      moveSummary([
+        {
+          hookId: "auto-slug",
+          enabled: true,
+          config: { sourceField: "summary", targetField: "slug" },
+        },
+      ])
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message:
+                "summary is named by the Auto-generate Slug hook (sourceField), which reads and writes only top-level fields. Update the hook first, then move summary.",
+            }),
+          ],
+        },
+      })
+    );
+    // A disabled hook, one the executor does not know, and one naming another field run nothing.
+    expect(() =>
+      moveSummary([
+        {
+          hookId: "auto-slug",
+          enabled: false,
+          config: { sourceField: "summary" },
+        },
+        { hookId: "not-a-hook", enabled: true, config: { field: "summary" } },
+        {
+          hookId: "unique-validation",
+          enabled: true,
+          config: { field: "slug" },
+        },
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses a move out of a group onto the title or slug every entry keeps while no field takes it", () => {
+    // With no top-level field of the name, the table keeps its own `title` and `slug` columns.
+    for (const name of ["title", "slug"]) {
+      const moveOut = (before: FieldDefinition[]) =>
+        planEntityMoves({
+          ...base,
+          before,
+          after: [text(name), group("meta", [])],
+          moves: [{ from: ["meta", name], to: [name] }],
+        });
+      expect(() => moveOut([group("meta", [text(name)])]), name).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: `Every entry already keeps its own ${name} while no field is named ${name}, and moving ${name} there would write over it. Rename ${name} inside the group first, then move it out.`,
+              }),
+            ],
+          },
+        })
+      );
+    }
+    // A column no system column holds moves as before.
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [group("meta", [text("summary")])],
+        after: [text("summary"), group("meta", [])],
+        moves: [{ from: ["meta", "summary"], to: ["summary"] }],
+      })
     ).not.toThrow();
   });
 

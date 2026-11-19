@@ -17,12 +17,14 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { getPrebuiltHook } from "../../../hooks/prebuilt";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   classifyFieldKind,
   fieldProducesColumn,
   fieldsStoredOnRow,
   getColumnDescriptor,
+  systemColumnsForFields,
   toSnakeCase,
 } from "../services/field-column-descriptor";
 
@@ -341,6 +343,40 @@ function refuseNamedByAdmin(
   );
 }
 
+/** A hook the entity's definition stores, as the stored-hook executor reads it. */
+interface StoredHookReference {
+  hookId: string;
+  enabled: boolean;
+  config: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Refuses moving into a group a top-level field an enabled stored hook names, as the admin
+ * settings' refusal does: the executor hands each hook its stored config as it stands, and the
+ * hook reads and writes the entry's top-level keys by those names (auto-slug's `sourceField`), so
+ * it would stop finding the field without saying so. A hook the executor does not know is skipped
+ * there, and here.
+ */
+function refuseNamedByHook(
+  request: FieldMoveRequest,
+  hooks: readonly StoredHookReference[] | undefined
+): void {
+  if (request.from.length !== 1 || request.to.length === 1) return;
+  const name = request.from[0] ?? "";
+  for (const stored of hooks ?? []) {
+    const hook = stored.enabled ? getPrebuiltHook(stored.hookId) : undefined;
+    if (hook === undefined) continue;
+    const setting = Object.keys(stored.config).find(
+      key => stored.config[key] === name
+    );
+    if (setting === undefined) continue;
+    throw refused(
+      request,
+      `${name} is named by the ${hook.name} hook (${setting}), which reads and writes only top-level fields. Update the hook first, then move ${name}.`
+    );
+  }
+}
+
 /** Whether a field on the row that is not a group keeps its values in `column`. */
 function columnHeldByOtherKind(
   fields: readonly FieldDefinition[],
@@ -506,6 +542,8 @@ export function planEntityMoves(args: {
   dialect: SupportedDialect;
   /** The entity's admin settings after the save, which name top-level fields. */
   admin?: AdminReferences;
+  /** The hooks the entity's definition stores after the save, whose settings name fields. */
+  hooks?: readonly StoredHookReference[];
 }): EntityMoves {
   const result: EntityMoves = {
     up: { first: [], last: [] },
@@ -517,6 +555,13 @@ export function planEntityMoves(args: {
     before: rowColumns(args.before),
     after: rowColumns(args.after),
   };
+  // The system columns the table holds before the save, `title` and `slug` among them while no
+  // field takes their name.
+  const systemBefore = new Set(
+    systemColumnsForFields(args.before, args.dialect, {
+      builtBy: "collection",
+    }).map(column => column.name)
+  );
   refuseOverlapping(args.moves);
   refuseSameNames(args.moves);
   refuseUnpairedNames(args, args.renames ?? []);
@@ -526,6 +571,7 @@ export function planEntityMoves(args: {
     refuseInsideOwnPlace(request);
     refuseUnbound(request);
     refuseNamedByAdmin(request, args.admin);
+    refuseNamedByHook(request, args.hooks);
     refuseUnmatched(args.before, args.after, request);
     const checked = checkMove(args.before, args.after, request, {
       localized: args.localized,
@@ -537,6 +583,7 @@ export function planEntityMoves(args: {
     refuseRenamedColumns(request, move, args.renames ?? []);
     refuseMadeRequired(request, move, args.before);
     refuseUnplaceable(request, move, columns);
+    refuseSystemColumn(request, move, systemBefore);
     // A field moving between places on one level (a group with no name) keeps its column.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
     const target = moveColumn(move, args.table, args.dialect);
@@ -548,6 +595,24 @@ export function planEntityMoves(args: {
     recordColumns(result, move, request, target);
   }
   return result;
+}
+
+/**
+ * Refuses a move out of a group onto a column the table keeps for itself while no field takes its
+ * name, such as `title` or `slug`: every entry already holds its own value there, which the copy
+ * would write over, and an entry without the moved value would show its old one as the field's.
+ */
+function refuseSystemColumn(
+  request: FieldMoveRequest,
+  move: PlannedMove,
+  systemBefore: ReadonlySet<string>
+): void {
+  if (move.to.kind !== "column" || !systemBefore.has(move.to.column)) return;
+  const name = request.from.at(-1) ?? "This field";
+  throw refused(
+    request,
+    `Every entry already keeps its own ${move.to.column} while no field is named ${move.to.column}, and moving ${name} there would write over it. Rename ${name} inside the group first, then move it out.`
+  );
 }
 
 /** The column a move adds and fills from its group, or the one it drops into a group, recorded. */

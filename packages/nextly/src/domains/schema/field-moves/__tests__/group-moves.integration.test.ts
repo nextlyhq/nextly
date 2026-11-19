@@ -138,7 +138,7 @@ const run = <T>(t: TestNextly, statement: string) =>
 async function createPosts(
   t: TestNextly,
   slug = SLUG,
-  options: { fields?: Field[]; localized?: boolean } = {}
+  options: { fields?: Field[]; localized?: boolean; hooks?: Field[] } = {}
 ): Promise<void> {
   await t.getService("collectionService").createCollection(
     {
@@ -146,6 +146,7 @@ async function createPosts(
       label: "Post",
       localized: options.localized ?? false,
       fields: options.fields ?? OUTSIDE,
+      ...(options.hooks === undefined ? {} : { hooks: options.hooks }),
     } as Parameters<CollectionService["createCollection"]>[0],
     {}
   );
@@ -1114,6 +1115,55 @@ describe.each(getConfiguredTestDialects())(
           OUTSIDE,
           OUT,
           `1 entry holds a date for published its own column would not keep as the same date (${String((item as { id: unknown }).id)})`
+        );
+        expect(await readAll(t)).toEqual(before);
+      });
+
+      it("a field moved into a group that an enabled stored hook names", async () => {
+        const t = await boot(dialect);
+        await createPosts(t, SLUG, {
+          hooks: [
+            {
+              hookId: "auto-slug",
+              hookType: "beforeChange",
+              enabled: true,
+              config: { sourceField: "summary", targetField: "slug" },
+              order: 0,
+            },
+          ],
+        });
+        await seed(t);
+        const before = await readAll(t);
+        await expectRefused(
+          t,
+          [
+            ...MOVED_FIELDS.filter(field => field.name !== "summary"),
+            group("meta", [NOTE, { name: "summary", type: "text" }]),
+          ],
+          [{ from: ["summary"], to: ["meta", "summary"] }],
+          "summary is named by the Auto-generate Slug hook (sourceField), which reads and writes only top-level fields. Update the hook first, then move summary."
+        );
+        expect(await readAll(t)).toEqual(before);
+      });
+
+      it("a field moved out of a group onto the title every entry keeps while no field is named title", async () => {
+        const t = await boot(dialect);
+        const seoTitle: Field = { name: "title", type: "text" };
+        await createPosts(t, SLUG, {
+          fields: [group("meta", [NOTE, seoTitle])],
+        });
+        // The entry's own title, in the column the table keeps, and the group's title beside it.
+        await t.nextly.create({
+          collection: SLUG,
+          data: { title: "Own", slug: "own", meta: { title: "Group" } },
+        });
+        const before = await readAll(t);
+        expect(before.get("own")?.title).toBe("Own");
+        await expectRefused(
+          t,
+          [seoTitle, group("meta", [NOTE])],
+          [{ from: ["meta", "title"], to: ["title"] }],
+          "Every entry already keeps its own title while no field is named title"
         );
         expect(await readAll(t)).toEqual(before);
       });

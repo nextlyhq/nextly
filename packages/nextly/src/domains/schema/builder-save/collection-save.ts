@@ -2073,6 +2073,8 @@ function plannedMovesOf(
     dialect: deps.adapter.getCapabilities().dialect,
     // The settings the save's definition keeps, which may name a field the save moves.
     ...(save.entity.admin === undefined ? {} : { admin: save.entity.admin }),
+    // The hooks it stores, whose settings name top-level fields as the admin settings do.
+    ...(save.entity.hooks === undefined ? {} : { hooks: save.entity.hooks }),
   });
   refuseDeletesBeforeRefill(save, planned);
   return planned;
