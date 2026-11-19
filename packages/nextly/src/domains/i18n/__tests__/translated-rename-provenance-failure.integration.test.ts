@@ -10,19 +10,29 @@
  * on, as its fields did, so a client still holding the old one is refused.
  *
  * The failure is the database's own: a trigger refuses the provenance rename. The file itself ran,
- * as the renamed translations column shows, and the provenance kept the old name.
+ * as the renamed translations column shows, and the provenance kept the old name. Where the row's
+ * version cannot be written either, the answer is still the move's, with that failure logged.
+ *
+ * A translated Collection's save stops before its registry row is written, so it answers that it
+ * was saved only in part, followed by the kept file's steps. The statements the log gives move
+ * the records as the move does, a path that would no longer fit the column dropped.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { getLoggerFromDI } from "../../../dispatcher/helpers/di";
-import { renameFieldProvenance } from "../provenance/record-provenance";
+import {
+  renameFieldProvenance,
+  renameFieldProvenanceStatements,
+} from "../provenance/record-provenance";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../services";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
@@ -41,19 +51,31 @@ const RENAMED = [
 ];
 
 /**
- * The statements the server log gives for moving the Single's records of `heading` to `title2` by
- * hand: the field's own records, then each row's record under `heading#`.
+ * The statements the server log gives for moving an entity's records of `heading` to `title2` by
+ * hand: the field's own records; each row's record whose new path would pass the column's 255
+ * characters dropped (none can here, as `title2` is the shorter name); then each row's record
+ * under `heading#`.
  */
-function finishingStatements(dialect: TestDialect): string[] {
+function finishingStatements(
+  dialect: TestDialect,
+  kind: "single" | "collection" = "single",
+  slug = SLUG
+): string[] {
+  const scope =
+    dialect === "mysql"
+      ? `\`scope_kind\` = '${kind}' AND \`scope_slug\` = '${slug}'`
+      : `"scope_kind" = '${kind}' AND "scope_slug" = '${slug}'`;
   if (dialect === "mysql") {
     return [
-      "UPDATE `nextly_translation_provenance` SET `field_path` = 'title2' WHERE `scope_kind` = 'single' AND `scope_slug` = 'trp_hero' AND `field_path` = 'heading';",
-      "UPDATE `nextly_translation_provenance` SET `field_path` = CONCAT('title2#', SUBSTRING(`field_path`, 9)) WHERE `scope_kind` = 'single' AND `scope_slug` = 'trp_hero' AND SUBSTRING(`field_path`, 1, 8) = 'heading#';",
+      `UPDATE \`nextly_translation_provenance\` SET \`field_path\` = 'title2' WHERE ${scope} AND \`field_path\` = 'heading';`,
+      `DELETE FROM \`nextly_translation_provenance\` WHERE ${scope} AND SUBSTRING(\`field_path\`, 1, 8) = 'heading#' AND CHAR_LENGTH(\`field_path\`) > 256;`,
+      `UPDATE \`nextly_translation_provenance\` SET \`field_path\` = CONCAT('title2#', SUBSTRING(\`field_path\`, 9)) WHERE ${scope} AND SUBSTRING(\`field_path\`, 1, 8) = 'heading#';`,
     ];
   }
   return [
-    `UPDATE "nextly_translation_provenance" SET "field_path" = 'title2' WHERE "scope_kind" = 'single' AND "scope_slug" = 'trp_hero' AND "field_path" = 'heading';`,
-    `UPDATE "nextly_translation_provenance" SET "field_path" = 'title2#' || SUBSTR("field_path", 9) WHERE "scope_kind" = 'single' AND "scope_slug" = 'trp_hero' AND SUBSTR("field_path", 1, 8) = 'heading#';`,
+    `UPDATE "nextly_translation_provenance" SET "field_path" = 'title2' WHERE ${scope} AND "field_path" = 'heading';`,
+    `DELETE FROM "nextly_translation_provenance" WHERE ${scope} AND SUBSTR("field_path", 1, 8) = 'heading#' AND LENGTH("field_path") > 256;`,
+    `UPDATE "nextly_translation_provenance" SET "field_path" = 'title2#' || SUBSTR("field_path", 9) WHERE ${scope} AND SUBSTR("field_path", 1, 8) = 'heading#';`,
   ];
 }
 
@@ -126,16 +148,16 @@ describeEachDialect(
       return t.adapter.executeQuery<T>(sql);
     }
 
-    /** The registry row's fields, schema version and translation switch, as stored. */
-    async function recorded() {
+    /**
+     * A registry row's fields, schema version and translation switch, as stored: the Single's by
+     * default.
+     */
+    async function recorded(registry = "dynamic_singles", slug = SLUG) {
       clearRegistryRowCache();
-      const [row] = await t.adapter.select<Record<string, unknown>>(
-        "dynamic_singles",
-        {
-          columns: ["fields", "schemaVersion", "localized"],
-          where: { and: [{ column: "slug", op: "=", value: SLUG }] },
-        }
-      );
+      const [row] = await t.adapter.select<Record<string, unknown>>(registry, {
+        columns: ["fields", "schemaVersion", "localized"],
+        where: { and: [{ column: "slug", op: "=", value: slug }] },
+      });
       const fields =
         typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields;
       return {
@@ -153,28 +175,28 @@ describeEachDialect(
       return rows.map(row => `${String(row.id)} ${String(row.path)}`).sort();
     }
 
-    /** The field paths the Single's provenance records, sorted. */
-    async function provenancePaths(): Promise<string[]> {
+    /** The field paths an entity's provenance records (the Single's by default), sorted. */
+    async function provenancePaths(slug = SLUG): Promise<string[]> {
       const rows = await query<{ path: string }>(
-        `SELECT ${quote(dialect, "field_path")} AS path FROM ${quote(dialect, PROVENANCE)} WHERE ${quote(dialect, "scope_slug")} = '${SLUG}'`
+        `SELECT ${quote(dialect, "field_path")} AS path FROM ${quote(dialect, PROVENANCE)} WHERE ${quote(dialect, "scope_slug")} = '${slug}'`
       );
       return [...new Set(rows.map(row => String(row.path)))].sort();
     }
 
-    async function companionColumns(): Promise<string[]> {
+    async function companionColumns(table = TABLE): Promise<string[]> {
       const rows = await query<{ name: string }>(
         dialect === "sqlite"
-          ? `SELECT name FROM pragma_table_info('${TABLE}_locales')`
+          ? `SELECT name FROM pragma_table_info('${table}_locales')`
           : dialect === "mysql"
-            ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${TABLE}_locales'`
-            : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${TABLE}_locales'`
+            ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}_locales'`
+            : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}_locales'`
       );
       return rows.map(row => String(row.name));
     }
 
-    /** A trigger refusing any change of the Single's provenance records of `heading`. */
-    async function refuseProvenanceRename(): Promise<void> {
-      const when = `OLD.${quote(dialect, "scope_slug")} = '${SLUG}' AND OLD.${quote(dialect, "field_path")} = 'heading'`;
+    /** A trigger refusing any change of an entity's provenance records of `heading`. */
+    async function refuseProvenanceRename(slug = SLUG): Promise<void> {
+      const when = `OLD.${quote(dialect, "scope_slug")} = '${slug}' AND OLD.${quote(dialect, "field_path")} = 'heading'`;
       if (dialect === "postgresql") {
         await query(
           `CREATE FUNCTION trp_refuse() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'injected failure of the provenance rename'; END $$ LANGUAGE plpgsql`
@@ -193,19 +215,47 @@ describeEachDialect(
       }
     }
 
-    async function dropTrigger(): Promise<void> {
-      if (t === undefined) return;
-      await query(
-        dialect === "postgresql"
-          ? `DROP TRIGGER IF EXISTS trp_refuse ON ${PROVENANCE}`
-          : "DROP TRIGGER IF EXISTS trp_refuse"
-      );
+    /**
+     * A trigger refusing a move of a Single's registry version. The save's migration file writes
+     * the row's fields and leaves its version as it was, so only the write after it is refused.
+     */
+    async function refuseVersionBump(): Promise<void> {
+      const version = quote(dialect, "schema_version");
       if (dialect === "postgresql") {
-        await query("DROP FUNCTION IF EXISTS trp_refuse()");
+        await query(
+          `CREATE FUNCTION trp_refuse_version() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'injected failure of the version write'; END $$ LANGUAGE plpgsql`
+        );
+        await query(
+          `CREATE TRIGGER trp_refuse_version BEFORE UPDATE ON dynamic_singles FOR EACH ROW WHEN (OLD.${version} IS DISTINCT FROM NEW.${version}) EXECUTE FUNCTION trp_refuse_version()`
+        );
+      } else if (dialect === "mysql") {
+        await query(
+          `CREATE TRIGGER trp_refuse_version BEFORE UPDATE ON dynamic_singles FOR EACH ROW BEGIN IF NOT (OLD.${version} <=> NEW.${version}) THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'injected failure of the version write'; END IF; END`
+        );
+      } else {
+        await query(
+          `CREATE TRIGGER trp_refuse_version BEFORE UPDATE ON dynamic_singles WHEN OLD.${version} IS NOT NEW.${version} BEGIN SELECT RAISE(ABORT, 'injected failure of the version write'); END`
+        );
       }
     }
 
-    /** The schema dialog applying the rename, as what it threw or what it answered. */
+    async function dropTrigger(): Promise<void> {
+      if (t === undefined) return;
+      for (const [name, table] of [
+        ["trp_refuse", PROVENANCE],
+        ["trp_refuse_version", "dynamic_singles"],
+      ]) {
+        await query(
+          dialect === "postgresql"
+            ? `DROP TRIGGER IF EXISTS ${name} ON ${table}`
+            : `DROP TRIGGER IF EXISTS ${name}`
+        );
+        if (dialect === "postgresql") {
+          await query(`DROP FUNCTION IF EXISTS ${name}()`);
+        }
+      }
+    }
+
     /** The schema dialog applying `fields` (the rename by default) at `version` (the row's). */
     async function applyRename(
       version?: number,
@@ -318,6 +368,192 @@ describeEachDialect(
       ]);
       expect(stale.failed, `the stale save answered: ${stale.said}`).toBe(true);
       expect(await recorded(), "the registry row").toEqual(afterFailure);
+    });
+
+    it("keeps the move's answer when the row's version cannot be written either", async () => {
+      const before = await recorded();
+      await refuseProvenanceRename();
+      await refuseVersionBump();
+      const logged = captureErrorLog();
+
+      const { failed, said, message } = await applyRename();
+
+      expect(failed, `the rename answered: ${said}`).toBe(true);
+      expect(message).toBe(
+        `Single "${SLUG}" was saved: its change landed, but its translations step failed, so the translation records of "heading" were not moved to "title2". Until they are, no language of title2 can be found out of date. A developer can finish it with the statements in the server log.`
+      );
+      // Control: the version write was refused, so the row keeps its version.
+      expect(await recorded(), "the registry row").toEqual({
+        fields: ["title2", "views"],
+        schemaVersion: before.schemaVersion,
+        localized: true,
+      });
+      const log = logged().join("\n");
+      for (const statement of finishingStatements(dialect)) {
+        expect(log, "the server log").toContain(statement);
+      }
+      expect(log, "the server log").toContain(
+        `The registry row of '${SLUG}' was not written after its rename, so its version did not move on`
+      );
+    });
+
+    it("answers that a translated Collection was saved only in part when its translations step fails", async () => {
+      const name = "trp_posts";
+      const collections = t.getService("collectionsHandler") as unknown as {
+        createCollection(data: Record<string, unknown>): Promise<{
+          success: boolean;
+        }>;
+        getEntryService(): {
+          createEntry(
+            params: Record<string, unknown>,
+            data: Record<string, unknown>
+          ): Promise<{ success: boolean; data: unknown }>;
+          updateEntry(
+            params: Record<string, unknown>,
+            data: Record<string, unknown>
+          ): Promise<{ success: boolean }>;
+        };
+      };
+      const created = await collections.createCollection({
+        name,
+        label: "Post",
+        localized: true,
+        fields: TRANSLATED,
+      });
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const entries = collections.getEntryService();
+      const entry = await entries.createEntry(
+        { collectionName: name, overrideAccess: true, locale: "en" },
+        { heading: "Hello", views: 7 }
+      );
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+      const spanish = await entries.updateEntry(
+        {
+          collectionName: name,
+          entryId: String((entry.data as { id: unknown }).id),
+          overrideAccess: true,
+          locale: "es",
+        },
+        { heading: "Hola", _overwrite: true }
+      );
+      expect(spanish.success, JSON.stringify(spanish)).toBe(true);
+      const before = await recorded("dynamic_collections", name);
+      expect(before.fields, "the Collection as seeded").toEqual([
+        "heading",
+        "views",
+      ]);
+      expect(await provenancePaths(name), "the seeded provenance").toContain(
+        "heading"
+      );
+      await refuseProvenanceRename(name);
+      const logged = captureErrorLog();
+
+      let message: string | undefined;
+      try {
+        const answer = await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: name },
+          {
+            fields: RENAMED,
+            confirmed: true,
+            localized: true,
+            renameResolutions: [
+              {
+                tableName: `dc_${name}_locales`,
+                fromColumn: "heading",
+                toColumn: "title2",
+                choice: "rename" as const,
+              },
+            ],
+            schemaVersion: before.schemaVersion,
+          }
+        );
+        message = `answered: ${JSON.stringify(answer)}`;
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      const said = `Collection "${name}" was saved only in part: its change landed in the database, but its translations step failed, so the translation records of "heading" were not moved to "title2". Until they are, no language of title2 can be found out of date. A developer can move them with the statements in the server log. `;
+      expect(message?.slice(0, said.length)).toBe(said);
+      // The kept file's steps follow, which bring the registry in step.
+      expect(message, "the steps after it").toContain(
+        "nextly migrate:resolve --applied"
+      );
+      // The change landed in the database, and the registry row stayed as it was.
+      expect(
+        await companionColumns(`dc_${name}`),
+        "the translations columns"
+      ).toContain("title2");
+      expect(await provenancePaths(name), "the provenance").toContain(
+        "heading"
+      );
+      expect(await recorded("dynamic_collections", name)).toEqual(before);
+      const log = logged().join("\n");
+      for (const statement of finishingStatements(
+        dialect,
+        "collection",
+        name
+      )) {
+        expect(log, "the server log").toContain(statement);
+      }
+    });
+
+    it("gives statements that move the records as the move itself does, dropping a path that no longer fits", async () => {
+      // One set of records under two Singles: one moved by the move, one by the statements.
+      // From `hd` to `hd_renamed`, a row's path grows by 8 characters, so one of 247 still fits
+      // the column's 255 and one of 248 does not. `hdx#…` is another field's.
+      const paths = [
+        "hd",
+        "hd#r1",
+        `hd#${"r".repeat(244)}`,
+        `hd#${"s".repeat(245)}`,
+        "hdx#r2",
+      ];
+      for (const slug of ["trp_by_move", "trp_by_statements"]) {
+        for (const [index, fieldPath] of paths.entries()) {
+          await t.adapter.insert(PROVENANCE, {
+            id: `${slug}-${String(index)}`,
+            scopeKind: "single",
+            scopeSlug: slug,
+            entryId: "e1",
+            locale: "en",
+            partState: "live",
+            fieldPath,
+            valueFingerprint: "f",
+            origin: "person",
+            writtenAt: new Date(),
+          });
+        }
+      }
+      const rename = {
+        scopeKind: "single" as const,
+        from: "hd",
+        to: "hd_renamed",
+      };
+
+      await renameFieldProvenance(t.adapter, {
+        ...rename,
+        scopeSlug: "trp_by_move",
+      });
+      for (const statement of renameFieldProvenanceStatements(dialect, {
+        ...rename,
+        scopeSlug: "trp_by_statements",
+      })) {
+        await query(statement);
+      }
+
+      const byMove = await provenancePaths("trp_by_move");
+      // Control: the move dropped the path that no longer fits and kept the one that does.
+      expect(byMove, "the moved records").toEqual(
+        [
+          "hd_renamed",
+          "hd_renamed#r1",
+          `hd_renamed#${"r".repeat(244)}`,
+          "hdx#r2",
+        ].sort()
+      );
+      expect(await provenancePaths("trp_by_statements")).toEqual(byMove);
     });
   }
 );
