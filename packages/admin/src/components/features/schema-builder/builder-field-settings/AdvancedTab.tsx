@@ -8,6 +8,7 @@ import { neverTranslatable } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 import type { JSX } from "react";
 
+import { isAlwaysUniqueBuiltIn } from "@admin/lib/builder/constants";
 import { fieldLocalized } from "@admin/lib/builder/field-localized";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "../builder-config";
@@ -53,7 +54,9 @@ export function AdvancedTab({
   const setAdv = (next: Partial<NonNullable<BuilderField["advanced"]>>) =>
     onChange({ ...field, advanced: { ...adv, ...next } });
 
-  const uniqueDisabled = readOnly || isInsideRepeatingAncestor;
+  // A collection's slug is unique through its table's own index: shown on, and not switchable.
+  const alwaysUnique = isAlwaysUniqueBuiltIn(field, kind === "collection");
+  const uniqueDisabled = readOnly || isInsideRepeatingAncestor || alwaysUnique;
   // A component/field-group REFERENCE field produces no column and stores no
   // value, so localizing it is structurally unbacked: the flag would save and
   // change nothing, which reads as the Apply button being broken. What the
@@ -72,11 +75,13 @@ export function AdvancedTab({
         ariaLabel="Unique"
         label="Unique"
         help={
-          isInsideRepeatingAncestor
-            ? NESTED_UNIQUE_TOOLTIP
-            : "Disallow duplicate values in this column."
+          alwaysUnique
+            ? "Every entry's slug is unique."
+            : isInsideRepeatingAncestor
+              ? NESTED_UNIQUE_TOOLTIP
+              : "Disallow duplicate values in this column."
         }
-        checked={adv.unique === true}
+        checked={alwaysUnique || adv.unique === true}
         disabled={uniqueDisabled}
         onChange={v => setAdv({ unique: v })}
       />

@@ -352,3 +352,119 @@ describe("the built-in fields follow the entity's kind", () => {
     ).toEqual(["body"]);
   });
 });
+
+// A collection's title is a built-in row, yet its Unique is the person's to choose: turning it on
+// or off is a change the count shows, the save sends, a reload keeps, and Discard all takes back.
+// Its slug is always unique, and a Single's built-in fields are not saved by the Builder, so
+// neither is ever sent.
+describe("a collection's title Unique", () => {
+  const titleOf = (fields: readonly BuilderField[]) =>
+    fields.find(field => field.isSystem && field.name === "title");
+  const withUnique = (
+    fields: readonly BuilderField[],
+    name: string,
+    unique: boolean
+  ) =>
+    fields.map(field =>
+      field.isSystem && field.name === name
+        ? { ...field, advanced: { ...field.advanced, unique } }
+        : field
+    );
+  const sent = (
+    builder: ReturnType<typeof makeBuilder>,
+    kind: SchemaTemplateKind
+  ) =>
+    renderHook(() => useBuilderFieldActions(builder.api, kind))
+      .result.current.getValidatedFields()
+      ?.map(field => [field.name, field.unique]);
+
+  it("counts turning it on as one change of the title's settings, and saves the title with it", () => {
+    const entity = {
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    };
+    const { result, builder, rerender } = setup(entity);
+    expect(result.current.unsavedCount).toBe(0);
+
+    act(() =>
+      builder.api.setFields(withUnique(builder.api.fields, "title", true))
+    );
+    rerender({ e: entity });
+
+    expect(result.current.unsavedCount).toBe(1);
+    expect(result.current.pending.changes).toEqual([
+      expect.objectContaining({ kind: "settings", name: "title" }),
+    ]);
+    expect(sent(builder, "collection")).toEqual([
+      ["title", true],
+      ["body", false],
+    ]);
+  });
+
+  it("reloads a title stored unique with its Unique on, and sends it off once turned off", () => {
+    const entity = {
+      slug: "posts",
+      name: "Post",
+      fields: [{ ...definition("title"), unique: true }, definition("body")],
+    };
+    const { result, builder, rerender } = setup(entity);
+    expect(titleOf(builder.api.fields)?.advanced?.unique).toBe(true);
+    expect(result.current.unsavedCount).toBe(0);
+
+    act(() =>
+      builder.api.setFields(withUnique(builder.api.fields, "title", false))
+    );
+    rerender({ e: entity });
+
+    expect(result.current.unsavedCount).toBe(1);
+    // Off is sent: the server keeps a stored built-in field it is not sent.
+    expect(sent(builder, "collection")).toEqual([
+      ["title", false],
+      ["body", false],
+    ]);
+  });
+
+  it("takes the change back with Discard all", () => {
+    const entity = {
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    };
+    const { result, builder, rerender } = setup(entity);
+    act(() =>
+      builder.api.setFields(withUnique(builder.api.fields, "title", true))
+    );
+    rerender({ e: entity });
+    expect(result.current.unsavedCount).toBe(1);
+
+    act(() => result.current.pending.discardAll());
+    rerender({ e: entity });
+
+    expect(titleOf(builder.api.fields)?.advanced?.unique).toBeUndefined();
+    expect(result.current.unsavedCount).toBe(0);
+  });
+
+  it("never sends the slug, nor a Single's title", () => {
+    const entity = {
+      slug: "posts",
+      name: "Post",
+      fields: [definition("body")],
+    };
+    const collection = setup(entity);
+    act(() =>
+      collection.builder.api.setFields(
+        withUnique(collection.builder.api.fields, "slug", true)
+      )
+    );
+    expect(sent(collection.builder, "collection")).toEqual([["body", false]]);
+
+    const single = setup(entity, { kind: "single" });
+    act(() =>
+      single.builder.api.setFields(
+        withUnique(single.builder.api.fields, "title", true)
+      )
+    );
+    expect(sent(single.builder, "single")).toEqual([["body", false]]);
+  });
+});

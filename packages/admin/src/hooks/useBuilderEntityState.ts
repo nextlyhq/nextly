@@ -22,9 +22,10 @@ import type {
   BuilderFieldsApi,
 } from "@admin/components/features/schema-builder/types";
 import { convertToBuilderField } from "@admin/lib/builder";
-import { builtInFieldsOf } from "@admin/lib/builder/constants";
+import { builtInFieldsAsStored } from "@admin/lib/builder/constants";
 import { collectFieldIds } from "@admin/lib/builder/field-placement";
 import {
+  builtInChanges,
   describeStep,
   type PendingChange,
   pendingChanges,
@@ -43,7 +44,7 @@ import type { BuilderSnapshot } from "./useFieldBuilder";
 export interface UseBuilderEntityStateOptions<TEntity> {
   /**
    * Which kind of entity this is, which decides the built-in fields shown above its own
-   * (`builtInFieldsOf`): a collection's and a Single's title and slug, none for a field group,
+   * (`builtInFieldsAsStored`): a collection's and a Single's title and slug, none for a field group,
    * whose fields of those names are its own.
    */
   kind: SchemaTemplateKind;
@@ -202,6 +203,10 @@ export function useBuilderEntityState<TEntity>({
   const [originalFields, setOriginalFields] = useState<
     readonly BuilderField[] | null
   >(null);
+  // The built-in rows as loaded or last saved, apart from the user's fields: the one setting of
+  // theirs a person changes (a title's Unique) is measured from these (`builtInChanges`).
+  const [savedBuiltIns, setSavedBuiltIns] =
+    useState<readonly BuilderField[]>(NO_FIELDS);
   const [originalSettings, setOriginalSettings, baselineNow] =
     useSettingsBaseline();
 
@@ -217,11 +222,11 @@ export function useBuilderEntityState<TEntity>({
     // The kind's built-in fields first (none for a field group), and the entity's own after:
     // a field of a built-in's name is left out only where the kind holds that built-in, so a
     // field group's own `title` or `slug` is shown, and saved, as any other field.
-    const builtIn = builtInFieldsOf(kind);
+    // Each built-in row as stored: a title saved unique reloads with its Unique on.
+    const stored = toFields(entity);
+    const builtIn = builtInFieldsAsStored(kind, stored);
     const builtInNames = builtIn.map(field => field.name);
-    const userFields = toFields(entity).filter(
-      f => !builtInNames.includes(f.name)
-    );
+    const userFields = stored.filter(f => !builtInNames.includes(f.name));
     const allFields = [
       ...builtIn,
       ...userFields.map((field, index) =>
@@ -234,6 +239,7 @@ export function useBuilderEntityState<TEntity>({
     resetFields(allFields, loaded);
     // Nothing of an unsaved entity is saved, so none of its fields are either.
     setOriginalFields(unsaved ? NO_FIELDS : allFields.filter(f => !f.isSystem));
+    setSavedBuiltIns(builtIn);
     setOriginalSettings(loaded);
 
     setLoadedKey(currentKey);
@@ -267,6 +273,7 @@ export function useBuilderEntityState<TEntity>({
   const pending = useFieldPendingChanges(
     builder,
     originalFields,
+    savedBuiltIns,
     originalSettings,
     changedSettings
   );
@@ -293,6 +300,7 @@ export function useBuilderEntityState<TEntity>({
   const pinFields = useCallback(() => {
     const saved = builder.snapshot;
     setOriginalFields(saved.fields.filter(f => !f.isSystem));
+    setSavedBuiltIns(saved.fields.filter(f => f.isSystem));
     // The snapshot itself, as the history holds it, so the history finds the
     // place the save was made from. Settings still to be written share this
     // history, so one step stays before it: the saved fields with the settings
@@ -366,14 +374,23 @@ function describeSnapshotStep(
 function useFieldPendingChanges(
   builder: BuilderFieldsApi,
   saved: readonly BuilderField[] | null,
+  /** The built-in rows as loaded or last saved (`builtInChanges`). */
+  savedBuiltIns: readonly BuilderField[],
   savedSettings: BuilderSettingsValues | null,
   changedSettings: readonly SettingChange[]
 ): BuilderPendingChanges {
   const { fields, resetFields, undo: undoFields, redo: redoFields } = builder;
   // The net changes from what was saved, by field identity.
+  // The built-in rows' own changes first, where the Builder shows those rows.
   const changes = useMemo(
-    () => (saved ? pendingChanges(saved, fields) : []),
-    [saved, fields]
+    () =>
+      saved
+        ? [
+            ...builtInChanges(savedBuiltIns, fields),
+            ...pendingChanges(saved, fields),
+          ]
+        : [],
+    [saved, savedBuiltIns, fields]
   );
   const marks = useMemo(
     () =>
@@ -392,13 +409,13 @@ function useFieldPendingChanges(
     return step ? `Redid: ${describeSnapshotStep(step.from, step.to)}` : null;
   }, [redoFields]);
   const discardAll = useCallback(() => {
-    // The builder's own system rows stay as they are: they are never changed.
-    // The saved settings come back with the fields, in one fresh history.
+    // The built-in rows as saved, a title's Unique included, then the saved fields; the saved
+    // settings come back with them, in one fresh history.
     resetFields(
-      [...fields.filter(f => f.isSystem), ...(saved ?? [])],
+      [...savedBuiltIns, ...(saved ?? [])],
       savedSettings ?? undefined
     );
-  }, [resetFields, fields, saved, savedSettings]);
+  }, [resetFields, savedBuiltIns, saved, savedSettings]);
   return {
     changes,
     marks,

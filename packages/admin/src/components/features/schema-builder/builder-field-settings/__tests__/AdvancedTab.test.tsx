@@ -53,6 +53,59 @@ describe("FieldEditorSheet — AdvancedTab", () => {
     expect(last.advanced?.unique).toBe(true);
   });
 
+  // A collection's slug is unique through an index its table is made with, whatever the field
+  // says, so its switch shows that and cannot be turned off. Its title's Unique is the person's.
+  it("shows a collection's built-in slug as always unique, and leaves its title switchable", () => {
+    const slug: BuilderField = {
+      ...f,
+      id: "system_slug",
+      name: "slug",
+      label: "Slug",
+      isSystem: true,
+    };
+    const { unmount } = render(<Controlled initial={slug} />);
+    const sw = screen.getByRole("switch", { name: /^unique$/i });
+    expect(sw).toBeChecked();
+    expect(sw).toBeDisabled();
+    expect(
+      screen.getByText("Every entry's slug is unique.")
+    ).toBeInTheDocument();
+    unmount();
+
+    const title: BuilderField = {
+      ...f,
+      id: "system_title",
+      name: "title",
+      label: "Title",
+      isSystem: true,
+    };
+    render(<Controlled initial={title} />);
+    const titleSwitch = screen.getByRole("switch", { name: /^unique$/i });
+    expect(titleSwitch).not.toBeChecked();
+    expect(titleSwitch).not.toBeDisabled();
+  });
+
+  it("leaves a Single's slug and a field group's own slug switchable", () => {
+    const builtIn: BuilderField = {
+      ...f,
+      id: "system_slug",
+      name: "slug",
+      label: "Slug",
+      isSystem: true,
+    };
+    const { unmount } = render(<Controlled initial={builtIn} kind="single" />);
+    expect(
+      screen.getByRole("switch", { name: /^unique$/i })
+    ).not.toBeDisabled();
+    unmount();
+
+    const own: BuilderField = { ...f, name: "slug", label: "Slug" };
+    render(<Controlled initial={own} kind="field-group" />);
+    expect(
+      screen.getByRole("switch", { name: /^unique$/i })
+    ).not.toBeDisabled();
+  });
+
   it("does NOT render the Index switch (removed in PR E1)", () => {
     render(<Controlled initial={f} />);
     expect(

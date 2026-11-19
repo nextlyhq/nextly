@@ -18,7 +18,10 @@ import type {
 } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
 import { convertToFieldDefinition } from "@admin/lib/builder";
-import { builtInFieldNamesOf } from "@admin/lib/builder/constants";
+import {
+  builtInFieldNamesOf,
+  builtInFieldsToSave,
+} from "@admin/lib/builder/constants";
 import {
   duplicatedFields,
   type DuplicateNaming,
@@ -47,7 +50,8 @@ export interface UseBuilderFieldActionsReturn {
 
 /**
  * @param kind which kind of entity is edited: only its built-in fields (`builtInFieldNamesOf`)
- *   are left out of what a save sends, so a field group's own `title` or `slug` is saved.
+ *   are left out of what a save sends, so a field group's own `title` or `slug` is saved; of
+ *   those, one whose Unique the person set is sent (`builtInFieldsToSave`).
  */
 export function useBuilderFieldActions(
   builder: BuilderFieldsApi,
@@ -89,7 +93,11 @@ export function useBuilderFieldActions(
         );
         return null;
       }
-      return userFields.map(convertToFieldDefinition);
+      // A built-in row the person set Unique on or off for goes first, as the Builder shows it;
+      // the server checks a title made unique for repeats before anything changes.
+      return [...builtInFieldsToSave(kind, builder.fields), ...userFields].map(
+        convertToFieldDefinition
+      );
     },
     [builder, kind]
   );
