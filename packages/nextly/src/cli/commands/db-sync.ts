@@ -117,8 +117,8 @@ import {
   syncUserFields,
 } from "./dev-build";
 import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
-import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { createDebouncedSync } from "./dev-watcher";
+import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { syncSchemaInOrder } from "./sync-schema";
 
 // ============================================================================

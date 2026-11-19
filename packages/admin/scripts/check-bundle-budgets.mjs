@@ -48,7 +48,12 @@ export const BUDGETS = {
   // `./testing` entry, and comment annotations an application's minifier
   // strips. Gzip tracks what is transferred. What a visitor's first load
   // downloads is the consumer check's report (`check-consumer-bundle.mjs`).
-  totalGzipKB: 1300,
+  // Raised on 2026-11-19 from 1,300: measured at 1,371.1 KB once the Schema
+  // Builder's create, rename, template and pending-settings work and the
+  // Email hub's Activity tab shipped (the routes `route-budgets.json` lists
+  // under `raised`, each with the pull requests it grew from); that plus 1%,
+  // rounded up to the next 10 KB, as above.
+  totalGzipKB: 1390,
   // The shared shell, measured at 140.3 KB gzipped on 2026-11-13 once the
   // root entry exported only what an application mounts (it was 331 KB), the
   // form library and zod's classic API left it, and the packages

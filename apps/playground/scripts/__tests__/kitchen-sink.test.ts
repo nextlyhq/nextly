@@ -26,6 +26,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { pageOutline } from "@nextlyhq/blocks-react";
 import type { BlockRenderArgs, PageContext } from "@nextlyhq/blocks-react";
 import type { BlockNode, NestingSource } from "@nextlyhq/blocks-engine";
 import { ENTRY_CONTENT_TYPE, validateDocument } from "@nextlyhq/blocks-engine";
@@ -229,6 +230,12 @@ describe("the kitchen-sink document", () => {
 
       const context: PageContext = {
         entry: null,
+        // The page's own outline, as the renderer builds it once per page:
+        // a table of contents lists the headings THIS document draws, so it
+        // is judged with them rather than with none.
+        outline: pageOutline([
+          { area: "content", nodes: KITCHEN_SINK_DOCUMENT.nodes },
+        ]),
         data: { find: () => Promise.resolve({ items: [], total: 0 }) },
         resolveMedia: () => Promise.resolve(null),
         resolveEntryPath: () => Promise.resolve(null),
