@@ -26,13 +26,19 @@
 
 import type { FilterProblem } from "./filter-shape";
 import {
+  ASSIGNED_TO_ME_KEY,
   IN_RELEASE_KEY,
   PENDING_CHANGE_KEY,
   STRANDED_STAGE_KEY,
 } from "./reserved-filter-keys";
 
 // Declared with the other reserved keys, so the admin reads the same names.
-export { IN_RELEASE_KEY, PENDING_CHANGE_KEY, STRANDED_STAGE_KEY };
+export {
+  ASSIGNED_TO_ME_KEY,
+  IN_RELEASE_KEY,
+  PENDING_CHANGE_KEY,
+  STRANDED_STAGE_KEY,
+};
 
 /**
  * Which scheduled releases an entry must be in to be kept.
@@ -63,6 +69,11 @@ export interface WorkflowFilter {
    * meaning what it meant.
    */
   strandedStage?: boolean;
+  /**
+   * Keep only entries with a part assigned to the reader or to one of their
+   * roles. Absent reads as false, as `strandedStage` does.
+   */
+  assignedToMe?: boolean;
 }
 
 /**
@@ -140,6 +151,13 @@ function readStrandedStage(value: unknown): true | undefined {
 }
 
 /**
+ * `_assignedToMe`'s value, read: `true` is its only form, as `_strandedStage`'s.
+ */
+function readAssignedToMe(value: unknown): true | undefined {
+  return value === true ? true : undefined;
+}
+
+/**
  * `_inRelease`'s value, read: `true`, or an object holding exactly one
  * `scheduledBefore` instant.
  *
@@ -179,6 +197,10 @@ const WORKFLOW_KEYS = {
     read: readStrandedStage,
     form: `true`,
   },
+  [ASSIGNED_TO_ME_KEY]: {
+    read: readAssignedToMe,
+    form: `true`,
+  },
 } as const;
 
 type WorkflowKey = keyof typeof WORKFLOW_KEYS;
@@ -210,6 +232,8 @@ export const WORKFLOW_KEY_PURPOSE: Readonly<Record<WorkflowKey, string>> = {
   [IN_RELEASE_KEY]: "keeps entries a scheduled release will publish",
   [STRANDED_STAGE_KEY]:
     "keeps entries with a part in a stage their workflow no longer has",
+  [ASSIGNED_TO_ME_KEY]:
+    "keeps entries with a part assigned to you or to one of your roles",
 };
 
 /** How a workflow key is written, for the refusal of one given below the top level. */
@@ -235,6 +259,7 @@ function applyWorkflowKey(
 ): void {
   if (key === PENDING_CHANGE_KEY) filter.pendingChange = true;
   else if (key === STRANDED_STAGE_KEY) filter.strandedStage = true;
+  else if (key === ASSIGNED_TO_ME_KEY) filter.assignedToMe = true;
   else filter.inRelease = readInRelease(value) ?? null;
 }
 

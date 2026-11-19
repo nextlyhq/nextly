@@ -15,12 +15,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { decidePermission } from "../../auth/access/decide";
 import { NextlyError } from "../../errors";
-import { resolveUserRoles } from "../../services/lib/permissions";
 import type { PublishCaller } from "../collections/services/publish-gate";
 import { configuredLocales } from "../i18n/configured-locales";
 
 import { primaryStep } from "./define-workflow";
-import { roleIdsOfSlugs } from "./holders";
+import { holdersOf } from "./holders";
 import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import { lastMovesOn, type LastMove } from "./last-moves";
 import { documentTableOn, partVersionOn } from "./part-versions";
@@ -709,32 +708,6 @@ function waitingScan(
     },
   };
   return scan;
-}
-
-/**
- * Whom the caller stands for when work is assigned: a person, as themselves and every role they
- * hold now (inherited ones included). A key, full-access or scoped, as its roles alone, never as
- * its owner in person: work assigned to the owner by name is the owner's to see, as an approval is
- * a person's to give. Its roles are those its scope names, or, where it names none, its owner's,
- * as its permissions are judged.
- */
-async function holdersOf(
-  adapter: DrizzleAdapter,
-  caller: WaitingQuery["caller"]
-): Promise<ReviewAssignee[]> {
-  if (caller.kind === "key") {
-    // A scope names its roles by slug; work is assigned to a role by id.
-    const ids =
-      caller.scope.roles !== undefined
-        ? await roleIdsOfSlugs(adapter, caller.scope.roles)
-        : [...(await resolveUserRoles(caller.userId)).roleIds];
-    return ids.map(id => ({ kind: "role" as const, id }));
-  }
-  const { roleIds } = await resolveUserRoles(caller.userId);
-  return [
-    { kind: "user", id: caller.userId },
-    ...[...roleIds].map(id => ({ kind: "role" as const, id })),
-  ];
 }
 
 /** One waiting part, its stage shown as `shown` says (its workflow's saved presentation). */

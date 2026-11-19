@@ -35,6 +35,12 @@ export const IN_RELEASE_KEY = "_inRelease";
 export const STRANDED_STAGE_KEY = "_strandedStage";
 
 /**
+ * The reserved key keeping entries with a part assigned to the reader or to one
+ * of their roles. @experimental
+ */
+export const ASSIGNED_TO_ME_KEY = "_assignedToMe";
+
+/**
  * Every key a filter may carry only at its top level.
  *
  * @experimental
@@ -44,6 +50,7 @@ export const RESERVED_TOP_LEVEL_KEYS = [
   PENDING_CHANGE_KEY,
   IN_RELEASE_KEY,
   STRANDED_STAGE_KEY,
+  ASSIGNED_TO_ME_KEY,
 ] as const;
 
 /** @experimental */

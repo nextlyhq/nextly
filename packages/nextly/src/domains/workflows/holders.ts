@@ -111,6 +111,36 @@ export async function roleIdsOfSlugs(
   return found.flatMap(role => (role ? [role.id] : []));
 }
 
+/**
+ * Whom the caller stands for when work is assigned: a person, as themselves and every role they
+ * hold now (inherited ones included). A key, full-access or scoped, as its roles alone, never as
+ * its owner in person: work assigned to the owner by name is the owner's to see, as an approval is
+ * a person's to give. Its roles are those its scope names, or, where it names none, its owner's,
+ * as its permissions are judged. The waiting list and a list's "assigned to me" filter both ask it.
+ *
+ * @experimental
+ */
+export async function holdersOf(
+  adapter: DrizzleAdapter,
+  caller:
+    | { kind: "user"; userId: string }
+    | { kind: "key"; userId: string; scope: { roles?: readonly string[] } }
+): Promise<ReviewAssignee[]> {
+  if (caller.kind === "key") {
+    // A scope names its roles by slug; work is assigned to a role by id.
+    const ids =
+      caller.scope.roles !== undefined
+        ? await roleIdsOfSlugs(adapter, caller.scope.roles)
+        : [...(await resolveUserRoles(caller.userId)).roleIds];
+    return ids.map(id => ({ kind: "role" as const, id }));
+  }
+  const { roleIds } = await resolveUserRoles(caller.userId);
+  return [
+    { kind: "user", id: caller.userId },
+    ...[...roleIds].map(id => ({ kind: "role" as const, id })),
+  ];
+}
+
 /** The stored permission for `action` on `resource`, or undefined when there is none. */
 async function permissionFor(
   adapter: DrizzleAdapter,

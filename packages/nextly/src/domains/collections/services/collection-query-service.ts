@@ -245,6 +245,8 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
+import { assignedToCondition } from "../../workflows/assigned-to-condition";
+import type { ReviewAssignee } from "../../workflows/review-state-repository";
 import { strandedStageCondition } from "../../workflows/stranded-stage-condition";
 import {
   componentTableNamesFor,
@@ -279,6 +281,7 @@ import {
   windowRowsEnd,
 } from "../query/timeseries-interval";
 import {
+  ASSIGNED_TO_ME_KEY,
   extractWorkflowFilter,
   IN_RELEASE_KEY,
   PENDING_CHANGE_KEY,
@@ -2841,6 +2844,17 @@ export class CollectionQueryService extends BaseService {
         })
       );
     }
+    if (filter.assignedToMe === true) {
+      conditions.push(
+        assignedToCondition({
+          dialect,
+          collectionName: params.collectionName,
+          entryId: idColumn,
+          locales,
+          holders: await this.readerHolders(params),
+        })
+      );
+    }
     if (filter.inRelease !== null) {
       conditions.push(
         inReleaseCondition({
@@ -2854,6 +2868,34 @@ export class CollectionQueryService extends BaseService {
       );
     }
     return conditions;
+  }
+
+  /**
+   * The people and roles the reader stands for when work is assigned (`holdersOf`): a person as
+   * themselves and their roles, a key as its roles alone. A trusted read stands for no one, so
+   * "assigned to me" keeps nothing on it.
+   */
+  private async readerHolders(params: {
+    overrideAccess?: boolean;
+    accessUser?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<ReviewAssignee[]> {
+    const userId = params.accessUser?.id;
+    if (
+      params.overrideAccess === true ||
+      typeof userId !== "string" ||
+      userId === ""
+    ) {
+      return [];
+    }
+    // Loaded when asked: the workflow holders read the role services, which reach this module.
+    const { holdersOf } = await import("../../workflows/holders");
+    return holdersOf(
+      this.adapter,
+      params.authenticatedScope === undefined
+        ? { kind: "user", userId }
+        : { kind: "key", userId, scope: params.authenticatedScope }
+    );
   }
 
   /**
@@ -2908,9 +2950,12 @@ export class CollectionQueryService extends BaseService {
   }): Promise<void> {
     if (!isPlainObject(params.where)) return;
     const where = params.where;
-    const used = [PENDING_CHANGE_KEY, IN_RELEASE_KEY, STRANDED_STAGE_KEY].find(
-      key => Object.prototype.hasOwnProperty.call(where, key)
-    );
+    const used = [
+      PENDING_CHANGE_KEY,
+      IN_RELEASE_KEY,
+      STRANDED_STAGE_KEY,
+      ASSIGNED_TO_ME_KEY,
+    ].find(key => Object.prototype.hasOwnProperty.call(where, key));
     if (used === undefined) return;
     const denied = await this.denyCollectionRead({
       collectionName: params.collectionName,
