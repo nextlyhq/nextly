@@ -9,6 +9,7 @@ import {
   COMPONENT_WALK_RELEASES,
   COMPONENT_WALK_ROUNDS,
 } from "../component-hold";
+import type { ReleaseRecheckTarget } from "../release-recheck";
 import { NO_DECISIONS } from "../release-scope";
 import {
   NO_RELEASE_VISIBILITY,
@@ -61,6 +62,13 @@ function member(
     createdBy: "author",
     createdAt: PAST,
   };
+}
+
+/** The documents a walk of shared documents asks about; none for any other target. */
+function documentsOf(
+  target: ReleaseRecheckTarget
+): readonly { entryId: string }[] {
+  return "documents" in target ? target.documents : [];
 }
 
 /** Nothing due to plan: what the first cases' reads never reach. */
@@ -184,12 +192,11 @@ describe("createReleaseVisibility with a hold on going live", () => {
     // release. Nothing in it is held, yet a read that walked it to the end would never finish,
     // and one that stopped short and planned what it had would be guessing.
     const indexOf = (id: string) => Number(id.slice(1));
-    const scheduledMembersFor = vi.fn(
-      async (target: { documents?: readonly { entryId: string }[] }) =>
-        (target.documents ?? []).map(document => ({
-          release: release(`r${indexOf(document.entryId)}`),
-          members: [],
-        }))
+    const scheduledMembersFor = vi.fn(async (target: ReleaseRecheckTarget) =>
+      documentsOf(target).map(document => ({
+        release: release(`r${indexOf(document.entryId)}`),
+        members: [],
+      }))
     );
     const visibility = createReleaseVisibility({
       cache: { mayHaveDue: async () => true },
@@ -246,12 +253,10 @@ describe("createReleaseVisibility with a hold on going live", () => {
           reveal: [...singles, "p1", "p2", "h"],
           hide: [],
         }),
-        scheduledMembersFor: async (target: {
-          documents?: readonly { entryId: string }[];
-        }) =>
+        scheduledMembersFor: async (target: ReleaseRecheckTarget) =>
           [
             ...new Set(
-              (target.documents ?? []).flatMap(
+              documentsOf(target).flatMap(
                 document => holders.get(document.entryId) ?? []
               )
             ),
@@ -304,11 +309,9 @@ describe("createReleaseVisibility over a schedule that moves between its reads",
       cache: { mayHaveDue: async () => true },
       repository: {
         findDueDecisions: async () => ({ reveal: ["e1", "e2"], hide: ["e3"] }),
-        scheduledMembersFor: async (target: {
-          documents?: readonly { entryId: string }[];
-        }) => {
+        scheduledMembersFor: async (target: ReleaseRecheckTarget) => {
           const asked = new Set(
-            (target.documents ?? []).map(document => document.entryId)
+            documentsOf(target).map(document => document.entryId)
           );
           return [...holds]
             .filter(([, members]) => members.some(m => asked.has(m.entryId)))
