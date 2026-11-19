@@ -114,8 +114,9 @@ export function createReleaseVisibility(deps: {
  * (`dueComponentsHolding`), followed through every shared document, so a hold reached through a
  * release that shares a document with these but none with this scope still withholds them, as
  * the run refuses them. A read pays for its own documents' components, not the whole due
- * backlog; a component too large to walk is not guessed at, and this read projects none of its
- * decisions, as a held component projects nothing.
+ * backlog; a component too large to walk is not guessed at, and this read projects none of that
+ * component's decisions, as a held component projects nothing, while every other component keeps
+ * its own.
  */
 async function withoutHeld(
   due: ReleaseDecisions,
@@ -133,11 +134,18 @@ async function withoutHeld(
     })),
     query.now
   );
-  if (reached === null) return NO_DECISIONS;
-  if (reached.releases.length === 0) return due;
-  const plan = planReleaseMaterialisation({ ...reached, now: query.now });
+  if (reached.releases.length === 0 && reached.unbounded.length === 0) {
+    return due;
+  }
+  const plan = planReleaseMaterialisation({
+    releases: reached.releases,
+    members: reached.members,
+    now: query.now,
+  });
   const decided = new Set([...due.reveal, ...due.hide]);
-  const withheld = new Set<string>();
+  // A component past the walk's bound is not guessed at: its documents project nothing, as a
+  // held component's do, and every other component keeps its decisions.
+  const withheld = new Set(reached.unbounded.map(document => document.entryId));
   for (const actions of actionsByComponent(plan)) {
     const here = actions.filter(
       action =>

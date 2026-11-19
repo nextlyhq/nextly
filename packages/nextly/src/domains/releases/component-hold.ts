@@ -142,11 +142,12 @@ export function begunReleases(
 
 /**
  * The most rounds a walk of shared documents takes ({@link dueComponentsHolding}): each round is
- * one step along a chain of releases, each sharing a document with the one before.
+ * one step along a chain of releases, each sharing a document with the one before. A component
+ * still growing after this many is past the bound.
  */
 export const COMPONENT_WALK_ROUNDS = 16;
 
-/** The most due releases a walk of shared documents gathers before it gives up. */
+/** The most due releases one component may hold before a walk gives up on it. */
 export const COMPONENT_WALK_RELEASES = IDS_PER_LOOKUP;
 
 /** The reads a walk of shared documents makes, satisfied by `ReleasesRepository`. */
@@ -155,10 +156,70 @@ export type ComponentReads = Pick<
   "scheduledMembersFor" | "listMembersOf"
 >;
 
-/** Due releases closed under shared documents, with every member of each, ready to plan. */
+/**
+ * Due releases closed under shared documents, with every member of each, ready to plan; and the
+ * documents asked about whose component passed the bound, of which neither list holds anything.
+ */
 export interface DueComponents {
   releases: DueRelease[];
   members: DrainMemberRow[];
+  unbounded: ReleaseRecheckDocument[];
+}
+
+/** A document's key in a walk: its scope and entry, any language. */
+function walkKeyOf(document: ReleaseRecheckDocument): string {
+  return `d${JSON.stringify([document.scopeKind, document.scopeSlug, document.entryId])}`;
+}
+
+/** A release's key in a walk, apart from every document's. */
+const releaseKeyOf = (releaseId: string): string => `r${releaseId}`;
+
+/**
+ * The components a walk has joined so far, as a union-find over documents and releases, with the
+ * components it has given up on. A component given up on stays so when it joins another, since
+ * what it joins is only larger.
+ */
+class WalkedComponents {
+  private readonly parent = new Map<string, string>();
+  private readonly beyond = new Set<string>();
+
+  rootOf(key: string): string {
+    let root = key;
+    for (let up = this.parent.get(root); up !== undefined && up !== root; ) {
+      root = up;
+      up = this.parent.get(root);
+    }
+    this.parent.set(key, root);
+    return root;
+  }
+
+  join(a: string, b: string): void {
+    const ra = this.rootOf(a);
+    const rb = this.rootOf(b);
+    if (ra === rb) return;
+    this.parent.set(ra, rb);
+    if (this.beyond.has(ra)) this.beyond.add(rb);
+  }
+
+  giveUp(key: string): void {
+    this.beyond.add(this.rootOf(key));
+  }
+
+  isBeyond(key: string): boolean {
+    return this.beyond.has(this.rootOf(key));
+  }
+
+  /** Gives up on each component holding more than the bound of these releases. */
+  giveUpOversized(releaseIds: Iterable<string>): void {
+    const sizes = new Map<string, number>();
+    for (const id of releaseIds) {
+      const root = this.rootOf(releaseKeyOf(id));
+      sizes.set(root, (sizes.get(root) ?? 0) + 1);
+    }
+    for (const [root, size] of sizes) {
+      if (size > COMPONENT_WALK_RELEASES) this.beyond.add(root);
+    }
+  }
 }
 
 /**
@@ -167,28 +228,33 @@ export interface DueComponents {
  *
  * Walked outward from the documents: the due releases holding them, then every document those
  * releases hold, then the due releases holding those, until a round finds no document not
- * already followed. What it gathers is closed under shared documents, so planning it gives each
- * of its components exactly as planning every due release would; a document shared only in
+ * already followed. Each component it gathers is closed under shared documents, so planning it
+ * gives the component exactly as planning every due release would; a document shared only in
  * another language joins two releases the planner keeps apart, which plans a little more and
  * never less.
  *
- * Bounded, since a component can chain through any number of releases: past
- * {@link COMPONENT_WALK_ROUNDS} rounds or {@link COMPONENT_WALK_RELEASES} releases the answer is
- * null, and the caller decides what an unknown component means for it. Each round reads its
- * documents and releases in runs of at most {@link IDS_PER_LOOKUP}.
+ * Bounded PER COMPONENT, since one component can chain through any number of releases while
+ * many small ones beside it cost little each: a component holding more than
+ * {@link COMPONENT_WALK_RELEASES} due releases, or still growing after
+ * {@link COMPONENT_WALK_ROUNDS} rounds, is walked no further, left out of what is returned, and
+ * its documents asked about are named `unbounded`, for the caller to decide what an unknown
+ * component means for it. Every other component is returned whole. A component given up on is
+ * disjoint from every component returned: one returned was closed, so a release sharing any of
+ * its documents was found and joined to it. Each round reads its documents and releases in runs
+ * of at most {@link IDS_PER_LOOKUP}.
  */
 export async function dueComponentsHolding(
   reads: ComponentReads,
   documents: readonly ReleaseRecheckDocument[],
   now: Date
-): Promise<DueComponents | null> {
-  const keyOf = (document: ReleaseRecheckDocument) =>
-    JSON.stringify([document.scopeKind, document.scopeSlug, document.entryId]);
+): Promise<DueComponents> {
+  const components = new WalkedComponents();
   const followed = new Set<string>();
   let frontier: ReleaseRecheckDocument[] = [];
   const follow = (document: ReleaseRecheckDocument) => {
-    if (followed.has(keyOf(document))) return;
-    followed.add(keyOf(document));
+    const key = walkKeyOf(document);
+    if (followed.has(key)) return;
+    followed.add(key);
     frontier.push({
       scopeKind: document.scopeKind,
       scopeSlug: document.scopeSlug,
@@ -198,29 +264,76 @@ export async function dueComponentsHolding(
   documents.forEach(follow);
   const releases = new Map<string, DueRelease>();
   const members: DrainMemberRow[] = [];
-  for (let round = 0; frontier.length > 0; round += 1) {
-    if (round === COMPONENT_WALK_ROUNDS) return null;
-    const found = (
-      await reads.scheduledMembersFor({ documents: frontier })
-    ).flatMap(({ release }) =>
+  for (let round = 0; ; round += 1) {
+    frontier = frontier.filter(
+      document => !components.isBeyond(walkKeyOf(document))
+    );
+    if (frontier.length === 0) break;
+    if (round === COMPONENT_WALK_ROUNDS) {
+      for (const document of frontier) components.giveUp(walkKeyOf(document));
+      break;
+    }
+    const found = await dueReleasesHolding(reads, frontier, now, releases);
+    for (const { release, naming } of found) {
+      releases.set(release.id, release);
+      // Joined to the documents it was found by, so a component past the bound is known before
+      // any of its members are read.
+      for (const document of naming) {
+        components.join(releaseKeyOf(release.id), walkKeyOf(document));
+      }
+    }
+    components.giveUpOversized(releases.keys());
+    const added = await reads.listMembersOf(
+      found
+        .map(({ release }) => release.id)
+        .filter(id => !components.isBeyond(releaseKeyOf(id)))
+    );
+    members.push(...added);
+    frontier = [];
+    for (const member of added) {
+      components.join(releaseKeyOf(member.releaseId), walkKeyOf(member));
+      follow(member);
+    }
+    components.giveUpOversized(releases.keys());
+  }
+  const whole = (releaseId: string) =>
+    !components.isBeyond(releaseKeyOf(releaseId));
+  return {
+    releases: [...releases.values()].filter(release => whole(release.id)),
+    members: members.filter(member => whole(member.releaseId)),
+    unbounded: documents.filter(document =>
+      components.isBeyond(walkKeyOf(document))
+    ),
+  };
+}
+
+/**
+ * The due releases holding these documents not already in `known`, each with the members naming
+ * them: one round of a walk's reads of releases.
+ */
+async function dueReleasesHolding(
+  reads: ComponentReads,
+  documents: readonly ReleaseRecheckDocument[],
+  now: Date,
+  known: ReadonlyMap<string, DueRelease>
+): Promise<
+  { release: DueRelease; naming: readonly ReleaseRecheckDocument[] }[]
+> {
+  return (await reads.scheduledMembersFor({ documents })).flatMap(
+    ({ release, members }) =>
       release.scheduledAt !== null &&
       isDueAt(release.scheduledAt, now) &&
-      !releases.has(release.id)
+      !known.has(release.id)
         ? [
             {
-              id: release.id,
-              scheduledAt: release.scheduledAt,
-              revision: release.revision,
+              release: {
+                id: release.id,
+                scheduledAt: release.scheduledAt,
+                revision: release.revision,
+              },
+              naming: members,
             },
           ]
         : []
-    );
-    if (releases.size + found.length > COMPONENT_WALK_RELEASES) return null;
-    for (const release of found) releases.set(release.id, release);
-    const added = await reads.listMembersOf(found.map(release => release.id));
-    members.push(...added);
-    frontier = [];
-    added.forEach(follow);
-  }
-  return { releases: [...releases.values()], members };
+  );
 }

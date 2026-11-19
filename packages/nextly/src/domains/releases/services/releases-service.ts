@@ -3007,7 +3007,9 @@ export class ReleasesService {
       members,
       now
     );
-    if (reached === null) return this.duePlan(now);
+    // This release's documents are one component, so any of them past the walk's bound means
+    // its component is: planned instead with every due release, as the run plans it.
+    if (reached.unbounded.length > 0) return this.duePlan(now);
     const releases = new Map(
       [...(known?.releases ?? []), ...reached.releases].map(release => [
         release.id,

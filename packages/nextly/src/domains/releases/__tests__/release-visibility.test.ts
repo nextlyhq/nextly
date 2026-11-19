@@ -5,6 +5,10 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  COMPONENT_WALK_RELEASES,
+  COMPONENT_WALK_ROUNDS,
+} from "../component-hold";
 import { NO_DECISIONS } from "../release-scope";
 import {
   NO_RELEASE_VISIBILITY,
@@ -197,7 +201,68 @@ describe("createReleaseVisibility with a hold on going live", () => {
     });
 
     expect(await visibility.decisions(QUERY)).toEqual(NO_DECISIONS);
-    expect(scheduledMembersFor.mock.calls.length).toBeLessThan(100);
+    // One read of releases a round, and no round past the bound.
+    expect(scheduledMembersFor.mock.calls.length).toBeLessThanOrEqual(
+      COMPONENT_WALK_ROUNDS
+    );
+  });
+
+  it("drops only the decisions of a component past its bound, however many components fit beside it", async () => {
+    // More due releases than the bound in all, but each component small: one release per single
+    // document, and a pair joined through a document this read does not decide. Beside them, a
+    // document held by more releases than the bound, which alone is too large to plan.
+    const singles = Array.from(
+      { length: COMPONENT_WALK_RELEASES + 1 },
+      (_, i) => `s${i}`
+    );
+    const crowd = Array.from(
+      { length: COMPONENT_WALK_RELEASES + 1 },
+      (_, i) => `rh${i}`
+    );
+    const holds = new Map<string, string[]>([
+      ...singles.map((entryId): [string, string[]] => [
+        `r-${entryId}`,
+        [entryId],
+      ]),
+      ["rp1", ["p1", "x"]],
+      ["rp2", ["p2", "x"]],
+      ...crowd.map((id): [string, string[]] => [id, ["h"]]),
+    ]);
+    const holders = new Map<string, string[]>();
+    for (const [releaseId, entryIds] of holds) {
+      for (const entryId of entryIds) {
+        holders.set(entryId, [...(holders.get(entryId) ?? []), releaseId]);
+      }
+    }
+    const visibility = createReleaseVisibility({
+      cache: { mayHaveDue: async () => true },
+      repository: {
+        findDueDecisions: async () => ({
+          reveal: [...singles, "p1", "p2", "h"],
+          hide: [],
+        }),
+        scheduledMembersFor: async (target: {
+          documents?: readonly { entryId: string }[];
+        }) =>
+          [
+            ...new Set(
+              (target.documents ?? []).flatMap(
+                document => holders.get(document.entryId) ?? []
+              )
+            ),
+          ].map(id => ({ release: release(id), members: [] })),
+        listMembersOf: async (ids: string[]) =>
+          ids.flatMap(id =>
+            (holds.get(id) ?? []).map(entryId => member(id, entryId, "publish"))
+          ),
+      },
+      hold: () => ({ held: async () => new Set<string>() }),
+    });
+
+    expect(await visibility.decisions(QUERY)).toEqual({
+      reveal: [...singles, "p1", "p2"],
+      hide: [],
+    });
   });
 
   it("never asks while nothing would be revealed, so a takedown is never held", async () => {
