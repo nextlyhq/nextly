@@ -564,9 +564,10 @@ async function ensureRow(
  * table and why SQLite names no holder. SQLite's own answer never reaches the caller as the
  * error; it is the stop's cause.
  *
- * A run that refuses a held lock at once (a Schema Builder save, a request) makes one try: its
- * caller is not kept waiting through the pauses. A command that waits for a held lock makes
- * them all.
+ * A run that refuses a held lock at once (a Schema Builder save, a request) makes one try, with
+ * the wait its connection is set to and none of the bounds: its caller is not kept waiting
+ * through the pauses, nor through a try an operator set long for a command. A command that
+ * waits for a held lock makes every try, and all its steps share the one total.
  *
  * A try that ended this way began no transaction, so nothing of the step is left and it runs
  * again whole. No lock is held yet, so there is none to show held between tries, and no lease to
@@ -575,11 +576,86 @@ async function ensureRow(
 async function waitingForBusyDatabase<T>(
   options: SchemaLockOptions,
   dialect: SupportedDialect,
+  waited: BusyWait,
   step: () => Promise<T>
 ): Promise<T> {
   if (dialect !== "sqlite") return step();
+  // A run that refuses a held lock at once asks once, waiting as its connection is set to and no
+  // longer: the bounds are a command's, and a request must not wait an operator's long try.
+  if (options.whenHeld === "refuse") {
+    return oneTryForBusyDatabase(options, dialect, step);
+  }
+  const startedAt = Date.now();
+  let metBusy = false;
+  try {
+    return await inBusyDatabaseTries(options, dialect, waited, step, () => {
+      metBusy = true;
+    });
+  } finally {
+    // What this step waited for a busy database is taken from the total every later step of the
+    // same run may wait: the total bounds the whole taking of the lock, not each step of it.
+    if (metBusy) waited.spentMs += Date.now() - startedAt;
+  }
+}
+
+/** How long one run has waited for a busy SQLite database while taking the lock, so far. */
+interface BusyWait {
+  spentMs: number;
+}
+
+/**
+ * `step` asked once on a busy SQLite database, for a run that refuses a held lock at once: it
+ * waits as the connection itself is set to, as it did before the tries, and a busy answer ends
+ * it with `NEXTLY_TABLE_BUSY` after that one try.
+ */
+async function oneTryForBusyDatabase<T>(
+  options: SchemaLockOptions,
+  dialect: SupportedDialect,
+  step: () => Promise<T>
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await step();
+  } catch (error) {
+    if (!endedWaiting(error, dialect, false)) throw error;
+    const stopped = tableBusyError({
+      change: options.command,
+      ended: {
+        table: SCHEMA_LOCK_TABLE,
+        holder: await readHolders(options.adapter, dialect, undefined),
+      },
+      tries: 1,
+      elapsedMs: Date.now() - startedAt,
+      appliedBefore: [],
+      outcome: { kind: "nothing-changed" },
+      cause: "table-busy",
+      endedAtLease: false,
+    });
+    throw withCause(stopped, error);
+  }
+}
+
+/** `stopped` with SQLite's own answer as its cause, where there is one to keep. */
+function withCause(stopped: NextlyError, busy: unknown): NextlyError {
+  if (!(busy instanceof Error)) return stopped;
+  return new NextlyError({
+    code: stopped.code,
+    publicMessage: stopped.publicMessage,
+    logContext: stopped.logContext,
+    cause: busy,
+  });
+}
+
+/** {@link waitingForBusyDatabase} for a command: `step` in every try its bounds allow. */
+async function inBusyDatabaseTries<T>(
+  options: SchemaLockOptions,
+  dialect: SupportedDialect,
+  waited: BusyWait,
+  step: () => Promise<T>,
+  onBusy: () => void
+): Promise<T> {
   const { adapter } = options;
-  const bounds = busyBoundsOf(options);
+  const bounds = busyBoundsOf(options, waited);
   if (bounds.kind === "invalid") {
     // The bounds matter only to a database found busy: an idle one is not refused for them.
     try {
@@ -616,6 +692,7 @@ async function waitingForBusyDatabase<T>(
           } catch (error) {
             if (!endedWaiting(error, dialect, false)) throw error;
             busy = error;
+            onBusy();
             return {
               kind: "ended",
               ended: {
@@ -630,31 +707,22 @@ async function waitingForBusyDatabase<T>(
         })
     );
   } catch (error) {
-    if (
-      !(busy instanceof Error) ||
-      !NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")
-    ) {
-      throw error;
-    }
-    throw new NextlyError({
-      code: error.code,
-      publicMessage: error.publicMessage,
-      logContext: error.logContext,
-      cause: busy,
-    });
+    if (!NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) throw error;
+    throw withCause(error, busy);
   }
 }
 
 /**
- * The bounds a run waits for a busy SQLite database with while it takes the lock: its caller's
- * (`busyBounds`), else the environment's, else the defaults; or, where the environment's are out
- * of range, the refusal that says so.
+ * The bounds a command waits for a busy SQLite database with while it takes the lock: its
+ * caller's (`busyBounds`), else the environment's, else the defaults; or, where the environment's
+ * are out of range, the refusal that says so.
  *
- * For a run that refuses a held lock at once, the total is one try: the first try is the only
- * one that fits.
+ * The total is what is left of it once the run's earlier steps have waited (`waited`), and never
+ * less than one try: the seeding of the lock's row and each claim of it share the one total.
  */
 function busyBoundsOf(
-  options: SchemaLockOptions
+  options: SchemaLockOptions,
+  waited: BusyWait
 ):
   | { kind: "valid"; value: BusyTableBounds }
   | { kind: "invalid"; error: unknown } {
@@ -666,10 +734,10 @@ function busyBoundsOf(
   }
   return {
     kind: "valid",
-    value:
-      options.whenHeld === "refuse"
-        ? { tryMs: bounds.tryMs, totalMs: bounds.tryMs }
-        : bounds,
+    value: {
+      tryMs: bounds.tryMs,
+      totalMs: Math.max(bounds.tryMs, bounds.totalMs - waited.spentMs),
+    },
   };
 }
 
@@ -1275,6 +1343,8 @@ class SchemaLockHold {
   }
   /** Whether the field-group claim's table has an expiry for the renewal to extend. */
   fieldGroupRenewable = false;
+  /** What this run has waited for a busy SQLite database while taking the lock, every step's. */
+  readonly busyWait: BusyWait = { spentMs: 0 };
   private renewal: ReturnType<typeof setInterval> | undefined;
   private outstandingRenewal: Promise<unknown> = Promise.resolve();
   /** A connection opened for renewals alone, on a pool that cannot spare one. */
@@ -1313,14 +1383,18 @@ class SchemaLockHold {
     if (!taken.ok) return this.heldByEarlierLock(taken.holder);
     this.earlier = taken.held;
     if (this.rowReady) {
-      const row = await waitingForBusyDatabase(this.options, this.dialect, () =>
-        claimRow(
-          this.adapter,
-          this.dialect,
-          this.claim,
-          this.options.command,
-          this.timings
-        )
+      const row = await waitingForBusyDatabase(
+        this.options,
+        this.dialect,
+        this.busyWait,
+        () =>
+          claimRow(
+            this.adapter,
+            this.dialect,
+            this.claim,
+            this.options.command,
+            this.timings
+          )
       );
       if (!row.ok) {
         await this.releaseAll();
@@ -1884,8 +1958,11 @@ export async function withSchemaLock<T>(
   const wait = new LockWait(options);
   const removeSignals = hold.installSignals();
   try {
-    hold.rowReady = await waitingForBusyDatabase(options, hold.dialect, () =>
-      ensureRow(hold.adapter, hold.dialect, hold.mayCreateTables)
+    hold.rowReady = await waitingForBusyDatabase(
+      options,
+      hold.dialect,
+      hold.busyWait,
+      () => ensureRow(hold.adapter, hold.dialect, hold.mayCreateTables)
     );
     const outcome = await runWhenHeld(hold, wait, work);
     if (!outcome.ran) return outcome;

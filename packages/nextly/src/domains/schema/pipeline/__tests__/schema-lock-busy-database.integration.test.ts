@@ -248,6 +248,55 @@ describe("taking the schema lock on a busy database (sqlite)", () => {
     ).toBeGreaterThan(1);
   }, 30_000);
 
+  it("asks once for a run that refuses at once, waiting as its connection is set to and not a command's long try", async () => {
+    const startedAt = Date.now();
+    // A try an operator set long for commands: a request must not wait it out.
+    const stop = await stopOf(() =>
+      run("refuse", { tryMs: 20_000, totalMs: 60_000 })
+    );
+    const elapsed = Date.now() - startedAt;
+
+    expect(stop.code).toBe("NEXTLY_TABLE_BUSY");
+    expect(triesOf(stop)).toBe(1);
+    // The connection's own busy timeout, with room for the run around it; never the 20 seconds.
+    expect(elapsed).toBeLessThan(ownBusyTimeout + 4_000);
+    expect(await busyTimeout()).toBe(ownBusyTimeout);
+  }, 30_000);
+
+  it("shares one total between the steps of taking the lock", async () => {
+    // The seeding of the lock's row waits for the holder and gets through on its second try.
+    // The database is then held again before the claim, which is left what remains of the total:
+    // one try, where a total of its own would have allowed the two the bounds plan.
+    const bounds = busyTableBounds({ env: process.env });
+    expect(plannedTryStarts(bounds).length).toBe(2);
+    const transaction = adapter.transaction.bind(adapter);
+    let transactions = 0;
+    const spied = vi
+      .spyOn(adapter, "transaction")
+      .mockImplementation(async (...args: Parameters<typeof transaction>) => {
+        const result = await transaction(...args);
+        transactions += 1;
+        if (transactions === 1) await holdTheDatabase();
+        return result;
+      });
+    await holdTheDatabase();
+    const letGo = setTimeout(() => free(), 1_500);
+    let error: unknown;
+    try {
+      error = await run("wait").then(
+        () => undefined,
+        (e: unknown) => e
+      );
+    } finally {
+      clearTimeout(letGo);
+      spied.mockRestore();
+    }
+
+    expect(NextlyError.is(error)).toBe(true);
+    expect((error as NextlyError).code).toBe("NEXTLY_TABLE_BUSY");
+    expect(triesOf(error as NextlyError)).toBe(1);
+  }, 30_000);
+
   describe("with a bound out of its range in the environment", () => {
     beforeAll(() => {
       vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "0");
