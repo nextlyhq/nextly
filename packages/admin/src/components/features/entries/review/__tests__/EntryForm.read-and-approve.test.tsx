@@ -117,6 +117,7 @@ const inReview: PartReview = {
   part: null,
   stage: "inReview",
   stageLabel: "In review",
+  stageColour: null,
   publishable: false,
   enteredAt: null,
   enteredBy: null,

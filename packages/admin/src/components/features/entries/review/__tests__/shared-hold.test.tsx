@@ -59,6 +59,7 @@ function waiting(code: string | null, reviewedVersionNo: number): PartReview {
     part: code,
     stage: "inReview",
     stageLabel: "In review",
+    stageColour: null,
     publishable: false,
     enteredAt: null,
     enteredBy: null,
