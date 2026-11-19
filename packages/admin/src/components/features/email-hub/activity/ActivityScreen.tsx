@@ -26,7 +26,7 @@ import type { EmailProviderRecord } from "@admin/services/emailProviderApi";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 import { providerTypeChoices, templateChoices } from "./activity-choices";
-import type { ActivityFilter } from "./activity-model";
+import { activityQuery, type ActivityFilter } from "./activity-model";
 import { ActivityDetailSheet } from "./ActivityDetailSheet";
 import {
   ActivityFilters,
@@ -340,13 +340,14 @@ function ActivityBody({
   );
 }
 
-/** Whether two filter choices ask the same of the Activity. */
+/**
+ * Whether two filter choices ask the same of the Activity: compared as the
+ * server is asked them (`activityQuery`) and by their window, so a filter
+ * added there is compared here too.
+ */
 function sameFilter(a: ActivityFilter, b: ActivityFilter): boolean {
   return (
-    a.outcome === b.outcome &&
-    a.template === b.template &&
-    a.providerType === b.providerType &&
-    a.providerOrigin === b.providerOrigin &&
-    a.window === b.window
+    a.window === b.window &&
+    JSON.stringify(activityQuery(a)) === JSON.stringify(activityQuery(b))
   );
 }
