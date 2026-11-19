@@ -102,7 +102,7 @@ export function formatRetiredManageWarning(
   roles: readonly RoleHoldingRetiredManage[]
 ): string {
   return [
-    "[nextly] These roles hold a retired manage permission, which no longer gives any access. Run `nextly migrate` to give each the plain permissions in its place:",
+    "[nextly] These roles hold a retired manage permission, which no longer gives any access. Run `nextly migrate`, or `nextly db:sync` in development, to give each the plain permissions in its place:",
     ...roles.map(role => `  - ${role.name}: ${role.permissions.join(", ")}`),
   ].join("\n");
 }

@@ -359,8 +359,10 @@ function classIdOf(entry: unknown): string | undefined {
  * One stored class with its fragment put back where it holds nothing;
  * `undefined` when it is the override the strip stored of a code class,
  * untouched since, which is taken out so the code's class applies again.
- * Untouched means equal to the override the strip recorded, or, for a row
- * kept before that was recorded, to the code's class as it is now stripped.
+ * Untouched means equal to the override the strip recorded, or to the code's
+ * class as the site draws it now, stripped: a text style made with "Fluid…"
+ * is remade when the site's range changes, so its override no longer equals
+ * the one recorded, yet still holds nothing the site edited.
  */
 function restoredClass(
   entry: unknown,
@@ -402,8 +404,11 @@ function untouchedOverride(
     readonly ids: ReadonlySet<string>;
   }
 ): boolean {
-  if (strip.generated !== undefined) {
-    return sameStoredValue(entry, strip.generated.entry);
+  if (
+    strip.generated !== undefined &&
+    sameStoredValue(entry, strip.generated.entry)
+  ) {
+    return true;
   }
   return (
     strip.coded !== undefined &&

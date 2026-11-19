@@ -1015,6 +1015,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "group (value)",
   "humanizeFieldName (value)",
   "isContentTypeScope (value)",
+  "isDraftModeRequest (value)",
   "isLocaleSelector (value)",
   "isNextlyUnavailable (value)",
   "isPluginCategory (value)",

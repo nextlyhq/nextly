@@ -12,7 +12,7 @@ import {
   ActivityFilters,
   DEFAULT_ACTIVITY_FILTER,
   isFiltered,
-  providerValue,
+  providerTypeValue,
   templateValue,
 } from "../ActivityFilters";
 
@@ -42,7 +42,7 @@ describe("Activity's filters", () => {
     });
   });
 
-  it("offers the template and provider filters only with a list to offer", () => {
+  it("offers the template, provider and provider-origin filters only with a list to offer", () => {
     const { rerender } = render(
       <ActivityFilters
         filter={DEFAULT_ACTIVITY_FILTER}
@@ -54,17 +54,19 @@ describe("Activity's filters", () => {
     expect(screen.getByLabelText("Outcome")).toBeTruthy();
     expect(screen.queryByLabelText("Template")).toBeNull();
     expect(screen.queryByLabelText("Provider")).toBeNull();
+    expect(screen.queryByLabelText("Provider origin")).toBeNull();
 
     rerender(
       <ActivityFilters
         filter={DEFAULT_ACTIVITY_FILTER}
         onChange={vi.fn()}
         templates={[{ slug: "password-reset", label: "Password reset" }]}
-        providers={[{ choice: { id: "p1" }, label: "Resend" }]}
+        providers={[{ type: "resend", label: "Every resend provider" }]}
       />
     );
     expect(screen.getByLabelText("Template")).toBeTruthy();
     expect(screen.getByLabelText("Provider")).toBeTruthy();
+    expect(screen.getByLabelText("Provider origin")).toBeTruthy();
   });
 
   it("counts the window alone as unfiltered, and any other choice as filtered", () => {
@@ -79,13 +81,15 @@ describe("Activity's filters", () => {
       isFiltered({ ...DEFAULT_ACTIVITY_FILTER, template: "password-reset" })
     ).toBe(true);
     expect(
-      isFiltered({ ...DEFAULT_ACTIVITY_FILTER, provider: { type: "smtp" } })
+      isFiltered({ ...DEFAULT_ACTIVITY_FILTER, providerType: "smtp" })
+    ).toBe(true);
+    expect(
+      isFiltered({ ...DEFAULT_ACTIVITY_FILTER, providerOrigin: "deleted" })
     ).toBe(true);
   });
 
   it('selects a template named "any" by a value no other choice has', () => {
     expect(templateValue("any")).not.toBe("any");
-    expect(providerValue({ type: "any" })).not.toBe("any");
-    expect(providerValue({ id: "any" })).not.toBe("any");
+    expect(providerTypeValue("any")).not.toBe("any");
   });
 });

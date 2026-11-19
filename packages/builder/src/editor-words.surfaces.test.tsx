@@ -12,7 +12,13 @@
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as React from "react";
 
@@ -103,7 +109,9 @@ describe("the editor's surfaces read the catalogue", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "«sections»" }), {
       button: 0,
     });
-    expect(screen.getByText("No «sections» yet.")).toBeTruthy();
+    expect(
+      within(screen.getByRole("listbox")).getByText("No «sections» yet.")
+    ).toBeTruthy();
     clearBlocks();
   });
 

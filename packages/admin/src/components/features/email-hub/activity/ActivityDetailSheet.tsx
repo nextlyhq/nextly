@@ -25,14 +25,19 @@ import {
 } from "@admin/hooks/queries/useEmailActivity";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 
-import { notStoredLabel } from "./activity-choices";
 import {
   attemptText,
   detailState,
+  emptyTimelineText,
   failureKindOf,
   versionText,
 } from "./activity-detail-model";
-import { RECIPIENT_KIND_LABELS, dueText } from "./activity-model";
+import {
+  RECIPIENT_KIND_LABELS,
+  dueText,
+  isUnsettled,
+  providerLabel,
+} from "./activity-model";
 import type { ActivityNames } from "./ActivityList";
 
 export interface ActivityDetailSheetProps {
@@ -130,7 +135,13 @@ function StateBox({ data }: { data: ActivityDetail }): JSX.Element {
 }
 
 /** Every attempt, oldest first, with each provider's structured answer. */
-function Timeline({ data }: { data: ActivityDetail }): JSX.Element {
+function Timeline({
+  data,
+  names,
+}: {
+  data: ActivityDetail;
+  names: ActivityNames;
+}): JSX.Element {
   const { timeline, timelineTruncated } = data.detail;
   // The server answers up to ten thousand attempts for an email sent to many
   // people; the newest are drawn, and the rest are counted, so opening the
@@ -150,11 +161,18 @@ function Timeline({ data }: { data: ActivityDetail }): JSX.Element {
         </p>
       )}
       {timeline.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No attempt yet.</p>
+        <p className="text-sm text-muted-foreground">
+          {emptyTimelineText(data.source === "queued" ? data.detail : null)}
+        </p>
       ) : (
         <ol className="space-y-3 border-l border-border pl-4">
           {shown.map(attempt => {
-            const text = attemptText(attempt);
+            // Each attempt names its provider as the details do: by name
+            // while stored, else by type and where it came from.
+            const text = attemptText(
+              attempt,
+              providerLabel(attempt.provider, names.provider)
+            );
             return (
               <li key={attempt.id} className="space-y-0.5">
                 <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -199,9 +217,7 @@ function DeliveryDetails({
   names: ActivityNames;
 }): JSX.Element {
   const d = data.detail;
-  const provider = d.provider.id
-    ? (names.provider(d.provider.id) ?? d.provider.type)
-    : notStoredLabel(d.provider.type);
+  const provider = providerLabel(d.provider, names.provider);
   const person = d.erased
     ? "Erased since"
     : d.namedPerson
@@ -256,7 +272,14 @@ function Details({
   now: Date;
 }): JSX.Element {
   const slug = data.detail.templateSlug;
-  const version = versionText(data.detail.templateVersion);
+  // "Not sent yet" only for an email still to be sent that has had no
+  // attempt: one attempted before has had its version pruned, not never sent.
+  const version = versionText(
+    data.detail.templateVersion,
+    data.source === "queued" &&
+      isUnsettled(data.detail.state) &&
+      data.detail.attempts === 0
+  );
   return (
     <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <Detail term="Time">{timeText(data.detail.createdAt)}</Detail>
@@ -287,7 +310,13 @@ function fixHrefOf(
 ): string | undefined {
   // Only a queued email's failure is known to have come from its template:
   // a direct send that failed to render left no record to open.
-  if (data?.source !== "queued" || !data.detail.templateCaused)
+  // The marker stays on a queued email after a later attempt succeeds, so the
+  // action is offered only while the failure is its current state.
+  if (
+    data?.source !== "queued" ||
+    !data.detail.templateCaused ||
+    (data.detail.state !== "retrying" && data.detail.state !== "failed")
+  )
     return undefined;
   const slug = data.detail.templateSlug;
   return slug ? fixTemplateHref(slug) : undefined;
@@ -367,7 +396,7 @@ export function ActivityDetailSheet({
                 </Button>
               )}
               <Details data={data} names={names} now={now} />
-              <Timeline data={data} />
+              <Timeline data={data} names={names} />
             </>
           )}
         </div>
