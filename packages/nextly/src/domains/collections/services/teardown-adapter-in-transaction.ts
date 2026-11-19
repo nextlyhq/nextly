@@ -28,15 +28,19 @@ import type {
 import { resolveRelations } from "../../../database/resolve-relations";
 import type { TeardownComponentDataAdapter } from "../../field-groups/services/teardown-entity-field-group-data";
 import type { TeardownI18nAdapter } from "../../i18n/migration/teardown-entity-i18n";
+import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
 
 /**
  * What both teardown helpers drive. `getCapabilities` too: forgetting a
  * translation transition builds a `MetaService` on the adapter it is given,
- * and that service reads its dialect from it.
+ * and that service reads its dialect from it. `dropTable` for a delete that
+ * drops its entity's tables after the teardowns, on the same transaction
+ * (a Single's or a field group's); the adapter itself has the same member, so
+ * either can be handed to such a delete.
  */
 export type TeardownAdapter = TeardownComponentDataAdapter &
   TeardownI18nAdapter &
-  Pick<DrizzleAdapter, "getCapabilities">;
+  Pick<DrizzleAdapter, "getCapabilities" | "dropTable">;
 
 /**
  * `adapter`'s teardown surface, every statement run inside `tx`.
@@ -80,6 +84,16 @@ export function teardownAdapterIn(
     },
     listTables() {
       return adapter.listTablesThrough(catalog);
+    },
+    // The adapter's own drop, as it renders it (`IF EXISTS` unless asked
+    // otherwise, `CASCADE` where asked), run inside `tx`: on PostgreSQL and
+    // SQLite the drop is then undone with the rest of the transaction.
+    async dropTable(tableName, options) {
+      const ifExists = options?.ifExists !== false ? "IF EXISTS " : "";
+      const cascade = options?.cascade ? " CASCADE" : "";
+      await tx.execute(
+        `DROP TABLE ${ifExists}${quoteIdent(tableName, adapter.dialect)}${cascade}`
+      );
     },
   };
 }
