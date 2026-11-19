@@ -19,9 +19,9 @@
  * `SQLITE_PUSH_KEEPS_PART_WAY` says which, and moves its cases between the two. A save that rolled
  * back whole never reaches the judgement of what applied at all.
  *
- * A collection's update through the push does not hand the writer its registry write yet (the
- * collection metadata service writes the row after the writer returns), so its stop keeps its files
- * for `nextly migrate:resolve` as before: its cases are expected to fail until it does.
+ * A collection's update through the push settles the same way: the collection metadata service
+ * hands the writer its registry write for the settle, with the fields that applied, and brings
+ * this process's running shape to them, so a write and a read through the API reach what landed.
  *
  * Where what the settle writes fails, the save is left as it stopped, its record that it is in
  * progress kept, and the failure that stopped it is still the one reported, the settle's after it.
@@ -596,6 +596,22 @@ describe.each(getConfiguredTestDialects())(
       return (fields ?? []).map(field => String(field.name)).sort();
     }
 
+    /** The registry row's migration status. */
+    async function migrationStatusOf(
+      t: TestNextly,
+      path: SavePath
+    ): Promise<unknown> {
+      clearRegistryRowCache();
+      const [row] = await t.adapter.select<{ migrationStatus: unknown }>(
+        path.registry,
+        {
+          columns: ["migrationStatus"],
+          where: { and: [{ column: "slug", op: "=", value: path.slug }] },
+        }
+      );
+      return row?.migrationStatus;
+    }
+
     /** The field names the definition file records for the entity. */
     function definedFields(path: SavePath): string[] {
       const file = join(basePath, DEFINITION);
@@ -676,11 +692,7 @@ describe.each(getConfiguredTestDialects())(
       beforeEach(() => {
         vi.mocked(judgeStoppedSave).mockClear();
       });
-      // The collection update's push writes its registry row after the writer returns, so the
-      // writer has no registry write to settle it with: it keeps its files, as before.
-      const settles = path.push === true ? it.fails : it;
-
-      (keepsPartWay(dialect, path) ? settles : it.skip)(
+      (keepsPartWay(dialect, path) ? it : it.skip)(
         "stopped at its second addition, keeps the first: one file for it, recorded applied, the definition and the registry at that shape",
         async () => {
           const t = await boot();
@@ -745,6 +757,24 @@ describe.each(getConfiguredTestDialects())(
             .toEqual(["alpha", "heading"]);
           if (path.read !== undefined) {
             expect.soft(await path.read(t)).toMatchObject({ heading: "Hello" });
+          }
+          if (path.push === true) {
+            // The update's row records what landed as applied, not the request.
+            expect
+              .soft(await migrationStatusOf(t, path), "the row's status")
+              .toBe("applied");
+            // This process's running shape reaches what landed: a value written to `alpha`
+            // through the API is read back.
+            await path.store?.(t, { heading: "Second", alpha: "Landed" });
+            const found = (await t.nextly.find({
+              collection: path.slug,
+            } as never)) as { items: Record<string, unknown>[] };
+            expect
+              .soft(
+                found.items.map(item => item.alpha),
+                "`alpha` read through the API"
+              )
+              .toContain("Landed");
           }
           // The failure names each change the save asked for, as applied or not.
           expect(namedChanges(outcome.error), "the report").toEqual([
