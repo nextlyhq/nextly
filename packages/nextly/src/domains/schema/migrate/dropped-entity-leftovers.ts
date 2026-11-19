@@ -30,6 +30,7 @@ import type { Logger } from "../../../shared/types";
 import { teardownAdapterIn } from "../../collections/services/teardown-adapter-in-transaction";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
+import { COMPANION_KEY_COLUMNS } from "../../i18n/companion-columns";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import {
   ARCHIVE_TABLE,
@@ -216,7 +217,7 @@ export async function leftoverTranslationsTables(args: {
   return out;
 }
 
-/** Whether live `table` holds `_parent` and `_locale`; one that cannot be read does not. */
+/** Whether live `table` is keyed as a translations table, by `_parent` and `_locale` alone; one that cannot be read is not. */
 async function keyedAsTranslations(
   adapter: DrizzleAdapter,
   table: string
@@ -227,10 +228,18 @@ async function keyedAsTranslations(
       adapter.dialect,
       [table]
     );
-    const columns = new Set(
-      live.tables.find(t => t.name === table)?.columns.map(c => c.name) ?? []
+    // Its primary key exactly the pair every translations table is made with (`PRIMARY KEY
+    // (_parent, _locale)`): columns of those names on a table that is keyed otherwise do not make
+    // it one, and dropping it is not undone.
+    const key = new Set(
+      (live.tables.find(t => t.name === table)?.columns ?? [])
+        .filter(column => column.primaryKey === true)
+        .map(column => column.name)
     );
-    return columns.has("_parent") && columns.has("_locale");
+    return (
+      key.size === COMPANION_KEY_COLUMNS.length &&
+      COMPANION_KEY_COLUMNS.every(column => key.has(column))
+    );
   } catch {
     return false;
   }
