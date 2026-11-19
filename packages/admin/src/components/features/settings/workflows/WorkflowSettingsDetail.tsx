@@ -42,7 +42,6 @@ import { workflowSettingsAccess } from "./workflow-permissions";
 import {
   attachmentsPhrase,
   reviewerOptions,
-  rolesHoldingPrimary,
   staleReviewers,
 } from "./workflow-settings-model";
 import { WorkflowDiagram } from "./WorkflowDiagram";
@@ -311,10 +310,7 @@ export function WorkflowSettingsDetail({
             workflow={workflow}
             settings={settings}
             optionsFor={stage =>
-              reviewerOptions(workflow, settings, roleItems, userItems, stage)
-            }
-            judgedOnSave={stage =>
-              rolesHoldingPrimary(workflow, settings, roleItems, stage) === null
+              reviewerOptions(settings, roleItems, userItems, stage)
             }
             nameOf={nameOf}
             canChange={access.update}

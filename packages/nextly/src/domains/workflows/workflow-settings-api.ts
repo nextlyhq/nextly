@@ -46,6 +46,7 @@ import {
   holderAnswer,
   holderAnswerOnceGranted,
   namesOf,
+  rolesHolding,
   type HolderAnswer,
 } from "./holders";
 import { BUILT_IN_ACTIONS, WORKFLOW_PERMISSION_GROUP } from "./permissions";
@@ -202,6 +203,13 @@ export interface WorkflowSettingsView {
    * person deactivated or gone, or a person or role lacking it somewhere).
    */
   defaultReviewerHolds: Record<string, HolderAnswer>;
+  /**
+   * The roles holding each review stage's primary step on every collection and Single the
+   * workflow is attached to, by stage name, each sorted: those granted it, those inheriting it and
+   * the super-admin role. Whom the stage's default reviewer may be chosen from, a person through any
+   * of them; a role holding it on some attachments only is not listed.
+   */
+  reviewerRoles: Record<string, string[]>;
 }
 
 /**
@@ -521,6 +529,66 @@ async function reviewerStanding(
   return { answer: "holds", slug: null };
 }
 
+/**
+ * The roles holding `action` on every one of `slugs`, sorted, as {@link rolesHolding} answers each
+ * attachment: what a role reviewer's {@link reviewerStanding} would answer `holds` for. With no
+ * attachments every role holds it, as that check finds no attachment refusing them.
+ */
+async function rolesHoldingEverywhere(
+  adapter: DrizzleAdapter,
+  action: string,
+  slugs: readonly string[]
+): Promise<string[]> {
+  if (slugs.length === 0) {
+    const rows = await adapter.select<{ id: unknown }>("roles", {
+      columns: ["id"],
+    });
+    return rows.map(row => String(row.id)).sort();
+  }
+  let holding: Set<string> | null = null;
+  for (const slug of slugs) {
+    const here = new Set(await rolesHolding(adapter, action, slug));
+    holding =
+      holding === null
+        ? here
+        : new Set([...holding].filter(id => here.has(id)));
+    // No role left to keep, so no later attachment can add one.
+    if (holding.size === 0) break;
+  }
+  return [...(holding ?? [])].sort();
+}
+
+/**
+ * Each review stage's possible default reviewers as roles, by stage name. Stages sharing a primary
+ * action are read once.
+ */
+async function reviewerRolesOf(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow
+): Promise<Record<string, string[]>> {
+  const { workflow } = registered;
+  const slugs = attachedTo(registered);
+  const byAction = new Map<string, string[]>();
+  const reviewerRoles: Record<string, string[]> = {};
+  for (const stage of workflow.stages) {
+    if (!isReviewStage(workflow, stage.name)) continue;
+    const action = primaryAction(workflow, stage.name);
+    // A stage no step leads out of is one nobody holds, as reviewerStanding answers it.
+    if (action === null) {
+      reviewerRoles[stage.name] = [];
+      continue;
+    }
+    if (!byAction.has(action)) {
+      byAction.set(
+        action,
+        await rolesHoldingEverywhere(adapter, action, slugs)
+      );
+    }
+    reviewerRoles[stage.name] = [...(byAction.get(action) ?? [])];
+  }
+  return reviewerRoles;
+}
+
 const DEFAULT_EMAILS: WorkflowEmailSettings = {
   assigned: true,
   approved: true,
@@ -590,6 +658,7 @@ async function viewOf(
     grants,
     grantableSteps,
     defaultReviewerHolds,
+    reviewerRoles: await reviewerRolesOf(adapter, registered),
   };
 }
 

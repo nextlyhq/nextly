@@ -26,6 +26,9 @@
  *   stage the workflow no longer has in the first stage, as every step reads it.
  * - The settings say, for each stage's default reviewer, whether they still hold the stage's
  *   primary step on every attachment, a person as well as a role.
+ * - The settings list, for each review stage, the roles holding its primary step on every
+ *   attachment, whom its default reviewer is chosen from: those granted it, those inheriting it,
+ *   and the super-admin role, never one holding it on some attachments only.
  *
  * The plausible broken surfaces: an eligibility check on the first attached collection only, a
  * write that stores a definition key or ignores it, a write that skips the revision, grants set on
@@ -64,6 +67,7 @@ import {
   person,
   role,
   stateDb,
+  superAdminRole,
 } from "./helpers/step-harness";
 import { editorial, handover } from "./helpers/step-workflows";
 
@@ -642,6 +646,53 @@ describe.each(getConfiguredTestDialects())(
         ).toEqual({
           legal: "lacks",
         });
+      });
+
+      it("lists whom each review stage's default reviewer may be chosen from: roles holding its primary step everywhere, granted, inherited or super-admin", async () => {
+        current = await bootSteps(dialect);
+        await admin();
+        const approvers = await role(
+          app(),
+          "approvers",
+          everywhere("sign-off")
+        );
+        // Granted nothing a review needs; holds sign-off only by inheriting Approvers.
+        const seniors = await role(
+          app(),
+          "seniors",
+          [["read", "posts"]],
+          [approvers]
+        );
+        // Holds sign-off on Posts alone.
+        const partial = await role(app(), "posts-desk", [
+          ["sign-off", "posts"],
+        ]);
+        // Holds the collections' own update, which Resume (On hold's primary step) needs.
+        const editors = await role(app(), "editors", everywhere("update"));
+        const admins = await superAdminRole(app());
+
+        const { reviewerRoles } = (await door.read(SAM, "editorial")) as {
+          reviewerRoles: Record<string, string[]>;
+        };
+
+        // The review stages alone: those with an approval out of them.
+        expect(Object.keys(reviewerRoles).sort()).toEqual(["hold", "legal"]);
+        expect(reviewerRoles.legal).toEqual(
+          [approvers, seniors, admins].sort()
+        );
+        expect(reviewerRoles.hold).toEqual(
+          expect.arrayContaining([editors, admins])
+        );
+        expect(reviewerRoles.hold).not.toContain(approvers);
+        expect(reviewerRoles.hold).not.toContain(partial);
+        // Each role listed is one a save accepts as the stage's default reviewer.
+        await door.update(SAM, "editorial", {
+          revision: 0,
+          defaultReviewers: { legal: { kind: "role", id: seniors } },
+        });
+        expect(
+          (await door.read(SAM, "editorial")).defaultReviewerHolds
+        ).toEqual({ legal: "holds" });
       });
 
       it("refuses a default reviewer who cannot take the stage's primary step on every attached collection and Single", async () => {

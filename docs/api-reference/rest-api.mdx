@@ -1050,11 +1050,14 @@ A document whose collection or Single has no workflow attached answers `200` wit
       "sharesPermissionWith": ["bounce"]
     }
   },
-  "defaultReviewerHolds": { "legal": "holds" }
+  "defaultReviewerHolds": { "legal": "holds" },
+  "reviewerRoles": { "legal": ["<roleId>", "<superAdminRoleId>"] }
 }
 ```
 
 `defaultReviewerHolds` says, for each stage with a default reviewer, whether that person or role still holds the stage's primary step on every attached collection and Single: `holds`, `lacks`, `deactivated` or `not-found`.
+
+`reviewerRoles` lists, for each review stage, the roles holding its primary step on every attached collection and Single: those granted it, those inheriting it, and the super-admin role. A default reviewer is a role from this list, or a person with one of them.
 
 `PATCH /admin/api/workflows/{slug}/settings` changes them, and answers `{ message, item }` with the settings as they now read. The body names the `revision` it read, plus any of `defaultReviewers`, `labels`, `emails` and `grants`.
 

@@ -7,14 +7,16 @@
  *
  * The plausible broken readings: a primary step taken from the steps' own
  * `primary` flag (missing a stage's only step), a notice per step rather than
- * per permission, reviewers offered from every role, the super-admin role left
- * out of who holds a step, a stale reviewer judged from the grants (blind to a
+ * per permission, reviewers offered from every role or from the grants alone (blind
+ * to a role inheriting the step, or to a step needing the collections' own
+ * permissions), a stale reviewer judged from the grants (blind to a
  * person, or to a deactivated one), and an issue path keyed in full so
  * `labels.x.colour` misses the label row.
  */
 import { describe, expect, it } from "vitest";
 
 import {
+  assigneeKey,
   diagramSentences,
   issuesByField,
   primaryStepOf,
@@ -58,40 +60,37 @@ describe("the workflow settings model", () => {
     expect(unheldPermissions(EDITORIAL, settingsOf())).toEqual([]);
   });
 
-  it("offers as a stage's reviewer only roles and people holding its primary step, super admins included", () => {
-    const offered = reviewerOptions(
-      EDITORIAL,
-      settingsOf(),
-      ROLES,
-      USERS,
-      "legal"
-    ).map(option => `${option.assignee.kind}:${option.assignee.id}`);
-    expect(offered).toEqual([
+  it("offers as a stage's reviewer the roles the server says hold its primary step, and the people having one", () => {
+    const offered = (stage: string) =>
+      reviewerOptions(settingsOf(), ROLES, USERS, stage).map(option =>
+        assigneeKey(option.assignee)
+      );
+    expect(offered("legal")).toEqual([
       "role:r-admin",
       "role:r-lawyers",
       "user:u-rita",
       "user:u-ada",
     ]);
+    // Resume needs only the collections' own update, which the server reads as for any step.
+    expect(offered("hold")).toEqual([
+      "role:r-admin",
+      "role:r-editors",
+      "user:u-ed",
+      "user:u-ada",
+    ]);
   });
 
-  it("offers every assignable role and person where the grants cannot tell who holds the step", () => {
-    // Resume needs only the collections' own permissions.
-    const offered = reviewerOptions(
-      EDITORIAL,
-      settingsOf(),
-      ROLES,
-      USERS,
-      "hold"
-    ).map(option => option.assignee.id);
-    expect(offered).toEqual([
-      "r-admin",
-      "r-lawyers",
-      "r-interns",
-      "r-editors",
-      "u-rita",
-      "u-ed",
-      "u-ada",
-    ]);
+  it("offers a role holding the step only through another, as the server lists it, and nobody for a stage it lists none for", () => {
+    // Editors are granted nothing, but inherit sign-off: the grants alone would leave them out.
+    const settings = settingsOf({
+      reviewerRoles: { legal: ["r-lawyers", "r-editors"] },
+    });
+    expect(
+      reviewerOptions(settings, ROLES, USERS, "legal").map(
+        option => option.assignee.id
+      )
+    ).toEqual(["r-lawyers", "r-editors", "u-rita", "u-ed"]);
+    expect(reviewerOptions(settings, ROLES, USERS, "hold")).toEqual([]);
   });
 
   it("says which default reviewers no longer hold their step, as the server answers it for a person or a role", () => {

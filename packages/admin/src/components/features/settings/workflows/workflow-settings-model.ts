@@ -138,31 +138,6 @@ export function partlyHeldPermissions(
   return [...byPermission.values()];
 }
 
-/** The super-admin role, which holds every step whatever it is granted. */
-function superAdminOf(roles: readonly Role[]): Role | undefined {
-  return roles.find(role => role.builtIn === "super-admin");
-}
-
-/**
- * The roles that hold a stage's primary step everywhere, as the grants read:
- * the roles granted it and the super-admin role. `null` where the grants
- * cannot tell: a stage with no primary step, or one whose step needs only the
- * collections' own permissions, which no workflow setting grants.
- */
-export function rolesHoldingPrimary(
-  workflow: WorkflowSummary,
-  settings: WorkflowSettingsView,
-  roles: readonly Role[],
-  stage: string
-): Set<string> | null {
-  const primary = primaryStepOf(workflow, stage);
-  if (!primary || !settings.grantableSteps[primary.name]) return null;
-  const holding = new Set(settings.grants[primary.name] ?? []);
-  const superAdmin = superAdminOf(roles);
-  if (superAdmin) holding.add(superAdmin.id);
-  return holding;
-}
-
 /** A default reviewer's option: a role, or a person. */
 export interface ReviewerOption {
   assignee: WorkflowAssignee;
@@ -170,26 +145,21 @@ export interface ReviewerOption {
 }
 
 /**
- * Whom a stage's default reviewer may be chosen from: roles and people holding
- * its primary step, as {@link rolesHoldingPrimary} reads the grants; a person
- * holds it through any role they have. Where the grants cannot tell, every
- * role that can be given to someone, and every person, is offered, and the
- * server judges the choice when it is saved.
+ * Whom a stage's default reviewer may be chosen from: the roles the server
+ * says hold its primary step on every attachment (`reviewerRoles`, which
+ * counts inherited grants and the collections' own permissions), and the
+ * people having one of them. A stage it lists no roles for offers nobody.
  */
 export function reviewerOptions(
-  workflow: WorkflowSummary,
   settings: WorkflowSettingsView,
   roles: readonly Role[],
   users: readonly UserApiResponse[],
   stage: string
 ): ReviewerOption[] {
-  const holding = rolesHoldingPrimary(workflow, settings, roles, stage);
-  const eligibleRoles = roles.filter(role =>
-    holding === null ? role.assignable !== false : holding.has(role.id)
-  );
-  const eligibleUsers = users.filter(
-    user =>
-      holding === null || user.roles.some(role => holding.has(String(role.id)))
+  const holding = new Set(settings.reviewerRoles[stage] ?? []);
+  const eligibleRoles = roles.filter(role => holding.has(role.id));
+  const eligibleUsers = users.filter(user =>
+    user.roles.some(role => holding.has(String(role.id)))
   );
   return [
     ...eligibleRoles.map(role => ({

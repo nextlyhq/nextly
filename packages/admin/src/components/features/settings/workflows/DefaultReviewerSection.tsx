@@ -35,8 +35,6 @@ export interface DefaultReviewerSectionProps {
   settings: WorkflowSettingsView;
   /** The options a stage's reviewer may be chosen from. */
   optionsFor: (stage: string) => ReviewerOption[];
-  /** Whether the options were read off the grants, or the server judges the choice. */
-  judgedOnSave: (stage: string) => boolean;
   /** How the current reviewer is named where the options do not carry them. */
   nameOf: (assignee: WorkflowAssignee) => string;
   canChange: boolean;
@@ -63,7 +61,6 @@ export function DefaultReviewerSection({
   workflow,
   settings,
   optionsFor,
-  judgedOnSave,
   nameOf,
   canChange,
   saving,
@@ -169,12 +166,6 @@ export function DefaultReviewerSection({
                     Save
                   </Button>
                 </div>
-                {judgedOnSave(stage.name) && (
-                  <p className="text-xs text-muted-foreground">
-                    Whether they can take {primary?.label ?? "its step"} is
-                    checked when you save.
-                  </p>
-                )}
                 {error && (
                   <p
                     id={`${selectId}-error`}

@@ -115,6 +115,12 @@ export interface WorkflowSettingsView {
   grantableSteps: Record<string, GrantableStepView>;
   /** Whether each stage's default reviewer still holds its primary step everywhere. */
   defaultReviewerHolds: Record<string, WorkflowHolderAnswer>;
+  /**
+   * The roles holding each review stage's primary step on every attachment, by stage name:
+   * granted it, inheriting it or super-admin. Whom a default reviewer is chosen from, a person
+   * through any of these roles.
+   */
+  reviewerRoles: Record<string, string[]>;
 }
 
 /**

@@ -122,7 +122,10 @@ export const EDITORIAL: WorkflowSummary = {
   singles: ["banner"],
 };
 
-/** Settings at revision 3: Lawyers hold sign-off everywhere, Interns on some collections. */
+/**
+ * Settings at revision 3: Lawyers hold sign-off everywhere, Interns on some collections, and
+ * Editors the collections' `update`.
+ */
 export function settingsOf(
   overrides: Partial<WorkflowSettingsView> = {}
 ): WorkflowSettingsView {
@@ -146,6 +149,12 @@ export function settingsOf(
       },
     },
     defaultReviewerHolds: {},
+    // As the server reads the roles: Lawyers granted sign-off, Editors holding the collections'
+    // update that Resume needs, and the super-admin role holding everything.
+    reviewerRoles: {
+      legal: ["r-admin", "r-lawyers"],
+      hold: ["r-admin", "r-editors"],
+    },
     ...overrides,
   };
 }

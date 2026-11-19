@@ -209,6 +209,27 @@ describe("a workflow in Settings", () => {
     ]);
   });
 
+  it("offers for a step needing the collections' own permission only those the server says hold it", async () => {
+    await open();
+
+    const select = screen.getByRole("combobox", {
+      name: "Default reviewer for On hold",
+    });
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map(option => option.textContent)
+    ).toEqual([
+      "No default reviewer",
+      "Super admin (the whole role)",
+      "Editors (the whole role)",
+      "Ed",
+      "Ada",
+    ]);
+    // The server has judged who holds it, so nothing is left to a save to find out.
+    expect(screen.queryByText(/checked when you save/)).toBeNull();
+  });
+
   it("warns when a person reviewer is deactivated, as the server says", async () => {
     await open(
       settingsOf({
