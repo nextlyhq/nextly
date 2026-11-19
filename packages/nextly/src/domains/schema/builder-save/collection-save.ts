@@ -80,6 +80,7 @@ import {
   recordAlreadyApplied,
   runRecordedAttempt,
   snapshotsEquivalent,
+  toDriftItem,
 } from "../migrate/drift-reconcile";
 import { refuseRequiredColumnsOverNulls } from "../migrate/required-column-guard";
 import { resolveMigration } from "../migrate/resolve";
@@ -367,11 +368,16 @@ export async function writeCollectionSave(
       // the history does not describe would meet statements written for
       // another one.
       runsFile: deps.applies && options.appliedBy === undefined,
+      pushes: deps.applies && options.appliedBy !== undefined,
     });
     // Once a push has run, the database changed outside the files: they stay.
     let pushed = false;
     try {
       if (deps.applies && options.appliedBy !== undefined) {
+        // Judged before the push, as the file road's reconcile judges a file before its statements:
+        // a push over a table the history does not describe would change it and leave the files
+        // unrecordable.
+        await refuseDriftBeforePush(deps, written.files, written.table);
         const applied = await options.appliedBy();
         pushed = true;
         if (applied === "partly-applied") {
@@ -510,7 +516,12 @@ export async function prepareCollectionSave(
 async function writeSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  options: { historyChecked?: boolean; runsFile?: boolean }
+  options: {
+    historyChecked?: boolean;
+    runsFile?: boolean;
+    /** The change is applied by a push (`appliedBy`), which reaches the translations table too. */
+    pushes?: boolean;
+  }
 ): Promise<{
   files: SaveFiles;
   names: readonly string[];
@@ -527,7 +538,10 @@ async function writeSave(
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
-  if (options.runsFile === true) {
+  // The translations table is judged before anything is written wherever the change reaches it:
+  // the file's statements are planned from the history's record of it, and a push changes it too,
+  // after which only the main table is compared (`recordWhatWasPushed`).
+  if (options.runsFile === true || options.pushes === true) {
     await refuseCompanionDrift(deps, save, plan.table);
   }
 
@@ -2299,6 +2313,33 @@ async function liveTable(
     ),
     table
   );
+}
+
+/**
+ * Refuse a save that applies its change by a push (`appliedBy`) where the collection's table is
+ * not, in the database, what the history before the save's files records of it: a column added by
+ * hand, say. Asked before the push, as the file road's reconcile asks before a file's statements
+ * (`reconcileFile`), with the same baseline (`scopedSnapshotBefore`) and the same refusal
+ * (`NEXTLY_MIGRATION_DRIFT`, naming each difference). Pushed over such a table, the change would
+ * stand in the database while no file could be recorded for it. A save that adopts its table
+ * writes a file describing the table as it stands, so it has nothing to judge.
+ */
+async function refuseDriftBeforePush(
+  deps: CollectionSaveDeps,
+  files: SaveFiles,
+  table: string
+): Promise<void> {
+  const first = files.change[0];
+  if (files.adopt !== undefined || first === undefined) return;
+  const before = await scopedSnapshotBefore(deps, first, table);
+  const live = await liveTable(deps, table);
+  if (snapshotsEquivalent(live, before)) return;
+  const migration = first.replace(/\.sql$/, "");
+  throw migrationDriftError({
+    migration,
+    file: join(deps.migrationsDir, first),
+    driftItems: diffSnapshots(before, live).map(toDriftItem),
+  });
 }
 
 /**
