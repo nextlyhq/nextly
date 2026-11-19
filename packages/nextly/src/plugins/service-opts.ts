@@ -181,6 +181,22 @@ export interface ServiceOpts {
    * language, say — and would be misled by the default's value standing in.
    */
   fallbackLocale?: string | false;
+
+  /**
+   * Whole-document fallback, for `collections.findEntryById` only.
+   *
+   * A public read in a language answers for that language alone: an entry not
+   * published in it is not found. Set, the read answers instead in the first
+   * language of the fallback chain the entry IS published in, read as a
+   * request for that language, and says which in `_locale` — the Direct API's
+   * `wholeDocumentFallback` and the REST API's `?fallback=document`. Each
+   * language is still read as the caller, so nothing a caller could not read
+   * in that language is admitted.
+   *
+   * Every other method refuses it (`400`), as a REST list refuses
+   * `?fallback=document`: a list or a write has no one document to answer for.
+   */
+  wholeDocumentFallback?: boolean;
 }
 
 /**
@@ -268,6 +284,15 @@ export async function resolveServiceOpts(
         reason: "service-opts-locale-selector",
         locale,
       },
+    });
+  }
+  // Honoured by one method, which takes it off before resolving the rest
+  // (see `translateServiceOpts`). Anywhere else it would be dropped and the
+  // read answer as if it was never asked, so it is refused by name instead.
+  if (opts.wholeDocumentFallback !== undefined) {
+    throw NextlyError.invalidInput({
+      message: "wholeDocumentFallback applies to findEntryById only.",
+      logContext: { reason: "service-opts-whole-document-fallback" },
     });
   }
   // What travels whatever the caller is, built once. Each branch below used to
@@ -1030,7 +1055,12 @@ function translateServiceOpts(
         prop as string
       ];
       const accessCall = async (args: unknown[]) => {
-        const opts = (args[idx] as ServiceOpts | undefined) ?? {};
+        const named = (args[idx] as ServiceOpts | undefined) ?? {};
+        // Whole-document fallback answers for one document, so only the read
+        // of one takes it off here; left on, `resolveServiceOpts` refuses it.
+        const { wholeDocumentFallback, ...rest } = named;
+        const wholeDocument = prop === "findEntryById";
+        const opts = wholeDocument ? rest : named;
         // A transactional write's caller is resolved on its transaction: read
         // on the pool, its roles would be another connection's, blind to a
         // role the transaction changed, and a field rule reading
@@ -1053,7 +1083,12 @@ function translateServiceOpts(
         // check -- twice, because a hand-written list is a second
         // implementation of what `resolveServiceOpts` already decided. A
         // spread cannot forget a field.
-        next[idx] = { ...resolved } satisfies RequestContext;
+        next[idx] = {
+          ...resolved,
+          ...(wholeDocument && wholeDocumentFallback === true
+            ? { wholeDocumentFallback }
+            : {}),
+        } satisfies RequestContext;
         next.push(...(trusted[prop as string] ?? []));
         // The scope this call runs under becomes the ambient one for its whole
         // duration, so a route that NARROWED its scope is narrowed at every

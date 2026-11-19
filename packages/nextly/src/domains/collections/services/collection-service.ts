@@ -1018,6 +1018,10 @@ export class CollectionService extends BaseService {
       collectionName,
       entryId,
       ...forwardedFromContext(context),
+      // A read of one document only, so it is named here rather than in the
+      // seam every facade method spreads: a list or a write has no first
+      // published language to answer in.
+      wholeDocumentFallback: context.wholeDocumentFallback,
     });
 
     if (!result.success) {

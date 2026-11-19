@@ -314,6 +314,57 @@ describe("wrapCollectionsForPlugin (D35, Unit C)", () => {
     });
   });
 
+  describe("whole-document fallback, which answers for one document", () => {
+    it("reaches a read by id beside the caller and its language", async () => {
+      const m = mockCollections();
+      await wrapCollectionsForPlugin(m as never).findEntryById("vault", "1", {
+        as: "public",
+        locale: "fr",
+        wholeDocumentFallback: true,
+      });
+      expect(m.findEntryById).toHaveBeenCalledWith("vault", "1", {
+        overrideAccess: false,
+        locale: "fr",
+        wholeDocumentFallback: true,
+      });
+    });
+
+    it("says nothing about it when the plugin said nothing", async () => {
+      const m = mockCollections();
+      await wrapCollectionsForPlugin(m as never).findEntryById("vault", "1", {
+        as: "public",
+        locale: "fr",
+      });
+      const ctx = m.findEntryById.mock.calls[0][2] as Record<string, unknown>;
+      expect(Object.hasOwn(ctx, "wholeDocumentFallback")).toBe(false);
+    });
+
+    it("is refused on any other method, before delegating", async () => {
+      // A count has no one document to answer for, as a REST list refuses
+      // `?fallback=document`. Dropped instead, it would answer as if the
+      // plugin had never asked.
+      const m = mockCollections();
+      await expect(
+        wrapCollectionsForPlugin(m as never).count(
+          "vault",
+          {},
+          {
+            as: "public",
+            locale: "fr",
+            wholeDocumentFallback: true,
+          }
+        )
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(m.count).not.toHaveBeenCalled();
+    });
+
+    it("is refused where a caller is resolved outside the collection reads", async () => {
+      await expect(
+        resolveServiceOpts({ as: "system", wholeDocumentFallback: true })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    });
+  });
+
   it("non-access methods pass through unchanged", async () => {
     const m = mockCollections();
     await wrapCollectionsForPlugin(m as never).listCollections();

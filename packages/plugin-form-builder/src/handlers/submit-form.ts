@@ -1023,10 +1023,20 @@ async function readTarget(
     // stays in force: a page with no published translation for this locale
     // still has a URL, in the language the site falls back to, and sending
     // the visitor there beats sending them nowhere.
+    //
+    // That fallback is whole-document, and asked for by name. A public read
+    // in a language the page is not published in finds nothing, so without
+    // it a French visitor to a page whose French translation is still a
+    // draft got no redirect at all, rather than the published default's URL.
     row = await pluginContext.services.collections.findEntryById(
       reference.collection,
       reference.id,
-      { ...read.access, locale: read.locale, request: read.request }
+      {
+        ...read.access,
+        locale: read.locale,
+        request: read.request,
+        wholeDocumentFallback: true,
+      }
     );
   } catch (error) {
     // The submission already succeeded, so this degrades to "no redirect"

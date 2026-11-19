@@ -61,6 +61,13 @@ export interface RequestContext {
   locale?: string;
   /** Fallback locale (or `false` to disable fallback) for localized reads. */
   fallbackLocale?: string | false;
+  /**
+   * Whole-document fallback for a read of one entry by id: where the entry is
+   * not published in `locale`, it answers in the first language of the
+   * fallback chain it is published in, and says which in `_locale`. Read only
+   * by `findEntryById`.
+   */
+  wholeDocumentFallback?: boolean;
   /** Unique request identifier for tracing/logging */
   requestId?: string;
   /**
