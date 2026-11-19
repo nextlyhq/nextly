@@ -819,7 +819,7 @@ async function desiredTable(
 ): Promise<TableSpec | undefined> {
   const kind = kindOf(save);
   const inputs = await appMigrationInputs({
-    ...inputsArgs(deps, save),
+    ...(await inputsArgs(deps, save)),
     manifest: withEntity(current, kind, save.slug, entity),
   });
   const declared = inputs[kind.manifest].find(c => c.slug === save.slug);
