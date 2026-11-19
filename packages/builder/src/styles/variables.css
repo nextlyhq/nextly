@@ -671,9 +671,12 @@
   font-weight: 600;
 }
 
+/* The admin's red TEXT token, not its fill: the fill read about 3.7:1 as this
+   small bold ratio on the popover, and the text token holds 6.4:1 in the light
+   theme and 9.6:1 in the dark one. */
 .nx-vars-editor__contrast-line[data-band="Low contrast"]
   .nx-vars-editor__ratio {
-  color: var(--nx-destructive);
+  color: var(--nx-danger-text);
 }
 
 .nx-vars-editor__same-dark {
