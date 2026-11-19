@@ -19,8 +19,8 @@ import type {
 } from "@nextlyhq/blocks-engine";
 
 import { lengthInPx } from "./fluid-size";
+import { typeScaleProperty } from "./panels/design/tokens-studio";
 import { variableLabel, variablesFor, type SiteVariable } from "./style-colour";
-import { typeScaleProperty } from "./tokens-studio";
 
 /**
  * The identity of the variable a typed word names at this leaf, or

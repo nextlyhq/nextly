@@ -18,7 +18,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { fetchableUrl } from "@nextlyhq/blocks-react";
 
-import { imageGroupOf } from "../image-group";
+import { imageGroupOf } from "../inspector/content/image-group";
 
 import type { PageCheck, PageCheckResult, ResolvedPage } from "./page-checks";
 import { bound, holds } from "./stored-values";

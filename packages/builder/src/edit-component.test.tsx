@@ -28,7 +28,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { blockActionRunners } from "./shell/builder-commands";
 import { ComponentBanner, reachSentence } from "./component-banner";
-import { InspectorPanel } from "./inspector-panel";
+import { InspectorPanel } from "./inspector/inspector-panel";
 import { useEditorState } from "./editor-state";
 import { useBlockKeyboardActions } from "./keyboard-actions";
 import { toolbarActions } from "./canvas/toolbar-actions";

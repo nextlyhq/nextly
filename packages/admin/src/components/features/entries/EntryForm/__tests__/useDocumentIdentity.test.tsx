@@ -88,4 +88,39 @@ describe("useDocumentIdentity", () => {
 
     expect(result.current?.kind).toBe("collection");
   });
+
+  it("is one value while the document is the same, and a new one once it changes", () => {
+    // A consumer memoises over it, or hands it to a memoised surface, so a
+    // new object for the same document would draw that surface again on
+    // every render of the form.
+    let entryId: string | undefined = undefined;
+    function Wrapper({ children }: { children: ReactNode }) {
+      return (
+        <EntryFormContextProvider
+          collectionSlug="posts"
+          {...(entryId === undefined ? {} : { entryId })}
+        >
+          {children}
+        </EntryFormContextProvider>
+      );
+    }
+    const { result, rerender } = renderHook(() => useDocumentIdentity(), {
+      wrapper: Wrapper,
+    });
+    const first = result.current;
+
+    rerender();
+    rerender();
+    expect(result.current).toBe(first);
+
+    // Saved for the first time: the document now has an id.
+    entryId = "e1";
+    rerender();
+    expect(result.current).not.toBe(first);
+    expect(result.current).toEqual({
+      kind: "collection",
+      slug: "posts",
+      documentId: "e1",
+    });
+  });
 });

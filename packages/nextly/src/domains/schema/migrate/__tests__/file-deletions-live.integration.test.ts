@@ -401,6 +401,60 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     }
   }, 120_000);
 
+  it("spares a write only to a table the run makes first and the database lacks", async () => {
+    // The database of this suite holds none of Nextly's own tables.
+    const core = "nextly_meta";
+    const view = `${P}_view`;
+    await adapter.executeQuery(
+      `CREATE VIEW ${view} AS SELECT id FROM ${keeper}`
+    );
+    const written = [
+      `INSERT INTO ${core} (id) VALUES (1)`,
+      `INSERT INTO ${missing} (id) VALUES (1)`,
+      `UPDATE ${view} SET id = 2`,
+    ];
+    const madeBeforeTheFiles = new Set([core]);
+    const facts = await readDeletionFacts(
+      adapter.getDrizzle(),
+      dialect,
+      written,
+      { madeBeforeTheFiles }
+    );
+    // The catalog was read and holds no such table.
+    expect(facts.liveTable(core)).toBe(false);
+    const unread = (table: string) => [
+      ...(dialect === "postgresql"
+        ? [
+            {
+              kind: "unnamed",
+              description: `rows written to tables that inherit from ${table} or partition it, whose triggers could not be read`,
+            },
+          ]
+        : []),
+      {
+        kind: "unnamed",
+        description: `rows written to ${table} may run code the table carries, which could not be read`,
+      },
+    ];
+    // Nothing for the table the run makes first; a table the database lacks that the run
+    // does not make, and a live view, which is no table to the catalog either, fail closed.
+    expect(fileDeletions(written, dialect, facts)).toEqual([
+      ...unread(missing),
+      ...unread(view),
+    ]);
+    // A caller that makes no table first is spared nothing.
+    const plain = await readDeletionFacts(
+      adapter.getDrizzle(),
+      dialect,
+      written
+    );
+    expect(fileDeletions(written, dialect, plain)).toEqual([
+      ...unread(core),
+      ...unread(missing),
+      ...unread(view),
+    ]);
+  }, 120_000);
+
   it("judges a file against the facts the database gives", async () => {
     const facts = await readDeletionFacts(
       adapter.getDrizzle(),

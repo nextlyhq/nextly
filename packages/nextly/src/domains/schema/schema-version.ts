@@ -376,6 +376,14 @@ interface RegistryWrite {
 const registryWrite = new AsyncLocalStorage<RegistryWrite>();
 
 /**
+ * Whether a registry write is open in this flow: a transaction work started
+ * now would join, and a schema statement would commit part of, on MySQL.
+ */
+export function registryWriteOpen(): boolean {
+  return registryWrite.getStore()?.live === true;
+}
+
+/**
  * Write registry rows, and the stored version beside them, in ONE
  * transaction.
  *

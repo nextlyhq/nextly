@@ -94,6 +94,18 @@ Command.displayName = "Command";
 /** @experimental */
 export interface CommandDialogProps extends DialogPrimitive.DialogProps {
   /**
+   * The dialog's accessible name, drawn visually hidden: the search field is what the eye
+   * reads, but a dialog without a name is announced as "dialog" and nothing more, and the
+   * field's placeholder names the INPUT, not the dialog around it. Defaults to "Command
+   * palette"; a caller whose palette searches something narrower says what.
+   */
+  title?: string;
+  /**
+   * What the dialog is for, drawn visually hidden and read after its name. Optional: without
+   * one the dialog points at no description, rather than at an element that is not there.
+   */
+  description?: string;
+  /**
    * Passed to the command root this dialog renders internally.
    *
    * A seam rather than a list of forwarded props, because the settings a caller needs from the
@@ -177,6 +189,8 @@ CommandDialogOverlay.displayName = "CommandDialogOverlay";
  */
 const CommandDialog = ({
   children,
+  title = "Command palette",
+  description,
   commandProps,
   contentProps,
   ...props
@@ -188,6 +202,12 @@ const CommandDialog = ({
       <DialogPrimitive.Portal container={portalContainer}>
         <CommandDialogOverlay />
         <DialogPrimitive.Content
+          // Radix points the dialog at its description's id whether or not one is drawn, and
+          // warns when the id names nothing; with no description, it points at none. Before
+          // `contentProps`, so a caller describing the dialog by an element of its own still can.
+          {...(description === undefined
+            ? { "aria-describedby": undefined }
+            : {})}
           {...contentProps}
           data-slot="command-content"
           className={cn(
@@ -215,6 +235,17 @@ const CommandDialog = ({
             "data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2"
           )}
         >
+          {/* Named as the kit's `Dialog` is, from a Radix title the dialog is labelled by;
+              hidden, since the search field is what the eye reads. Outside the command root,
+              so the list never takes them for items. */}
+          <DialogPrimitive.Title className="sr-only">
+            {title}
+          </DialogPrimitive.Title>
+          {description === undefined ? null : (
+            <DialogPrimitive.Description className="sr-only">
+              {description}
+            </DialogPrimitive.Description>
+          )}
           <Command
             {...commandProps}
             className={cn(

@@ -297,7 +297,9 @@ function FileStep({
             ) : (
               <>
                 Drag the file here, or{" "}
-                <span className="text-primary underline underline-offset-2">
+                {/* In the text colour, underlined: a brand's primary is a
+                    fill and can fall under AA as small text. */}
+                <span className="text-foreground underline underline-offset-2">
                   choose it
                 </span>
               </>

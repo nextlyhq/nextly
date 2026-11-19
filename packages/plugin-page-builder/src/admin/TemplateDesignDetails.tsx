@@ -212,7 +212,9 @@ function RowValue({ row }: { row: DesignDetailRow }): JSX.Element {
         href={row.href}
         {...navigateWithin(row.href, openInAdmin)}
         title={row.value}
-        className={`inline-flex min-w-0 items-center gap-1 rounded-sm text-xs font-medium text-primary underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring ${face}`}
+        // In the text colour, underlined: a brand's primary is a fill and
+        // can fall under AA as small text.
+        className={`inline-flex min-w-0 items-center gap-1 rounded-sm text-xs font-medium text-foreground underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring ${face}`}
       >
         <span className="truncate">{row.value}</span>
         <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />

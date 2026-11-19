@@ -28,8 +28,6 @@ import {
   CommandItem,
   CommandList,
   CommandShortcut,
-  DialogDescription,
-  DialogTitle,
   commandDefaultFilter,
   ShortcutScope,
   useCommandHighlight,
@@ -818,17 +816,12 @@ function PaletteSurface({
           shouldFilter: false,
         }}
         contentProps={{ onCloseAutoFocus: handleCloseAutoFocus }}
+        // Visually hidden, but the dialog's accessible name and description all the same: the
+        // search field's placeholder is not a substitute — it names the INPUT, not the dialog that
+        // wraps it. `CommandDialog` draws both from these.
+        title="Command palette"
+        description="Search for a command and press Enter to run it."
       >
-        {/*
-         * Visually hidden, but the dialog's accessible name and description all the same:
-         * `CommandDialog` renders neither, so without these a screen reader announces an unnamed
-         * dialog and Radix logs a missing-description warning. The search field's placeholder is
-         * not a substitute — it names the INPUT, not the dialog that wraps it.
-         */}
-        <DialogTitle className="sr-only">Command palette</DialogTitle>
-        <DialogDescription className="sr-only">
-          Search for a command and press Enter to run it.
-        </DialogDescription>
         <CommandInput
           placeholder={placeholder}
           value={search}

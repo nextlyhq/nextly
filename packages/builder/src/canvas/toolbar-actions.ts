@@ -58,7 +58,7 @@ import {
   duplicationRefusal,
 } from "../entry-content-rules";
 import type { Rect } from "../geometry";
-import { placedComponentId } from "../instance-inspector";
+import { placedComponentId } from "../inspector/instance-inspector";
 import {
   keyboardMovePosition,
   type KeyboardMove,
@@ -1056,23 +1056,49 @@ function wrapActions(
   if (wrap !== null) {
     items.push(
       isRefusal(wrap)
-        ? { id: "wrap-in-box", label: WRAP_WORDS.wrap, enabled: false, reason: wrap.reason, inMenu: true }
+        ? {
+            id: "wrap-in-box",
+            label: WRAP_WORDS.wrap,
+            enabled: false,
+            reason: wrap.reason,
+            inMenu: true,
+          }
         : heldByLock(
-            { id: "wrap-in-box", label: WRAP_WORDS.wrap, enabled: true, inMenu: true },
+            {
+              id: "wrap-in-box",
+              label: WRAP_WORDS.wrap,
+              enabled: true,
+              inMenu: true,
+            },
             ask,
             wrap.ops
           )
     );
   }
   const [only] = ids;
-  if (ids.length === 1 && only !== undefined && isUnwrappable(findNode(document.nodes, only))) {
+  if (
+    ids.length === 1 &&
+    only !== undefined &&
+    isUnwrappable(findNode(document.nodes, only))
+  ) {
     const unwrap = planUnwrap(document, only, nesting);
     if (unwrap !== null) {
       items.push(
         isRefusal(unwrap)
-          ? { id: "unwrap", label: WRAP_WORDS.unwrap, enabled: false, reason: unwrap.reason, inMenu: true }
+          ? {
+              id: "unwrap",
+              label: WRAP_WORDS.unwrap,
+              enabled: false,
+              reason: unwrap.reason,
+              inMenu: true,
+            }
           : heldByLock(
-              { id: "unwrap", label: WRAP_WORDS.unwrap, enabled: true, inMenu: true },
+              {
+                id: "unwrap",
+                label: WRAP_WORDS.unwrap,
+                enabled: true,
+                inMenu: true,
+              },
               ask,
               unwrap.ops
             )
