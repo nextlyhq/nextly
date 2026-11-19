@@ -26,7 +26,7 @@ export interface StagePresentation {
  * How `stage` of `workflow` is shown under `settings`: the saved label over the code's, the saved
  * colour or none. A stage the workflow no longer has keeps its name for a label.
  */
-export function stagePresentation(
+function stagePresentation(
   workflow: Workflow,
   settings: WorkflowSettings | undefined,
   stage: string
