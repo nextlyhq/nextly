@@ -55,12 +55,18 @@ import { Button } from "@nextlyhq/ui";
 import { ImageOff, ImagePlus } from "lucide-react";
 import * as React from "react";
 
-import type { ContentServices, PickedMedia } from "../content-services";
 import { isElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
-import { addPicturesTo, picturesHeld } from "../gallery-pictures";
 import type { Rect } from "../geometry";
-import { lockViewOf, propIsWritable } from "../inspector";
+import type {
+  ContentServices,
+  PickedMedia,
+} from "../inspector/content/content-services";
+import {
+  addPicturesTo,
+  picturesHeld,
+} from "../inspector/content/gallery-pictures";
+import { lockViewOf, propIsWritable } from "../inspector/inspector";
 import { selectionModeFor, type SelectionMode } from "../selection";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 

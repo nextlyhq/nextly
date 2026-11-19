@@ -27,7 +27,7 @@ import {
   mediaPickChanges,
   type ImageChanges,
   type ImageSourceGroup,
-} from "../image-group";
+} from "../inspector/content/image-group";
 import type { BuilderOp } from "../op-vocabulary";
 
 /**

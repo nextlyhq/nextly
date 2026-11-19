@@ -32,7 +32,7 @@
 import * as React from "react";
 
 import type { EditorState } from "../editor-state";
-import { RENDERED_TEXT_SIZES } from "../rendered-lengths";
+import { RENDERED_TEXT_SIZES } from "../inspector/style-inspector/rendered-lengths";
 import {
   orientationOfElement,
   siteOrientationOf,

@@ -29,8 +29,11 @@ import {
   type ItemSource,
   type StartingLayout,
 } from "./collection-list-item";
-import type { ContentServices, LoopCollection } from "./content-services";
 import type { FirstAdd } from "./first-add";
+import type {
+  ContentServices,
+  LoopCollection,
+} from "./inspector/content/content-services";
 import { radioGroupStep } from "./roving-radios";
 
 /** The words the two steps use, in one place. */

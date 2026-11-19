@@ -8,8 +8,8 @@
  *
  * @module block-style-words
  */
+import type { InspectedStyleProperty } from "./inspector/style-inspector/style-inspector";
 import type { StyleControl } from "./style-controls";
-import type { InspectedStyleProperty } from "./style-inspector";
 
 /** A block's words for one Style property. */
 export interface PropertyWords {

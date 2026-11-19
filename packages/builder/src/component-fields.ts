@@ -40,7 +40,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "./editor-state";
-import { fieldLabel, propLabel } from "./inspector";
+import { fieldLabel, propLabel } from "./inspector/inspector";
 import type { BuilderOp } from "./op-vocabulary";
 import { blockLabel } from "./panels/add/inserter";
 

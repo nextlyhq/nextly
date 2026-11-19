@@ -48,7 +48,7 @@ import {
 import type { EditorState } from "../editor-state";
 import { SharedStylesPanel } from "../shared-styles-panel";
 import { ShellActiveContext } from "./shell-active";
-import { StyleInspectorPanel } from "../style-inspector-panel";
+import { StyleInspectorPanel } from "../inspector/style-inspector/style-inspector-panel";
 
 afterEach(cleanup);
 

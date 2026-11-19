@@ -40,7 +40,7 @@ import {
   type RegionEditing,
 } from "./editing-target";
 import { useEditorState, type EditorState } from "./editor-state";
-import { InspectorPanel } from "./inspector-panel";
+import { InspectorPanel } from "./inspector/inspector-panel";
 import { BlockKeyboardActions } from "./keyboard-actions";
 import { InsertPanel } from "./panels/add/insert-panel";
 import { LayersPanel } from "./panels/layers/layers-panel";

@@ -16,8 +16,8 @@ import {
 } from "@nextlyhq/blocks-react";
 import { useMemo } from "react";
 
-import { useLoopCollections } from "../collection-loop-controls";
-import type { ContentServices } from "../content-controls";
+import { useLoopCollections } from "../inspector/content/collection-loop-controls";
+import type { ContentServices } from "../inspector/content/content-controls";
 import { layerLabel, type ComponentTitleOf } from "../panels/layers/layers";
 import type { PreviewedEntry } from "../previewed-entry";
 

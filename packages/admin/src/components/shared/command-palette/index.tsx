@@ -208,7 +208,13 @@ function CommandPaletteContent() {
   }, []);
 
   return (
-    <CommandDialog open={open} onOpenChange={handleOpenChange}>
+    <CommandDialog
+      open={open}
+      onOpenChange={handleOpenChange}
+      // Read after the dialog's name ("Command palette", the kit's default),
+      // so a screen reader hears what the palette offers before the field.
+      description="Go to a page, run an action or find a user, and press Enter to choose it."
+    >
       <CommandInput
         placeholder="Type a command or search..."
         value={search}

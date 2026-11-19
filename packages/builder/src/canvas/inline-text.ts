@@ -26,7 +26,7 @@ import {
   type PropSchema,
 } from "@nextlyhq/blocks-engine";
 
-import { propPatch } from "../inspector";
+import { propPatch } from "../inspector/inspector";
 import type { BuilderOp } from "../op-vocabulary";
 
 import { inlinePropsOfKind } from "./inline-target";

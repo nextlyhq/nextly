@@ -20,7 +20,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { CssNamesContext } from "./css-names-context";
+import { CssNamesContext } from "./inspector/css-names-context";
 import { labelNotInName } from "./label-in-name.fixture";
 import { TokensPanel, type TokensPanelProps } from "./tokens-panel";
 

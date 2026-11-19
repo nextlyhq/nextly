@@ -10,13 +10,13 @@ import {
 } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
-import type { ProviderOption, TemplateOption } from "./activity-choices";
+import type { ProviderTypeOption, TemplateOption } from "./activity-choices";
 import {
+  ORIGIN_FILTERS,
   OUTCOME_FILTERS,
   TIME_WINDOWS,
   type ActivityFilter,
   type OutcomeFilter,
-  type ProviderChoice,
 } from "./activity-model";
 
 /**
@@ -31,9 +31,9 @@ export function templateValue(slug: string): string {
   return `template:${slug}`;
 }
 
-/** The value a provider choice is selected by. */
-export function providerValue(choice: ProviderChoice): string {
-  return "id" in choice ? `id:${choice.id}` : `type:${choice.type}`;
+/** The value a provider type is selected by. */
+export function providerTypeValue(type: string): string {
+  return `type:${type}`;
 }
 
 /** The default filters: any outcome, the last 7 days. */
@@ -47,7 +47,8 @@ export function isFiltered(filter: ActivityFilter): boolean {
   return (
     filter.outcome !== "any" ||
     filter.template !== undefined ||
-    filter.provider !== undefined
+    filter.providerType !== undefined ||
+    filter.providerOrigin !== undefined
   );
 }
 
@@ -56,13 +57,14 @@ export interface ActivityFiltersProps {
   onChange: (filter: ActivityFilter) => void;
   /** Templates to offer; `undefined` hides the template filter. */
   templates: readonly TemplateOption[] | undefined;
-  /** Providers to offer; `undefined` hides the provider filter. */
-  providers: readonly ProviderOption[] | undefined;
+  /** Provider types to offer; `undefined` hides the provider filters. */
+  providers: readonly ProviderTypeOption[] | undefined;
 }
 
 /**
- * Activity's filters: outcome, template, provider and how far back. Each
- * wraps onto its own line at phone width rather than scrolling sideways.
+ * Activity's filters: outcome, template, provider type, where the provider
+ * came from, and how far back. Each wraps onto its own line at phone width
+ * rather than scrolling sideways.
  */
 export function ActivityFilters({
   filter,
@@ -74,7 +76,7 @@ export function ActivityFilters({
     onChange({ ...filter, ...next });
   return (
     <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 xl:flex xl:flex-wrap">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:flex xl:flex-wrap">
         <Select
           value={filter.outcome}
           onValueChange={value => set({ outcome: value as OutcomeFilter })}
@@ -119,15 +121,14 @@ export function ActivityFilters({
         )}
         {providers && (
           <Select
-            value={filter.provider ? providerValue(filter.provider) : ANY}
+            value={
+              filter.providerType ? providerTypeValue(filter.providerType) : ANY
+            }
             onValueChange={value =>
               set({
-                provider:
-                  value === ANY
-                    ? undefined
-                    : providers.find(
-                        option => providerValue(option.choice) === value
-                      )?.choice,
+                providerType: providers.find(
+                  option => providerTypeValue(option.type) === value
+                )?.type,
               })
             }
           >
@@ -138,9 +139,33 @@ export function ActivityFilters({
               <SelectItem value={ANY}>Any provider</SelectItem>
               {providers.map(option => (
                 <SelectItem
-                  key={providerValue(option.choice)}
-                  value={providerValue(option.choice)}
+                  key={option.type}
+                  value={providerTypeValue(option.type)}
                 >
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {providers && (
+          <Select
+            value={filter.providerOrigin ?? ANY}
+            onValueChange={value =>
+              set({
+                providerOrigin: ORIGIN_FILTERS.find(
+                  option => option.value === value
+                )?.value,
+              })
+            }
+          >
+            <SelectTrigger aria-label="Provider origin" className="xl:w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ANY}>Any origin</SelectItem>
+              {ORIGIN_FILTERS.map(option => (
+                <SelectItem key={option.value} value={option.value}>
                   {option.label}
                 </SelectItem>
               ))}

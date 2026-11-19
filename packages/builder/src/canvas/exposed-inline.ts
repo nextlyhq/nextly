@@ -36,7 +36,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { composedHolds } from "../component-holds";
-import { setOverrideOp } from "../instance-inspector";
+import { setOverrideOp } from "../inspector/instance-inspector";
 import { lockBlockingEdit } from "../locking";
 import type { BuilderOp } from "../op-vocabulary";
 

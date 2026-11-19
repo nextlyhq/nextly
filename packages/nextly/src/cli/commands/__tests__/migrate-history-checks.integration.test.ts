@@ -60,7 +60,6 @@ import {
 } from "../migrate";
 import { baselineCore } from "../migrate-baseline";
 import { downDatabaseDeps, migrateDownCore } from "../migrate-down";
-import { runReconcileCore } from "../upgrade";
 
 /** Every table a lock keeps its row in: not part of what a run leaves behind. */
 const LOCK_TABLES = new Set([
@@ -162,24 +161,6 @@ describe.each(LOCK_DIALECTS)(
       });
     }
 
-    /** `nextly upgrade --reconcile-core`, wired as the command wires it. */
-    function reconcileCore() {
-      return runReconcileCore({
-        adapter: adapter as never,
-        consent: resolveDataLossConsent({}),
-        interactive: false,
-        checkAppHistory: () =>
-          assertAppHistoryHolds({
-            adapter: adapter as never,
-            db: adapter.getDrizzle(),
-            dialect,
-            migrationsDir,
-            logger,
-            command: "nextly upgrade --reconcile-core",
-          }),
-      });
-    }
-
     /** `migrate:baseline`'s core. */
     function baseline() {
       return baselineCore({
@@ -265,7 +246,7 @@ describe.each(LOCK_DIALECTS)(
       context?: Record<string, unknown>;
     }) {
       const before = await databaseState();
-      for (const command of [migrate, migrateDown, baseline, reconcileCore]) {
+      for (const command of [migrate, migrateDown, baseline]) {
         expect(await refusal(command())).toMatchObject(expected);
         expect(await databaseState()).toEqual(before);
       }

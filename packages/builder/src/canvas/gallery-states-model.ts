@@ -19,7 +19,10 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { INSTANCE_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { galleryPictureOf, isGallery } from "../gallery-pictures";
+import {
+  galleryPictureOf,
+  isGallery,
+} from "../inspector/content/gallery-pictures";
 
 import { nodeElement } from "./canvas-addressing";
 import { chosenFile } from "./image-states-model";
