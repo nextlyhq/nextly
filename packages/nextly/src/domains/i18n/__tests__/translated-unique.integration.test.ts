@@ -841,30 +841,49 @@ describeEachDialect("a translated unique field", dialect => {
   });
 
   // An index under the per-language index's name proves nothing by its name: one left there that
-  // is not unique holds nothing, so the save that finds it puts the real one in its place.
-  it("replaces an index under the per-language index's name that is not unique", async () => {
+  // is not unique holds nothing. The migration history records the unique one, so a save that
+  // finds the other is refused as drift, as the save's file would be, with the way on: the unique
+  // index put back by hand, the same save goes on.
+  it("refuses a save over an index under the per-language index's name that is not unique, and saves once it is put back", async () => {
     await seedCollection();
     const index = companionUniqueIndexName("dc_pages_locales", "handle");
+    const dropIndex = () =>
+      query(
+        dialect === "mysql"
+          ? `DROP INDEX ${quoted(index)} ON ${quoted("dc_pages_locales")}`
+          : `DROP INDEX ${quoted(index)}`
+      );
+    const onHandle = `(${dialect === "mysql" ? "`handle`(50)" : quoted("handle")}, ${quoted("_locale")})`;
+    await dropIndex();
     await query(
-      dialect === "mysql"
-        ? `DROP INDEX ${quoted(index)} ON ${quoted("dc_pages_locales")}`
-        : `DROP INDEX ${quoted(index)}`
+      `CREATE INDEX ${quoted(index)} ON ${quoted("dc_pages_locales")} ${onHandle}`
     );
-    await query(
-      `CREATE INDEX ${quoted(index)} ON ${quoted("dc_pages_locales")} (${dialect === "mysql" ? "`handle`(50)" : quoted("handle")}, ${quoted("_locale")})`
+    const save = () =>
+      handler().updateCollection(
+        { collectionName: "pages" },
+        {
+          fields: [
+            { name: "handle", type: "text", unique: true },
+            { name: "note", type: "text" },
+            { name: "code", type: "number", unique: true, localized: false },
+            { name: "summary", type: "text" },
+          ],
+        }
+      );
+
+    const refused = await save();
+    expect(refused.success, JSON.stringify(refused)).toBe(false);
+    expect(refused.message).toContain("schema drift detected");
+    expect(refused.message).toContain(
+      "put the table back as the history records it"
     );
 
-    const saved = await handler().updateCollection(
-      { collectionName: "pages" },
-      {
-        fields: [
-          { name: "handle", type: "text", unique: true },
-          { name: "note", type: "text" },
-          { name: "code", type: "number", unique: true, localized: false },
-          { name: "summary", type: "text" },
-        ],
-      }
+    // The way on, followed: the index put back unique, as the history records it.
+    await dropIndex();
+    await query(
+      `CREATE UNIQUE INDEX ${quoted(index)} ON ${quoted("dc_pages_locales")} ${onHandle}`
     );
+    const saved = await save();
     expect(saved.success, JSON.stringify(saved)).toBe(true);
 
     await write("en", { handle: "about" });

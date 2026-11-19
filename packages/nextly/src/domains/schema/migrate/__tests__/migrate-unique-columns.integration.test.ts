@@ -65,6 +65,7 @@ import {
   type LockWorld,
 } from "../../pipeline/__tests__/helpers/schema-lock-world";
 import { createIndexSql } from "../../pipeline/sql-templates/create-index";
+import { mysqlLiveStatements } from "../../pipeline/sql-templates/mysql-live-restate";
 import { splitStatements } from "../../pipeline/sql-statement-utils";
 import { uniqueIndexNameForColumn } from "../../services/index-name";
 import { NO_CONSENT, resolveDataLossConsent } from "../data-loss-consent";
@@ -1213,6 +1214,58 @@ describe.each(LOCK_DIALECTS)(
       expect(await personIsUnique()).toBe(false);
       expect(await ledger()).toEqual([]);
     }, 120_000);
+
+    // On MySQL `migrate:create` writes a column's rename as a run built from the catalog when the
+    // file runs (`mysqlLiveStatements`): read back from the index, the run is the rename it
+    // amounts to, so the index is judged over the column's values before the run.
+    it.runIf(dialect === "mysql")(
+      "refuses a file that renames a column with migrate:create's MySQL run and then makes it unique over repeats, before the rename runs",
+      async () => {
+        await run([profile("p1", "ada"), profile("p2", "ada")]);
+        const renameRun =
+          mysqlLiveStatements({
+            type: "rename_column",
+            tableName: PROFILES,
+            fromColumn: "person",
+            toColumn: "member",
+            fromType: "text",
+            toType: "text",
+          }) ?? [];
+        // Positive control: the file carries the run, not the plain rename.
+        expect(renameRun).toHaveLength(4);
+        writeFileAs(NAME, [
+          ...renameRun,
+          createIndexSql(
+            PROFILES,
+            {
+              name: uniqueIndexNameForColumn(PROFILES, "member"),
+              columns: ["member"],
+              unique: true,
+            },
+            dialect,
+            q
+          ),
+        ]);
+
+        const error = await refusal();
+
+        expect(error.publicMessage).toContain(`${FILE} was not applied.`);
+        expect(error.publicMessage).toContain(
+          `cannot become unique while 1 value repeats: "ada" (2 entries)`
+        );
+        // Nothing ran: the column keeps its name.
+        const live = await introspectLiveColumns(
+          adapter.getDrizzle(),
+          dialect,
+          [PROFILES]
+        );
+        const columns = live.tables[0]?.columns.map(c => c.name);
+        expect(columns).toContain("person");
+        expect(columns).not.toContain("member");
+        expect(await ledger()).toEqual([]);
+      },
+      120_000
+    );
 
     it("refuses a file that adds a column with one constant for every row and makes it unique, before the column is added", async () => {
       await run([profile("p1", "ada"), profile("p2", "bob")]);

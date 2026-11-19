@@ -19,7 +19,7 @@ import {
   SHARED_STYLES_WORD,
   type SharedStyleFilter,
   type SharedStyleRow,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 
 import type { Issue } from "./shared-styles-usage";
 import {

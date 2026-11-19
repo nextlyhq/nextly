@@ -9,13 +9,13 @@
 import type { NamedClass } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { useSurvivingReport } from "../../shell/builder-notices";
 import {
   renameSharedStyle,
   type SharedStyleReach,
   type SharedStyleRow,
   type SharedStylesUsage,
-} from "../../shared-style-library";
-import { useSurvivingReport } from "../../shell/builder-notices";
+} from "../../styles/shared-style-library";
 
 import type {
   SharedStylesAccess,

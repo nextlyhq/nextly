@@ -566,6 +566,20 @@ exports[`each code, as a command ends with it > BUILDER_RELATION_TARGET_UNKNOWN 
   Docs: https://nextlyhq.com/docs/cli/errors/builder-relation-target-unknown  (BUILDER_RELATION_TARGET_UNKNOWN)"
 `;
 
+exports[`each code, as a command ends with it > BUILDER_SAVE_LEFT_PART_WAY 1`] = `
+"✗ A Builder save was left part-way, so the database does not match its migrations yet.
+  Why:  Left part-way: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio.
+  Next: To settle it, start the app in development (\`next dev\`) on this project: its start settles the save.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-left-part-way  (BUILDER_SAVE_LEFT_PART_WAY)"
+`;
+
+exports[`each code, as a command ends with it > BUILDER_SAVE_RECORD_UNREADABLE 1`] = `
+"✗ A Builder save of this collection was left part-way, and its record cannot be read.
+  Why:  Each Builder save records that it is in progress until its outcome is recorded, and what an earlier save left cannot be told from a record that cannot be read.
+  Next: To clear it, first check that no Builder save is running, then remove the one row "builder-save-in-progress:collection:posts" from the nextly_meta table; the next save then records its own.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-record-unreadable  (BUILDER_SAVE_RECORD_UNREADABLE)"
+`;
+
 exports[`each code, as a command ends with it > BUILDER_SLUG_COLLISION 1`] = `
 "✗ An entity is defined in both \`nextly.config.ts\` and \`ui-schema.json\`.
   Why:  slug 'posts' is defined in both nextly.config.ts and ui-schema.json
@@ -1022,6 +1036,13 @@ exports[`each code, as a command ends with it > MIGRATION_DRIFT 1`] = `
           [C] Capture the drift in a new migration:
                 pnpm nextly migrate:create --name capture_drift && pnpm nextly migrate
   Docs: https://nextlyhq.com/docs/cli/errors/migration-drift  (MIGRATION_DRIFT)"
+`;
+
+exports[`each code, as a command ends with it > MIGRATION_HISTORY_FORKED 1`] = `
+"✗ Two migrations were written from 20261020_120000_add_posts.sql: 20261021_090000_add_tags.sql and 20261021_090500_add_price.sql.
+  Why:  20261021_090000_add_tags.sql is applied on this database, and 20261021_090500_add_price.sql was written without its changes, so it was not applied.
+  Next: Run \`nextly migrate:create --name record_merge\` to record the merge.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-history-forked  (MIGRATION_HISTORY_FORKED)"
 `;
 
 exports[`each code, as a command ends with it > MIGRATION_IRREVERSIBLE 1`] = `

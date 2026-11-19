@@ -52,16 +52,28 @@ import type {
   BuilderSaveSetup,
   writeCollectionSave,
 } from "../../domains/schema/builder-save/collection-save";
+import {
+  type ConfirmedDeletion,
+  deletionHoldOf,
+} from "../../domains/schema/builder-save/deletion-counts";
+import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
+  renamedFieldsOf,
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
-import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import type {
+  BrowserRenameResolution,
+  LegacyResolutionsBundle,
+} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import type { DesiredCollection } from "../../domains/schema/pipeline/types";
+import type {
+  DesiredCollection,
+  DesiredSchema,
+} from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
@@ -81,7 +93,10 @@ import {
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
 import { bumpSchemaVersion } from "../../route-handler/schema-version";
-import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import type {
+  DynamicCollectionRecord,
+  FieldDefinition,
+} from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
@@ -328,6 +343,96 @@ const TogetherParam = z
       )
       .max(500)
   );
+
+/**
+ * The counts of removed fields' values the person confirmed in the review, as an apply's body
+ * sends them: each field's name and a whole number of values. Absent where the body sends none,
+ * and the save then deletes as it always has (`CollectionSave.confirmedDeletions`).
+ */
+const ConfirmedDeletionsBody = z.object({
+  confirmedDeletions: z
+    .array(
+      z.object({
+        field: z.string().min(1),
+        count: z.number().int().min(0),
+      })
+    )
+    .max(500)
+    .optional(),
+});
+
+function readConfirmedDeletions(
+  body: unknown
+): z.infer<typeof ConfirmedDeletionsBody>["confirmedDeletions"] {
+  try {
+    return ConfirmedDeletionsBody.parse(body ?? {}).confirmedDeletions;
+  } catch (error) {
+    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+    throw error;
+  }
+}
+
+/**
+ * The dialog's confirmations by field name, as its questions read them
+ * (`refuseUnansweredDialogQuestions`): each field's own resolution, and each removed field whose
+ * count of values the person confirmed deleting (`confirmedDeletions`), a count being its drop
+ * confirmed. Nothing where the body sends neither.
+ */
+function dialogConfirmations(
+  tableName: string,
+  resolutions: Record<string, FieldResolution> | undefined,
+  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
+): { legacy?: LegacyResolutionsBundle } {
+  const confirmDrop: LegacyResolutionsBundle["byFieldName"][string] = {
+    action: "confirm_drop",
+  };
+  const counted = (confirmedDeletions ?? []).map(
+    deletion => [deletion.field, confirmDrop] as const
+  );
+  if (resolutions === undefined && counted.length === 0) return {};
+  return {
+    legacy: {
+      tableName,
+      byFieldName: { ...Object.fromEntries(counted), ...resolutions },
+    },
+  };
+}
+
+/** The save's answer of the counts confirmed, where the body sent them; nothing otherwise. */
+function confirmedDeletionsAnswer(
+  confirmedDeletions: z.infer<
+    typeof ConfirmedDeletionsBody
+  >["confirmedDeletions"]
+): { confirmedDeletions?: readonly ConfirmedDeletion[] } {
+  return confirmedDeletions === undefined ? {} : { confirmedDeletions };
+}
+
+/**
+ * The counts the person confirmed, compared just before the schema pipeline's push deletes the
+ * removed fields' values, where no save writer runs the save: with nothing held, as a push the
+ * writer runs compares them (`DeletionHold.compare`). Refuses where a count changed.
+ */
+async function comparedBeforePipelinePush(args: {
+  dialect: Parameters<typeof deletionHoldOf>[0]["dialect"];
+  tableName: string;
+  localized: boolean;
+  previous: readonly unknown[] | undefined;
+  next: FieldDefinition[];
+  /** The rename answers: a field renamed keeps its values, so it is not compared. */
+  renames: readonly BrowserRenameResolution[] | undefined;
+  confirmed: readonly ConfirmedDeletion[] | undefined;
+  db: unknown;
+}): Promise<void> {
+  await deletionHoldOf({
+    dialect: args.dialect,
+    tableName: args.tableName,
+    localized: args.localized,
+    previous: (args.previous ?? []) as unknown as FieldDefinition[],
+    next: args.next,
+    renamed: renamedFieldsOf(args.renames ?? []),
+    confirmed: args.confirmed,
+  })?.compare(args.db);
+}
 
 function parseTogetherParam(value: string | undefined): string[] {
   if (value === undefined) return [];
@@ -844,39 +949,12 @@ const COLLECTIONS_METHODS: Record<
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
 
-      // Build a full DesiredSchema so drizzle-kit sees all managed tables.
-      // Without this, singles/components in the live DB are absent from the
-      // desired snapshot and drizzle-kit offers them as rename candidates.
-      const desired = await buildFullDesiredSchema();
-      desired.collections[p.collectionName] = {
+      const desired = await dialogDesiredSchema({
         slug: p.collectionName,
-        tableName,
-        // As the apply's first push creates them (`fieldsAsFirstPushed`).
-        fields: fieldsAsFirstPushed({
-          oldFields: currentFields,
-          newFields: fields as FieldDefinition[],
-          entity: collection,
-          requestedLocalized: previewLocalized,
-        }) as DesiredCollection["fields"],
-        // Carry the Draft/Published flag so previewDesiredSchema injects
-        // the `status` column into the desired snapshot.
-        status: collection.status === true,
-        // i18n: carry the localized flag so the push diff OMITS translatable
-        // columns from the main table's desired snapshot (they live in the
-        // companion `_locales` table). buildFullDesiredSchema already sets this
-        // from the registry, but the splice above overwrites that entry, so we
-        // must re-supply it or the preview would show translatable columns being
-        // added to the main table. The REQUEST's flag wins when the Builder
-        // sent one: the apply prefers it too, and a preview that diffed against
-        // the persisted flag instead would collect resolutions for DDL the
-        // apply is not going to run.
-        localized:
-          previewLocalized ??
-          (collection as { localized?: boolean }).localized === true,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-        recordedFields: recordedFieldsOf(collection),
-      };
+        collection,
+        fields: fields as FieldDefinition[],
+        requestedLocalized: previewLocalized,
+      });
 
       const preview = await builderSchemaPreviewBody({
         desired,
@@ -985,6 +1063,9 @@ const COLLECTIONS_METHODS: Record<
       // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
       // before the lock is taken.
       const requestedLifecycle = readRequestedLifecycle(body);
+      // The counts the person confirmed deleting, read with the rest of the request, before the
+      // lock: a malformed one refuses the save before anything is read from the database.
+      const confirmedDeletions = readConfirmedDeletions(body);
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
@@ -1283,6 +1364,35 @@ const COLLECTIONS_METHODS: Record<
               bumpSchemaVersion();
             },
             appliedBy: push.appliedBy,
+            // Where the file carries the change, the push's questions are asked of it first: a
+            // rename the request does not answer, or a drop it does not confirm, refuses the save
+            // before anything is written, as the push refuses it.
+            questions: async () =>
+              refuseUnansweredDialogQuestions({
+                desired: await dialogDesiredSchema({
+                  slug: p.collectionName,
+                  collection,
+                  fields: fields as unknown as FieldDefinition[],
+                  requestedLocalized: readRequestLocalized(body),
+                }),
+                db: adapter.getDrizzle(),
+                dialect,
+                tableName,
+                // The builder that made the table, which the offered rename is judged by.
+                builtBy: "collection",
+                oldFields: (collection.fields ??
+                  []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+                renameResolutions: renameResolutions ?? [],
+                eventResolutions: eventResolutions ?? [],
+                ...dialogConfirmations(
+                  tableName,
+                  resolutions,
+                  confirmedDeletions
+                ),
+              }),
             // Whether the push applies the change in development, the writer recording its
             // migration once the push has run: a translated collection, or one turning
             // translation on or off, whose push carries its values across the change; and a change
@@ -1314,6 +1424,7 @@ const COLLECTIONS_METHODS: Record<
               ...(acknowledgedConversions === undefined
                 ? {}
                 : { acknowledgedConversions }),
+              ...confirmedDeletionsAnswer(confirmedDeletions),
             },
           });
           // Thrown before the registry row is written: the row keeps the fields the database
@@ -1323,6 +1434,20 @@ const COLLECTIONS_METHODS: Record<
             written === undefined
               ? (fields as unknown as FieldDefinition[])
               : written.fields;
+          // Without a save writer, the pipeline's push deletes the removed fields' values: the counts
+          // the person confirmed are compared just before it (`comparedBeforePipelinePush`).
+          if (written === undefined) {
+            await comparedBeforePipelinePush({
+              dialect,
+              tableName,
+              localized: wasLocalized,
+              previous: collection.fields,
+              next: fields as unknown as FieldDefinition[],
+              renames: renameResolutions,
+              confirmed: confirmedDeletions,
+              db: adapter.getDrizzle(),
+            });
+          }
           const result =
             written !== undefined
               ? { summary: pushedSummary }
@@ -1999,20 +2124,32 @@ export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;
  * A registry row as the writer reads it: its table and its fields, which the
  * registry stores as the field definitions they were saved as.
  */
-function writerRowOf(collection: { tableName: string; fields?: unknown }): {
+function writerRowOf(collection: {
+  tableName: string;
+  fields?: unknown;
+  localized?: unknown;
+}): {
   tableName: string;
   fields: FieldDefinition[];
+  localized: boolean;
 } {
   return {
     tableName: collection.tableName,
     fields: (collection.fields ?? []) as FieldDefinition[],
+    // Whether the collection is translated as the registry stores it: where its values are, for a
+    // collection the definition file lacks (`saveOfSchemaChange`).
+    localized: collection.localized === true,
   };
 }
 
 /** What a field change gives the Builder save writer. */
 interface WriterChange {
   slug: string;
-  collection: { tableName: string; fields?: FieldDefinition[] };
+  collection: {
+    tableName: string;
+    fields?: FieldDefinition[];
+    localized?: boolean;
+  };
   fields: FieldDefinition[];
   localized: boolean;
   answers: SchemaChangeAnswers;
@@ -2075,6 +2212,50 @@ async function writerSaveOf(change: WriterChange): Promise<
 }
 
 /**
+ * The full desired schema a collection's dialog change is planned against: this collection as the
+ * change leaves it, its fields as the apply's first push creates them (`fieldsAsFirstPushed`), and
+ * every other managed table as it is, so drizzle-kit sees them all rather than offering a Single's
+ * or a field group's table as a rename candidate. What the dialog's preview shows, and what a save
+ * that runs its own migration file asks the push's questions of (`refuseUnansweredDialogQuestions`).
+ */
+async function dialogDesiredSchema(args: {
+  slug: string;
+  collection: DynamicCollectionRecord;
+  fields: FieldDefinition[];
+  /** The request's localized flag, when the Builder sent one. */
+  requestedLocalized: boolean | undefined;
+}): Promise<DesiredSchema> {
+  const { slug, collection, fields } = args;
+  const currentFields = (collection.fields ??
+    []) as unknown as FieldDefinition[];
+  const desired = await buildFullDesiredSchema();
+  desired.collections[slug] = {
+    slug,
+    tableName: collection.tableName,
+    // As the apply's first push creates them (`fieldsAsFirstPushed`).
+    fields: fieldsAsFirstPushed({
+      oldFields: currentFields,
+      newFields: fields,
+      entity: collection,
+      requestedLocalized: args.requestedLocalized,
+    }) as DesiredCollection["fields"],
+    // Carry the Draft/Published flag so the desired snapshot has the `status` column.
+    status: collection.status === true,
+    // i18n: the push diff OMITS translatable columns from the main table's desired snapshot (they
+    // live in the companion `_locales` table). The request's flag wins when the Builder sent one,
+    // as the apply prefers it: planning against the persisted flag instead would ask about DDL the
+    // apply is not going to run.
+    localized:
+      args.requestedLocalized ??
+      (collection as { localized?: boolean }).localized === true,
+    // Authored in the Schema Builder: this is the Builder's own save path.
+    builderOwned: true,
+    recordedFields: recordedFieldsOf(collection),
+  };
+  return desired;
+}
+
+/**
  * A field change through the Builder save writer, when the app registered
  * one: written and, in development, run, or applied by `appliedBy` and then
  * recorded. Undefined without a writer, where the push pipeline applies the
@@ -2102,6 +2283,12 @@ async function saveThroughWriter(
      * caller does after an apply, given the fields the row recorded.
      */
     settled?: (fields: FieldDefinition[]) => void;
+    /**
+     * The questions the push asks before it changes anything, asked where the save's file rather
+     * than the push carries the change, before anything is written: a dialog's request that leaves
+     * one unanswered is refused as the push refuses it (`refuseUnansweredDialogQuestions`).
+     */
+    questions?: () => Promise<void>;
   }
 ): Promise<
   | {
@@ -2120,6 +2307,7 @@ async function saveThroughWriter(
     change.appliedBy !== undefined &&
     prepared.deps.applies &&
     (change.pushWhen === undefined || (await change.pushWhen()));
+  if (!viaPush) await change.questions?.();
   // Loaded here, where a save runs: the writer brings the migration generator
   // and runner, which a request that writes no field change never needs.
   const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([

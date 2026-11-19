@@ -230,5 +230,8 @@
   "UPGRADE_RELEASE_UNKNOWN": "`nextly upgrade` could not tell which release to move to: the one given is not published, or the installed release's channel names none, so it changed nothing.",
   "UPGRADE_PACKAGE_CANNOT_MOVE": "A Nextly package of the project cannot move to the release `nextly upgrade` was moving to, so no package was moved.",
   "UPGRADE_INSTALL_FAILED": "The package manager failed while `nextly upgrade` was moving the packages, and the project was put back as it was.",
-  "UPGRADE_NOT_RESTORED": "The package manager failed while `nextly upgrade` was moving the packages, and the installed packages could not be put back."
+  "UPGRADE_NOT_RESTORED": "The package manager failed while `nextly upgrade` was moving the packages, and the installed packages could not be put back.",
+  "MIGRATION_HISTORY_FORKED": "Migrations were written without each other, and no migration yet records them together, so the command applied none of them that was not applied already.",
+  "BUILDER_SAVE_LEFT_PART_WAY": "A Builder save was left part-way, so the command refused: the project's migrations do not describe the database until the save is settled.",
+  "BUILDER_SAVE_RECORD_UNREADABLE": "A Builder save was refused, because the record that an earlier save of the same entity was in progress cannot be read."
 }

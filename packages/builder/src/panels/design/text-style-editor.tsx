@@ -38,8 +38,11 @@ import { propertyVariableLeaf } from "../../inspector/style-inspector/style-valu
 import {
   sharedStyleChange,
   type SharedStyleChange,
-} from "../../shared-style-target";
-import { fontWeightOptions, lineHeightFromText } from "../../style-folded";
+} from "../../styles/shared-style-target";
+import {
+  fontWeightOptions,
+  lineHeightFromText,
+} from "../../styles/style-folded";
 
 import { FluidButton } from "./fluid-popover";
 import { FontChoicesContext } from "./font-family-field";

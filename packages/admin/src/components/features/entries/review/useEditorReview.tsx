@@ -29,6 +29,7 @@ import {
   reviewKeys,
   useReviewState,
 } from "@admin/hooks/queries/useReviewState";
+import { versionKeys } from "@admin/hooks/queries/useVersions";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 import type { PartReview, ReviewStep } from "@admin/types/workflows";
@@ -39,11 +40,13 @@ import type {
   DocumentReviewBinding,
 } from "../EntryForm/useDocumentActionBindings";
 
+import { versionScopeOf } from "./part-changes";
 import {
   partsOnScreen,
   takeableOnEvery,
   waitingForWords,
 } from "./review-words";
+import { approves, hidesALanguage, SHARED_APPROVAL_HELD } from "./shared-hold";
 import { STEP_NOT_OFFERED, useStepTaker } from "./useStepTaker";
 
 export interface EditorReviewInput {
@@ -59,6 +62,20 @@ export interface EditorReviewInput {
    * starts the next draft.
    */
   storedStamp?: string;
+  /**
+   * Why the host holds every step at this moment, where something does: a
+   * past version on screen, or a save or a recovery on its way. The header
+   * holds its steps for these through the action model; the review's other
+   * actions read it from `hold`.
+   */
+  held?: string | undefined;
+  /**
+   * Whether a workflow may hold the document's publishing, as the schema read
+   * says before the review state is: false where none is attached, so
+   * Publish is not held while the state is read. Absent where the page cannot
+   * tell, and Publish waits for the review state.
+   */
+  workflowExpected?: boolean;
 }
 
 export interface EditorReview {
@@ -66,6 +83,31 @@ export interface EditorReview {
   binding: DocumentReviewBinding | undefined;
   /** The part on screen, while it stands in a stage of an attached workflow. */
   part: PartReview | undefined;
+  /**
+   * The parts the header's steps move together: the part on screen first,
+   * with the shared part where it waits in the same stage. Empty where none
+   * waits.
+   */
+  onScreen: readonly PartReview[];
+  /** Every part of the document the caller may read, whatever its stage. */
+  parts: readonly PartReview[];
+  /** Why the last step taken from the header was refused; null otherwise. */
+  refusal: string | null;
+  /** Forgets that refusal. */
+  clearRefusal: () => void;
+  /**
+   * Why no step can be taken from outside the header at this moment (as the
+   * header's own steps are held): the host's hold, else unsaved edits or an
+   * unsaved document. Undefined where nothing holds them.
+   */
+  hold: string | undefined;
+  /**
+   * Why no step can be taken on any part at this moment, whichever surface
+   * offers it: the host's hold, else unsaved edits, which a step would not
+   * carry. The side panel's steps wait for it as the header's do. Undefined
+   * where nothing holds them.
+   */
+  stepsHold: string | undefined;
   /** The dialog a step needing a comment asks with. */
   dialog: ReactNode;
 }
@@ -75,30 +117,84 @@ export function useEditorReview({
   locale,
   isDirty,
   storedStamp,
+  held,
+  workflowExpected,
 }: EditorReviewInput): EditorReview {
   const query = useReviewState(document);
-  const { defaultLocale } = useLocalization();
+  const { defaultLocale, locales } = useLocalization();
   const taker = useStepTaker(document);
   const queryClient = useQueryClient();
 
   // A store moves the review (an edit to approved content returns it to
-  // review), so a new stamp asks again; the first render asks anyway.
+  // review), so a new stamp asks again; the first render asks anyway. It
+  // records a version too, so the document's versions and comparisons are
+  // read again with it: the changes shown stay those of the version the
+  // review state now says was seen.
   const stamp = useRef(storedStamp);
   useEffect(() => {
     if (stamp.current === storedStamp || document === undefined) return;
     stamp.current = storedStamp;
-    void queryClient.invalidateQueries({
-      queryKey: reviewKeys.document(document),
-    });
+    const scope = versionScopeOf(document);
+    for (const queryKey of [
+      reviewKeys.document(document),
+      versionKeys.list(scope),
+      versionKeys.documentDiffs(scope),
+    ]) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
   }, [storedStamp, document, queryClient]);
 
   // The parts one step moves together, the first of them the one the header
   // speaks for.
   const onScreen = partsOnScreen(query.data, locale ?? defaultLocale);
   const part = onScreen[0];
+  const parts =
+    document !== undefined && query.data?.attached === true
+      ? query.data.review.parts
+      : [];
+  // Where this person can't read every language, the shared fields' newest
+  // version may be one they can't see: their approval of the shared fields is
+  // held, here (the shared part on screen) and in approve-all (the shared part
+  // among those waiting for their approval).
+  const hidden = hidesALanguage(parts, locales.length);
+  const sharedApproves = (candidates: readonly PartReview[]): boolean =>
+    candidates.some(
+      candidate =>
+        candidate.part === null &&
+        candidate.steps.some(step => approves(step) && step.mayTake)
+    );
+  const sharedHold =
+    hidden && sharedApproves(onScreen) ? SHARED_APPROVAL_HELD : undefined;
+  const stepsHold = held ?? (isDirty ? SAVE_FIRST : undefined);
+  const stepReason =
+    stepHold(isDirty, taker.pending, onScreen).stepReason ?? sharedHold;
+  const hold =
+    stepsHold ??
+    stepReason ??
+    (hidden && sharedApproves(parts) ? SHARED_APPROVAL_HELD : undefined);
+
+  // Until the review state is known, a workflow may be holding the part: the
+  // header holds Publish, saying why, rather than offering it as free. Not
+  // where the page knows no workflow is attached.
+  const unknown =
+    document !== undefined &&
+    query.data === undefined &&
+    workflowExpected !== false
+      ? reviewUnknown(query.isError)
+      : undefined;
 
   if (document === undefined || part === undefined) {
-    return { binding: undefined, part: undefined, dialog: null };
+    return {
+      binding: unknown,
+      part: undefined,
+      onScreen: [],
+      parts,
+      refusal: null,
+      clearRefusal: taker.clearRefusal,
+      hold,
+      stepsHold,
+      dialog: null,
+    };
   }
 
   // Offered only where every part it moves may take it.
@@ -123,18 +219,57 @@ export function useEditorReview({
       primary: step.primary,
     })),
     waitingFor: waitingForWords(part.waitingFor),
-    ...stepHold(isDirty, onScreen),
+    ...(stepReason === undefined ? {} : { stepReason }),
   };
 
-  return { binding: { state, takeStep }, part, dialog: taker.dialog };
+  return {
+    binding: { state, takeStep },
+    part,
+    onScreen,
+    parts,
+    refusal: taker.refusal,
+    clearRefusal: taker.clearRefusal,
+    hold,
+    stepsHold,
+    dialog: taker.dialog,
+  };
 }
 
-/** Why no step can be taken at this moment, where something holds them. */
+/**
+ * What the header's actions read while the review state is not known: no
+ * step, and Publish held with why, as a stage that does not allow publishing
+ * holds it. No step is offered, so none is taken.
+ */
+function reviewUnknown(failed: boolean): DocumentReviewBinding {
+  return {
+    state: {
+      stageLabel: "",
+      publishable: false,
+      steps: [],
+      waitingFor: null,
+      publishReason: failed
+        ? "The review state couldn't be read. Reload the page to try again."
+        : "Checking the review…",
+    },
+    takeStep: () => Promise.resolve(STEP_NOT_OFFERED),
+  };
+}
+
+/** Why a step waits while the page holds edits a step would not carry. */
+const SAVE_FIRST = "Save your changes first.";
+
+/**
+ * Why no step can be taken at this moment, where something holds them: a step
+ * already on its way holds the others, so a second click sends no second step
+ * with the revision the first is about to move.
+ */
 function stepHold(
   isDirty: boolean,
+  stepPending: boolean,
   parts: readonly PartReview[]
 ): { stepReason?: string } {
-  if (isDirty) return { stepReason: "Save your changes first." };
+  if (isDirty) return { stepReason: SAVE_FIRST };
+  if (stepPending) return { stepReason: "Taking the step…" };
   if (parts.some(part => part.version === null)) {
     return { stepReason: "Save the document first." };
   }

@@ -13,13 +13,13 @@ import type {
   StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
-import type { EditClasses } from "../../block-style-actions";
+import type { EditClasses } from "../../styles/block-style-actions";
 import type {
   SharedStyleRefusal,
   SharedStylesCount,
   SharedStylesUsage,
   SharedStyleUsesPage,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 
 import type { LookKey } from "./block-look-rows";
 import type { GroupFolds } from "./tokens-panel";

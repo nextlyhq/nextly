@@ -58,7 +58,7 @@ import {
   sameLook,
   type BlockLookRow,
 } from "../panels/design/block-look-rows";
-import type { PlainFlow } from "../plain-layout";
+import type { PlainFlow } from "../styles/plain-layout";
 
 import { useAskedSetting } from "./asked-setting";
 import { BlockCard, type CardVerbs } from "./block-card";

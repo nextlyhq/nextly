@@ -273,16 +273,27 @@ describe.each(getConfiguredTestDialects())(
       const first = await boot(dialect);
       instance = first;
       await createPosts(first);
-      // A column as a database may have it: with a default of its own.
-      if (dialect === "mysql") {
-        await run(
-          first,
-          `ALTER TABLE ${q(TABLE)} MODIFY COLUMN ${q("views")} INT NULL DEFAULT 7`
-        );
-      } else if (dialect === "postgresql") {
+      // A column as a database may have it: with a default of its own, given by hand. The migration
+      // history records no such default, so turning translation on is refused as drift before
+      // anything moves, with the way on; put back by hand, the same save goes on.
+      if (dialect !== "sqlite") {
         await run(
           first,
           `ALTER TABLE ${q(TABLE)} ALTER COLUMN ${q("views")} SET DEFAULT 7`
+        );
+        const refused = await setTranslated(first, true).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        const told =
+          refused instanceof Error ? refused.message : String(refused);
+        expect(told).toContain("schema drift detected");
+        expect(told).toContain("put the table back as the history records it");
+        await expectAllMovedIn(first, TABLE);
+        expect(await tableThere(first, COMPANION)).toBe(false);
+        await run(
+          first,
+          `ALTER TABLE ${q(TABLE)} ALTER COLUMN ${q("views")} DROP DEFAULT`
         );
       }
       await expectAllMovedIn(first, TABLE);

@@ -70,7 +70,7 @@ import { pathTo } from "../panels/layers/layers";
 import {
   saveAsSharedStyleRefusal,
   type SharedStyleOffer,
-} from "../shared-style-target";
+} from "../styles/shared-style-target";
 
 import { compositionRefusalReason } from "./composition-refusal";
 import { blockDeletion } from "./delete-block";
