@@ -443,7 +443,6 @@ function StyleRow({
         aria-pressed={
           panel.onEdit === undefined ? undefined : sameLook(row, panel.editing)
         }
-        aria-label={rowName(row, sentence)}
         aria-description={row.own ? ownLookDescription(title) : undefined}
         title={sentence === "" ? undefined : sentence}
         data-block-look={row.id}
@@ -454,10 +453,14 @@ function StyleRow({
         })}
       >
         <span className="nx-block-looks__specimen">{specimen}</span>
-        <span className="nx-vars__name" title={row.name}>
+        <span className="nx-vars__name" title={row.name} aria-hidden="true">
           {row.name}
         </span>
         <Chips row={row} reach={reach} chip={panel.chip} />
+        {/* The row's name, in one element: its name, what it is and its
+            reach. Text rather than an aria-label, which would have to hold
+            every drawn word, the specimen's and the chips' included. */}
+        <span className="nx-sr-only">{rowName(row, sentence)}</span>
       </button>
       {offersAny(offers) ? (
         <BlockStyleMenu

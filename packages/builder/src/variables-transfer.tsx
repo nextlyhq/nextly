@@ -10,6 +10,13 @@
  * refused stays until the author dismisses it, since it names what did not
  * arrive.
  *
+ * An import carries more than the variables: the file's text styles, its
+ * Site text rows, colour order, fluid range and built-in colours setting,
+ * each listed in the preview and stored through the host's own writers (the
+ * text styles through its one class writer). The fonts the file uses that
+ * the site has no file for are listed too, with "Add from Google Fonts" for
+ * a font the catalogue has.
+ *
  * Exports write files straight away: the design token file (with a theme file
  * beside it when there are dark values), or one file per mode for Figma. A
  * short toast says what was written; what the files did not carry is one
@@ -20,7 +27,10 @@
  */
 import {
   resolveTokenPrefix,
+  sameJsonValue,
   tokenDisplayLabel,
+  type BreakpointSet,
+  type NamedClass,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -42,8 +52,11 @@ import {
 import { Ellipsis } from "lucide-react";
 import * as React from "react";
 
+import type { ClassListEdit, EditClasses } from "./block-style-actions";
 import { ChromeTooltip } from "./chrome-tooltip";
 import { DESIGN_ACTION_WORDS as WORDS } from "./editor-words";
+import { FontChoicesContext, type FontChoices } from "./font-family-field";
+import { sharedStyleName } from "./shared-style-library";
 import {
   applyImport,
   exportDtcgWithTheme,
@@ -55,12 +68,17 @@ import {
   type ExportResult,
   type ImportPlan,
 } from "./tokens-transfer";
+import { siteDataLines, type ImportContext } from "./tokens-transfer-extras";
+import { MissingFonts, type ImportCatalogue } from "./variables-transfer-fonts";
 
 type ReadyPlan = Extract<ImportPlan, { ok: true }>;
 
 /** One of the menu's exports: what it makes, and how its toast names it. */
 interface ExportKind {
-  make: (set: SiteTokenSet) => readonly ExportResult[];
+  make: (
+    set: SiteTokenSet,
+    classes: readonly NamedClass[]
+  ) => readonly ExportResult[];
   /** The toast's opening words, before the files it names. */
   done: string;
   /** How the files' labels are joined in the toast. */
@@ -115,11 +133,41 @@ export function useVariablesTransfer({
   onChange,
   currentTokens,
   readOnly,
+  currentClasses,
+  onEditClasses,
+  storeTokensNow,
+  catalogue,
+  breakpoints,
 }: {
   onChange: (tokens: SiteTokenSet) => void;
   currentTokens: () => SiteTokenSet | undefined;
   readOnly: boolean;
+  /**
+   * The site's classes as they are now, whose text styles an export writes
+   * and an import is matched with. Absent: none are exported or imported.
+   */
+  currentClasses?: () => readonly NamedClass[] | undefined;
+  /** The host's one class writer, which an import's text styles are stored through. */
+  onEditClasses?: EditClasses;
+  /**
+   * The host's variables write made at once rather than at the author's
+   * pause, answering whether it was stored. An import's text styles name
+   * its variables, and the site refuses a text style naming a variable it
+   * doesn't hold yet, so those are stored first through this. Absent, like
+   * `onEditClasses`: an import brings in no text styles.
+   */
+  storeTokensNow?: (tokens: SiteTokenSet) => Promise<boolean>;
+  /** The Google Fonts catalogue, which a missing font is added from. */
+  catalogue?: ImportCatalogue;
+  /**
+   * The site's breakpoints, once read: a file's text style values for one
+   * the site lacks are left out of an import, and the preview says so.
+   */
+  breakpoints?: BreakpointSet;
 }): VariablesTransfer {
+  // The site's fonts, from the host's Design frame: a font the file names
+  // and none of these provide is listed as missing.
+  const fonts = React.useContext(FontChoicesContext);
   const [plan, setPlan] = React.useState<ReadyPlan | null>(null);
   const [notExported, setNotExported] = React.useState<NotExported | null>(
     null
@@ -128,12 +176,25 @@ export function useVariablesTransfer({
   // Where focus goes back to when the list closes: the toast that opened it
   // has gone by then.
   const trigger = React.useRef<HTMLButtonElement>(null);
-  const hint = React.useId();
   // The callbacks as they are now, published at commit, for reads that
   // outlive the render that started them.
-  const latest = React.useRef({ onChange, currentTokens });
+  const latest = React.useRef({
+    onChange,
+    currentTokens,
+    currentClasses,
+    onEditClasses,
+    storeTokensNow,
+    breakpoints,
+  });
   React.useLayoutEffect(() => {
-    latest.current = { onChange, currentTokens };
+    latest.current = {
+      onChange,
+      currentTokens,
+      currentClasses,
+      onEditClasses,
+      storeTokensNow,
+      breakpoints,
+    };
   });
   // Which read is the current one: a later choice supersedes an earlier read
   // still in flight, and a read finishing after the panel has gone is ignored.
@@ -180,7 +241,11 @@ export function useVariablesTransfer({
       refuse("This site's variables are not loaded, so nothing was imported.");
       return;
     }
-    const planned = planImport(texts, into);
+    const planned = planImport(
+      texts,
+      into,
+      importContext(latest.current, fonts)
+    );
     if (!planned.ok) {
       refuse(planned.error, planned.skipped);
       return;
@@ -201,20 +266,45 @@ export function useVariablesTransfer({
       refuse(result.error, result.skipped);
       return;
     }
-    latest.current.onChange(result.tokens);
-    const imported = `Imported ${counted(result.imported, "variable", "variables")}.`;
-    if (result.skipped.length === 0) {
-      toast(imported);
+    // What the toast says once the import is stored: only what arrived.
+    const done = (textStyles: number): void => {
+      const imported = importedWords(result.imported, textStyles);
+      if (result.skipped.length === 0) {
+        toast(imported);
+        return;
+      }
+      // Refused in part: what did not arrive is named, and stays named
+      // until the author has read it.
+      const refused = result.skipped.length;
+      sayUntilDismissed(
+        "warning",
+        `${imported} ${counted(refused, "value was", "values were")} refused:`,
+        result.skipped
+      );
+    };
+    const { onEditClasses: edit, storeTokensNow: storeNow } = latest.current;
+    if (
+      result.classes === undefined ||
+      edit === undefined ||
+      storeNow === undefined
+    ) {
+      latest.current.onChange(result.tokens);
+      done(result.textStyles ?? 0);
       return;
     }
-    // Refused in part: what did not arrive is named, and stays named until
-    // the author has read it.
-    const refused = result.skipped.length;
-    sayUntilDismissed(
-      "warning",
-      `${imported} ${counted(refused, "value was", "values were")} refused:`,
-      result.skipped
-    );
+    void importInSteps({
+      variables: withSiteRowsOf(result.tokens, into, result.rows),
+      classes: result.classes,
+      // The rows laid over the variables as they are by then, so an edit
+      // made meanwhile isn't lost.
+      rows: () => withRows(latest.current.currentTokens() ?? into, result.rows),
+      writers: { storeNow, edit, onChange: latest.current.onChange },
+      refuse,
+    }).then(stored => {
+      if (stored !== "nothing") {
+        done(stored === "all" ? (result.textStyles ?? 0) : 0);
+      }
+    });
   };
 
   const send = (kind: ExportKind): void => {
@@ -225,7 +315,7 @@ export function useVariablesTransfer({
       );
       return;
     }
-    const made = kind.make(set);
+    const made = kind.make(set, latest.current.currentClasses?.() ?? []);
     const written = made.filter(file => file.text !== "");
     for (const file of written) download(file);
     const gaps = oncePerVariable(made.flatMap(file => file.gaps));
@@ -340,17 +430,16 @@ export function useVariablesTransfer({
                 <DropdownMenuSeparator />
               </>
             )}
-            {/* The format is a hint, not part of the name: an author picks
-                "design tokens", and the version is there for whoever needs
-                it. */}
+            {/* The format is drawn as a quieter hint, and said after the
+                name: every word drawn is in the name, so someone who says
+                what they see reaches the item. */}
             <DropdownMenuItem
-              aria-label={WORDS.exportTokens}
-              aria-describedby={hint}
+              aria-label={`${WORDS.exportTokens}, ${WORDS.exportTokensHint}`}
               className="nx-design-more__item"
               onSelect={() => send(DTCG_EXPORT)}
             >
               <span>{WORDS.exportTokens}</span>
-              <span id={hint} className="nx-design-more__hint">
+              <span className="nx-design-more__hint">
                 {WORDS.exportTokensHint}
               </span>
             </DropdownMenuItem>
@@ -400,6 +489,7 @@ export function useVariablesTransfer({
           plan={plan}
           onCancel={() => setPlan(null)}
           onApply={apply}
+          {...(catalogue === undefined ? {} : { catalogue })}
         />
       )}
     </>
@@ -418,20 +508,30 @@ function ImportPreview({
   plan,
   onCancel,
   onApply,
+  catalogue,
 }: {
   plan: ReadyPlan;
   onCancel: () => void;
   onApply: (choices: ReadonlyMap<string, ConflictChoice>) => void;
+  catalogue?: ImportCatalogue;
 }): React.JSX.Element {
   const [choices, setChoices] = React.useState<Map<string, ConflictChoice>>(
     () => new Map()
   );
+  const styles = plan.extras.textStyles;
   const counts = [
     count(plan.added.length, "to add"),
     count(plan.changed.length, "to update"),
     count(plan.unchanged.length, "unchanged"),
     count(plan.conflicts.length, "to settle"),
+    count(
+      styles.added.length + styles.updated.length,
+      styles.added.length + styles.updated.length === 1
+        ? "text style"
+        : "text styles"
+    ),
   ].filter(part => part !== "");
+  const alsoInFile = siteDataLines(plan.extras.site);
   return (
     <Dialog
       open
@@ -450,6 +550,26 @@ function ImportPreview({
             title="Updated (a dark value, a name or a note this site lacks, or another tool's data)"
             names={plan.changed.map(tokenDisplayLabel)}
           />
+          <NameList
+            title={WORDS.textStyles}
+            names={[...styles.added, ...styles.updated].map(sharedStyleName)}
+          />
+          {alsoInFile.length === 0 ? null : (
+            <section className="nx-vars-import__section">
+              <h3>{WORDS.alsoInFile}</h3>
+              <ul className="nx-vars-import__skipped">
+                {alsoInFile.map(line => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {plan.extras.missingFonts.length === 0 ? null : (
+            <MissingFonts
+              families={plan.extras.missingFonts}
+              {...(catalogue === undefined ? {} : { catalogue })}
+            />
+          )}
           {plan.conflicts.length === 0 ? null : (
             <section className="nx-vars-import__section">
               <h3>Different from this site</h3>
@@ -533,6 +653,127 @@ function ImportPreview({
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * An import with text styles, stored in three steps, each a step of the
+ * history: the variables (and the site's other design data) first, since
+ * the site refuses a text style naming a variable it doesn't hold; then the
+ * text styles; then the Site text rows, which may follow them. Undo takes
+ * them back in the opposite order, which the site accepts at each step: it
+ * refuses to remove a text style while a row still follows it. Answers what
+ * was stored.
+ */
+async function importInSteps(steps: {
+  /** The import's variables, with the site's own Site text kept. */
+  variables: SiteTokenSet;
+  classes: ClassListEdit;
+  /** The import whole, laid over the variables as they are then. */
+  rows: () => SiteTokenSet | undefined;
+  writers: {
+    storeNow: (tokens: SiteTokenSet) => Promise<boolean>;
+    edit: EditClasses;
+    onChange: (tokens: SiteTokenSet) => void;
+  };
+  refuse: (headline: string, detail?: readonly string[]) => void;
+}): Promise<"all" | "variables" | "nothing"> {
+  const { writers, refuse } = steps;
+  const stored = await writers.storeNow(steps.variables).catch(() => false);
+  if (!stored) {
+    refuse("The variables weren't saved, so nothing was imported.");
+    return "nothing";
+  }
+  const refusal = await writers
+    .edit(steps.classes)
+    .catch(() => "The text styles couldn't be saved.");
+  if (refusal !== undefined) {
+    refuse("The text styles weren't imported, so neither was Site text.", [
+      refusal,
+    ]);
+    return "variables";
+  }
+  const rows = steps.rows();
+  if (rows !== undefined) writers.onChange(rows);
+  return "all";
+}
+
+/**
+ * The variables as they are with the Site text rows the import takes laid
+ * over the rows as they are then, or `undefined` where that changes
+ * nothing. Only those rows: the variables were stored by the first step and
+ * any other row edited since stands.
+ */
+function withRows(
+  now: SiteTokenSet,
+  rows: SiteTokenSet["siteText"]
+): SiteTokenSet | undefined {
+  if (rows === undefined) return undefined;
+  const next = { ...now.siteText, ...rows };
+  return sameJsonValue(now.siteText ?? {}, next)
+    ? undefined
+    : { ...now, siteText: next };
+}
+
+/**
+ * `tokens` with the import's own Site text rows (`rows`) held back: each
+ * of those roles keeps the row `site` holds, to be laid over by the last
+ * step. Every other row is the one `tokens` holds, which a changed fluid
+ * range has already remade.
+ */
+function withSiteRowsOf(
+  tokens: SiteTokenSet,
+  site: SiteTokenSet,
+  rows: SiteTokenSet["siteText"]
+): SiteTokenSet {
+  const { siteText: merged, ...rest } = tokens;
+  const kept: Record<string, unknown> = { ...merged };
+  for (const role of Object.keys(rows ?? {})) {
+    const own = site.siteText?.[role as keyof typeof site.siteText];
+    if (own === undefined) delete kept[role];
+    else kept[role] = own;
+  }
+  return Object.keys(kept).length === 0 ? rest : { ...rest, siteText: kept };
+}
+
+/**
+ * What an import is planned against: the site's text styles where the host
+ * can store the file's (it has both writers an import's steps go through), and its fonts where the host says which it has.
+ */
+function importContext(
+  host: {
+    readonly onEditClasses?: EditClasses | undefined;
+    readonly storeTokensNow?:
+      | ((tokens: SiteTokenSet) => Promise<boolean>)
+      | undefined;
+    readonly currentClasses?:
+      | (() => readonly NamedClass[] | undefined)
+      | undefined;
+    readonly breakpoints?: BreakpointSet | undefined;
+  },
+  fonts: FontChoices | undefined
+): ImportContext {
+  return {
+    ...(host.onEditClasses === undefined || host.storeTokensNow === undefined
+      ? {}
+      : { textStyles: host.currentClasses?.() ?? [] }),
+    ...(fonts?.faces === undefined
+      ? {}
+      : { faces: [...fonts.faces, ...fonts.fromCode] }),
+    ...(host.breakpoints === undefined
+      ? {}
+      : { breakpoints: host.breakpoints }),
+  };
+}
+
+/**
+ * What an import's toast says it stored: "Imported 3 variables.", or with
+ * the text styles beside them, "Imported 3 variables and 2 text styles.".
+ */
+function importedWords(variables: number, textStyles: number): string {
+  const said = counted(variables, "variable", "variables");
+  return textStyles === 0
+    ? `Imported ${said}.`
+    : `Imported ${said} and ${counted(textStyles, "text style", "text styles")}.`;
 }
 
 /** "3 to add", or nothing for none. */

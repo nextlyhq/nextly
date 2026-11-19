@@ -43,6 +43,7 @@ import {
   lockViewOf,
   propIsWritable,
   propPatch,
+  writablePropsOf,
   type BlockInspection,
   type EditableProp,
 } from "./inspector";
@@ -275,6 +276,13 @@ function ContentSurface({
   // so beside one, every such binding on the block is said above it.
   const unreadable = useVisitorUnreadable(inspection.nodeId);
   const filterOn = useSettingsMatch().active;
+  // Which props the block's locks leave writable, read once per document and
+  // block rather than once per field the tab draws.
+  const writable = React.useMemo(
+    () =>
+      writablePropsOf(editor.document, inspection.nodeId, lockViewOf(editor)),
+    [editor, inspection.nodeId]
+  );
   const fieldsFor = (rows: readonly EditableProp[]): React.JSX.Element => (
     <ContentFields
       inspection={inspection}
@@ -283,14 +291,7 @@ function ContentSurface({
       services={services}
       reasonId={reasonId}
       fields={fields}
-      writable={name =>
-        propIsWritable(
-          editor.document,
-          inspection.nodeId,
-          name,
-          lockViewOf(editor)
-        )
-      }
+      writable={writable}
       onCommitMany={changes =>
         commitLinkChanges(editor, inspection.nodeId, changes)
       }
@@ -305,13 +306,6 @@ function ContentSurface({
   // of their generated rows.
   const stored =
     findNode(editor.document.nodes, inspection.nodeId)?.props ?? {};
-  const formWritable = (name: string) =>
-    propIsWritable(
-      editor.document,
-      inspection.nodeId,
-      name,
-      lockViewOf(editor)
-    );
   // Where a Form's form comes from, read only while a Form is inspected.
   const formSources = useFormSources(
     inspection.blockName === FORM_BLOCK ? services?.listForms : undefined
@@ -320,7 +314,7 @@ function ContentSurface({
     inspection,
     stored,
     services,
-    writable: formWritable,
+    writable,
     onCommit: (name, value) => {
       onCommit(name, value);
     },
@@ -344,13 +338,7 @@ function ContentSurface({
     stored: embedNode?.props ?? {},
     linkBound: embedNode?.bindings?.src !== undefined,
     services,
-    writable: name =>
-      propIsWritable(
-        editor.document,
-        inspection.nodeId,
-        name,
-        lockViewOf(editor)
-      ),
+    writable,
     onCommit: (name, value) => {
       onCommit(name, value);
     },
@@ -367,7 +355,7 @@ function ContentSurface({
           inspection,
           stored,
           sources: formSources,
-          writable: formWritable,
+          writable,
           onCommit: (name, value) => {
             onCommit(name, value);
           },

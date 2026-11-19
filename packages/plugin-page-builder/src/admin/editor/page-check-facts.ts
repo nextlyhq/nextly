@@ -61,7 +61,7 @@ export interface PageCheckFactsInputs {
 
 /** The page's data count as a fact: counted, still counting, or failed. */
 export function pageDataFact(
-  count: PageDataCount | null
+  count: Pick<PageDataCount, "report" | "retry"> | null
 ): PageDataFact | undefined {
   if (count === null) return undefined;
   if (count.report !== undefined) {
@@ -175,13 +175,19 @@ export function usePageCheckFacts(inputs: PageCheckFactsInputs): PageFacts {
       }),
     [document, applied, regionCards, areaOf, currentPage]
   );
+  // Read off the count's own answer. The count is a new object with each
+  // editor state, since it carries the editor for the meter, and new facts on
+  // every click ran every page check again over an unchanged page.
+  const counted = pageData !== null;
+  const report = pageData?.report;
+  const retry = pageData?.retry;
   return useMemo(() => {
-    const data = pageDataFact(pageData);
+    const data = counted ? pageDataFact({ report, retry }) : undefined;
     return {
       ...(bindingsToFix === undefined ? {} : { bindingsToFix }),
       ...(data === undefined ? {} : { pageData: data }),
       ...(unpublished === undefined ? {} : { unpublished }),
       ...(doubledRegions === undefined ? {} : { doubledRegions }),
     };
-  }, [bindingsToFix, pageData, unpublished, doubledRegions]);
+  }, [bindingsToFix, counted, report, retry, unpublished, doubledRegions]);
 }

@@ -66,36 +66,46 @@ export function useShownAgain(): number {
   return count;
 }
 
-/** Whether any Form in `nodes` picks a form from a provider. */
-function picksAForm(nodes: BlockDocument["nodes"]): boolean {
+/** A tree of blocks as a host draws it. */
+type DrawnTree = { readonly nodes: BlockDocument["nodes"] };
+
+/** Whether any Form in `trees` picks a form from a provider. */
+function picksAForm(trees: readonly DrawnTree[]): boolean {
   let picks = false;
-  walkNodes(nodes, node => {
-    if (node.type === FORM_BLOCK && pickedFormOf(node.props.form) !== undefined)
-      picks = true;
-  });
+  for (const tree of trees) {
+    walkNodes(tree.nodes, node => {
+      if (
+        node.type === FORM_BLOCK &&
+        pickedFormOf(node.props.form) !== undefined
+      )
+        picks = true;
+    });
+  }
   return picks;
 }
 
 /**
  * The round a page's picked forms are drawn in: a count that goes up each
- * time the author comes back to the editor (`useShownAgain`) while the page
- * picks a form, and holds otherwise. A host draws its Forms afresh for each
- * round, so a form changed in its own tab is drawn as it now is, and a page
- * picking none is not drawn again for a return.
+ * time the author comes back to the editor (`useShownAgain`) while what is
+ * drawn picks a form, and holds otherwise. A host draws its Forms afresh for
+ * each round, so a form changed in its own tab is drawn as it now is, and a
+ * page picking none is not drawn again for a return.
+ *
+ * `drawn` is every tree the host draws, as it draws them: the page with the
+ * components it places composed in, and the header and footer of its
+ * Layout, so a Form inside a placement or a region counts. The stored page
+ * holds only the placement, never the Form it draws.
  *
  * @experimental Settles with the form provider contract.
  */
-export function useFormsShownAgain(document: {
-  readonly nodes: BlockDocument["nodes"];
-}): number {
+export function useFormsShownAgain(drawn: readonly DrawnTree[]): number {
   const shown = useShownAgain();
-  const { nodes } = document;
-  const picks = React.useMemo(() => picksAForm(nodes), [nodes]);
   const [seen, setSeen] = React.useState({ shown, round: 0 });
   if (seen.shown === shown) return seen.round;
-  // Shown again since the last render: a new round only for a page picking
-  // a form, kept so the next render agrees.
-  const round = picks ? seen.round + 1 : seen.round;
+  // Shown again since the last render: a new round only for a page drawing
+  // a picked form, kept so the next render agrees. Walked only on a return,
+  // never per edit, since the composed trees are the whole page.
+  const round = picksAForm(drawn) ? seen.round + 1 : seen.round;
   setSeen({ shown, round });
   return round;
 }

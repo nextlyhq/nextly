@@ -92,6 +92,7 @@ export const emailDeliveriesMysql = mysqlTable(
     templateDigest: varchar("template_digest", { length: 64 }),
     failureKind: varchar("failure_kind", { length: 16 }),
     failureStatus: int("failure_status"),
+    providerOrigin: varchar("provider_origin", { length: 16 }),
 
     /**
      * `fsp: 3` — milliseconds, not whole seconds.
@@ -121,6 +122,10 @@ export const emailDeliveriesMysql = mysqlTable(
     // Erasure clears a send's key digest from all its records.
     index("email_deliveries_key_idx").on(t.keyDigest),
     index("email_deliveries_queued_idx").on(t.queuedId),
+    index("email_deliveries_provider_origin_idx").on(
+      t.providerOrigin,
+      t.createdAt
+    ),
     index("email_deliveries_template_idx").on(
       t.templateSlug,
       t.status,
