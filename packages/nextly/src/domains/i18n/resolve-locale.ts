@@ -131,13 +131,16 @@ export function resolveLocaleChain(
   if (fallbackLocale === false || fallbackLocale === NO_FALLBACK) {
     return [requested];
   }
-  if (
-    typeof fallbackLocale === "string" &&
-    isValidLocale(cfg, fallbackLocale)
-  ) {
+  // A named fallback in an older spelling is resolved to its configured code, as the requested
+  // language is: the chain names the code its rows are stored under.
+  const named =
+    typeof fallbackLocale === "string"
+      ? configuredLocale(cfg, fallbackLocale)
+      : undefined;
+  if (named !== undefined) {
     const seen = new Set<string>();
-    return [requested, ...resolveFallbackChain(cfg, fallbackLocale)].filter(
-      code => (seen.has(code) ? false : (seen.add(code), true))
+    return [requested, ...resolveFallbackChain(cfg, named)].filter(code =>
+      seen.has(code) ? false : (seen.add(code), true)
     );
   }
   if (!cfg.fallback) return [requested];

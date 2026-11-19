@@ -5,7 +5,7 @@
  * must agree, because a disagreement is invisible from either side: the write
  * reports success and the read shows the old content.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { text } from "../../../config";
@@ -16,6 +16,9 @@ import {
 import { resolveDraftHold } from "../draft-hold";
 import { resolveDraftOverlay } from "../draft-overlay";
 import type { ComponentSchemas } from "../restore-snapshot";
+
+// A case that stands in for an earlier release's layout leaves the one every installation runs.
+afterEach(() => _resetPerLanguageStorage());
 
 const FIELDS = [text({ name: "title" })] as unknown as FieldConfig[];
 
@@ -152,8 +155,9 @@ describe("resolveDraftOverlay", () => {
     { entityKind: "collection" as const, shows: true },
     { entityKind: "single" as const, shows: false },
   ])(
-    "shows a $entityKind's draft held before the rule: $shows",
+    "shows a $entityKind's draft held before the rule: $shows (an earlier release's layout)",
     ({ entityKind, shows }) => {
+      setPerLanguageStorage(false);
       expect(
         resolveDraftOverlay({
           ...base,
