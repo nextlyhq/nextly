@@ -14,6 +14,7 @@ import {
   expectPublishHeldForReview,
   expectStage,
   leading,
+  leaveNote,
   NOTES,
   openNote,
   publishControl,
@@ -89,6 +90,9 @@ test("a writer submits, a reviewer approves, and a publisher publishes, Publish 
     await expect(statusLine(writer.page)).toContainText(
       "Draft · In review · waiting for "
     );
+    // Each person leaves the note before the next opens it, which would
+    // otherwise find it held and open it read-only.
+    await leaveNote(writer, page, id);
 
     // The publisher, before the approval: Publish leads, held with the stage and who it waits for.
     await openNote(publisher.page, id);
@@ -101,6 +105,7 @@ test("a writer submits, a reviewer approves, and a publisher publishes, Publish 
       publisher.page,
       /^Needs approval: In review, waiting for /
     );
+    await leaveNote(publisher, page, id);
 
     // The reviewer: Approve leads, with Request changes beside it.
     await openNote(reviewer.page, id);
@@ -116,6 +121,7 @@ test("a writer submits, a reviewer approves, and a publisher publishes, Publish 
     await expectStage(reviewer, id, "approved");
     // Approved allows publishing, so nobody is waited for any more.
     await expect(statusLine(reviewer.page)).toHaveText("Draft · Approved");
+    await leaveNote(reviewer, page, id);
 
     // The publisher, once it is approved: Publish leads and runs.
     await openNote(publisher.page, id, "dark");

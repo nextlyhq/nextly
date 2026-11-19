@@ -237,6 +237,35 @@ export async function openNote(
   });
 }
 
+/**
+ * Leaves a note's editor and waits until nobody holds it. Opening a note
+ * claims it for whoever may edit it, so the next person to open it would find
+ * it read-only, with "Request edit access", until the first has left.
+ */
+export async function leaveNote(
+  person: { page: Page },
+  by: Requester,
+  id: string
+): Promise<void> {
+  await person.page.goto("about:blank");
+  const search = new URLSearchParams({
+    scopeKind: "collection",
+    scopeSlug: REVIEWED_NOTES,
+    entryId: id,
+  });
+  await expect
+    .poll(
+      async () => {
+        const read = await by.request.get(
+          `${API}/document-lock?${search.toString()}`
+        );
+        return ((await read.json()) as { holder: unknown }).holder ?? null;
+      },
+      { message: `the note ${id} is free`, timeout: 15_000 }
+    )
+    .toBeNull();
+}
+
 /** The line under the title that says where the note stands in its review. */
 export function statusLine(page: Page): Locator {
   return page.getByTestId("review-status-line");
@@ -275,7 +304,9 @@ export async function expectPublishHeldForReview(
   await held.focus();
   await expect(held).toBeFocused();
   await expect(held).toHaveAccessibleDescription(reason);
-  await held.click();
+  // Pressed by keyboard, as a person reaching it by Tab would: a pointer click
+  // waits for an `aria-disabled` control to be enabled, which this never is.
+  await page.keyboard.press("Enter");
   const ready = page
     .locator("[data-publish-parts-dialog]")
     .getByRole("region", { name: "Ready to publish?" });

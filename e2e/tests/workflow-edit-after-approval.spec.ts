@@ -15,6 +15,7 @@ import {
   expectEditorAccessible,
   expectStage,
   expectPublishHeldForReview,
+  leaveNote,
   NOTES,
   openNote,
   resetReviewSettings,
@@ -72,6 +73,8 @@ test("an edit to an approved note sends it back to review and holds Publish, and
       "Draft · In review · waiting for "
     );
     expect((await sharedPartOf(writer, id)).approval).toBeNull();
+    // The writer leaves, so the publisher finds the note free.
+    await leaveNote(writer, page, id);
 
     // The publisher's Publish is held again, with why.
     await openNote(publisher.page, id);
@@ -79,6 +82,7 @@ test("an edit to an approved note sends it back to review and holds Publish, and
       publisher.page,
       /^Needs approval: In review\b/
     );
+    await leaveNote(publisher, page, id);
 
     // The history names the withdrawal among the workflow's events.
     await gotoAdmin(writer.page, `/collections/reviewed-notes/${id}?history=1`);
@@ -96,12 +100,14 @@ test("an edit to an approved note sends it back to review and holds Publish, and
     await step(page, id, "approve");
     await expectStage(page, id, "approved");
     const current = await page.request.get(`${NOTES}/${id}?status=all`);
-    const { title, summary } = (await current.json()) as {
+    const { title, summary, _rev } = (await current.json()) as {
       title: string;
       summary: string;
+      _rev: string;
     };
+    // The same values, over the version just read.
     const saved = await writer.request.patch(`${NOTES}/${id}`, {
-      data: { title, summary },
+      data: { title, summary, _rev },
     });
     expect(saved.ok(), await saved.text()).toBe(true);
     const after = await sharedPartOf(writer, id);

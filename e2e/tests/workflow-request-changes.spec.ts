@@ -14,6 +14,7 @@ import {
   expectEditorAccessible,
   expectStage,
   leading,
+  leaveNote,
   NOTES,
   openNote,
   resetReviewSettings,
@@ -79,6 +80,8 @@ test("a reviewer asks for changes with a comment, and the writer changes the not
     await expect(dialog).toBeHidden();
     await expectStage(reviewer, id, "drafting");
     await expect(statusLine(reviewer.page)).toHaveText(/^Draft · Drafting\b/);
+    // The reviewer leaves, so the writer finds the note free to change.
+    await leaveNote(reviewer, page, id);
 
     // The writer reads the comment on the note, in the side panel's Review section.
     await openNote(writer.page, id);

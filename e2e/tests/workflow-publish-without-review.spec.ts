@@ -12,6 +12,7 @@ import { expectNoAxeViolations } from "./support/axe";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 import {
+  leaveNote,
   NOTES,
   openNote,
   resetReviewSettings,
@@ -75,6 +76,8 @@ test("a person who may publish without review gives a reason and publishes; a pu
     await expectNoAxeViolations(publisher.page, {
       include: "[data-publish-parts-dialog]",
     });
+    // The publisher leaves, so the next person finds the note free.
+    await leaveNote(publisher, page, id);
 
     // The person who holds it is offered it, and asked why.
     await openNote(emergency.page, id);
