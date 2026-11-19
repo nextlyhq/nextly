@@ -40,12 +40,14 @@ import {
   $isRangeSelection,
   type LexicalEditor,
 } from "lexical";
-import { useRef, type JSX, type MutableRefObject } from "react";
+import { useRef, useState, type JSX, type MutableRefObject } from "react";
 
+import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
 import {
   ArrowDown,
   ArrowUp,
   GripVertical,
+  Image as ImageIcon,
   MoreHorizontal,
   Plus,
 } from "@admin/components/icons";
@@ -55,6 +57,7 @@ import type {
   WrittenBlock,
   WrittenDocument,
 } from "@admin/services/emailTemplateApi";
+import type { Media } from "@admin/types/media";
 
 import type { TemplateFormVariable } from "../schema";
 
@@ -229,6 +232,98 @@ function ItemFields({
   );
 }
 
+type ImageBlock = Extract<WrittenBlock, { type: "image" }>;
+
+/**
+ * A library file's address as an email can use it: a sent email is read far
+ * from the admin, and only a complete address loads there, so one the
+ * library gives relative to the site is made complete from the admin's own.
+ */
+function libraryImageAddress(url: string): string {
+  return new URL(url, window.location.origin).href;
+}
+
+/** An image's address, typed or chosen from the media library, and its alt text. */
+function ImageFields({
+  block,
+  path,
+  edit,
+  set,
+}: {
+  block: ImageBlock;
+  path: BlockPath;
+  edit: Edit;
+  set: (next: WrittenBlock) => void;
+}): JSX.Element {
+  const [picking, setPicking] = useState(false);
+  const choose = (media: Media[]) => {
+    const picked = media[0];
+    setPicking(false);
+    if (!picked) return;
+    // The library's alt text, unless the block already has its own.
+    const alt =
+      block.alt.length === 0 && picked.altText
+        ? [{ type: "text" as const, text: picked.altText }]
+        : block.alt;
+    set({ ...block, src: { url: libraryImageAddress(picked.url) }, alt });
+  };
+  return (
+    <div className="grid gap-2">
+      {"url" in block.src ? (
+        <div className="flex flex-wrap gap-2">
+          <Input
+            aria-label="Image address"
+            placeholder="https://"
+            className="min-w-0 flex-1"
+            value={block.src.url}
+            readOnly={edit.readOnly}
+            onChange={event =>
+              set({ ...block, src: { url: event.target.value } })
+            }
+          />
+          {edit.readOnly ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setPicking(true)}
+            >
+              <ImageIcon aria-hidden className="size-4" />
+              Choose from library
+            </Button>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          The image at [{block.src.chip.variable}]
+        </p>
+      )}
+      <RunEditor
+        label="Alt text"
+        placeholder="Describe the image"
+        value={block.alt}
+        readOnly={edit.readOnly}
+        onFocusEditor={editor => edit.focused(editor, path)}
+        onChange={alt => set({ ...block, alt: plain(alt) })}
+      />
+      {block.alt.length === 0 ? (
+        <p className="text-xs text-warning-text">
+          No alt text: screen readers and blocked images show nothing.
+        </p>
+      ) : null}
+      {picking ? (
+        <MediaPickerDialog
+          mode="single"
+          open
+          onOpenChange={setPicking}
+          onSelect={choose}
+          accept="image/*"
+          title="Choose an image"
+        />
+      ) : null}
+    </div>
+  );
+}
+
 /** The fields of one block, by its kind. */
 function BlockFields({
   block,
@@ -293,38 +388,7 @@ function BlockFields({
         </div>
       );
     case "image":
-      return (
-        <div className="grid gap-2">
-          {"url" in block.src ? (
-            <Input
-              aria-label="Image address"
-              placeholder="https://"
-              value={block.src.url}
-              readOnly={edit.readOnly}
-              onChange={event =>
-                set({ ...block, src: { url: event.target.value } })
-              }
-            />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              The image at [{block.src.chip.variable}]
-            </p>
-          )}
-          <RunEditor
-            label="Alt text"
-            placeholder="Describe the image"
-            value={block.alt}
-            readOnly={edit.readOnly}
-            onFocusEditor={editor => edit.focused(editor, path)}
-            onChange={alt => set({ ...block, alt: plain(alt) })}
-          />
-          {block.alt.length === 0 ? (
-            <p className="text-xs text-warning-text">
-              No alt text: screen readers and blocked images show nothing.
-            </p>
-          ) : null}
-        </div>
-      );
+      return <ImageFields block={block} path={path} edit={edit} set={set} />;
     case "divider":
       return null;
     case "spacer":

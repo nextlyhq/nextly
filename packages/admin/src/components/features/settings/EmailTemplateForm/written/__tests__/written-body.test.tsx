@@ -12,6 +12,7 @@ import type {
   WrittenBlock,
   WrittenDocument,
 } from "@admin/services/emailTemplateApi";
+import type { Media } from "@admin/types/media";
 
 import { WrittenBody, type InsertVariable } from "../WrittenBody";
 
@@ -25,6 +26,37 @@ afterEach(() => {
   toast.mockReset();
   toast.info.mockReset();
 });
+
+/** A file in the media library, as the picker hands it over. */
+const LAMP: Media = {
+  id: "m1",
+  filename: "lamp.png",
+  originalFilename: "lamp.png",
+  mimeType: "image/png",
+  size: 1200,
+  url: "/uploads/lamp.png",
+  altText: "A brass lamp",
+  uploadedBy: null,
+  uploadedAt: new Date(0),
+  updatedAt: new Date(0),
+};
+
+// The library itself is the media library's to test: here, a picker that
+// hands over one file when asked.
+vi.mock("@admin/components/features/media-library/MediaPickerDialog", () => ({
+  MediaPickerDialog: ({
+    open,
+    onSelect,
+  }: {
+    open: boolean;
+    onSelect: (media: Media[]) => void;
+  }) =>
+    open ? (
+      <button type="button" onClick={() => onSelect([LAMP])}>
+        Pick the lamp
+      </button>
+    ) : null,
+}));
 
 const heading = (text: string): WrittenBlock => ({
   type: "heading",
@@ -422,6 +454,43 @@ describe("a written email's blocks", () => {
           ],
         },
       ],
+    });
+  });
+
+  it("chooses an image from the media library, with a complete address and its alt text", async () => {
+    const user = userEvent.setup();
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    render(
+      <WrittenBody
+        value={doc(
+          { type: "image", src: { url: "" }, alt: [] },
+          {
+            type: "image",
+            src: { url: "" },
+            alt: [{ type: "text", text: "Ours" }],
+          }
+        )}
+        onChange={seen}
+      />
+    );
+    const [first, second] = screen.getAllByRole("button", {
+      name: "Choose from library",
+    });
+    await user.click(first);
+    await user.click(screen.getByRole("button", { name: "Pick the lamp" }));
+    // A relative library address is made complete, so a sent email loads it.
+    expect(seen.mock.calls[0]?.[0].blocks[0]).toEqual({
+      type: "image",
+      src: { url: `${window.location.origin}/uploads/lamp.png` },
+      alt: [{ type: "text", text: "A brass lamp" }],
+    });
+
+    // Alt text the block already has is its own: the library's does not replace it.
+    await user.click(second);
+    await user.click(screen.getByRole("button", { name: "Pick the lamp" }));
+    const last = seen.mock.calls[seen.mock.calls.length - 1]?.[0];
+    expect(last?.blocks[1]).toMatchObject({
+      alt: [{ type: "text", text: "Ours" }],
     });
   });
 
