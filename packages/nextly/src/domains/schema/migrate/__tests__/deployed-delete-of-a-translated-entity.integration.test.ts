@@ -406,6 +406,17 @@ function migrate(consent: AcceptDataLossOption = true, config = PROJECT) {
   );
 }
 
+/** `nextly migrate --dry-run`, which writes nothing. */
+function dryRun() {
+  loaded.config = PROJECT;
+  return command(context =>
+    runMigrate(
+      { cwd: dir, dryRun: true } as Parameters<typeof runMigrate>[0],
+      context
+    )
+  );
+}
+
 /** `nextly migrate:down` of the last migration, with the data-loss consent. */
 function migrateDown() {
   loaded.config = PROJECT;
@@ -764,7 +775,7 @@ describe.each(getConfiguredTestDialects())(
       await arm(deployed.adapter);
       const deleted = await migrate();
       const after = await sharedLeftOf(deployed.adapter);
-      return { deployed, before, deleted, after };
+      return { own, deployed, before, deleted, after };
     }
 
     /** The run's line naming what it removed of NOTES. */
@@ -1045,10 +1056,86 @@ describe.each(getConfiguredTestDialects())(
         const later = await migrate();
 
         expect(later.code, later.said).toBeUndefined();
-        expect(later.said).toContain(`- table ${notes.table}_locales`);
+        // Listed with the rows it holds: the collection's two languages.
+        expect(later.said).toContain(`- table ${notes.table}_locales (2 rows)`);
         expect(await translationsStand(deployed.adapter)).toBe(false);
         expect(later.said).toContain(
           `Removed what the deleted collection "${NOTES}" left: its translations table ${notes.table}_locales`
+        );
+      },
+      180_000
+    );
+
+    it.skipIf(dialect !== "postgresql")(
+      "names the translations table an older delete left in a dry run, with the consent a real run needs, and drops nothing",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+
+        const preview = await dryRun();
+
+        expect(preview.code, preview.said).toBeUndefined();
+        expect(preview.said).toContain("tables deleted entities left");
+        expect(preview.said).toContain(
+          `deletes data: table ${notes.table}_locales (2 rows): left by the deleted collection "${NOTES}". A real run needs`
+        );
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+      },
+      180_000
+    );
+
+    // A pending file of the run that makes the collection again leaves it undeleted in the history
+    // the run ends at: the metadata pass would not drop its old translations table, so the run
+    // does not ask about it.
+    it.skipIf(dialect !== "postgresql")(
+      "does not ask about the translations table of a collection a pending file makes again",
+      async () => {
+        const { own, deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        // Made again in the Builder, untranslated, and the file it writes left pending.
+        reach(dialect, own.url);
+        await start(own.adapter);
+        await builder(async () => {
+          await dispatchCollections(
+            {} as ServiceContainer,
+            "createCollection",
+            {},
+            { name: NOTES, label: NOTES, fields: [text({ name: "title" })] }
+          );
+        });
+        reach(dialect, deployed.url);
+        await start(deployed.adapter);
+
+        const later = await migrate("dpl_another");
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(later.said).not.toContain(`table ${notes.table}_locales`);
+        // Positive control: the run made the collection again.
+        expect(await deployed.adapter.tableExists(notes.table)).toBe(true);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+      },
+      180_000
+    );
+
+    // A drop is not undone by a later failure: a run that dropped the table and then could not
+    // remove the collection's rows names both.
+    it.skipIf(dialect !== "postgresql")(
+      "names the translations table it dropped when the removal of the rows after it fails",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        leftovers.stop = true;
+
+        const later = await migrate();
+
+        expect(leftovers.stop, "the stop was reached").toBe(false);
+        expect(later.code, later.said).toBeUndefined();
+        expect(await translationsStand(deployed.adapter)).toBe(false);
+        expect(later.said).toContain(
+          `Removed what the deleted collection "${NOTES}" left: its translations table ${notes.table}_locales.`
+        );
+        expect(later.said).toContain(
+          `Could not remove what the deleted collection "${NOTES}" left`
         );
       },
       180_000
