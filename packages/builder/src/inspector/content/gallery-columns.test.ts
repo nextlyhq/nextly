@@ -18,9 +18,9 @@ import {
   planGalleryColumns,
   planGalleryMobile,
 } from "./gallery-columns";
-import { stackTiers } from "../../columns-layout";
+import { stackTiers } from "../../canvas/columns-layout";
 import { applyOps, type BuilderOp } from "../../op-vocabulary";
-import { readStyleValue } from "../../style-values";
+import { readStyleValue } from "../../styles/style-values";
 
 const SITE: BreakpointSet = {
   viewport: [

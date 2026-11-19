@@ -36,6 +36,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
+import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   isLocalizationIntentRefusal,
@@ -168,6 +169,7 @@ import {
   asServiceLogger,
   reconcileMigrationMetadata,
 } from "../../domains/schema/migrate/reconcile-metadata";
+import { refuseForkedHistory } from "../../domains/schema/migrate/history-line";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
   findRegistryDisagreements,
@@ -192,7 +194,6 @@ import {
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
-import { retireDroppedEntities } from "../../domains/schema/migrate/retire-dropped-entities";
 import {
   constructsAdded,
   refuseUnitTheServerCannotHold,
@@ -211,6 +212,7 @@ import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { danglingReferences } from "../../domains/schema/migrate/sqlite-foreign-keys";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import {
+  isStoppedAtPoint,
   reachStopPoint,
   withStopPoints,
   type StopPointHook,
@@ -270,6 +272,7 @@ import {
   markedForSchemaLock,
 } from "../../domains/schema/pipeline/schema-lock";
 import {
+  appliedAppMigrations,
   newestAppliedAppMigration,
   writeRegistryRows,
 } from "../../domains/schema/schema-version";
@@ -869,6 +872,18 @@ export async function runMigrate(
         // run does not put unmigrated edits back to the snapshot. Everywhere
         // else the rows are brought to the newest applied snapshot.
         registryRows: configWatchAllowed() ? "insert-missing" : "write",
+        // A deleted entity's field-group values are read through the ORM, which this command's
+        // resolver of Nextly's own tables cannot address: every field group's table is added to
+        // it first, as `prune` adds them (`registerComponentSchemas`).
+        prepareLeftoverTables: async () => {
+          const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+          await registerComponentSchemas({
+            adapter: drizzleAdapter,
+            registry: installRegistryResolver(drizzleAdapter),
+            dialect,
+            logger,
+          });
+        },
         // An app file or a plugin module waits for a busy table in tries; each try's notice goes
         // to standard error, so a run with --json keeps one document on standard output, and is
         // kept back under --quiet.
@@ -937,11 +952,6 @@ export async function runMigrate(
        * registry work it had just measured was still owed.
        */
       reportMetadataOutcome(metadata, logger);
-      // What an applied migration's dropped entities still hold fails the run, named, once
-      // everything else is reported: the next run removes it.
-      if (metadata.rowsOwed !== undefined && metadata.rowsOwed.length > 0) {
-        throw rowsOwedError(metadata.rowsOwed);
-      }
 
       // Both streams count: a run that executed only plugin modules did
       // migrate, and saying "nothing to migrate" after it is untrue.
@@ -951,7 +961,8 @@ export async function runMigrate(
         ran === 0
           ? metadata.stillPending > 0 ||
             metadata.unreadable.length > 0 ||
-            metadata.rowsNotWritten.length > 0
+            metadata.rowsNotWritten.length > 0 ||
+            (metadata.leftoversLeft?.length ?? 0) > 0
             ? "No migration files to apply."
             : "Nothing to migrate. Database is up to date."
           : `${formatCount(ran, "migration")} applied.`
@@ -1285,8 +1296,9 @@ export interface MigrateCoreDeps {
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
   /**
    * For tests: called at each named point the run reaches (`stop-points.ts`): before and after
-   * each statement of a file, once a file is recorded applied, and after each kind of a dropped
-   * entity's rows is removed. One that throws fails the run there.
+   * each statement of a file, once a file is recorded applied, as a dropped entity's registry row
+   * goes, once the registry write commits, and as what a dropped entity left goes. One that throws
+   * fails the run there.
    */
   stopAt?: StopPointHook;
   /**
@@ -1302,6 +1314,12 @@ export interface MigrateCoreDeps {
    * registry row the run creates (`pluginMigrationArgs`).
    */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  /**
+   * Makes every field group's table addressable before a deleted entity's
+   * leftovers are removed: given by the command, whose adapter resolves
+   * Nextly's own tables alone; a booted app's adapter resolves them already.
+   */
+  prepareLeftoverTables?: () => Promise<void>;
   /**
    * Seam for tests; defaults to recording and retiring element owner rows
    * against the database.
@@ -1420,12 +1438,9 @@ export interface MigrateCoreResult {
     fieldGroupsRegistered: number;
     rowsNotWritten: string[];
     rowsRemoved: string[];
-    /**
-     * Entities an applied migration dropped that still hold rows this run could not remove, as
-     * `<kind> <slug>` and the kinds of row left (`retireDroppedEntities`). The next run removes
-     * them; the command fails while any are named. Absent when none are.
-     */
-    rowsOwed?: string[];
+    leftoversRemoved: string[];
+    /** The dropped entities whose leftovers this run could not remove, owed to the next run. */
+    leftoversLeft?: string[];
     marked: number;
     stillPending: number;
     awaitingMigration: number;
@@ -2472,32 +2487,6 @@ function assertPluginTablesAreMigratable(
  * and interleaving them with the migrate flow made both harder to follow than
  * either is alone.
  */
-/**
- * The failure of a run that applied its migrations but could not remove everything the entities
- * they dropped owned: what each still holds, and that the next run removes it.
- */
-function rowsOwedError(owed: readonly string[]): NextlyError {
-  return new NextlyError({
-    code: "INTERNAL_ERROR",
-    publicMessage:
-      `The migrations applied, but what the entities they dropped owned was not all removed: ` +
-      `${owed.join("; ")}. Run \`nextly migrate\` again once the cause is fixed: it removes what ` +
-      `remains, and runs no migration again.`,
-    logContext: { reason: "dropped-entity-rows-owed", owed: [...owed] },
-  });
-}
-
-/** Warns of what the entities an applied migration dropped still hold, which the next run removes. */
-function reportRowsOwed(
-  owed: readonly string[],
-  logger: CommandContext["logger"]
-): void {
-  if (owed.length === 0) return;
-  logger.warn(
-    `${formatCount(owed.length, "dropped entity", "dropped entities")} still ${owed.length === 1 ? "holds" : "hold"} rows this run could not remove: ${owed.join("; ")}.`
-  );
-}
-
 function reportMetadataOutcome(
   metadata: MigrateCoreResult["metadata"],
   logger: CommandContext["logger"]
@@ -2529,14 +2518,17 @@ function reportMetadataOutcome(
     );
   }
 
-  // What the entities an applied migration dropped still hold, which the next run removes.
-  reportRowsOwed(metadata.rowsOwed ?? [], logger);
-
   // The rows of entities an applied migration dropped, removed with it.
   if (metadata.rowsRemoved.length > 0) {
     logger.success(
       `${formatCount(metadata.rowsRemoved.length, "registry row")} of a dropped entity removed: ${metadata.rowsRemoved.join(", ")}.`
     );
+  }
+
+  // What deleted entities left in the tables every entity shares, removed once
+  // their rows were gone: each entity named with what went.
+  for (const line of metadata.leftoversRemoved) {
+    logger.success(`Removed what the deleted ${line}.`);
   }
 
   if (marked > 0) {
@@ -2773,6 +2765,10 @@ export async function migrateCore(
   await assertFilesPresent(historyArgs);
   await refuseAttempts(historyArgs);
   await assertFilesUnchanged({ ...historyArgs, recordChecksums: false });
+  // And the history is one line: migrations written without each other are
+  // refused before any of them applies, until a migration records the merge,
+  // with those this database has applied, where it has, named as applied.
+  await refuseForkedAppHistory(deps);
   // Before the lock as well: taking it creates the lock's own table on a
   // database that has none, and a refused run leaves the schema as it was. A
   // file another run records meanwhile is only refused once more.
@@ -2807,12 +2803,13 @@ export async function migrateCore(
   let applied = 0;
   let pluginModulesApplied = 0;
   let coreChanged = false;
-  let metadata: MigrateCoreResult["metadata"] = {
+  let metadata = {
     collectionsRegistered: 0,
     singlesRegistered: 0,
     fieldGroupsRegistered: 0,
     rowsNotWritten: [] as string[],
     rowsRemoved: [] as string[],
+    leftoversRemoved: [] as string[],
     marked: 0,
     stillPending: 0,
     awaitingMigration: 0,
@@ -2846,42 +2843,24 @@ export async function migrateCore(
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
+    ...(deps.prepareLeftoverTables === undefined
+      ? {}
+      : { prepareLeftoverTables: deps.prepareLeftoverTables }),
     logger: {
       info: (m: string) => deps.logger.debug(m),
       warn: (m: string) => deps.logger.warn(m),
       debug: (m: string) => deps.logger.debug(m),
     },
   });
-  /**
-   * `recorded`, with the entities its pass found an applied migration dropped retired, once that
-   * pass has committed (`retireDroppedEntities`): what each owned outside its tables, then its
-   * registry row. What a retirement could not remove is named in `rowsOwed`.
-   */
-  const retiredAfter = async (
-    recorded: Awaited<ReturnType<typeof reconcileMetadata>>
-  ): Promise<typeof metadata> => {
-    // The list is the run's to act on, not part of what it reports.
-    const { entitiesRetiring: retiring = [], ...reported } = recorded;
-    if (retiring.length === 0) return reported;
-    const retired = await retireDroppedEntities(
-      deps.adapter as unknown as DrizzleAdapter,
-      retiring,
-      deps.logger
-    );
-    return {
-      ...reported,
-      rowsRemoved: [...reported.rowsRemoved, ...retired.removed],
-      ...(retired.owed.length > 0 ? { rowsOwed: retired.owed } : {}),
-    };
-  };
   const recordMetadata = async (): Promise<void> => {
     deps.logger.info("Phase 3: recording migration metadata...");
     try {
-      metadata = await retiredAfter(await reconcileMetadata(metadataArgs()));
+      metadata = await reconcileMetadata(metadataArgs());
     } catch (error) {
       // A run that lost the schema lock stops here: it is not a bookkeeping
-      // failure to warn about and carry on from into Phase 4's writes.
-      if (isSchemaLockLost(error)) throw error;
+      // failure to warn about and carry on from into Phase 4's writes. Nor is
+      // a test's stop at a point (`stop-points.ts`).
+      if (isSchemaLockLost(error) || isStoppedAtPoint(error)) throw error;
       // The whole pass failed, so nothing was read: say so in the result
       // rather than returning zeroes that read like "nothing needed doing".
       metadata = {
@@ -3013,7 +2992,7 @@ export async function migrateCore(
       // the version names the point the record is at.
       { wrote: () => false, migration: ({ point }) => point }
     );
-    metadata = await retiredAfter(committed.recorded);
+    metadata = committed.recorded;
     if (configurationRows !== undefined) {
       deps.logger.success(
         configurationRowsMessage(
@@ -3087,6 +3066,11 @@ export async function migrateCore(
         deps,
         agreedDeletions
       );
+      // And the history as one line, read again under the lock and after the
+      // files this run applies were read from the folder: a migration written
+      // beside another while the run waited is among those files only if it
+      // is in the folder now, where this reads it, before the first write.
+      await refuseForkedAppHistory(deps);
       // An applied file edited since it ran is refused here too, before the
       // first write; one recorded without a checksum gets its checksum.
       await (deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged)(
@@ -4084,6 +4068,50 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
   // A removal stands for the applied outcome it was recorded after.
   const removed = removedOnPurpose(rows, await repo.listFileRemovals());
   return { files, rows, removed, repo, oldBuilder };
+}
+
+/**
+ * Those of `adopted`, the indexes a file adopts, that are on a table
+ * `before`, the snapshot before the file, holds: the ones the comparison of
+ * the database with the file's sides leaves out. One on a table the file
+ * itself creates stays in it.
+ */
+function adoptedOnTablesOf<T extends { table: string }>(
+  before: NextlySchemaSnapshot,
+  adopted: readonly T[]
+): T[] {
+  const held = new Set(before.tables.map(table => table.name.toLowerCase()));
+  return adopted.filter(index => held.has(index.table));
+}
+
+/**
+ * Refuses a forked history of the app's migrations (`history-line.ts`),
+ * read-only: the folder's snapshots, and the migrations the ledger records
+ * applied where the database has a ledger.
+ */
+async function refuseForkedAppHistory(args: {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+}): Promise<void> {
+  // Detected, not assumed: a caller of the run's seam may hand an adapter
+  // without this operation, which then has no ledger to read.
+  const probe = args.adapter as unknown as {
+    tableExists?: (table: string) => Promise<boolean>;
+  };
+  const hasLedger =
+    typeof probe.tableExists === "function" &&
+    (await probe.tableExists("nextly_schema_events"));
+  const applied = hasLedger
+    ? appliedAppMigrations(
+        await new SchemaEventsRepository(
+          args.db,
+          args.dialect
+        ).listFileApplies()
+      )
+    : new Set<string>();
+  await refuseForkedHistory(args.migrationsDir, applied);
 }
 
 /**
@@ -5195,9 +5223,12 @@ export async function runFileMigrations(args: {
         before,
         target,
         // Without the indexes the file adopted, which its snapshot before it does not record.
+        // On a table the file itself creates they stay: a table that is there already, with
+        // them, is the file's own end, as where a migration written to record a merge
+        // creates a table an earlier one of the merge made.
         live: withoutAdoptedIndexes(
           await introspectLiveSnapshot(db, dialect, managed),
-          adoption.adopted
+          adoptedOnTablesOf(before, adoption.adopted)
         ),
         contributions: mergeContributions(
           beforeContributions,

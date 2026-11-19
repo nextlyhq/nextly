@@ -26,7 +26,8 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import type { CollectionArtifacts } from "../../dynamic-collections/services/dynamic-collection-service";
-import { dropEntityTranslationsTable } from "../../i18n/migration/teardown-entity-i18n";
+import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
+import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import {
   publishesPerLanguage,
   storesPerLanguage,
@@ -51,7 +52,6 @@ import {
   applyCollectionSchemaChange,
   refuseNewCollectionIndexNamesTaken,
 } from "../../schema/services/collection-schema-apply";
-import { removeBeforeTheDrop } from "../../schema/services/remove-entity-owned-data";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { loadUiSchema } from "../../schema/ui-schema/loader";
 import { withSystemTextFields } from "../system-text-fields";
@@ -1706,18 +1706,26 @@ export class CollectionMetadataService extends BaseService {
     collection: DeletedCollectionRow,
     adapter: TeardownAdapter
   ): Promise<void> {
-    // What the collection owns outside its tables, removed as every delete removes it, a
-    // deployed one through `nextly migrate` included (`removeRowsBeforeTheDrop`): its field-group
-    // values, keyed by a plain `_parent_table` string with no FK, so dropping this collection's
-    // table cascades nothing and would strand them, and its translation rows in the shared
-    // archive and records, DML that no migration file should carry.
-    // Its translations table among them, before the main table goes: the companion holds an FK
-    // to `<main>.id`, so dropping the child first is safe in every environment.
-    await removeBeforeTheDrop(
+    // Embedded component instances live in `comp_<slug>` tables keyed by a plain
+    // `_parent_table` string with no FK, so dropping this collection's table cascades
+    // nothing and would strand every instance. Sweep them (and any nested instances)
+    // before the drop.
+    await teardownEntityComponentData({
       adapter,
-      { kind: "collection", slug, table: collection.tableName },
-      () => dropEntityTranslationsTable(adapter, collection.tableName)
-    );
+      parentTable: collection.tableName,
+    });
+
+    // Tear down the localization artifacts in-process, before the main table goes.
+    // Unlike the main-table drop below this is not deferred to `nextly migrate`: the
+    // companion holds an FK to `<main>.id` so dropping the child first is safe in every
+    // environment, and the shared-archive purge is DML that no migration file should
+    // carry (the archive table is created lazily and may not exist).
+    await teardownEntityI18n({
+      kind: "collection",
+      adapter,
+      slug,
+      tableName: collection.tableName,
+    });
   }
 
   /**

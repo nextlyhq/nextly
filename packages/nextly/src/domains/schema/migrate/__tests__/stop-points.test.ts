@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  isStoppedAtPoint,
   KILL_AT_VARIABLE,
   reachStopPoint,
   withStopPoints,
@@ -56,17 +57,22 @@ describe("a stop point", () => {
     expect(reached).toEqual(["inside"]);
   });
 
-  it("fails the run at the point a hook throws", async () => {
-    await expect(
-      withStopPoints(
-        point => {
-          if (point === "there") throw new Error("stopped there");
-        },
-        async () => {
-          await reachStopPoint("before", {});
-          await reachStopPoint("there", {});
-        }
-      )
-    ).rejects.toThrow("stopped there");
+  it("fails the run at the point a hook throws, marked as a stop at that point", async () => {
+    const stopped = await withStopPoints(
+      point => {
+        if (point === "there") throw new Error("stopped there");
+      },
+      async () => {
+        await reachStopPoint("before", {});
+        await reachStopPoint("there", {});
+      }
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    // Marked, so a step that carries on from its own failures still ends the run on it.
+    expect(isStoppedAtPoint(stopped)).toBe(true);
+    expect((stopped as Error).cause).toEqual(new Error("stopped there"));
+    expect(isStoppedAtPoint(new Error("stopped there"))).toBe(false);
   });
 });

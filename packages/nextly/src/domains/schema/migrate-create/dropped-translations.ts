@@ -153,7 +153,8 @@ function recordedEntityOf(
   if (record === undefined) return undefined;
   for (const kind of Object.keys(RECORD_KEYS) as I18nTransitionKind[]) {
     for (const [slug, entry] of Object.entries(record[RECORD_KEYS[kind]])) {
-      if (tableOf(kind, slug, entry) === table) return { kind, slug, entry };
+      if (recordedEntityTable(kind, slug, entry) === table)
+        return { kind, slug, entry };
     }
   }
   return undefined;
@@ -165,7 +166,7 @@ function recordedEntityOf(
  * one (`tableName`, or `dbName`): one made under a name its author chose keeps
  * it, which its slug alone does not give.
  */
-function tableOf(
+export function recordedEntityTable(
   kind: I18nTransitionKind,
   slug: string,
   entry: RecordedEntitySettings

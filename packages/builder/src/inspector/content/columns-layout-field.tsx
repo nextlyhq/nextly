@@ -34,9 +34,9 @@ import {
   stackTiers,
   type ColumnsLayout,
   type StackOn,
-} from "../../columns-layout";
+} from "../../canvas/columns-layout";
 import type { EditorState } from "../../editor-state";
-import { readStyleValue } from "../../style-values";
+import { readStyleValue } from "../../styles/style-values";
 import { HeldByLock } from "../held-by-lock";
 import type { PanelSection } from "../panel-section";
 import { arrowTo, SegmentChoices } from "../segment-choices";

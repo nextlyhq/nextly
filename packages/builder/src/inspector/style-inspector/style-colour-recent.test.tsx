@@ -27,7 +27,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { useEditorState, type EditorState } from "../../editor-state";
-import { RecentColoursStore } from "../../recent-colours";
+import { RecentColoursStore } from "../../panels/design/recent-colours";
 import type { PreferenceStore } from "../../shell-state";
 import { StyleInspectorPanel } from "./style-inspector-panel";
 

@@ -18,8 +18,8 @@ import {
 import { Accordion, AccordionContent, AccordionItem } from "@nextlyhq/ui";
 import * as React from "react";
 
-import type { ParentArrangement } from "../../plain-layout";
-import type { StyleProvenance } from "../../style-provenance";
+import type { ParentArrangement } from "../../styles/plain-layout";
+import type { StyleProvenance } from "../../styles/style-provenance";
 import type { InspectorSectionKey } from "../inspector-sections";
 import { useTabFolds } from "../panel-folds-context";
 import { SectionHeading } from "../panel-section";

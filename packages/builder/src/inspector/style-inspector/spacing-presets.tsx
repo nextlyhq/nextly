@@ -14,14 +14,14 @@ import {
 import * as React from "react";
 
 import type { useCanvasTokenMode } from "../../canvas/prefers-dark";
+import { variableGroupOf } from "../../panels/design/tokens-studio";
 import {
   variableLabel,
   variablesFor,
   type SiteVariable,
-} from "../../style-colour";
-import type { StyleControl } from "../../style-controls";
-import { lengthInPx, variableValueText } from "../../style-variables";
-import { variableGroupOf } from "../../tokens-studio";
+} from "../../styles/style-colour";
+import type { StyleControl } from "../../styles/style-controls";
+import { lengthInPx, variableValueText } from "../../styles/style-variables";
 
 import { storedText } from "./style-text-field";
 

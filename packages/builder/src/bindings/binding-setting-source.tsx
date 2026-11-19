@@ -21,9 +21,9 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { ComponentFieldsHost } from "../component-fields";
 import { ComponentFieldsContext } from "../inspector/component-fields-panel";
 import type { EditableProp } from "../inspector/inspector";
+import type { ComponentFieldsHost } from "../panels/components/component-fields";
 
 import type {
   BindingFieldChoice,

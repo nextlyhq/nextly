@@ -8,7 +8,6 @@
  */
 import * as React from "react";
 
-import { useLatestCallback } from "../latest-callback";
 import { isLeftPanel, topologyKey, type LeftPanel } from "../shell-state";
 
 import {
@@ -18,6 +17,7 @@ import {
   type EditorRailProps,
 } from "./editor-rail";
 import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
+import { useLatestCallback } from "./latest-callback";
 import type { BuilderShellProps } from "./shell-props";
 
 /**

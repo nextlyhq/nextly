@@ -12,6 +12,8 @@
  * @module domains/schema/migrate/stop-points
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
+
 /** What a test runs at each point a run reaches; one that throws fails the run there. */
 export type StopPointHook = (point: string) => void | Promise<void>;
 
@@ -19,6 +21,13 @@ export type StopPointHook = (point: string) => void | Promise<void>;
 export const KILL_AT_VARIABLE = "NEXTLY_TEST_KILL_AT";
 
 let installed: StopPointHook | undefined;
+
+const STOPPED_AT_POINT = "stopped-at-point";
+
+/** Whether `error` is a test's stop at a point (`reachStopPoint`), which always ends the run. */
+export function isStoppedAtPoint(error: unknown): boolean {
+  return NextlyError.is(error) && error.logContext?.reason === STOPPED_AT_POINT;
+}
 
 /** Runs `run` with `hook` called at each stop point it reaches, and the earlier hook back after. */
 export async function withStopPoints<T>(
@@ -43,7 +52,15 @@ export async function reachStopPoint(
   point: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<void> {
-  await installed?.(point);
+  try {
+    await installed?.(point);
+  } catch (cause) {
+    // Marked, so a step that carries on from its own failures still lets this one end the run.
+    throw NextlyError.internal({
+      ...(cause instanceof Error ? { cause } : {}),
+      logContext: { reason: STOPPED_AT_POINT, point },
+    });
+  }
   if (env.NODE_ENV === "test" && env[KILL_AT_VARIABLE] === point) {
     process.kill(process.pid, "SIGKILL");
   }

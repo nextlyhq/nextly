@@ -29,7 +29,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { boundField, boundNames } from "./binding-bound-names";
 import type { BindingFieldSource } from "./binding-services";
 import { settingBoundFrom, settingSource } from "./binding-setting-source";
-import type { ComponentFieldsHost } from "../component-fields";
+import type { ComponentFieldsHost } from "../panels/components/component-fields";
 import type { ContentServices } from "../inspector/content/content-controls";
 import type { EditorState } from "../editor-state";
 import { InspectorPanel } from "../inspector/inspector-panel";

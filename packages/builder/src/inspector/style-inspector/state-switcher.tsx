@@ -39,7 +39,7 @@ import {
 import { Check, ChevronDown } from "lucide-react";
 import * as React from "react";
 
-import { stateHasOwnValues } from "../../style-values";
+import { stateHasOwnValues } from "../../styles/style-values";
 
 /**
  * What each state is CALLED, in this product's vocabulary.

@@ -15,8 +15,8 @@ import * as React from "react";
 import { describe, expect, it } from "vitest";
 
 import type { EditorState } from "../editor-state";
-import { PAGE_BUILDER_DOCS } from "../docs-links";
-import { BlockKeyboardActions } from "../keyboard-actions";
+import { PAGE_BUILDER_DOCS } from "./docs-links";
+import { BlockKeyboardActions } from "./keyboard-actions";
 import { HelpDialog, type PanelKeysSetting } from "./help-dialog";
 
 /** Each binding's description as it runs, for asking which one a key ran. */

@@ -9,13 +9,13 @@
 import { findNode, type StyleValue } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { useCanvasTokenMode } from "../../canvas/prefers-dark";
 import {
   planSpacerHeight,
   reachingBeneath,
   SPACER_BLOCK,
-} from "../../block-shortcuts";
-import { useCanvasTokenMode } from "../../canvas/prefers-dark";
-import type { StyleControl } from "../../style-controls";
+} from "../../styles/block-shortcuts";
+import type { StyleControl } from "../../styles/style-controls";
 import { SegmentChoices } from "../segment-choices";
 
 import {

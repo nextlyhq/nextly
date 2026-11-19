@@ -56,7 +56,6 @@ import {
 } from "../migrate-create/snapshot-io";
 import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 import { inRegistryStep, writeRegistryRows } from "../schema-version";
-import type { OwningEntity } from "../services/remove-entity-owned-data";
 import {
   collectionRowValues,
   componentRowValues,
@@ -73,6 +72,7 @@ import {
 } from "./registry-history";
 import { removeRegistryRow } from "./registry-row-removal";
 import type { RegistrySource } from "./registry-source";
+import { reachStopPoint } from "./stop-points";
 import { topLevelFieldNames } from "./top-level-field-names";
 
 export interface RegistryWriteDeps {
@@ -101,19 +101,6 @@ export interface RegistryWriteResult {
   removed: string[];
   /** Entities whose row could not be written or removed, as `<kind> <slug>`. */
   failed: string[];
-  /**
-   * Entities an applied migration dropped whose tables are gone, for the run to retire once this
-   * pass commits (`retireDroppedEntities`): the rows they own outside their tables first, each kind
-   * on its own, their registry row last. Their registry rows are left in this pass, so an entity
-   * whose retirement stops part-way is still found owed by the next run.
-   */
-  retiring?: OwningEntity[];
-  /**
-   * Entities an applied migration dropped whose registry could not be read, as `<kind> <slug>`:
-   * nothing they own can be removed this run, so the run fails, naming them, as for any entity
-   * that still holds rows.
-   */
-  unretired?: string[];
 }
 
 /**
@@ -268,21 +255,16 @@ export async function writeRegistryFromSource(
         );
       }
     }
-    if (plan.remove !== undefined) {
-      await removeRows(plan.remove, stored, deps, result);
-    } else if (plan.only === undefined) {
-      // A drop judged from the snapshots alone is confirmed by the table: a
-      // migration applied with consent dropped it, so a row whose table still
-      // stands is no drop's and is left with it. The rest are retired by the
-      // run once this pass commits.
-      const dropped = droppedEntities(chain);
-      result.retiring = await retiringEntities(dropped, stored, deps, result);
-      result.unretired = RECORDED_KINDS.flatMap(([kind]) =>
-        stored[kind] === undefined
-          ? [...dropped[kind]]
-              .filter(slug => !isReservedResourceSlug(slug))
-              .map(slug => `${kind} ${slug}`)
-          : []
+    if (plan.only === undefined || plan.remove !== undefined) {
+      await removeRows(
+        plan.remove ?? droppedEntities(chain),
+        stored,
+        deps,
+        result,
+        // A drop judged from the snapshots alone is confirmed by the table:
+        // a migration applied with consent dropped it, so a row whose table
+        // still stands is no drop's and is left with it.
+        plan.remove === undefined
       );
     }
   } finally {
@@ -293,22 +275,28 @@ export async function writeRegistryFromSource(
 }
 
 /**
- * Each entity in `remove` the registry holds a row for, with that row. An entity of a reserved
- * slug, or with no stored row, is passed over; a kind whose rows could not be read is passed over
- * whole, as its rows were not written, and each of its entities is reported not done, so the run
- * never reads as complete while a row it should remove may stay.
+ * Remove the stored row of each entity in `remove`, on the registry write
+ * the caller opened (or one of its own); a removal that fails fails that
+ * write, so nothing of any removal is kept. An entity of
+ * a reserved slug, or with no stored row, is passed over; a kind whose rows
+ * could not be read is passed over whole, as its rows were not written.
+ * With `keepWhereTableStands`, so is a row whose table is still there.
  */
-function storedCandidates(
+async function removeRows(
   remove: SlugsByKind,
   stored: StoredRows,
   deps: RegistryWriteDeps,
-  result: RegistryWriteResult
-): { kind: SettingsEntityKind; slug: string; row: unknown }[] {
+  result: RegistryWriteResult,
+  keepWhereTableStands: boolean
+): Promise<void> {
   const candidates = RECORDED_KINDS.flatMap(([kind]) =>
     [...remove[kind]]
       .filter(slug => !isReservedResourceSlug(slug))
       .map(slug => ({ kind, slug }))
   );
+  // A registry that could not be read cannot say whether a row is there to
+  // remove: each candidate is reported not done, so the run never reads as
+  // complete while a row it should remove may stay.
   for (const { kind, slug } of candidates) {
     if (stored[kind] !== undefined) continue;
     result.failed.push(`${kind} ${slug}`);
@@ -316,105 +304,45 @@ function storedCandidates(
       `Could not remove the registry row of ${kind} "${slug}": the ${kind} registry could not be read.`
     );
   }
-  return candidates.flatMap(({ kind, slug }) => {
-    const row = stored[kind]?.get(slug);
-    return row === undefined ? [] : [{ kind, slug, row }];
-  });
-}
-
-/**
- * The entities in `dropped` the registry still holds whose tables are gone, for the run to retire
- * (`RegistryWriteResult.retiring`), asked on the registry write the caller opened.
- */
-async function retiringEntities(
-  dropped: SlugsByKind,
-  stored: StoredRows,
-  deps: RegistryWriteDeps,
-  result: RegistryWriteResult
-): Promise<OwningEntity[]> {
-  const view = adapterForReads(deps.adapter);
-  const retiring: OwningEntity[] = [];
-  for (const { kind, slug, row } of storedCandidates(
-    dropped,
-    stored,
-    deps,
-    result
-  )) {
-    const table = tableNameOf(row);
-    // A row naming no table, or one whose table still stands, is no drop's.
-    if (table === undefined || (await tableStands(deps.adapter, view, row))) {
-      continue;
-    }
-    retiring.push({ kind, slug, table });
-  }
-  return retiring;
-}
-
-/**
- * Remove the stored row of each entity in `remove`, on the registry write the caller opened (or
- * one of its own), as `migrate:down` removes the row of an entity a rolled-back migration added.
- */
-async function removeRows(
-  remove: SlugsByKind,
-  stored: StoredRows,
-  deps: RegistryWriteDeps,
-  result: RegistryWriteResult
-): Promise<void> {
-  const doomed = storedCandidates(remove, stored, deps, result);
+  const doomed = candidates.filter(
+    ({ kind, slug }) => stored[kind]?.has(slug) === true
+  );
   if (doomed.length === 0) return;
-  result.removed.push(...(await removeRegistryRowsIn(deps.adapter, doomed)));
-}
-
-/**
- * Removes the registry row of each of `entities`, with what goes with it, in one registry write
- * (the caller's, or one of its own), and returns them as `<kind> <slug>`. A removal that fails
- * fails the write, so nothing of any of them is kept.
- */
-export async function removeRegistryRowsIn(
-  adapter: DrizzleAdapter,
-  entities: readonly { kind: SettingsEntityKind; slug: string }[]
-): Promise<string[]> {
-  const removed: string[] = [];
   await writeRegistryRows(
-    adapter,
+    deps.adapter,
     async tx => {
-      const view = adapterForReads(adapter);
+      const view = adapterForReads(deps.adapter);
       // Asked on the transaction the rows are removed in (`view`), never on
       // a second connection that cannot see it, each as a step of its own so
       // a probe that fails cannot abort it.
       const tables = {
-        dashboardPinsPresent: await inRegistryStep(adapter, () =>
-          dashboardPinsPresent(adapter, undefined, view)
+        dashboardPinsPresent: await inRegistryStep(deps.adapter, () =>
+          dashboardPinsPresent(deps.adapter, undefined, view)
         ),
-        mediaUsagePresent: await inRegistryStep(adapter, () =>
-          mediaUsageTablePresent(adapter, undefined, view)
+        mediaUsagePresent: await inRegistryStep(deps.adapter, () =>
+          mediaUsageTablePresent(deps.adapter, undefined, view)
         ),
       };
-      for (const { kind, slug } of entities) {
+      for (const { kind, slug } of doomed) {
         await assertSchemaLockHeld();
+        if (
+          keepWhereTableStands &&
+          (await tableStands(deps.adapter, view, stored[kind]?.get(slug)))
+        ) {
+          continue;
+        }
         // Not one row's failure to report and go on from: a removal deletes
         // the entity's autosaves and pins before its row, and on MySQL a
         // step has no savepoint to undo them, so a removal that fails fails
         // the registry write it is part of, which then leaves them all.
         await removeRegistryRow({ tx, view, tables }, kind, slug);
-        removed.push(`${kind} ${slug}`);
+        await reachStopPoint(`${kind} ${slug}: removed registryRow`);
+        result.removed.push(`${kind} ${slug}`);
       }
-      return removed.length;
+      return result.removed.length;
     },
-    { wrote: count => count > 0 }
+    { wrote: removed => removed > 0 }
   );
-  return removed;
-}
-
-/** The table a stored registry row names, or undefined where it names none. */
-function tableNameOf(row: unknown): string | undefined {
-  const tableName =
-    row !== null && typeof row === "object"
-      ? (row as { tableName?: unknown }).tableName
-      : undefined;
-  return typeof tableName === "string" && tableName !== ""
-    ? tableName
-    : undefined;
 }
 
 /**
@@ -427,8 +355,11 @@ async function tableStands(
   view: DrizzleAdapter,
   row: unknown
 ): Promise<boolean> {
-  const tableName = tableNameOf(row);
-  if (tableName === undefined) return true;
+  const tableName =
+    row !== null && typeof row === "object"
+      ? (row as { tableName?: unknown }).tableName
+      : undefined;
+  if (typeof tableName !== "string" || tableName === "") return true;
   try {
     return await inRegistryStep(adapter, () => view.tableExists(tableName));
   } catch {

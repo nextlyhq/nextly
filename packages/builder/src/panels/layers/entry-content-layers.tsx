@@ -23,7 +23,7 @@ import {
   entryFieldRemoved,
   fieldName,
   usePreviewedCollection,
-} from "../../previewed-entry";
+} from "../../canvas/previewed-entry";
 
 /** One Entry content row's facts: its field's name, and whether it is gone. */
 export interface EntryContentRowFacts {

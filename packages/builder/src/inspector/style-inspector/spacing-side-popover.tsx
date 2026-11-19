@@ -23,9 +23,9 @@ import {
 import { MoreHorizontal, X } from "lucide-react";
 import * as React from "react";
 
+import { isElement, isInput } from "../../canvas/dom-kind";
 import { useCanvasTokenMode } from "../../canvas/prefers-dark";
-import { isElement, isInput } from "../../dom-kind";
-import type { StyleControl } from "../../style-controls";
+import type { StyleControl } from "../../styles/style-controls";
 import { SegmentChoices } from "../segment-choices";
 
 import { CompactSides } from "./spacing-box";

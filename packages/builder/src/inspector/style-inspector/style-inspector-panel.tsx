@@ -66,17 +66,23 @@ import {
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
-import { breakpointQueries, matchedBreakpoints } from "../../breakpoints";
 import { useCanvasFrame } from "../../canvas/canvas-frame-context";
 import {
   CanvasTokenModeProvider,
   useCanvasTokenModeAt,
 } from "../../canvas/prefers-dark";
 import type { EditorState } from "../../editor-state";
-import { FontChoicesContext, type FontChoices } from "../../font-family-field";
+import {
+  FontChoicesContext,
+  type FontChoices,
+} from "../../panels/design/font-family-field";
 import { layerLabel } from "../../panels/layers/layers";
-import type { SideOrientation } from "../../side-orientation";
-import type { StylePolicy } from "../../style-values";
+import {
+  breakpointQueries,
+  matchedBreakpoints,
+} from "../../styles/breakpoints";
+import type { SideOrientation } from "../../styles/side-orientation";
+import type { StylePolicy } from "../../styles/style-values";
 import { CssNamesProvider } from "../css-names-context";
 import { PanelFoldsProvider } from "../panel-folds-context";
 

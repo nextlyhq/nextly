@@ -53,6 +53,7 @@ import {
 import * as React from "react";
 
 import { ChromeTooltip } from "../chrome-tooltip";
+import type { EditorState } from "../editor-state";
 import {
   editedComponent,
   EXPOSURE_TYPE_LABEL,
@@ -73,8 +74,7 @@ import {
   applyFieldEdit,
   type ComponentFieldsHost,
   type FieldEditContext,
-} from "../component-fields";
-import type { EditorState } from "../editor-state";
+} from "../panels/components/component-fields";
 import { useStoredDraft } from "../stored-draft";
 
 import { commitOnEnter } from "./commit-on-enter";

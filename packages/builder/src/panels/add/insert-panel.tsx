@@ -81,10 +81,10 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "../../block-icon";
-import { isElement } from "../../dom-kind";
+import { isElement } from "../../canvas/dom-kind";
+import { entryContentRefusal } from "../../canvas/entry-content-rules";
+import { usePreviewedCollection } from "../../canvas/previewed-entry";
 import { EDITOR_WORDS } from "../../editor-words";
-import { entryContentRefusal } from "../../entry-content-rules";
-import { usePreviewedCollection } from "../../previewed-entry";
 
 import { LibraryNotices, type LibraryTier } from "./insert-panel-notices";
 import { useInsertOffers } from "./insert-panel-offers";

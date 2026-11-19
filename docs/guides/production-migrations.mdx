@@ -79,32 +79,28 @@ It names what `nextly migrate` will ask consent for, judged the same way, and `n
 ### Deleting a collection, Single or field group
 
 A migration that deletes a collection, Single or field group holds only the drops of its tables:
-its own, its translations table and its junction tables. The rows other tables hold for it are
-removed by `nextly migrate` in the run that applies the file, once the file is recorded applied,
-under the consent the file was applied with:
+its own, its translations table and its junction tables. `nextly migrate` removes the rest in the
+run that applies the file, once the file is recorded applied, under the consent the file was
+applied with:
 
-- its values in each field group's shared table, nested ones included;
-- its archived translations, the record of where its translations came from, and its translation
-  transition record;
-- last, its registry row, with its autosaves, version pins, readers' "seen" markers, dashboard pins
-  and the record of the media its documents use.
+- in the registry write, the entity's registry row, with its autosaves, version pins, readers'
+  "seen" markers, dashboard pins and the record of the media its documents use;
+- once that write has committed, what it left in the tables every entity shares: its values in
+  each field group's shared table, nested ones included, its archived translations, the record of
+  where its translations came from, and its translation transition record. Each entity's go in one
+  transaction.
 
 The Schema Builder's delete in development removes the same rows, before its drops.
 
 The consent naming the entity's table covers these rows (`--accept-data-loss=dc_posts`), and
-`nextly migrate` lists each before asking. Each kind of row is removed on its own and the registry
-row last, so a run that stops part-way is finished by the next `nextly migrate`, even with nothing
-pending, without running any drop again or recording anything new. A run that cannot remove them
-fails, naming the entity and what it still holds; a start that applies migrations in production
-reports it and keeps starting.
+`nextly migrate` lists each before asking. A run that stops part-way is finished by the next
+`nextly migrate`, even with nothing pending, without running any drop again or recording anything
+new. A run that cannot remove what a deleted entity left says so, naming the entity, and the next run removes it.
 
 If a run stops inside the delete file, nothing is removed. On PostgreSQL and SQLite the file rolls
 back and the next run applies it whole. On MySQL each drop commits as it runs, so the next run
 refuses, naming each drop as done or not done, until you finish the drops and record the file with
 `migrate:resolve`; the run after that removes the rows.
-
-A delete migration written by an earlier release is applied the same way. An entity whose registry
-row an earlier run already removed keeps the rows that run left.
 
 ### Renaming a field
 
@@ -476,6 +472,18 @@ statements before it have then run and stay applied, and the refusal says so. A 
 adds with one constant default for every row is refused before anything runs once the table holds
 two rows. An index with a `WHERE` clause, one over an expression, or one on a table qualified by
 another schema than the connection's own is left to the database.
+
+### Two migrations written from the same one
+
+Each migration is written from the one before it, and its snapshot records which. Two migrations that record the same one were written without each other: most often on two branches that each added a migration and were then merged, and rarely by two `migrate:create` runs at once where one was stopped for a long time. Until a migration records them together, the newest snapshot lacks one side's change.
+
+`nextly migrate`, a production start, `nextly migrate:check` and a Schema Builder save refuse such a history with `MIGRATION_HISTORY_FORKED`, naming the files, and `nextly migrate` applies none of them. Before this, they were applied in file order and the configuration was then refused as ahead of its migrations.
+
+After merging a branch that brought a migration of its own, run `nextly migrate:create --name record_merge`: it writes a migration after both that records the merged state, and `nextly migrate` then applies everything. Where both branches change the same table or column, they cannot be applied one after the other: the message names what both change, and the fix is to delete one of the two with its snapshot and run `nextly migrate:create` again, which writes its change after the other. If it finds nothing to record, the configuration is already what the newest of them records: it names the migrations written without it, which repeat the change or make one the configuration no longer has, and those are deleted with their snapshots in `meta/`. A migration that only continues one of the branches does not record the merge.
+
+Run `nextly migrate:check` in CI on every pull request, so a merge that still needs its record fails there.
+
+Migrations written before this was recorded name no parent, and are never refused.
 
 ### A build older than the database
 

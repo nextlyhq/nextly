@@ -1,9 +1,10 @@
 /**
  * `nextly migrate` removes in a deployed database what deleting a collection in the Schema
  * Builder removes in development: its tables, from the migration file, and, once the file is
- * recorded applied, the rows other tables hold for it: its field-group values, its archived
- * translations and translation provenance, then its registry row with its autosaves, version pins
- * and "seen" markers. Another collection's rows in the same shared tables stay.
+ * recorded applied, the rows other tables hold for it: its registry row with its autosaves, version
+ * pins and "seen" markers, in the registry write, then, once that has committed, its field-group
+ * values, archived translations and translation provenance. Another collection's rows in the same
+ * shared tables stay.
  *
  * A run stopped part-way leaves what the dialect can promise. Inside the file, PostgreSQL and
  * SQLite roll the file back, so nothing is removed and the next run applies it whole; MySQL keeps
@@ -87,13 +88,24 @@ const NOTES_TABLE = `dc_${NOTES}`;
 const OTHER_TABLE = `dc_${OTHER}`;
 const META_TABLE = resolveComponentTableName(META);
 
-/** What deleting `dpr_notes` removes on the deployed database, by the step that removes it. */
-const STEPS = [
-  "fieldGroupValues",
-  "translationArchive",
-  "translationTransition",
-  "translationProvenance",
+/**
+ * The points a run reaches once the delete file is recorded, in order, as a stop names them after
+ * the file's or the collection's name (`stop-points.ts`), and whether `dpr_notes`'s registry row
+ * still stands when a process is killed there: the registry write removes it, then what the
+ * collection left goes, in a transaction of its own.
+ */
+const AFTER_THE_FILE = [
+  { at: "recorded applied", registryRow: 1 },
+  { at: "removed registryRow", registryRow: 1 },
+  { at: "registry written", registryRow: 0 },
+  { at: "removed fieldGroupValues", registryRow: 0 },
+  { at: "removed translationRows", registryRow: 0 },
+  { at: "removed leftovers", registryRow: 0 },
 ] as const;
+
+/** Whether `point` is the one named `at`, after the file's or the collection's name, or alone. */
+const isPoint = (point: string, at: string) =>
+  point === at || point.endsWith(`: ${at}`);
 
 let dir: string;
 let closers: Array<() => Promise<void>> = [];
@@ -505,25 +517,20 @@ describe.each(getConfiguredTestDialects())(
       expect(await otherLeft(deployed)).toEqual(other);
     }, 240_000);
 
-    it.each(["recorded applied", ...STEPS.map(step => `removed ${step}`)])(
+    it.each(AFTER_THE_FILE.map(({ at }) => at))(
       "finishes, with nothing pending, a run that failed once the file was recorded, at %s",
       async at => {
         const { deployed, other } = await readyToDelete();
         const stopped = await withStopPoints(
           point => {
-            if (point.endsWith(`: ${at}`)) throw new Error(`stopped at ${at}`);
+            if (isPoint(point, at)) throw new Error(`stopped at ${at}`);
           },
           () => migrate()
         );
-        // The run fails and the file stays recorded. Stopped in a removal, the collection's
-        // registry row still stands, so it is still owed; stopped as the file is recorded, the
-        // run's own registry pass, which runs as a failed run ends, has already retired it.
+        // The run fails and the file stays recorded, its tables gone.
         expect(stopped.code, stopped.said).not.toBeUndefined();
         expect(await deployed.tableExists(NOTES_TABLE)).toBe(false);
         const ledger = await ledgerOf(deployed, dialect);
-        expect((await notesLeft(deployed)).registryRow, stopped.said).toBe(
-          at === "recorded applied" ? 0 : 1
-        );
 
         const finished = await migrate();
 
@@ -569,17 +576,22 @@ describe.each(getConfiguredTestDialects())(
         const { deployed, url, other } = await readyToDelete();
         const { name } = deleteFile();
         let ledger: number | undefined;
-        for (const at of [
-          `${name}: recorded applied`,
-          ...STEPS.map(step => `collection ${NOTES}: removed ${step}`),
-        ]) {
-          const killed = await migrateProcess(url, at);
+        for (const { at, registryRow } of AFTER_THE_FILE) {
+          const point =
+            at === "recorded applied"
+              ? `${name}: ${at}`
+              : at === "registry written"
+                ? at
+                : `collection ${NOTES}: ${at}`;
+          const killed = await migrateProcess(url, point);
           const seen = `${at}\n${killed.stdout}\n${killed.stderr}`;
           expect(killed.status, seen).not.toBe(0);
-          // Killed with the file recorded: its tables are gone, the registry row still stands,
-          // and no later run records anything new.
+          // Killed with the file recorded: its tables are gone, the registry row stands until the
+          // registry write commits, and no later run records anything new.
           expect(await deployed.tableExists(NOTES_TABLE), seen).toBe(false);
-          expect((await notesLeft(deployed)).registryRow, seen).toBe(1);
+          expect((await notesLeft(deployed)).registryRow, seen).toBe(
+            registryRow
+          );
           ledger ??= await ledgerOf(deployed, dialect);
           expect(await ledgerOf(deployed, dialect), seen).toBe(ledger);
           expect(await otherLeft(deployed), seen).toEqual(other);

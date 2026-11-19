@@ -37,8 +37,8 @@ import {
   orientationOfElement,
   siteOrientationOf,
   type SideOrientation,
-} from "../side-orientation";
-import { markedElementOf } from "../style-subject";
+} from "../styles/side-orientation";
+import { markedElementOf } from "../styles/style-subject";
 
 import { observeRenderedTree } from "./rendered-tree";
 
