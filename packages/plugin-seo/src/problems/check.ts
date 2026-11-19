@@ -18,7 +18,13 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { addressHolders } from "../address-record/participant";
+import {
+  addressHolders,
+  holdersAt,
+  withKnownHolders,
+  type AskedAddress,
+  type KnownHolders,
+} from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import type { CodeRoute } from "../code-pages/routes";
 import { readConnections } from "../connections/store";
@@ -28,6 +34,7 @@ import { pageLanguageLinks } from "../languages/head";
 import {
   heldLanguages,
   singleIn,
+  withHeldLanguages,
   standingOf,
   type HeldLanguages,
 } from "../languages/versions";
@@ -54,7 +61,9 @@ import {
   servedGroups,
   type RobotsBlock,
 } from "../settings/robots-blocks";
+import { readStructuredDataSettings } from "../settings/rules";
 import { isSeoOff } from "../settings/seo-off";
+import type { ReadStructuredDataSettings } from "../settings/structured-data-rules";
 import type { ReadSocialCardRules } from "../social/card";
 import { shareImageProblems } from "../social/problems";
 import { readStanding } from "../staging/guard";
@@ -71,7 +80,7 @@ import {
 } from "./contract";
 import { datesCheckScope, datesTodayProblems } from "./dates-check";
 import { linkCounts, linkedPageKey, orphanProblems } from "./link-graph";
-import { addressShapes, readLinks } from "./links";
+import { addressShapes, linkAddresses, readLinks } from "./links";
 import { canonicalIsOwn, pageProblems } from "./page-checks";
 import { pageTypeOf, singleKey } from "./page-types";
 import {
@@ -103,6 +112,8 @@ export interface CheckReaders {
   readRules: ReadRules;
   readStructuredDataRules: ReadStructuredDataRules;
   readSocialCardRules: ReadSocialCardRules;
+  /** The SEO settings' structured data facts: read afresh when not given. */
+  readStructuredDataSettings?: ReadStructuredDataSettings;
 }
 
 /** What the checks run over: the types SEO is added to, and the rules. */
@@ -418,6 +429,9 @@ async function pagesAt(
     .filter(holder => holder.collection !== redirects)
     .map(holder => ({ collection: holder.collection, id: holder.id, locale }));
   if (pages.length > 0 || hops >= MAX_REDIRECT_HOPS) return pages;
+  // A redirect holds its address in the record as a page does, so an
+  // address nothing holds meets no redirect: not read a second time.
+  if (holders.length === 0) return [];
   const met = await redirectMeeting(ctx, { locale, path });
   if (met === null) return [];
   const { data } = await ctx.services.ownCollections.listEntries(redirects, {
@@ -569,6 +583,36 @@ async function examine(
 }
 
 /**
+ * Each language the page `id` of `type` is checked in, from what was read
+ * for it: every language it holds an address in or was checked in before,
+ * with its entry there and its row as it stood.
+ */
+function versionsOf(
+  type: string,
+  id: string,
+  reads: PageReads
+): {
+  version: Version;
+  entry: Readonly<Record<string, unknown>> | undefined;
+  previous: PageRow | undefined;
+}[] {
+  const { defaultLanguage, before, held, entries, code } = reads;
+  const languages = new Set([...held.keys(), ...before.map(row => row.locale)]);
+  return [...languages].map(language => ({
+    version: {
+      type,
+      id,
+      language,
+      locale: language === defaultLanguage ? undefined : language,
+      held: held.get(language) ?? new Set(),
+      code: code.get(language) ?? {},
+    },
+    entry: entries.get(language),
+    previous: before.find(row => row.locale === language),
+  }));
+}
+
+/**
  * Whether a page's new check can alter another page's result: it appeared,
  * or its address, title, description or links changed.
  */
@@ -600,7 +644,7 @@ async function checkPage(
   reads?: PageReads,
   marks = true
 ): Promise<string[]> {
-  const { defaultLanguage, before, held, entries, code } = reads ??
+  const read = reads ??
     (await readBatch(ctx, type, [id])).get(id) ?? {
       defaultLanguage: await ctx.publicAddresses.defaultLanguage(),
       before: [],
@@ -608,24 +652,10 @@ async function checkPage(
       entries: new Map(),
       code: new Map(),
     };
-  const languages = new Set([...held.keys(), ...before.map(row => row.locale)]);
   const found: { previous: PageRow | undefined; row: PageRow | undefined }[] =
     [];
-  for (const language of languages) {
-    const row = await examine(
-      ctx,
-      checks,
-      {
-        type,
-        id,
-        language,
-        locale: language === defaultLanguage ? undefined : language,
-        held: held.get(language) ?? new Set(),
-        code: code.get(language) ?? {},
-      },
-      entries.get(language)
-    );
-    found.push({ previous: before.find(row => row.locale === language), row });
+  for (const { version, entry, previous } of versionsOf(type, id, read)) {
+    found.push({ previous, row: await examine(ctx, checks, version, entry) });
   }
   const changed = found.some(({ previous, row }) =>
     row === undefined ? previous !== undefined : altersOthers(previous, row)
@@ -634,7 +664,7 @@ async function checkPage(
   const kept: string[] = [];
   for (const { previous, row } of found) {
     if (row !== undefined) {
-      await savePage(ctx, row);
+      await savePage(ctx, row, previous);
       kept.push(pageKey(type, id, row.locale));
     } else if (previous !== undefined) {
       await removePage(ctx, previous);
@@ -665,11 +695,68 @@ function readOnceEach(readers: CheckReaders): CheckReaders {
     readRules: onceForEach(readers.readRules),
     readStructuredDataRules: onceForEach(readers.readStructuredDataRules),
     readSocialCardRules: onceForEach(readers.readSocialCardRules),
+    readStructuredDataSettings: onceForEach(
+      readers.readStructuredDataSettings ?? readStructuredDataSettings
+    ),
   };
 }
 
 /** Pages read per step of a full check. */
 const HELD_PAGE = 100;
+
+/**
+ * Who holds each address checking the pages of `batch` asks the record
+ * about, read for the whole batch: each page's own address in each language
+ * it is checked in, then the addresses its links name, read from where the
+ * page is served. An address not foreseen here, such as one a redirect
+ * leads on to, is read when it is asked about.
+ */
+async function holdersForBatch(
+  ctx: PluginContext,
+  checks: ProblemChecks,
+  type: string,
+  batch: ReadonlyMap<string, PageReads>
+): Promise<KnownHolders> {
+  const versions = [...batch].flatMap(([id, reads]) =>
+    versionsOf(type, id, reads).flatMap(({ version, entry }) =>
+      entry === undefined ? [] : [{ version, entry }]
+    )
+  );
+  const own: AskedAddress[] = [];
+  for (const { version, entry } of versions) {
+    const address = await publicAddressOf(
+      pageTypeOf(type),
+      entry,
+      version.locale
+    );
+    if (address.status === "resolved") {
+      own.push({ locale: version.language, path: address.path });
+    }
+  }
+  const ownHolders = await holdersAt(ctx, own);
+  const linked = await withKnownHolders(ownHolders, async () => {
+    const found: AskedAddress[] = [];
+    for (const { version, entry } of versions) {
+      const served = await servedAddress(ctx, version, entry);
+      if (served === undefined) continue;
+      const rules = await checks.readers.readRules(ctx, version.locale);
+      const origin = originOf(served.address);
+      found.push(
+        ...(await linkAddresses(contentFacts(entry).links, {
+          productionAddresses: productionAddressesOf(rules.productionAddresses),
+          ...(origin === undefined ? {} : { origin }),
+          keptOf: url => askedAddress(ctx, url),
+        }))
+      );
+    }
+    return found;
+  });
+  const linkHolders = await holdersAt(
+    ctx,
+    linked.filter(({ locale, path }) => !ownHolders.has(`${locale}|${path}`))
+  );
+  return new Map([...ownHolders, ...linkHolders]);
+}
 
 /**
  * Check every page of the type kept as `slug` holding an address, keep each
@@ -697,20 +784,34 @@ async function checkType(
     // check's.
     const writes = new Map(ids.map(id => [id, writesTo(slug, id)]));
     const batch = await readBatch(ctx, slug, ids);
+    // Who holds what the batch's pages ask the record about, and what each
+    // page holds, read together too, and read from by each page read with
+    // its batch. A page saved since rereads all of it in its turn.
+    const holders = await holdersForBatch(ctx, checks, slug, batch);
+    const held = new Map(
+      [...batch].flatMap(([id, reads]) =>
+        reads.held.size === 0 ? [] : [[id, reads.held] as const]
+      )
+    );
     for (const id of ids) {
       await inTurn(slug, id, async () => {
         const current = writes.get(id) === writesTo(slug, id);
-        for (const key of await checkPage(
-          ctx,
-          checks,
-          slug,
-          id,
-          current ? batch.get(id) : undefined,
-          // The full check's own findings mark nothing: it is the recheck.
-          false
-        )) {
-          seen.add(key);
-        }
+        const check = () =>
+          checkPage(
+            ctx,
+            checks,
+            slug,
+            id,
+            current ? batch.get(id) : undefined,
+            // The full check's own findings mark nothing: it is the recheck.
+            false
+          );
+        const kept = current
+          ? await withKnownHolders(holders, () =>
+              withHeldLanguages(slug, ids, held, check)
+            )
+          : await check();
+        for (const key of kept) seen.add(key);
       });
     }
     after = page.next;

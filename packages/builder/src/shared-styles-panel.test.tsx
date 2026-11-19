@@ -276,7 +276,13 @@ describe("the list", () => {
     const rows = [
       ...looks.querySelectorAll<HTMLElement>(".nx-block-styles__row"),
     ];
-    expect(rows.map(each => each.textContent)).toEqual([
+    // What each row draws: its name is heard from a hidden text of its own.
+    const drawn = (each: HTMLElement): string => {
+      const copy = each.cloneNode(true) as HTMLElement;
+      for (const heard of copy.querySelectorAll(".nx-sr-only")) heard.remove();
+      return copy.textContent ?? "";
+    };
+    expect(rows.map(drawn)).toEqual([
       "ButtonPrimary★ Default",
       "ButtonOutline",
     ]);
@@ -317,9 +323,7 @@ describe("the list", () => {
     expect(usageReads[0]).toEqual([CARD.id, outline.id]);
     const looks = screen.getByRole("region", { name: "Block styles" });
     expect(
-      within(looks)
-        .getByRole("button", { name: /^Outline, / })
-        .getAttribute("aria-label")
+      nameOf(within(looks).getByRole("button", { name: /^Outline, / }))
     ).toMatch(/3 pages/);
   });
 
@@ -353,9 +357,7 @@ describe("the list", () => {
     });
     const looks = screen.getByRole("region", { name: "Block styles" });
     const look = within(looks).getByRole("button", { name: /^Outline, / });
-    expect(look.getAttribute("aria-label")).toBe(
-      "Outline, 2 blocks on this page · on 3 pages"
-    );
+    expect(nameOf(look)).toBe("Outline, 2 blocks on this page · on 3 pages");
     expect(look.getAttribute("title")).toBe(
       "2 blocks on this page · on 3 pages"
     );
@@ -392,7 +394,7 @@ describe("the list", () => {
     const lookNames = () =>
       within(screen.getByRole("region", { name: "Block styles" }))
         .getAllByRole("button", { pressed: false })
-        .map(each => each.getAttribute("aria-label"));
+        .map(each => nameOf(each));
     // The control: with no search, both are listed.
     expect(lookNames()).toEqual(["Primary, default", "Square, default"]);
     fireEvent.change(search, { target: { value: "Square" } });

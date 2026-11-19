@@ -176,7 +176,6 @@ export function useVariablesTransfer({
   // Where focus goes back to when the list closes: the toast that opened it
   // has gone by then.
   const trigger = React.useRef<HTMLButtonElement>(null);
-  const hint = React.useId();
   // The callbacks as they are now, published at commit, for reads that
   // outlive the render that started them.
   const latest = React.useRef({
@@ -431,17 +430,16 @@ export function useVariablesTransfer({
                 <DropdownMenuSeparator />
               </>
             )}
-            {/* The format is a hint, not part of the name: an author picks
-                "design tokens", and the version is there for whoever needs
-                it. */}
+            {/* The format is drawn as a quieter hint, and said after the
+                name: every word drawn is in the name, so someone who says
+                what they see reaches the item. */}
             <DropdownMenuItem
-              aria-label={WORDS.exportTokens}
-              aria-describedby={hint}
+              aria-label={`${WORDS.exportTokens}, ${WORDS.exportTokensHint}`}
               className="nx-design-more__item"
               onSelect={() => send(DTCG_EXPORT)}
             >
               <span>{WORDS.exportTokens}</span>
-              <span id={hint} className="nx-design-more__hint">
+              <span className="nx-design-more__hint">
                 {WORDS.exportTokensHint}
               </span>
             </DropdownMenuItem>
