@@ -10,6 +10,8 @@
  *
  * @module domains/schema/services/sqlite-nullability-rebuild
  */
+import { sql } from "drizzle-orm";
+
 import { NextlyError } from "../../../errors/nextly-error";
 import type { MigrationTransaction } from "../migrate/migration-transaction";
 import {
@@ -87,8 +89,13 @@ export async function rebuildSqliteNullability(
     columns: live.columns.map(column => {
       const wanted = target(column.name);
       const type = typeOf(column.name);
+      // A new type is spelled as declared, so the old declaration's modifier (`numeric(10,2)`'s
+      // `10,2`) is not carried onto it.
+      const { typeModifier, ...rest } = column;
       return {
-        ...column,
+        ...(type === undefined && typeModifier !== undefined
+          ? { ...rest, typeModifier }
+          : rest),
         ...(wanted === undefined ? {} : { nullable: !wanted }),
         ...(type === undefined ? {} : { type }),
       };
@@ -98,5 +105,69 @@ export async function rebuildSqliteNullability(
     keptUnique: losses?.unique ?? [],
   })) {
     await tx.execute(statement);
+  }
+  // Only the columns this rebuild retypes: one already of its type holds what it held before.
+  const retyped = new Map(
+    live.columns.flatMap(column => {
+      const type = typeOf(column.name);
+      return type !== undefined &&
+        column.type.toLowerCase() !== type.toLowerCase()
+        ? [[column.name, type] as const]
+        : [];
+    })
+  );
+  await refuseValuesTheTypesCannotTake(tx.db, tableName, retyped);
+}
+
+/**
+ * Whether SQLite stores a column of this declared type by numeric affinity (its own rules: an
+ * `INT` is INTEGER; `CHAR`, `CLOB` or `TEXT` is TEXT; `BLOB` or no type is BLOB; anything else,
+ * `REAL`, `DOUBLE` and `NUMERIC` among them, is numeric).
+ */
+function numericAffinity(type: string): boolean {
+  const declared = type.toUpperCase();
+  if (declared.includes("INT")) return true;
+  if (/CHAR|CLOB|TEXT|BLOB/.test(declared) || declared.trim() === "") {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Refuses, inside the rebuild's transaction so nothing of it commits, a column whose type changed
+ * to a numeric one but holds a value SQLite could not convert: SQLite keeps such a value as it was
+ * (`"abc"` stays text in an integer column) rather than refusing it. The values are judged before a
+ * save plans the change; this holds where one was written in between.
+ */
+async function refuseValuesTheTypesCannotTake(
+  db: unknown,
+  tableName: string,
+  types: ReadonlyMap<string, string>
+): Promise<void> {
+  const reader = db as { all(query: unknown): unknown };
+  for (const [column, type] of types) {
+    if (!numericAffinity(type)) continue;
+    const rows: unknown = await Promise.resolve(
+      reader.all(
+        sql`SELECT COUNT(*) AS "unconverted" FROM ${sql.identifier(tableName)}
+            WHERE ${sql.identifier(column)} IS NOT NULL
+              AND typeof(${sql.identifier(column)}) NOT IN ('integer', 'real')`
+      )
+    );
+    const [row] = Array.isArray(rows)
+      ? (rows as { unconverted: number }[])
+      : [];
+    const unconverted = Number(row?.unconverted ?? 0);
+    if (unconverted === 0) continue;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `schema.${tableName}.${column}`,
+          code: "TYPE_CHANGE_LOSES_VALUES",
+          message: `${column} holds ${String(unconverted)} ${unconverted === 1 ? "value" : "values"} that can't be stored as ${type}, so its type was not changed.`,
+        },
+      ],
+      logContext: { table: tableName, column, type, unconverted },
+    });
   }
 }
