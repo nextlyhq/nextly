@@ -424,6 +424,14 @@ describe.each(getConfiguredTestDialects())(
       const adapter = await connect(dialect, url);
       const q = (name: string) =>
         dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      // A row the registry lacks is written by the run from the snapshot's record, as a database
+      // that lost it, or never had it, gets it back.
+      await adapter.executeQuery(
+        `DELETE FROM ${q("dynamic_field_groups")} WHERE ${q("slug")} = 'fh_banner'`
+      );
+      const rewritten = await migrate();
+      expect(rewritten.exit, rewritten.said).toBeUndefined();
+
       const rows = (await adapter.executeQuery(
         `SELECT ${q("table_name")} AS table_name, ${q("fields")} AS fields FROM ${q("dynamic_field_groups")} WHERE ${q("slug")} = 'fh_banner'`
       )) as Array<{ table_name: string; fields: unknown }>;
