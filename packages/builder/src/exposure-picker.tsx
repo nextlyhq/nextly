@@ -36,7 +36,7 @@ import {
 import { Checkbox, Input, Label } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { propLabel } from "./inspector";
+import { propLabel } from "./inspector/inspector";
 import { layerLabel } from "./panels/layers/layers";
 
 /** Why a pick was refused, as an author reads it. */

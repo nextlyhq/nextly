@@ -21,6 +21,8 @@ const START_AREA = {
   drag: "or drag a block here",
   /** The heading over the row of starter pages, where there are any. */
   starters: "or start from a page",
+  /** Under a starter page the site can't use, above the host's reason. */
+  notAvailable: "Not available on this site",
 } as const;
 
 /** What the start area of an empty document says. */
@@ -30,6 +32,7 @@ export interface StartWords {
   readonly savedSection: string;
   readonly drag: string;
   readonly starters: string;
+  readonly notAvailable: string;
 }
 
 /**

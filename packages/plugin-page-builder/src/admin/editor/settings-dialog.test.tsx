@@ -465,7 +465,7 @@ describe("Page settings", () => {
     expect(tabNames()).toEqual(["General", "Fields", "Reviews"]);
     expect(
       screen.getByText(
-        "This page adds its own code or CSS. Only people who can change site settings can see or edit it."
+        "This page adds its own code or CSS. Only people who can change site settings can edit it; anyone who can edit the page can read it."
       )
     ).toBeTruthy();
     expect(screen.queryByText("<meta name=a content=b>")).toBeNull();
@@ -502,7 +502,7 @@ describe("Page settings", () => {
     expect(tabNames()).not.toContain("Code");
     expect(
       screen.getByText(
-        "This page adds its own code or CSS. Only people who can change site settings can see or edit it."
+        "This page adds its own code or CSS. Only people who can change site settings can edit it; anyone who can edit the page can read it."
       )
     ).toBeTruthy();
     expect(document.body.textContent).not.toContain("rebeccapurple");

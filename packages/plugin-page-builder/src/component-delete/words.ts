@@ -15,6 +15,8 @@ export function leftWords(reason: LeftDocumentReason): string {
       return "It has unpublished changes. Publish or discard them, then try again.";
     case "not-permitted":
       return "You don't have permission to change it.";
+    case "not-permitted-to-publish":
+      return "You don't have permission to publish it.";
     case "unreadable":
       return "It couldn't be read to the end, so whether it uses the component can't be told.";
     case "unaddressable":

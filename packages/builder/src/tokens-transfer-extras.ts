@@ -21,13 +21,14 @@ import {
   sameJsonValue,
   SITE_TEXT_LABELS,
   SITE_TEXT_ROLES,
-  tokenCustomProperty,
+  remapTokenReferences,
   type DtcgSiteData,
   type FontFaceDef,
   type ModesRead,
   type NamedClass,
   type SiteToken,
   type SiteTokenSet,
+  type TokenRemap,
 } from "@nextlyhq/blocks-engine";
 
 import type { ClassListEdit } from "./block-style-actions";
@@ -82,17 +83,10 @@ export interface ImportContext {
  * The file's tokens that merge into a site variable under its id rather
  * than their own (a variable renamed here to the code name the file uses):
  * each one's identity in the file to the id it takes, and the site's
- * prefix, which a `var()` naming one is written with.
+ * prefix, which a `var()` naming one is written with. The engine's
+ * {@link TokenRemap}, which a page or component transfer reads through too.
  */
-export interface Adoption {
-  readonly ids: ReadonlyMap<string, string>;
-  /** Every variable identity the file holds, adopted or not. */
-  readonly identities: readonly string[];
-  /** The prefix the file's `var()` references are written under. */
-  readonly from: string;
-  /** This site's prefix, which they are read under here. */
-  readonly to: string;
-}
+export type Adoption = TokenRemap;
 
 /**
  * What an import carries beyond the variables, planned against the site:
@@ -163,77 +157,16 @@ function siteFollowingAdoption(
 /**
  * A file's text style or site data with each variable it names by an
  * adopted identity, by `$token` or through `var()` of its custom property,
- * pointed at the id that variable takes here.
+ * pointed at the id that variable takes here: the engine's one remap, built
+ * once per import.
  */
 export function followingAdoption<T>(
   value: T,
   adoption: Adoption | undefined
 ): T {
-  if (adoption === undefined) return value;
-  // Built once per import, however many values it is asked of.
-  let remap = remappers.get(adoption);
-  if (remap === undefined) {
-    remap = remapperFor(adoption);
-    remappers.set(adoption, remap);
-  }
-  return remap(value) as T;
-}
-
-/** Each import's remapper, kept with the adoption it was built for. */
-const remappers = new WeakMap<Adoption, (value: unknown) => unknown>();
-
-/** The walk that points a value's references where `adoption` says. */
-function remapperFor(adoption: Adoption): (value: unknown) => unknown {
-  // Each of the file's variables' custom properties, as the file writes it,
-  // to the one it is read under here: its id here, under this site's
-  // prefix. Matched as a whole name inside `var()`, ended by a space, a
-  // fallback's comma or the closing parenthesis, so a longer property it
-  // begins is left alone; and in one pass over the text as written, so a
-  // property already pointed elsewhere is never pointed again.
-  const table = new Map<string, string>();
-  for (const identity of adoption.identities) {
-    const from = tokenCustomProperty(identity, adoption.from);
-    const to = tokenCustomProperty(
-      adoption.ids.get(identity) ?? identity,
-      adoption.to
-    );
-    if (from !== to && !table.has(from)) table.set(from, to);
-  }
-  if (table.size === 0 && adoption.ids.size === 0) return value => value;
-  const names = [...table.keys()]
-    .sort((left, right) => right.length - left.length)
-    .map(escapeRegExp);
-  const pattern =
-    names.length === 0
-      ? undefined
-      : new RegExp(`(var\\(\\s*)(${names.join("|")})(?=[\\s,)])`, "g");
-  const walk = (node: unknown): unknown => {
-    if (typeof node === "string") {
-      return pattern === undefined
-        ? node
-        : node.replace(
-            pattern,
-            (_match, open: string, name: string) =>
-              `${open}${table.get(name) ?? name}`
-          );
-    }
-    if (Array.isArray(node)) return node.map(walk);
-    if (node === null || typeof node !== "object") return node;
-    return Object.fromEntries(
-      Object.entries(node).map(([key, entry]) => [
-        key,
-        key === "$token" && typeof entry === "string"
-          ? (adoption.ids.get(entry) ?? entry)
-          : walk(entry),
-      ])
-    );
-  };
-  return walk;
-}
-
-/** `text` as a regular expression matching it literally. */
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return adoption === undefined
+    ? value
+    : remapTokenReferences(value, adoption);
 }
 
 /**

@@ -11,7 +11,7 @@
 import { useCallback, useMemo, useState } from "react";
 
 import { useRestartOn } from "./editor-history";
-import type { SettingTab } from "./settings-index";
+import type { SettingTab } from "./inspector/settings-index";
 
 /** A setting of a block's panel: its tab, and its id in the settings index. */
 export interface AskedSetting {

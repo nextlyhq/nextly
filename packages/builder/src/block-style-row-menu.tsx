@@ -24,7 +24,7 @@ import { Ellipsis } from "lucide-react";
 import * as React from "react";
 
 import { BLOCK_STYLE_WORDS } from "./block-style-actions";
-import { commitOnEnter } from "./commit-on-enter";
+import { commitOnEnter } from "./inspector/commit-on-enter";
 
 /** What a row's menu offers, from what the style is. */
 export interface BlockStyleOffers {

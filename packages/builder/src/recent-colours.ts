@@ -14,7 +14,10 @@
 import { isRawColour } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { readRecentIcons, rememberIcon } from "./recent-icons";
+import {
+  readRecentIcons,
+  rememberIcon,
+} from "./inspector/content/recent-icons";
 import type { PreferenceStore } from "./shell-state";
 
 /**

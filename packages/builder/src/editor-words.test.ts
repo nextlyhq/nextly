@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { panelLabel } from "./shell/editor-rail";
 import { EDITOR_WORDS } from "./editor-words";
-import { inspectorTabLabels } from "./inspector-panel";
+import { inspectorTabLabels } from "./inspector/inspector-panel";
 import { LEFT_PANELS } from "./shell-state";
 
 describe("the editor's words", () => {

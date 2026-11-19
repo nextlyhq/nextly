@@ -18,6 +18,7 @@ import {
 
 import type { CollectionAccessService } from "./collection-access-service";
 import { CollectionBulkService } from "./collection-bulk-service";
+import { copiedFromOf } from "./copied-from";
 import type { CollectionMutationService } from "./collection-mutation-service";
 import type { CollectionQueryService } from "./collection-query-service";
 import type { CollectionServiceResult } from "./collection-types";
@@ -122,5 +123,88 @@ describe("duplicateEntry source read", () => {
       trusted: collection => collection === "pages",
     });
     expect(bounded.getEntry.mock.calls[0]?.[0].status).toBeUndefined();
+  });
+
+  it("tells the create what it copies, minted from the read and only after it", async () => {
+    const { service, getEntry, createEntry } = build(DRAFT);
+
+    await service.duplicateEntry({
+      collectionName: "pages",
+      entryId: "src",
+      user: { id: "editor-1" },
+      overrideAccess: false,
+    });
+
+    const copy = copiedFromOf(createEntry.mock.calls[0]?.[0].copiedFrom);
+    // The live row is copied, so only its live form vouches.
+    expect(copy).toEqual({
+      collection: "pages",
+      id: "src",
+      forms: ["published"],
+      fields: ["id", "title", "status"],
+    });
+    expect(getEntry.mock.invocationCallOrder[0]).toBeLessThan(
+      createEntry.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+});
+
+describe("createFromSource", () => {
+  it("reads the source as the editor sees it, then creates the data told the copy", async () => {
+    const { service, getEntry, createEntry } = build({
+      success: true,
+      statusCode: 200,
+      message: "Found",
+      data: { id: "page-1", content: {}, _isWorkingDraft: true },
+    });
+
+    const result = await service.createFromSource({
+      collectionName: "patterns",
+      source: { collection: "pages", id: "page-1", field: "content" },
+      data: { title: "Hero", content: {} },
+      user: { id: "editor-1" },
+      overrideAccess: false,
+      locale: "fr",
+    });
+
+    expect(result.success).toBe(true);
+    expect(getEntry.mock.calls[0]?.[0]).toMatchObject({
+      collectionName: "pages",
+      entryId: "page-1",
+      status: "all",
+      includeWorkingDraft: true,
+      locale: "fr",
+      overrideAccess: false,
+    });
+    const [params, data] = createEntry.mock.calls[0] ?? [];
+    expect(params).toMatchObject({ collectionName: "patterns", locale: "fr" });
+    expect(data).toEqual({ title: "Hero", content: {} });
+    // The read showed the caller the draft, so only the draft vouches.
+    expect(copiedFromOf(params?.copiedFrom)).toMatchObject({
+      collection: "pages",
+      id: "page-1",
+      field: "content",
+      forms: ["draft"],
+    });
+  });
+
+  it("creates nothing when the caller's read of the source is refused", async () => {
+    const { service, createEntry } = build({
+      success: false,
+      statusCode: 404,
+      message: "Entry not found",
+      data: null,
+    });
+
+    const result = await service.createFromSource({
+      collectionName: "patterns",
+      source: { collection: "pages", id: "page-1" },
+      data: { title: "Hero" },
+      user: { id: "editor-1" },
+      overrideAccess: false,
+    });
+
+    expect(result.statusCode).toBe(404);
+    expect(createEntry).not.toHaveBeenCalled();
   });
 });

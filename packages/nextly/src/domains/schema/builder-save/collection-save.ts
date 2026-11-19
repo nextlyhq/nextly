@@ -158,13 +158,24 @@ import {
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
 
-import { partlyAppliedChange } from "./landing-push";
+import { nextSteps, partlyAppliedChange } from "./landing-push";
 import {
   openSaveRecords,
   recordSaveStarted,
   withSaveRecords,
   type StartedSave,
 } from "./save-in-progress";
+import {
+  appliedFieldsOf,
+  appliedRenames,
+  askedChanges,
+  fieldsWith,
+  judgeStoppedSave,
+  standsAs,
+  stoppedSaveError,
+  withSettleFailure,
+  type StoppedChange,
+} from "./stopped-save";
 
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
@@ -325,6 +336,17 @@ export interface CollectionSaveResult {
   files: string[];
   /** Whether they were run and recorded applied here. */
   applied: boolean;
+  /**
+   * Where they were kept, recorded applied nowhere (`applied` false): the one a
+   * `migrate:resolve` checks against the database (`checkedFileOf`), or null where none has a
+   * snapshot.
+   */
+  checked?: string | null;
+  /**
+   * Where a push stopped part way and settling what of it applied failed: that failure, for the
+   * caller to tell after the push's own (`partWayPush`). The save is left as far as it got.
+   */
+  settleFailure?: unknown;
 }
 
 /**
@@ -371,6 +393,14 @@ export async function writeCollectionSave(
      * join, and the work then runs on its own after the file.
      */
     inLastTransaction?: () => Promise<void>;
+    /**
+     * The caller's registry write for a save that stopped part way, once it is settled to what of
+     * it the database holds (`settleStoppedSave`): handed the report, it writes the entity's row
+     * with the fields the report names applied (`appliedFieldsOf`). Where it is given, a part-way
+     * stop the settle can judge is recorded as far as it got and thrown as the report; where it
+     * is not, or the stop cannot be judged, its files are kept as before.
+     */
+    onSettled?: (report: readonly StoppedChange[]) => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult> {
   // The save's record that it is in progress is cleared when this scope ends, or the caller's
@@ -396,9 +426,7 @@ export async function writeCollectionSave(
         const applied = await options.appliedBy();
         pushed = true;
         if (applied === "partly-applied") {
-          // Kept recorded applied nowhere: nothing says what committed, so the record stays.
-          written.started.left();
-          return { files: [...written.names], applied: false };
+          return await afterPartWayPush(deps, save, written, options.onSettled);
         }
         await recordWhatWasPushed(deps, written.files, written.table);
       } else if (deps.applies) {
@@ -423,16 +451,411 @@ export async function writeCollectionSave(
         pushed = true;
         if (applied === "partly-applied") written.started.left();
       }
-      return { files: [...written.names], applied: deps.applies };
+      return finishedResult(deps, written);
     } catch (error) {
       if (!pushed) {
-        await undoThenThrow(error, [
-          { files: written.names, undo: () => written.undo(error) },
-        ]);
+        await settleOrUndoThenThrow(
+          deps,
+          save,
+          written,
+          error,
+          options.onSettled
+        );
       }
       throw error;
     }
   }, deps.logger);
+}
+
+/** What `writeSave` wrote, as the settle of a stopped save reads it. */
+type WrittenSave = Awaited<ReturnType<typeof writeSave>>;
+
+/**
+ * After a save whose files did not all apply: a file that stopped part way is settled to what of
+ * it applied, where the caller records the registry row of it (`settleThenThrow`); one this cannot
+ * judge, or any other failure, has what the save wrote withdrawn or kept as before
+ * (`undoThenThrow`). Throws in every case.
+ */
+async function settleOrUndoThenThrow(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  written: WrittenSave,
+  error: unknown,
+  onSettled: ((report: readonly StoppedChange[]) => Promise<void>) | undefined
+): Promise<never> {
+  if (onSettled !== undefined && partlyApplied(error)) {
+    await settleThenThrow(deps, save, written, error, onSettled);
+  }
+  return undoThenThrow(error, [
+    { files: written.names, undo: () => written.undo(error) },
+  ]);
+}
+
+/**
+ * Settle a save whose file stopped part way (`settleStoppedSave`) and throw the report of it, the
+ * record that it is in progress cleared. Where the stop cannot be judged nothing is written and
+ * this returns, for the caller's own handling. Where what the settle writes fails, the save is
+ * left as far as it got, its record kept for the next settle, and the stop's own failure is thrown
+ * with the settle's after it (`withSettleFailure`), never in its place.
+ */
+async function settleThenThrow(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  written: WrittenSave,
+  failure: unknown,
+  onSettled: (report: readonly StoppedChange[]) => Promise<void>
+): Promise<void> {
+  let report: StoppedChange[] | undefined;
+  try {
+    report = await settleStoppedSave(deps, save, written, onSettled);
+  } catch (settleFailure) {
+    written.started.left();
+    deps.logger.error(
+      `The save of "${save.slug}" stopped part way, and recording what of it applied failed: ${
+        settleFailure instanceof Error
+          ? settleFailure.message
+          : String(settleFailure)
+      }`
+    );
+    throw withSettleFailure(failure, settleFailure);
+  }
+  if (report === undefined) return;
+  written.started.settled();
+  throw stoppedSaveError(save.slug, report, failure);
+}
+
+/**
+ * After a push that changed the database and then failed part way: the save settled to what of it
+ * applied and the report thrown, where the caller records the registry row of it (`onSettled`).
+ * Where it does not, or the stop cannot be judged, the files are kept recorded applied nowhere, for
+ * the push's own failure to name (`partWayPush`); where the settle's writes fail, they are kept
+ * with that failure (`settleFailure`), for the caller to tell after the push's own. Either way
+ * nothing records what committed, so the record that the save is in progress stays.
+ */
+async function afterPartWayPush(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  written: WrittenSave,
+  onSettled: ((report: readonly StoppedChange[]) => Promise<void>) | undefined
+): Promise<CollectionSaveResult> {
+  let report: StoppedChange[] | undefined;
+  try {
+    report =
+      onSettled === undefined
+        ? undefined
+        : await settleStoppedSave(deps, save, written, onSettled);
+  } catch (settleFailure) {
+    written.started.left();
+    return { ...(await keptResult(deps, written)), settleFailure };
+  }
+  if (report === undefined) {
+    written.started.left();
+    return keptResult(deps, written);
+  }
+  written.started.settled();
+  // The push's own failure stays with its caller, which the report replaces: it names the field
+  // changes, and the push's statements stay in the log of the push.
+  throw stoppedSaveError(save.slug, report, undefined);
+}
+
+/**
+ * Settle a save that stopped part way to what of it the database holds. Each change the save asked
+ * for is judged from the entity's live table (`judgeStoppedSave`), and the shape that judgement
+ * arrives at is proven against the whole table before anything is written. Then the save's file
+ * and snapshot are replaced by a file written for exactly the changes that applied, and the
+ * definition is brought to that shape. The file is compared with the live table again and recorded
+ * applied, the ledger's attempt at the stopped file cleared, and the row written by `onSettled`,
+ * the caller's registry write, all in one transaction. Answers the report.
+ *
+ * Undefined, with nothing written, where the save is not one this can judge (`judgeableStop`), or
+ * the table stands as no judgement explains. A failure reading what it judges from is answered
+ * the same way, as nothing has been written yet. Any later failure, the transaction's included,
+ * puts the stopped file, its snapshot and the definition back as the save left them, so the stop
+ * stays as it was for `nextly migrate:resolve`, and is thrown.
+ */
+async function settleStoppedSave(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  written: WrittenSave,
+  onSettled: (report: readonly StoppedChange[]) => Promise<void>
+): Promise<StoppedChange[] | undefined> {
+  let judged: Awaited<ReturnType<typeof judgedStop>>;
+  try {
+    judged = await judgedStop(deps, save, written.files, written.table);
+  } catch (error) {
+    deps.logger.warn(
+      `The save of "${save.slug}" stopped part way, and what of it applied could not be judged: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return undefined;
+  }
+  if (judged === undefined) return undefined;
+  const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
+  // What the save left, read before anything of it is replaced, to be put back where the
+  // replacement cannot be recorded.
+  const left = {
+    definition: await readIfPresent(definitionPath),
+    files: await readSaveFiles(deps, written.files.change),
+  };
+  const replacement: string[] = [];
+  try {
+    for (const filename of written.files.change) {
+      await removeFileAndSnapshot(deps, filename);
+    }
+    const settled = settledSaveOf(save, judged.applied, judged.report);
+    const plan = await planSave(deps, settled);
+    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+    const files = await writeFiles(deps, settled, plan, names =>
+      replacement.push(...names)
+    );
+    // Compared with the live table before it is recorded, as a pushed save's files are.
+    const units = await verifiedUnits(deps, files, plan.table);
+    // The replacement recorded applied, the ledger's attempt at the stopped file cleared and the
+    // registry row written, in one transaction: the registry write joins it through the adapter,
+    // so a failure of any of them records none, and the stop is put back as it was.
+    await deps.adapter.transaction(async tx => {
+      const repo = new SchemaEventsRepository(
+        tx.getDrizzle(),
+        deps.adapter.getCapabilities().dialect
+      );
+      await recordUnits(units, repo);
+      for (const filename of written.files.change) {
+        await settleAttempts(deps, repo, filename);
+      }
+      await onSettled(judged.report);
+    });
+  } catch (error) {
+    await putBack(deps, left, replacement, definitionPath);
+    throw error;
+  }
+  return judged.report;
+}
+
+/** A migration file the save wrote, and its snapshot where it has one, as text. */
+interface SaveFileText {
+  filename: string;
+  sql: string;
+  snapshot: string | undefined;
+}
+
+/** The files `filenames` names, each with its snapshot, as they stand. */
+async function readSaveFiles(
+  deps: CollectionSaveDeps,
+  filenames: readonly string[]
+): Promise<SaveFileText[]> {
+  const files: SaveFileText[] = [];
+  for (const filename of filenames) {
+    files.push({
+      filename,
+      sql: await readFile(join(deps.migrationsDir, filename), "utf-8"),
+      snapshot: await readIfPresent(snapshotPathOf(deps, filename)),
+    });
+  }
+  return files;
+}
+
+/**
+ * Put a stopped save back as it left itself, after a settle that could not record its
+ * replacement: the replacement's files removed, the stopped file and its snapshot written again,
+ * and the definition as the save wrote it. A failure here is logged; the settle's own is what is
+ * thrown.
+ */
+async function putBack(
+  deps: CollectionSaveDeps,
+  left: { definition: string | undefined; files: readonly SaveFileText[] },
+  replacement: readonly string[],
+  definitionPath: string
+): Promise<void> {
+  try {
+    for (const filename of replacement) {
+      await removeFileAndSnapshot(deps, filename);
+    }
+    for (const { filename, sql, snapshot } of left.files) {
+      await writeAtomically(join(deps.migrationsDir, filename), sql);
+      if (snapshot !== undefined) {
+        await writeAtomically(snapshotPathOf(deps, filename), snapshot);
+      }
+    }
+    if (left.definition === undefined) {
+      await rm(definitionPath, { force: true });
+    } else {
+      await writeAtomically(definitionPath, left.definition);
+    }
+  } catch (error) {
+    deps.logger.error(
+      `The stopped save's files could not all be put back: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+}
+
+/**
+ * The stopped save judged (`settleStoppedSave`): each change it asked for, applied or not, and the
+ * entity with exactly the applied ones, proven to be how the live table stands. Undefined where it
+ * cannot be judged.
+ */
+async function judgedStop(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  files: SaveFiles,
+  table: string
+): Promise<{ report: StoppedChange[]; applied: UiSchemaEntity } | undefined> {
+  const judgeable = judgeableStop(save, files);
+  if (judgeable === undefined) return undefined;
+  const { previous, entity } = judgeable;
+  const asked = askedChanges(
+    previous.fields,
+    entity.fields,
+    save.renamedFields
+  );
+  if (asked.length === 0) return undefined;
+  const current = await loadUiSchema({
+    projectRoot: deps.projectRoot,
+    uiSchemaFile: deps.config.db.uiSchemaFile,
+  });
+  const desired = (fields: UiSchemaEntity["fields"]) =>
+    desiredTable(deps, save, current, { ...entity, fields }, table);
+  // Every change is laid over the entity's own settings as the save asks them: a save whose
+  // settings change what the table holds (a status column, say) is not judged.
+  const before = await desired(previous.fields);
+  if (
+    before === undefined ||
+    !standsAs(before, await desiredTable(deps, save, current, previous, table))
+  ) {
+    return undefined;
+  }
+  const withEach = new Map<string, TableSpec>();
+  for (const change of asked) {
+    const alone = await desired(
+      fieldsWith(
+        previous.fields,
+        entity.fields,
+        asked,
+        c => c.field === change.field
+      )
+    );
+    if (alone !== undefined) withEach.set(change.field, alone);
+  }
+  const live = (await liveTable(deps, table)).tables[0];
+  const report = judgeStoppedSave({ asked, live, before, withEach });
+  if (report === undefined) return undefined;
+  const applied = {
+    ...entity,
+    fields: appliedFieldsOf(previous.fields, entity.fields, report),
+  };
+  // The whole table proven, not only the parts each change reaches.
+  if (!standsAs(live, await desired(applied.fields))) return undefined;
+  return { report, applied };
+}
+
+/**
+ * The entity before and after a stopped save, where the stop is one its main table's shape alone
+ * can judge: an update of one file, of an entity not translated (whose change reaches its
+ * translations table too), carrying no junction or key statements of its own, and no fill or
+ * delete of rows (`resolutions`, `rowFills`), which MySQL commits as it runs, so rows it changed
+ * before a later statement failed stay changed whatever the table's shape reads as. A field with
+ * no name that holds fields (a group with no name) keeps its fields on the table's row, by their
+ * own names, which the judgement does not reach: a save changing one is not judged.
+ */
+function judgeableStop(
+  save: CollectionSave,
+  files: SaveFiles
+): { previous: UiSchemaEntity; entity: UiSchemaEntity } | undefined {
+  const { previous, entity } = save;
+  if (previous === null || entity === null) return undefined;
+  const oneFile = files.adopt === undefined && files.change.length === 1;
+  if (!oneFile || carriesItsOwnRows(save) || pastItsTable(previous, entity)) {
+    return undefined;
+  }
+  return { previous, entity };
+}
+
+/**
+ * Whether a save carries statements of its own beyond the generator's: junction tables, keys,
+ * fills or deletes of rows.
+ */
+function carriesItsOwnRows(save: CollectionSave): boolean {
+  const statements = [
+    ...(save.junctions?.up ?? []),
+    ...(save.junctions?.down ?? []),
+    ...(save.resolutions ?? []),
+    ...(save.rowFills ?? []),
+  ];
+  const keysChange =
+    save.keys !== undefined &&
+    JSON.stringify(save.keys.before) !== JSON.stringify(save.keys.after);
+  return statements.length > 0 || keysChange;
+}
+
+/**
+ * Whether a save reaches past what the judgement reads of the entity's main table: a translated
+ * entity's translations table, or the fields a field with no name keeps on the row.
+ */
+function pastItsTable(
+  previous: UiSchemaEntity,
+  entity: UiSchemaEntity
+): boolean {
+  const unnamed = (e: UiSchemaEntity) =>
+    JSON.stringify(e.fields.filter(f => f.name === undefined));
+  return (
+    previous.localized === true ||
+    entity.localized === true ||
+    unnamed(previous) !== unnamed(entity)
+  );
+}
+
+/**
+ * The entity's table as the one field-to-column mapping declares `entity`, the rest of the
+ * definition as `current` has it: what a migration written for that entity leaves.
+ */
+async function desiredTable(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  current: UiSchemaManifest,
+  entity: UiSchemaEntity,
+  table: string
+): Promise<TableSpec | undefined> {
+  const kind = kindOf(save);
+  const inputs = await appMigrationInputs({
+    ...(await inputsArgs(deps, save)),
+    manifest: withEntity(current, kind, save.slug, entity),
+  });
+  const declared = inputs[kind.manifest].find(c => c.slug === save.slug);
+  if (declared === undefined) return undefined;
+  const placed = (list: ManifestKind) =>
+    list === kind.manifest ? [declared] : [];
+  return buildDesiredSnapshotFromConfig(
+    placed("collections"),
+    placed("singles"),
+    placed("components"),
+    deps.adapter.getCapabilities().dialect,
+    inputs.latest?.data.snapshot
+  ).tables.find(t => t.name === table);
+}
+
+/**
+ * The save as far as it applied: the entity with the applied changes alone, the renames of those
+ * changes, and a moment of its own, so its file runs after the history's. A judged save carries no
+ * fill and no row values (`judgeableStop`).
+ */
+function settledSaveOf(
+  save: CollectionSave,
+  applied: UiSchemaEntity,
+  report: readonly StoppedChange[]
+): CollectionSave {
+  const { renamedFields } = save;
+  return {
+    ...save,
+    entity: applied,
+    now: new Date(),
+    ...(renamedFields === undefined
+      ? {}
+      : {
+          renamedFields: appliedRenames(renamedFields, report),
+        }),
+  };
 }
 
 /**
@@ -2211,7 +2634,8 @@ async function runWritten(
       // after it are kept, recorded nowhere, and the failure says so with what to run next, as a
       // push that failed part way says it.
       if (applied.length > 0) {
-        throw partlyAppliedChange(error, ordered.slice(applied.length));
+        const kept = ordered.slice(applied.length);
+        throw partlyAppliedChange(error, kept, await checkedFileOf(deps, kept));
       }
       throw error;
     }
@@ -2529,15 +2953,37 @@ async function recordWhatWasPushed(
   files: SaveFiles,
   table: string
 ): Promise<void> {
-  const repo = new SchemaEventsRepository(
-    deps.adapter.getDrizzle(),
-    deps.adapter.getCapabilities().dialect
+  await recordUnits(
+    await verifiedUnits(deps, files, table),
+    new SchemaEventsRepository(
+      deps.adapter.getDrizzle(),
+      deps.adapter.getCapabilities().dialect
+    )
   );
+}
+
+/** A written file, read for recording, with the snapshot beside it. */
+type WrittenUnit = {
+  filename: string;
+  file: Awaited<ReturnType<typeof unitOf>>;
+  target: NextlySchemaSnapshot | null;
+};
+
+/**
+ * The written files, in run order, once the collection's table is found to stand as the newest of
+ * them with a snapshot says (`recordWhatWasPushed`): where it does not, the save is refused naming
+ * the file. Reads the live table, so it is asked before any transaction that records them opens.
+ */
+async function verifiedUnits(
+  deps: CollectionSaveDeps,
+  files: SaveFiles,
+  table: string
+): Promise<WrittenUnit[]> {
   const ordered = [
     ...(files.adopt === undefined ? [] : [files.adopt]),
     ...files.change,
   ];
-  const units = [];
+  const units: WrittenUnit[] = [];
   for (const filename of ordered) {
     units.push({
       filename,
@@ -2546,29 +2992,82 @@ async function recordWhatWasPushed(
     });
   }
   // The table after the push is what the change's newest file with a
-  // snapshot records: the adoption describes it before the push, and a
-  // translations-table file, which may come after, has no snapshot. Compared
-  // before anything is recorded, so a mismatch records no file.
-  const verified = [...units]
-    .reverse()
-    .find(u => u.filename !== files.adopt && u.target !== null);
+  // snapshot records (`checkedFileOf`). Compared before anything is
+  // recorded, so a mismatch records no file.
+  const checked = await checkedFileOf(deps, files.change);
+  const verified = units.find(u => u.filename === checked);
   if (verified?.target != null) {
     const live = await liveTable(deps, table);
     const expected = onlyTable(verified.target, table);
     if (!snapshotsEquivalent(live, expected)) {
       throw new NextlyError({
         code: "NEXTLY_MIGRATION_DRIFT",
-        publicMessage: `The database does not stand as ${verified.filename} says after the save's change was applied, so the save's files were not recorded applied. Compare the table with the file, then record it with \`nextly migrate:resolve --applied ${verified.filename}\` once they match.`,
+        // The change landed, so its files are kept: the steps that finish it are a part-way
+        // push's (`nextSteps`), checking the file compared here, the registry brought in step by
+        // the `nextly migrate` after them.
+        publicMessage: `The database does not stand as ${verified.filename} says after the save's change was applied, so the save's ${ordered.length === 1 ? "file" : "files"} ${ordered.join(", ")} ${ordered.length === 1 ? "was" : "were"} kept and not recorded applied. Compare the table with ${verified.filename}. ${nextSteps(ordered, verified.filename)}`,
         logContext: {
           file: verified.filename,
+          keptFiles: [...ordered],
           differences: diffSnapshots(expected, live).length,
         },
       });
     }
   }
+  return units;
+}
+
+/** Record each of `units` applied, in order, on `repo`: a transaction's, where they commit with it. */
+async function recordUnits(
+  units: readonly WrittenUnit[],
+  repo: SchemaEventsRepository
+): Promise<void> {
   for (const { filename, file } of units) {
     await recordAlreadyApplied({ filename, sha256: file.sha256 }, repo);
   }
+}
+
+/**
+ * A save's result where its files were kept, recorded applied nowhere: the files, and the one a
+ * `migrate:resolve` checks against the database (`checkedFileOf`).
+ */
+async function keptResult(
+  deps: CollectionSaveDeps,
+  written: { names: readonly string[]; files: SaveFiles }
+): Promise<CollectionSaveResult> {
+  return {
+    files: [...written.names],
+    applied: false,
+    checked: await checkedFileOf(deps, written.files.change),
+  };
+}
+
+/**
+ * A save's result once its change was made: its files recorded applied in development, and
+ * elsewhere kept, recorded nowhere, and named as a part-way failure names them (`keptResult`).
+ */
+async function finishedResult(
+  deps: CollectionSaveDeps,
+  written: { names: readonly string[]; files: SaveFiles }
+): Promise<CollectionSaveResult> {
+  if (!deps.applies) return keptResult(deps, written);
+  return { files: [...written.names], applied: true };
+}
+
+/**
+ * Of a save's change files, in run order, the one a `migrate:resolve` checks against the database:
+ * the newest with a snapshot, which describes the table as the change leaves it. A translations
+ * table's file, which may come after it, has none, and the adoption describes the table before the
+ * change, so neither is it. Null where none has a snapshot.
+ */
+async function checkedFileOf(
+  deps: CollectionSaveDeps,
+  files: readonly string[]
+): Promise<string | null> {
+  for (const filename of [...files].reverse()) {
+    if ((await snapshotOf(deps, filename)) !== null) return filename;
+  }
+  return null;
 }
 
 /** A written file as the runner takes it. */
@@ -2673,19 +3172,29 @@ async function undoUnapplied(
   }
   for (const filename of written) {
     await settleAttempts(deps, repo, filename);
-    await rm(join(deps.migrationsDir, filename), { force: true });
-    await rm(
-      join(
-        deps.migrationsDir,
-        "meta",
-        filename.replace(/\.sql$/, ".snapshot.json")
-      ),
-      { force: true }
-    );
+    await removeFileAndSnapshot(deps, filename);
   }
   if (definition === undefined) await rm(definitionPath, { force: true });
   else await writeAtomically(definitionPath, definition);
   return "withdrawn";
+}
+
+/** Remove a migration file the save wrote, and its snapshot. */
+async function removeFileAndSnapshot(
+  deps: CollectionSaveDeps,
+  filename: string
+): Promise<void> {
+  await rm(join(deps.migrationsDir, filename), { force: true });
+  await rm(snapshotPathOf(deps, filename), { force: true });
+}
+
+/** Where the snapshot of the migration file `filename` is kept. */
+function snapshotPathOf(deps: CollectionSaveDeps, filename: string): string {
+  return join(
+    deps.migrationsDir,
+    "meta",
+    filename.replace(/\.sql$/, ".snapshot.json")
+  );
 }
 
 /**

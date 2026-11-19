@@ -27,6 +27,13 @@ import { validateSingleConfig } from "../../../singles/config/validate-single";
 import { validateCollectionConfig } from "../../../collections/config/validate-config";
 import { defineSingle } from "../../../singles/config/define-single";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
+import { configurationProblems } from "../../../shared/lib/config-problems";
+
+/** Every problem the configuration's load reports for these entities, as one text. */
+const problemText = (entities: Parameters<typeof configurationProblems>[0]) =>
+  configurationProblems(entities)
+    .map(problem => `[${problem.code}] ${problem.path}: ${problem.message}`)
+    .join("\n");
 
 /** Names that reach a column, including the shapes the Builder refuses but code paths allow. */
 const FIELD_NAMES = [
@@ -554,20 +561,28 @@ describe("the config factories inject on the column too", () => {
     // declared `title` twice. That is now refused at validation, which runs first, so the
     // duplicate can no longer be constructed at all.
     for (const declared of ["Title", "Slug"]) {
-      expect(() =>
-        defineCollection({
-          slug: "posts",
-          labels: { singular: "Post", plural: "Posts" },
-          fields: [{ type: "text", name: declared }],
-        } as never)
-      ).toThrow();
-      expect(() =>
-        defineSingle({
-          slug: "home",
-          label: "Home",
-          fields: [{ type: "text", name: declared }],
-        } as never)
-      ).toThrow();
+      expect(
+        problemText({
+          collections: [
+            defineCollection({
+              slug: "posts",
+              labels: { singular: "Post", plural: "Posts" },
+              fields: [{ type: "text", name: declared }],
+            } as never),
+          ],
+        })
+      ).not.toBe("");
+      expect(
+        problemText({
+          singles: [
+            defineSingle({
+              slug: "home",
+              label: "Home",
+              fields: [{ type: "text", name: declared }],
+            } as never),
+          ],
+        })
+      ).not.toBe("");
     }
   });
 

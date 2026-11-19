@@ -27,7 +27,7 @@ import {
 
 import { nodeHasRoom } from "./class-library";
 import { lengthInPx } from "./fluid-size";
-import { designReadOnlyReason, type LockView } from "./inspector";
+import { designReadOnlyReason, type LockView } from "./inspector/inspector";
 import type { BuilderOp } from "./op-vocabulary";
 import { sharedStyleName } from "./shared-style-library";
 import { pairWords, valueText } from "./site-text-rows";

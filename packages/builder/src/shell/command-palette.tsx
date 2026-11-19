@@ -28,8 +28,6 @@ import {
   CommandItem,
   CommandList,
   CommandShortcut,
-  DialogDescription,
-  DialogTitle,
   commandDefaultFilter,
   ShortcutScope,
   useCommandHighlight,
@@ -580,14 +578,23 @@ function PaletteList({
     .map(statusShown)
     .filter(status => status !== undefined)
     .join(" ");
+  const empty = nothing
+    ? typeof emptyMessage === "function"
+      ? emptyMessage(query)
+      : emptyMessage
+    : null;
   return (
     <>
       <CommandList>
+        {/* Drawn in the list, and hidden from a screen reader, which hears it
+            from the status line below: a listbox may hold only options and
+            their groups, and one holding only words fails as a list. */}
         {nothing ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {typeof emptyMessage === "function"
-              ? emptyMessage(query)
-              : emptyMessage}
+          <div
+            aria-hidden="true"
+            className="px-4 py-8 text-center text-sm text-muted-foreground"
+          >
+            {empty}
           </div>
         ) : null}
         {groups.map((shown, index) => (
@@ -609,11 +616,11 @@ function PaletteList({
           </React.Fragment>
         ))}
       </CommandList>
-      {/* What a group's search is doing, said outside the list, where a
-          status may be; mounted before it has anything to say, so the first
-          words are announced. */}
+      {/* What a group's search is doing, or that nothing was found, said
+          outside the list, where a status may be; mounted before it has
+          anything to say, so the first words are announced. */}
       <p role="status" className="sr-only">
-        {statuses}
+        {nothing ? empty : statuses}
       </p>
       {nothing ? null : <PaletteFooter verbs={verbs} />}
     </>
@@ -809,17 +816,12 @@ function PaletteSurface({
           shouldFilter: false,
         }}
         contentProps={{ onCloseAutoFocus: handleCloseAutoFocus }}
+        // Visually hidden, but the dialog's accessible name and description all the same: the
+        // search field's placeholder is not a substitute — it names the INPUT, not the dialog that
+        // wraps it. `CommandDialog` draws both from these.
+        title="Command palette"
+        description="Search for a command and press Enter to run it."
       >
-        {/*
-         * Visually hidden, but the dialog's accessible name and description all the same:
-         * `CommandDialog` renders neither, so without these a screen reader announces an unnamed
-         * dialog and Radix logs a missing-description warning. The search field's placeholder is
-         * not a substitute — it names the INPUT, not the dialog that wraps it.
-         */}
-        <DialogTitle className="sr-only">Command palette</DialogTitle>
-        <DialogDescription className="sr-only">
-          Search for a command and press Enter to run it.
-        </DialogDescription>
         <CommandInput
           placeholder={placeholder}
           value={search}

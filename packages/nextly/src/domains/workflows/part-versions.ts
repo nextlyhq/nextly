@@ -27,9 +27,11 @@ import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
 import { liveColumnNames } from "../schema/pipeline/diff/introspect-live";
 import type { SingleRegistryService } from "../singles/services/single-registry-service";
+import type { VersionsDbApi } from "../versions/db-api";
 import { documentVersionOn } from "../versions/document-revision";
 import {
   VersionsRepository,
+  type VersionRef,
   type VersionRow,
 } from "../versions/versions-repository";
 
@@ -152,14 +154,36 @@ export async function partVersionOn(
 }
 
 /**
+ * How the history is read: on a step's or a publish's transaction, where the newest version of any
+ * part is a locking read, so a write waiting on the document's lock compares with the newest; or
+ * on the pool, by a check that writes nothing (a release's) and is judged again under the lock of
+ * the publish it leads to, which may take no lock.
+ */
+export type HistoryRead = "locked" | "pool";
+
+/**
+ * The newest recorded version of any part of `ref`, read as `read` says. One read either way,
+ * of every stored version whatever its language, so the pool's answer is the locked one's: a
+ * version recorded in a language the site has since stopped offering is still the newest.
+ */
+function newestOfAnyPart(
+  repo: VersionsRepository,
+  ref: VersionRef,
+  read: HistoryRead
+): Promise<VersionRow | undefined> {
+  return repo.findNewest(ref, { lock: read === "locked" });
+}
+
+/**
  * The newest recorded version of one part, snapshot included, read on `tx`: in the part's
  * language, or for the shared part, in any (each language's snapshot carries the shared fields).
  * Undefined for a part never saved.
  */
 export async function shownVersionOn(
-  tx: TransactionContext,
+  tx: VersionsDbApi,
   document: ReviewDocument,
-  part: string | null
+  part: string | null,
+  read: HistoryRead = "locked"
 ): Promise<VersionRow | undefined> {
   const repo = new VersionsRepository(tx);
   const ref = {
@@ -167,7 +191,7 @@ export async function shownVersionOn(
     scopeSlug: document.scopeSlug,
     entryId: document.entryId,
   };
-  if (part === null) return repo.findNewest(ref);
+  if (part === null) return newestOfAnyPart(repo, ref, read);
   const newest = (await repo.newestVersionNoByLocale(ref, [part])).get(part);
   return newest === undefined ? undefined : repo.findByVersionNo(ref, newest);
 }
@@ -179,14 +203,19 @@ export async function shownVersionOn(
  * own: an approval names the version its language was saved as.
  */
 export async function shownContentOn(
-  tx: TransactionContext,
+  tx: VersionsDbApi,
   document: ReviewDocument,
   table: DocumentTable,
-  part: string | null
+  part: string | null,
+  read: HistoryRead = "locked"
 ): Promise<VersionRow | undefined> {
-  const shown = await shownVersionOn(tx, document, part);
+  const shown = await shownVersionOn(tx, document, part, read);
   if (!shown || part === null || table.translated === null) return shown;
-  const newest = await new VersionsRepository(tx).findNewest(document);
+  const newest = await newestOfAnyPart(
+    new VersionsRepository(tx),
+    document,
+    read
+  );
   if (!laterThan(newest, shown)) return shown;
   return {
     ...shown,

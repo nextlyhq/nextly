@@ -488,11 +488,11 @@
 }
 
 /* A field the collection no longer has, still chosen: marked as the field
-   the canvas's red note names, its value in the same red. */
+   the canvas's red note names, its value in the red the editor's words take. */
 [data-content-control="entryField"]
   [data-slot="select-trigger"][aria-invalid="true"] {
   border-color: var(--nx-destructive);
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 /*
@@ -501,5 +501,5 @@
  * and the inspector's Field say it, the words read out beside the icon.
  */
 .nx-layer-row__badge[data-problem] {
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }

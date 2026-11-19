@@ -74,7 +74,9 @@ export function ForgotPassword(): JSX.Element {
       >
         <Link
           href={ROUTES.LOGIN}
-          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+          // In the text colour, underlined: a brand's primary is a fill and
+          // can fall under AA as small text.
+          className="inline-flex items-center text-foreground underline underline-offset-2 cursor-pointer font-medium transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Sign In
@@ -143,7 +145,9 @@ export function ForgotPassword(): JSX.Element {
           Remember your password?{" "}
           <Link
             href={ROUTES.LOGIN}
-            className="text-primary cursor-pointer font-medium transition-colors"
+            // In the text colour, underlined: a brand's primary is a fill and
+            // can fall under AA as small text.
+            className="text-foreground underline underline-offset-2 cursor-pointer font-medium transition-colors"
           >
             Sign in
           </Link>

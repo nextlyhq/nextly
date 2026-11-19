@@ -43,7 +43,7 @@ import {
   type BlockStyleOffers,
 } from "./block-style-row-menu";
 import { GroupToggle } from "./design-group-toggle";
-import { LookSpecimen } from "./look-tiles-view";
+import { LookSpecimen } from "./inspector/style-inspector/look-tiles-view";
 import { blockLabel } from "./panels/add/inserter";
 import {
   sharedStyleReachSentence,
