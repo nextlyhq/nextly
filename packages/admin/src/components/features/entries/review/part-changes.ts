@@ -11,39 +11,25 @@
 
 import { useBaselineDiff, useVersions } from "@admin/hooks/queries/useVersions";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { validationIssues } from "@admin/lib/api/parseApiError";
 import type { VersionScope } from "@admin/services/versionApi";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 import type { PartReview } from "@admin/types/workflows";
 
+import { sharedReviewPlan, type ReviewPlan } from "./review-pair";
 import {
-  reviewPlan,
-  sharedReviewPlan,
-  type ReviewPair,
-  type ReviewPlan,
-} from "./review-pair";
+  approvedBaselineOf,
+  baselineAnswerOf,
+  baselineTargetOf,
+  languagePlanOf,
+  pairWhereOf,
+  publishedBaselineOf,
+  serverPairOf,
+  type PairWhere,
+  type ServerPair,
+} from "./server-pair";
 
 /** A part's comparison, while its versions are read, and whether reading them failed. */
-export interface PartPair {
-  pair: ReviewPair | undefined;
-  isError: boolean;
-}
-
-/**
- * Why the server has nothing to compare a baseline with, in its words: a
- * refusal it names on `baseline`. Undefined for any other failure.
- */
-function baselineRefusalOf(error: unknown): string | undefined {
-  return validationIssues(error).find(issue => issue.path === "baseline")
-    ?.message;
-}
-
-/** The server baselines a part is compared with, in the order they are asked. */
-const SINCE_APPROVED = "since-approved";
-const PUBLISHED = "published";
-
-/** The part the server compares the shared fields as. */
-const SHARED_PART = "shared";
+export type PartPair = ServerPair;
 
 /**
  * The pair a part is reviewed by. The version under review is a language's
@@ -51,10 +37,10 @@ const SHARED_PART = "shared";
  * its review state names it (`sharedReviewPlan`). It is compared with what
  * the server's `since-approved` baseline answers, which keeps the part's last
  * approval even where an edit withdrew it since; where the server says the
- * part has none, with its `published` baseline. The shared part is compared
- * as the server's shared part: the shared fields alone, across languages,
- * from the shared part's own approval or the newest publish in any language.
- * Nothing is read while `enabled` is false.
+ * part has none, with its `published` baseline (`server-pair` decides each
+ * step). The shared part is compared as the server's shared part: the shared
+ * fields alone, across languages, from the shared part's own approval or the
+ * newest publish in any language. Nothing is read while `enabled` is false.
  */
 export function usePartPair(
   scope: VersionScope,
@@ -65,27 +51,20 @@ export function usePartPair(
   // Asked on every render, idle for the shared part, which reads no list.
   const language = useLanguagePlan(scope, shared ? undefined : part, enabled);
   const plan =
-    part === undefined
-      ? undefined
-      : shared
-        ? sharedReviewPlan(
-            part.reviewedVersionNo,
-            part.approval?.versionNo ?? null
-          )
-        : language.plan;
-  const server = useServerPair(
-    scope,
-    plan,
-    shared ? { part: SHARED_PART } : { locale: part?.part ?? undefined },
-    enabled
-  );
+    part !== undefined && shared
+      ? sharedReviewPlan(
+          part.reviewedVersionNo,
+          part.approval?.versionNo ?? null
+        )
+      : language.plan;
+  const server = useServerPair(scope, plan, pairWhereOf(part), enabled);
   return {
     pair: server.pair,
     isError: language.isError || server.isError,
   };
 }
 
-/** A language's plan, from the first page of its versions (`reviewPlan`). */
+/** A language's plan, from the first page of its versions (`languagePlanOf`). */
 function useLanguagePlan(
   scope: VersionScope,
   part: PartReview | undefined,
@@ -97,101 +76,33 @@ function useLanguagePlan(
     enabled: enabled && part !== undefined,
     ...(locale === undefined ? {} : { locale }),
   });
-  const listed = versions.data?.pages[0]?.items;
   return {
-    plan:
-      listed === undefined || part === undefined || part.part === null
-        ? undefined
-        : reviewPlan(listed, part.part, part.approval?.versionNo ?? null),
+    plan: languagePlanOf(part, versions.data?.pages[0]?.items),
     isError: part !== undefined && versions.isError,
   };
 }
 
 /**
- * The pair a plan comes to, resolved by the server's baselines where the plan
- * asks for them (see `usePartPair`), in the language or the part `where`
- * names.
+ * The pair a plan comes to: its two baseline queries, wired as `server-pair`
+ * decides what each asks and what its answer means.
  */
 function useServerPair(
   scope: VersionScope,
   plan: ReviewPlan | undefined,
-  where: { locale?: string | undefined; part?: typeof SHARED_PART },
+  where: PairWhere,
   enabled: boolean
 ): PartPair {
-  const server = plan?.kind === "server" ? plan : undefined;
-  const target = {
-    scope,
-    ...(server?.to === undefined ? {} : { to: server.to }),
-    ...(where.locale === undefined ? {} : { locale: where.locale }),
-    ...(where.part === undefined ? {} : { part: where.part }),
-    enabled,
-  };
-  const approved = useBaselineDiff({
-    ...target,
-    baseline: server === undefined ? null : SINCE_APPROVED,
-  });
-  const noApproval = approved.isError
-    ? baselineRefusalOf(approved.error)
-    : undefined;
-  // Asked only once the server says the part was never approved.
-  const published = useBaselineDiff({
-    ...target,
-    baseline:
-      server === undefined || noApproval === undefined ? null : PUBLISHED,
-  });
-  const nothingPublished = published.isError
-    ? baselineRefusalOf(published.error)
-    : undefined;
-  return {
-    pair: pairOf(
-      plan,
-      approved.data,
-      published.data,
-      nothingPublished,
-      where.part
-    ),
-    isError:
-      (approved.isError && noApproval === undefined) ||
-      (published.isError && nothingPublished === undefined),
-  };
-}
-
-/** The pair a plan comes to, with the server baselines' answers where it asked them. */
-function pairOf(
-  plan: ReviewPlan | undefined,
-  sinceApproved: { from: number; to: number } | undefined,
-  sincePublished: { from: number; to: number } | undefined,
-  refusal: string | undefined,
-  part: typeof SHARED_PART | undefined
-): ReviewPair | undefined {
-  if (plan === undefined) return undefined;
-  if (plan.kind !== "server") return plan;
-  const comparedAs = part === undefined ? {} : { part };
-  if (sinceApproved !== undefined) {
-    return {
-      kind: "pair",
-      from: sinceApproved.from,
-      to: sinceApproved.to,
-      since: "approved",
-      seededBy: SINCE_APPROVED,
-      ...comparedAs,
-    };
-  }
-  if (sincePublished !== undefined) {
-    return {
-      kind: "pair",
-      from: sincePublished.from,
-      to: sincePublished.to,
-      since: "published",
-      seededBy: PUBLISHED,
-      ...comparedAs,
-    };
-  }
-  // Refused twice: nothing approved or published in the part to compare with.
-  if (refusal === undefined) return undefined;
-  return plan.to === undefined
-    ? { kind: "none" }
-    : { kind: "first", to: plan.to, reason: refusal };
+  const target = { scope, ...baselineTargetOf(plan, where), enabled };
+  const approved = baselineAnswerOf(
+    useBaselineDiff({ ...target, baseline: approvedBaselineOf(plan) })
+  );
+  const published = baselineAnswerOf(
+    useBaselineDiff({
+      ...target,
+      baseline: publishedBaselineOf(plan, approved),
+    })
+  );
+  return serverPairOf(plan, approved, published, where);
 }
 
 /** What a part's comparison is against, or why there is none, in words. */
