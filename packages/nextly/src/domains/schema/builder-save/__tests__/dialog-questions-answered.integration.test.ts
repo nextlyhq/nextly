@@ -215,6 +215,10 @@ for (const dialect of getConfiguredTestDialects()) {
 
         const refused = await refusalOf([text("heading"), text("visits")], {});
 
+        // Told as the push tells a refused question: an apply failure with its message.
+        expect(refused).toMatchObject({
+          code: "NEXTLY_MIGRATION_APPLY_FAILED",
+        });
         expect(String(refused)).toMatch(/cancelled/);
         expect(migrationFiles()).toEqual(files);
         expect(await columns()).toEqual(before);
@@ -356,6 +360,83 @@ for (const dialect of getConfiguredTestDialects()) {
 
       await save({ resolutions: { views: { action: "confirm_drop" } } });
       expect(await columns()).not.toContain("views");
+    }, 60_000);
+  });
+}
+
+// A translated field's values are kept in the translations table, which the preview of the main
+// table does not read: removed, its drop is asked about all the same, and confirmed by its name as
+// the admin sends it.
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a dialog save that removes a translated field (${dialect})`, () => {
+    let t: TestNextly;
+    let basePath: string;
+    const translated = (name: string) => ({ ...text(name), localized: true });
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          localized: true,
+          fields: [translated("heading"), translated("teaser")],
+        }
+      );
+      await t.nextly.updateSingle({
+        slug: "notice",
+        locale: "en",
+        data: { heading: "Hello", teaser: "Read on", _overwrite: true },
+      } as never);
+    });
+
+    afterEach(async () => {
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    const save = async (extra: Record<string, unknown>) =>
+      dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "notice" },
+        {
+          fields: [translated("heading")],
+          confirmed: true,
+          localized: true,
+          schemaVersion: await versionOf(t, "dynamic_singles", "notice"),
+          ...extra,
+        }
+      );
+    const companionColumns = async () =>
+      (
+        await readTableDefinition(
+          statement => exec(t, statement),
+          (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+          "single_notice_locales"
+        )
+      ).columns.map(column => column.name);
+
+    it("refuses removing it unconfirmed, keeping every language, and drops it once confirmed by name", async () => {
+      const refused = await save({}).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+      expect(String(refused)).toMatch(/cancelled/);
+      expect(await companionColumns()).toContain("teaser");
+
+      await save({ resolutions: { teaser: { action: "confirm_drop" } } });
+      expect(await companionColumns()).not.toContain("teaser");
     }, 60_000);
   });
 }

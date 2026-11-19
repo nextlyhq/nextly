@@ -12,7 +12,9 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { isFieldLocalized } from "../../i18n/classify-fields";
 import { appLocalization } from "../../i18n/configured-locales";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { previewDesiredSchema } from "../pipeline/preview";
@@ -30,8 +32,9 @@ import { rowFieldDiff } from "../services/field-diff";
 /**
  * Refuse a dialog save whose request leaves a question the push asks unanswered, judged by the
  * push's own dispatcher over what the push would ask of the entity's table: the rename candidates
- * and the drops of columns holding values the preview of `desired` finds there. Thrown as the push
- * throws it (`PromptCancelledError`).
+ * and the drops of columns holding values the preview of `desired` finds there, and the drop of
+ * each removed field kept per language, whose values the translations table holds. Refused as the
+ * push refuses it (`cancelled`).
  */
 export async function refuseUnansweredDialogQuestions(args: {
   desired: DesiredSchema;
@@ -64,12 +67,44 @@ export async function refuseUnansweredDialogQuestions(args: {
   // lists them for the person to confirm (`rowFieldDiff`), a field inside a group with no name
   // included. A field it keeps by name whose column goes, a relationship stored in a link table
   // now, is a change of storage the save carries.
-  const removed = new Set(
-    rowFieldDiff(args.oldFields, args.newFields, {
-      localized: storesPerLanguage({ localized: args.wasLocalized }),
-      newLocalized: storesPerLanguage({ localized: args.isLocalized }),
-    }).removed.map(field => toSnakeCase(field.name))
-  );
+  const wasStored = storesPerLanguage({ localized: args.wasLocalized });
+  const removedFields = rowFieldDiff(args.oldFields, args.newFields, {
+    localized: wasStored,
+    newLocalized: storesPerLanguage({ localized: args.isLocalized }),
+  }).removed;
+  const removed = new Set(removedFields.map(field => toSnakeCase(field.name)));
+  // A removed field kept per language has its values in the translations table, which the
+  // preview does not read: its drop is confirmed by the field's name, as the dialog sends it, or
+  // by its translations column's drop event; or it is answered as a rename's pair, `rename`
+  // keeping its values and `drop_and_add` the consent to lose them, as the push takes a pair's
+  // answer. Unanswered, the file would drop every language's values with nobody asked.
+  const companion = `${args.tableName}_locales`;
+  const answeredAsPair = (column: string) =>
+    args.renameResolutions.some(
+      resolution =>
+        resolution.fromColumn === column &&
+        (resolution.tableName === companion ||
+          resolution.tableName === args.tableName)
+    );
+  const unconfirmedTranslated = removedFields.filter(field => {
+    const column = toSnakeCase(field.name);
+    return (
+      isFieldLocalized(field, wasStored) &&
+      !answeredAsPair(column) &&
+      args.legacy?.byFieldName[field.name]?.action !== "confirm_drop" &&
+      !args.eventResolutions.some(
+        resolution =>
+          resolution.kind === "confirm_drop" &&
+          resolution.eventId === `destructive_drop:${companion}.${column}`
+      )
+    );
+  });
+  if (unconfirmedTranslated.length > 0) {
+    throw cancelled(
+      args.tableName,
+      unconfirmedTranslated.map(field => field.name)
+    );
+  }
   const events = preview.events.filter(
     event =>
       event.tableName === args.tableName &&
@@ -87,5 +122,22 @@ export async function refuseUnansweredDialogQuestions(args: {
     classification: preview.classification,
     channel: "browser",
   });
-  if (!answer.proceed) throw new PromptCancelledError();
+  if (!answer.proceed) throw cancelled(args.tableName, []);
+}
+
+/**
+ * A save refused for a question its request left unanswered, told as the push tells it: the push's
+ * own cancellation (`PromptCancelledError`) as the apply failure it answers with, its message the
+ * person reads.
+ */
+function cancelled(table: string, unconfirmed: readonly string[]): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage: new PromptCancelledError().message,
+    logContext: {
+      reason: "unanswered-dialog-question",
+      table,
+      ...(unconfirmed.length > 0 ? { unconfirmedDrops: [...unconfirmed] } : {}),
+    },
+  });
 }
