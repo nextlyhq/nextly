@@ -115,7 +115,11 @@ import {
   type GenerateArgs,
 } from "../migrate-create/generate";
 import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
-import { isWriterOvertaken } from "../migrate-create/writer-hold";
+import {
+  assertWriterHold,
+  isWriterOvertaken,
+  WRITER_HOLD_LOST_REASON,
+} from "../migrate-create/writer-hold";
 import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
@@ -611,7 +615,7 @@ async function settleStoppedSave(
       replacement.push(...names)
     );
     // The definition last, after the replacement's files, as every save writes it.
-    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+    await writeDefinitionHeld(deps, definitionPath, plan.next);
     // Compared with the live table before it is recorded, as a pushed save's files are.
     const units = await verifiedUnits(deps, files, plan.table);
     // The replacement recorded applied, the ledger's attempt at the stopped file cleared and the
@@ -629,7 +633,11 @@ async function settleStoppedSave(
       await onSettled(judged.report);
     });
   } catch (error) {
-    await putBack(deps, left, replacement, definitionPath);
+    // Overtaken by another writer, the folder is that writer's now: nothing is removed from it or
+    // written back into it.
+    if (!isWriterOvertaken(error)) {
+      await putBack(deps, left, replacement, definitionPath);
+    }
     throw error;
   }
   return judged.report;
@@ -1029,11 +1037,51 @@ async function writeSave(
     // The definition last, once the migration files and snapshots that record its change are in
     // place: a save stopped or failing before this leaves the definition as it was, so a later
     // `migrate:create` reads no change that no file records, and writes none of the save's again.
-    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+    await writeDefinitionHeld(deps, definitionPath, plan.next);
     return { files, names, table: plan.table, undo, started };
   } catch (error) {
+    if (isWriterOvertaken(error)) {
+      // Another writer took the folder: what the save put there stays, since a migration file in
+      // the folder may already be applied, and the definition stays as it was. The record stays
+      // with them, for the save to be compared and made again.
+      started.left();
+      throw overtakenSaveError(error, names);
+    }
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
   }
+}
+
+/**
+ * Write the save's definition as the folder's writer: in full, then put in place only once the
+ * hold on the migration folder is checked to be still the save's. A save stalled past its lease
+ * after its files, with another writer gone ahead from its snapshot, changes no definition.
+ */
+async function writeDefinitionHeld(
+  deps: CollectionSaveDeps,
+  definitionPath: string,
+  next: UiSchemaManifest
+): Promise<void> {
+  await writeAtomically(definitionPath, serializeUiSchema(next), () =>
+    assertWriterHold(deps.migrationsDir)
+  );
+}
+
+/**
+ * The refusal of a save another writer overtook: it names the files the save left in the folder,
+ * where it wrote any, and says the definition was not changed.
+ */
+function overtakenSaveError(error: unknown, left: readonly string[]): unknown {
+  if (left.length === 0 || !NextlyError.is(error)) return error;
+  return NextlyError.serviceUnavailable({
+    publicMessage:
+      "Another migration writer took this project's migration files while this change was " +
+      `being saved, after it wrote ${left.join(", ")}. They were left in place, since a ` +
+      "migration file may already be applied, and the definition was not changed. Compare " +
+      "the newest migrations, delete the one `nextly migrate:status` does not show applied " +
+      "where two make the same change, then save again.",
+    logContext: { reason: WRITER_HOLD_LOST_REASON, left: [...left] },
+    cause: error,
+  });
 }
 
 /**
@@ -1994,13 +2042,20 @@ async function readIfPresent(path: string): Promise<string | undefined> {
 
 /**
  * Replace `path` with `text` in one rename, so a reader never sees half a
- * file, and a write that fails leaves the old one whole.
+ * file, and a write that fails leaves the old one whole. `beforePlace` runs
+ * once the text is written in full and before it replaces `path`: a refusal
+ * there leaves `path` as it was.
  */
-async function writeAtomically(path: string, text: string): Promise<void> {
+async function writeAtomically(
+  path: string,
+  text: string,
+  beforePlace?: () => Promise<void>
+): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, text, { encoding: "utf-8", flag: "wx" });
+    await beforePlace?.();
     await rename(temporary, path);
   } catch (error) {
     await rm(temporary, { force: true });

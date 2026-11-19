@@ -44,6 +44,10 @@ import type { ServiceContainer } from "../../../../services";
 import { consoleLogger } from "../../../../shared/types";
 import { MetaService } from "../../../meta/services/meta-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import {
+  acquireWriterHold,
+  setWriterHoldBounds,
+} from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
   refuseWhileSaveInProgress,
@@ -68,6 +72,8 @@ const kill = vi.hoisted(() => ({
   failAfter: undefined as undefined | ((point: string) => boolean),
   /** Whether a folder about to be listed is one to refuse, as one the process may not read. */
   refuseReading: undefined as undefined | ((path: string) => boolean),
+  /** Run once a file has been written in full under its temporary name, as a stalled process would. */
+  stall: undefined as undefined | ((path: string) => Promise<void>),
 }));
 
 /**
@@ -122,12 +128,19 @@ vi.mock("node:fs/promises", async importOriginal => {
       ...rest
     );
   }) as typeof real.readdir;
+  const writeFile = (async (
+    ...args: Parameters<typeof real.writeFile>
+  ): Promise<void> => {
+    await real.writeFile(...args);
+    await kill.stall?.(String(args[0]));
+  }) as typeof real.writeFile;
   return {
     ...real,
     rename,
     rm,
     readdir,
-    default: { ...real, rename, rm, readdir },
+    writeFile,
+    default: { ...real, rename, rm, readdir, writeFile },
   };
 });
 
@@ -180,6 +193,7 @@ afterEach(async () => {
   kill.failRegistry = false;
   kill.failAfter = undefined;
   kill.refuseReading = undefined;
+  kill.stall = undefined;
   await stopped;
   stopped = undefined;
   vi.restoreAllMocks();
@@ -770,6 +784,63 @@ describe.each(getConfiguredTestDialects())(
           "the save was not refused"
         ).toBe(false);
         expect(definitionText()).toBe(definitionBefore);
+      }, 300_000);
+
+      // A save stalled past its lease once its files are written, with another writer taking the
+      // folder meanwhile, no longer owns it: its definition is not written, and its files stay,
+      // since a migration file in the folder may already be applied.
+      it("a save overtaken before its definition leaves its files and the definition as they were", async () => {
+        const restoreBounds = setWriterHoldBounds({
+          waitMs: 30_000,
+          leaseSeconds: 1,
+          // Never inside the case: the stalled save is not renewing.
+          renewMs: 600_000,
+        });
+        try {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const definitionBefore = definitionText();
+          const sqlBefore = filesBelow(join(basePath, HISTORY)).filter(f =>
+            f.endsWith(".sql")
+          );
+          let overtaken = false;
+          kill.stall = async written => {
+            if (overtaken || !written.startsWith(join(basePath, DEFINITION))) {
+              return;
+            }
+            overtaken = true;
+            await new Promise(resolve => setTimeout(resolve, 1_200));
+            const other = await acquireWriterHold({
+              migrationsDir: join(basePath, HISTORY),
+              command: "migrate:create",
+              whenHeld: "wait",
+            });
+            await other.release();
+          };
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha")])
+            .catch((error: unknown) => error);
+          kill.stall = undefined;
+          expect(
+            overtaken,
+            "the save never stalled before its definition"
+          ).toBe(true);
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+          expect(definitionText(), "the definition").toBe(definitionBefore);
+          const left = filesBelow(join(basePath, HISTORY)).filter(
+            f => f.endsWith(".sql") && !sqlBefore.includes(f)
+          );
+          expect(left, "the save's migration file, left in place").toHaveLength(
+            1
+          );
+          expect(await recordRow(t, path), "the record's row").toBeDefined();
+        } finally {
+          restoreBounds();
+        }
       }, 300_000);
 
       // A migration file put in place whose writing then fails, which its generation takes back
