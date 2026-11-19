@@ -2923,17 +2923,22 @@ export class ReleasesService {
       if (release.scheduledAt === null) continue;
       if (judged > 0 && options.outOfTime?.()) break;
       judged += 1;
-      let judging = members;
-      if (isDueAt(release.scheduledAt, now)) {
-        due ??= await this.duePlan(now);
-        // Judged as the run judges it: only the actions it would take, the winning action on
-        // each document and not one an earlier pass already wrote. A losing publish is never
-        // made, so its approval holds nothing back.
-        judging = members.filter(member => due?.acting.has(member.id) === true);
-      }
-      if (judging.length === 0) continue;
-      const hard = await this.hardProblems(release, judging);
+      let hard = await this.hardProblems(release, members);
       if (hard.length === 0) continue;
+      if (isDueAt(release.scheduledAt, now)) {
+        // Only a due release with a problem pays for the drain's plan, as stopping one always
+        // has: a recheck that finds nothing wrong reads no other release.
+        due ??= await this.duePlan(now);
+        // Judged again as the run judges it: only the actions it would take, the winning action
+        // on each document and not one an earlier pass already wrote. A losing publish is never
+        // made, so its approval holds nothing back.
+        const acting = members.filter(
+          member => due?.acting.has(member.id) === true
+        );
+        hard =
+          acting.length === 0 ? [] : await this.hardProblems(release, acting);
+        if (hard.length === 0) continue;
+      }
       // A component an earlier pass began waits for its approval rather than stopping, as the
       // run leaves it (`begunReleases`): stopped, what it wrote would stay live for good.
       if (

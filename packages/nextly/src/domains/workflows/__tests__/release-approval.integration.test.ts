@@ -561,6 +561,24 @@ describe.each(getConfiguredTestDialects())(
       expect(await stoppedNotices(t, publishing)).toBe(0);
     });
 
+    it("reads no other due release when a recheck finds nothing wrong with a due one", async () => {
+      // A save is rechecked against every release holding its document; only a due release with
+      // a problem pays for the drain's plan of everything due.
+      const t = await boot(dialect);
+      const page = await doc(t, "pages");
+      await approve(t, "pages", page);
+      const arranged = await arrange(t, [publishPage(page)], PAST);
+      const planned = vi.spyOn(ReleasesRepository.prototype, "findDueReleases");
+
+      await handlerOf(t).updateEntry(
+        { collectionName: "pages", entryId: page, overrideAccess: true },
+        { title: "Hello", _overwrite: true }
+      );
+
+      expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
+      expect(planned).not.toHaveBeenCalled();
+    });
+
     it("binds no more ids in one statement than every dialect accepts, however many documents it judges", async () => {
       const t = await boot(dialect);
       const page = await doc(t, "pages");
