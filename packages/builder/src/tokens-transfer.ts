@@ -34,21 +34,54 @@
  */
 import {
   isPlainRecord,
-  compileSiteSheet,
   dtcgToTokens,
+  emitTokenBlocks,
   modeFilesToTokens,
+  NEXTLY_EXTENSION,
   resolverToTokens,
+  resolveTokenPrefix,
   sameSiteToken,
   tokensToFigma,
   tokensToResolver,
   tokenCustomProperty,
+  tokenDisplayLabel,
   tokenIdentity,
   tokensToDtcg,
+  isTextStyle,
+  DEFAULT_FLUID_RANGE,
+  type DtcgSiteData,
+  type ModesRead,
+  type NamedClass,
   type SiteToken,
+  type SiteTextMap,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
-import { labelClashes } from "./tokens-studio";
+import type { ClassListEdit } from "./block-style-actions";
+import { DESIGN_ACTION_WORDS } from "./editor-words";
+import { labelClashes, setFluidRange } from "./tokens-studio";
+import {
+  followingAdoption,
+  importExtras,
+  type Adoption,
+  siteDataChanges,
+  textStylesEdit,
+  textStylesTaken,
+  withSiteData,
+  type ImportContext,
+  type ImportExtras,
+} from "./tokens-transfer-extras";
+import {
+  aboutWhich,
+  gapsOf,
+  KEPT_WHY,
+  TEXT_STYLE_KEPT_WHY,
+  textStyleGap,
+  type ExportGap,
+} from "./tokens-transfer-gaps";
+import { reachingVariables } from "./tokens-transfer-reach";
+
+export type { ExportGap } from "./tokens-transfer-gaps";
 
 /** What an import did, or why it could not begin. */
 export type ImportResult =
@@ -60,6 +93,18 @@ export type ImportResult =
       readonly imported: number;
       /** What the file held that this site cannot, in the engine's words. */
       readonly skipped: readonly string[];
+      /** How many text styles the import stores, through {@link classes}. */
+      readonly textStyles?: number;
+      /**
+       * The class edit that stores the file's text styles, for the host's
+       * one class writer. Absent when there are none to store.
+       */
+      readonly classes?: ClassListEdit;
+      /**
+       * The file's Site text rows the import takes, which a host storing it
+       * in steps lays over the rows as they are by then.
+       */
+      readonly rows?: SiteTextMap;
     }
   | {
       readonly ok: false;
@@ -180,6 +225,8 @@ export type ImportPlan =
       readonly skipped: readonly string[];
       /** Every token read, in file order, for {@link applyImport}. */
       readonly incoming: readonly SiteToken[];
+      /** What the files carry beyond the variables. */
+      readonly extras: ImportExtras;
     }
   | {
       readonly ok: false;
@@ -199,7 +246,8 @@ export type ConflictChoice = "keep" | "use";
  */
 export function planImport(
   files: readonly ImportFile[],
-  into: SiteTokenSet
+  into: SiteTokenSet,
+  context: ImportContext = {}
 ): ImportPlan {
   const parsed: { name: string; document: unknown }[] = [];
   for (const file of files) {
@@ -216,7 +264,7 @@ export function planImport(
       };
     }
   }
-  let read: ReturnType<typeof dtcgToTokens>;
+  let read: ModesRead;
   try {
     read = readChosen(parsed);
   } catch {
@@ -229,26 +277,77 @@ export function planImport(
     };
   }
   const skipped = read.issues.map(entry => entry.message);
-  if (read.tokens.length === 0) {
+  const refusedStyles: string[] = [];
+  const adopted = adoptedIds(read.tokens, into);
+  const adoption: Adoption = {
+    ids: adopted,
+    // The file's variables and this site's: a reference may name either.
+    identities: [
+      ...new Set([...read.tokens, ...into.tokens].map(tokenIdentity)),
+    ],
+    from: resolveTokenPrefix(read.site?.prefix).prefix,
+    to: resolveTokenPrefix(into.prefix).prefix,
+  };
+  // The file's own values name each other through `var()` too (a shadow
+  // its colour), so they follow the same map as its text styles and rows.
+  const tokens = read.tokens.map(token => ({
+    ...token,
+    values: followingAdoption(token.values, adoption),
+  }));
+  const extras = importExtras(read, context, refusedStyles, adoption);
+  const { textStyles } = extras;
+  const carriesMore =
+    read.site !== undefined ||
+    textStyles.added.length +
+      textStyles.updated.length +
+      textStyles.unchanged.length >
+      0;
+  if (read.tokens.length === 0 && !carriesMore) {
     return {
       ok: false,
       error:
         "No variables in those files could be used by this site. Nothing was changed.",
-      skipped,
+      skipped: [...skipped, ...refusedStyles],
     };
   }
   // One entry per identity, chosen once, so the preview shows exactly what
   // applying will merge: the last of two entries sharing an identity, with
   // the first reported.
   const dropped: string[] = [];
-  const unique = [
-    ...oneEach(withStoredIds(read.tokens, into), dropped).values(),
-  ];
+  const unique = [...oneEach(withStoredIds(tokens, adopted), dropped).values()];
+  // Rows using a variable the merge would refuse keep the site's own,
+  // judged against every incoming variable taken; applying judges again
+  // against what the author's choices take.
+  const rowsLeft: string[] = [];
+  const reached = reachingVariables(
+    extras,
+    unique,
+    mergeById(withFluidRangeOf(into, extras.site), unique).tokens,
+    rowsLeft
+  );
   return {
     ok: true,
-    skipped: [...skipped, ...dropped],
+    skipped: [...skipped, ...refusedStyles, ...dropped, ...rowsLeft],
     ...planned(unique, into),
+    extras: reached,
   };
+}
+
+/**
+ * The site's variables with its own fluid sizes remade across the fluid
+ * range a file states, as the site's own range change remakes them, so a
+ * size the file doesn't restate keeps matching the range stored with it.
+ * Unchanged where the file states no range, or the site's own.
+ */
+function withFluidRangeOf(
+  into: SiteTokenSet,
+  site: DtcgSiteData | undefined
+): SiteTokenSet {
+  const range = site?.fluidRange;
+  if (range === undefined) return into;
+  const current = into.fluidRange ?? DEFAULT_FLUID_RANGE;
+  if (current.min === range.min && current.max === range.max) return into;
+  return setFluidRange(into, range);
 }
 
 /**
@@ -282,7 +381,7 @@ function newLabelClashes(before: SiteTokenSet, after: SiteTokenSet): string[] {
 /** Which reader the chosen files call for. */
 function readChosen(
   parsed: readonly { name: string; document: unknown }[]
-): ReturnType<typeof dtcgToTokens> {
+): ModesRead {
   const theme = parsed.find(file => isThemeFile(file.document));
   if (theme !== undefined) {
     const others = new Map(
@@ -350,24 +449,44 @@ function sortAgainst(
  */
 function laidOnto(held: SiteToken, stated: SiteToken): SiteToken {
   const dark = stated.values.dark ?? held.values.dark;
-  const id = stated.id ?? held.id;
-  const label = stated.label ?? held.label;
-  const description = stated.description ?? held.description;
-  const extensions = stated.extensions ?? held.extensions;
-  const unreadExtension = stated.unreadExtension ?? held.unreadExtension;
+  // The sizes a fluid size was made from belong to its value: a file that
+  // changes the value without them leaves a size typed by hand.
+  const fluid =
+    stated.fluid ??
+    (stated.values.light === held.values.light ? held.fluid : undefined);
   return {
-    ...(id === undefined ? {} : { id }),
+    ...keptOptional(held, stated),
     name: stated.name,
-    ...(label === undefined ? {} : { label }),
     kind: stated.kind,
     values:
       dark === undefined
         ? { light: stated.values.light }
         : { light: stated.values.light, dark },
-    ...(description === undefined ? {} : { description }),
-    ...(extensions === undefined ? {} : { extensions }),
-    ...(unreadExtension === undefined ? {} : { unreadExtension }),
+    ...(fluid === undefined ? {} : { fluid }),
   };
+}
+
+/** The optional fields a file's token may leave out, and the site's keep. */
+const OPTIONAL_FIELDS = [
+  "id",
+  "label",
+  "group",
+  "description",
+  "extensions",
+  "unreadExtension",
+] as const;
+
+/** Each optional field the file states, else the site's, else none. */
+function keptOptional(
+  held: SiteToken,
+  stated: SiteToken
+): Pick<SiteToken, (typeof OPTIONAL_FIELDS)[number]> {
+  const kept: Partial<Record<(typeof OPTIONAL_FIELDS)[number], unknown>> = {};
+  for (const field of OPTIONAL_FIELDS) {
+    const value = stated[field] ?? held[field];
+    if (value !== undefined) kept[field] = value;
+  }
+  return kept as Pick<SiteToken, (typeof OPTIONAL_FIELDS)[number]>;
 }
 
 /**
@@ -382,15 +501,33 @@ function laidOnto(held: SiteToken, stated: SiteToken): SiteToken {
  */
 function withStoredIds(
   incoming: readonly SiteToken[],
-  into: SiteTokenSet
+  adopted: ReadonlyMap<string, string>
 ): SiteToken[] {
+  return incoming.map(token => {
+    const id = token.id === undefined ? adopted.get(token.name) : undefined;
+    return id === undefined ? token : { ...token, id };
+  });
+}
+
+/**
+ * Which of the file's tokens take a site variable's id (see
+ * {@link withStoredIds}): each one's identity in the file, its name, to the
+ * id it takes here. What the file's text styles and Site text name by that
+ * identity follows the same map, so they reach the variable it merged into.
+ */
+function adoptedIds(
+  incoming: readonly SiteToken[],
+  into: SiteTokenSet
+): Map<string, string> {
   const identities = new Set(into.tokens.map(tokenIdentity));
   const byName = new Map(into.tokens.map(token => [token.name, token]));
-  return incoming.map(token => {
-    if (token.id !== undefined || identities.has(token.name)) return token;
-    const held = byName.get(token.name);
-    return held?.id === undefined ? token : { ...token, id: held.id };
-  });
+  const adopted = new Map<string, string>();
+  for (const token of incoming) {
+    if (token.id !== undefined || identities.has(token.name)) continue;
+    const held = byName.get(token.name)?.id;
+    if (held !== undefined) adopted.set(token.name, held);
+  }
+  return adopted;
 }
 
 /** Whether both sides state something and the statements differ. */
@@ -453,15 +590,26 @@ export function applyImport(
   const taken = plan.incoming.filter(
     token => !standing.has(tokenIdentity(token))
   );
-  if (taken.length === 0) {
+  const styles = textStylesTaken(plan.extras.textStyles);
+  const siteChanges = siteDataChanges(into, plan.extras.site);
+  if (taken.length === 0 && styles === 0 && !siteChanges) {
     return {
       ok: false,
       error:
-        "Nothing in those files would change this site's variables, so nothing was changed.",
+        "Nothing in those files would change this site's design, so nothing was changed.",
       skipped: plan.skipped,
     };
   }
-  const merged = mergeById(into, taken);
+  const merged = mergeById(withFluidRangeOf(into, plan.extras.site), taken);
+  // Judged again against what the author's choices take.
+  const rowsLeft: string[] = [];
+  const reached = reachingVariables(
+    plan.extras,
+    plan.incoming,
+    merged.tokens,
+    rowsLeft
+  );
+  const stored = textStylesTaken(reached.textStyles);
   // Refused rather than saved: two variables under one name cannot be told
   // apart in the panel, and the site's own edits are held to the same rule.
   const clashing = newLabelClashes(into, merged.tokens);
@@ -478,9 +626,20 @@ export function applyImport(
   }
   return {
     ok: true,
-    tokens: merged.tokens,
+    // The site's own design data laid over the merged variables, so the two
+    // save, merge and undo as one edit.
+    tokens: withSiteData(merged.tokens, reached.site),
     imported: merged.landed,
-    skipped: [...plan.skipped, ...merged.refused],
+    skipped: [...plan.skipped, ...merged.refused, ...rowsLeft],
+    ...(reached.site?.siteText === undefined
+      ? {}
+      : { rows: reached.site.siteText }),
+    ...(stored === 0
+      ? {}
+      : {
+          textStyles: stored,
+          classes: textStylesEdit(reached.textStyles),
+        }),
   };
 }
 
@@ -835,9 +994,20 @@ export interface ExportResult {
   readonly text: string;
   /** The file name to offer, which is part of the artefact rather than chrome. */
   readonly filename: string;
+  /**
+   * What the file holds, in words, for the message that says it was saved: a
+   * file name alone does not tell an author which file holds what.
+   */
+  readonly label: string;
   readonly mime: string;
   /** Tokens the format could not represent, in the engine's words. */
   readonly skipped: readonly string[];
+  /**
+   * The same report in the author's words, one entry per variable, with the
+   * variables the file keeps only as Nextly data beside the ones it left out:
+   * the list "What wasn't exported" shows.
+   */
+  readonly gaps: readonly ExportGap[];
 }
 
 /**
@@ -847,9 +1017,16 @@ export interface ExportResult {
  * in version control, where a diff over one line per token is the difference
  * between a reviewable change and an opaque one.
  */
-export function exportDtcg(tokens: SiteTokenSet): ExportResult {
+export function exportDtcg(
+  tokens: SiteTokenSet,
+  classes: readonly NamedClass[] = []
+): ExportResult {
   let skipped: string[];
+  let refused: string[];
+  let lost: string[];
   let text: string;
+  let kept: readonly string[];
+  let stylesKept: readonly NamedClass[];
   try {
     /*
      * EVERY step that reads the vendor data is inside this guard, the
@@ -861,8 +1038,17 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
      * whole export rather than any one of its steps, which is what stops a
      * line added later from landing outside it.
      */
-    const { document, issues } = tokensToDtcg(tokens);
-    skipped = [...issues.map(issue => issue.message), ...unwritable(tokens)];
+    const textStyles = classes.filter(isTextStyle);
+    const { document, issues, keptTextStyles } = tokensToDtcg(tokens, {
+      textStyles,
+    });
+    // Kept apart for the list: a variable the engine refused is not in the
+    // file, while one whose vendor data cannot be written still is.
+    refused = issues.map(issue => issue.message);
+    lost = unwritable(tokens);
+    skipped = [...refused, ...lost];
+    kept = carriedNames(document);
+    stylesKept = textStyles.filter(style => keptTextStyles.includes(style.id));
     text = `${JSON.stringify(document, null, 2)}\n`;
   } catch {
     /*
@@ -877,9 +1063,13 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
      * caller downloads what it is given, so a file that cannot be written has
      * to arrive here as a report.
      */
+    const skipped = [
+      "This site's tokens carry vendor data that cannot be written to a file — a value JSON has no form for, such as a very large number or a structure that refers to itself. Nothing was exported.",
+    ];
     return {
       text: "",
       filename: "tokens.json",
+      label: "variables",
       mime: "application/json",
       /*
        * The engine's own issues are absent here deliberately: the conversion
@@ -887,17 +1077,38 @@ export function exportDtcg(tokens: SiteTokenSet): ExportResult {
        * nothing to report but this. Naming issues from a conversion that did
        * not finish would be reporting a list nobody produced.
        */
-      skipped: [
-        "This site's tokens carry vendor data that cannot be written to a file — a value JSON has no form for, such as a very large number or a structure that refers to itself. Nothing was exported.",
-      ],
+      skipped,
+      gaps: gapsOf(tokens, skipped, []),
     };
   }
   return {
     text,
     filename: "tokens.json",
+    label: "variables",
     mime: "application/json",
     skipped,
+    gaps: [
+      ...gapsOf(tokens, refused, kept, lost),
+      ...stylesKept.map(style =>
+        textStyleGap(style, "kept", TEXT_STYLE_KEPT_WHY)
+      ),
+    ],
   };
+}
+
+/**
+ * The variables a token file holds only in Nextly's own extension: the ones
+ * the format has no type for, written exactly so Nextly reads them back, and
+ * skipped by every other tool. The engine writes them without a report, since
+ * nothing is lost to Nextly, so they are read off the document it wrote.
+ */
+function carriedNames(document: Record<string, unknown>): string[] {
+  const root = document["$extensions"];
+  const own = isPlainRecord(root) ? root[NEXTLY_EXTENSION] : undefined;
+  // `variables` is the file format's key for them, which Nextly's importer
+  // reads back; a key in the files people keep, so it does not move.
+  const carried = isPlainRecord(own) ? own["variables"] : undefined;
+  return isPlainRecord(carried) ? Object.keys(carried) : [];
 }
 
 /** The file name a DTCG export is saved under, and its theme file's. */
@@ -908,8 +1119,11 @@ const THEME_FILE = "variables.resolver.json";
  * The DTCG export: the token file, and beside it a theme file when any
  * variable has a dark value, so a tool reading the standard finds the modes.
  */
-export function exportDtcgWithTheme(tokens: SiteTokenSet): ExportResult[] {
-  const main = { ...exportDtcg(tokens), filename: DTCG_FILE };
+export function exportDtcgWithTheme(
+  tokens: SiteTokenSet,
+  classes: readonly NamedClass[] = []
+): ExportResult[] {
+  const main = { ...exportDtcg(tokens, classes), filename: DTCG_FILE };
   if (
     main.text === "" ||
     !tokens.tokens.some(token => token.values.dark !== undefined)
@@ -917,31 +1131,124 @@ export function exportDtcgWithTheme(tokens: SiteTokenSet): ExportResult[] {
     return [main];
   }
   const theme = tokensToResolver(tokens, DTCG_FILE);
+  const themeSkipped = theme.issues.map(entry => entry.message);
   return [
     main,
     {
       text: `${JSON.stringify(theme.resolver, null, 2)}\n`,
       filename: THEME_FILE,
+      // It holds the dark values the format can type, which a file name
+      // ending in "resolver" does not say; the token file's extension holds
+      // every dark value exactly.
+      label: "dark values in a theme file",
       mime: "application/json",
-      skipped: theme.issues.map(entry => entry.message),
+      skipped: themeSkipped,
+      gaps: [
+        ...gapsOf(tokens, themeSkipped, []),
+        ...darkValuesKept(tokens, theme.resolver, themeSkipped, main.gaps),
+      ],
     },
   ];
 }
 
 /**
+ * The variables whose dark value only the token file's Nextly data holds.
+ *
+ * The engine writes a dark value the format has no type for into the token
+ * file's own extension and leaves it out of the theme file without a report,
+ * since Nextly reads it back exactly. A variable whose light value IS typed
+ * is in the token file as other tools read it, so nothing else names it, yet
+ * those tools have no dark value for it and use the light one in dark mode.
+ * Read off the theme file the engine wrote rather than worked out again here,
+ * so what this names is what the file holds. A variable the token file
+ * already names, or the theme file refused, is not named a second time.
+ */
+function darkValuesKept(
+  tokens: SiteTokenSet,
+  resolver: unknown,
+  skipped: readonly string[],
+  named: readonly ExportGap[]
+): ExportGap[] {
+  const written = darkDocumentOf(resolver);
+  const elsewhere = new Set<string>(
+    named.flatMap(gap => (gap.name === undefined ? [] : [gap.name]))
+  );
+  for (const message of skipped) {
+    const token = aboutWhich(tokens.tokens, message);
+    if (token !== undefined) elsewhere.add(token.name);
+  }
+  return tokens.tokens.flatMap(token =>
+    token.values.dark === undefined ||
+    elsewhere.has(token.name) ||
+    holdsTokenAt(written, token.name)
+      ? []
+      : [
+          {
+            name: token.name,
+            label: tokenDisplayLabel(token),
+            outcome: "kept" as const,
+            why: `${DARK_KEPT_WHY} ${KEPT_WHY[token.kind]}`,
+          },
+        ]
+  );
+}
+
+/** What a dark value kept only as Nextly data means for other tools. */
+const DARK_KEPT_WHY =
+  "Its dark value is kept for Nextly only, so design tools use its light value in dark mode.";
+
+/** The token tree a theme file gives its `dark` context, if it has one. */
+function darkDocumentOf(resolver: unknown): unknown {
+  const modifiers = isPlainRecord(resolver) ? resolver["modifiers"] : undefined;
+  if (!isPlainRecord(modifiers)) return undefined;
+  for (const modifier of Object.values(modifiers)) {
+    const contexts = isPlainRecord(modifier) ? modifier["contexts"] : undefined;
+    const dark = isPlainRecord(contexts) ? contexts["dark"] : undefined;
+    if (Array.isArray(dark)) return dark[0];
+  }
+  return undefined;
+}
+
+/** Whether a token tree holds a token at a dotted name's path. */
+function holdsTokenAt(tree: unknown, name: string): boolean {
+  let node = tree;
+  for (const segment of name.split(".")) {
+    if (!isPlainRecord(node) || !Object.hasOwn(node, segment)) return false;
+    node = node[segment];
+  }
+  return isPlainRecord(node) && "$value" in node;
+}
+
+/**
  * The For Figma export: one file per mode, each holding every variable, as
  * Figma's variables import asks. What Figma cannot hold is named once, on the
- * light file.
+ * light file: shadows and text styles among it, which Figma keeps as effect
+ * styles and text styles, built on the variables the files hold.
  */
-export function exportForFigma(tokens: SiteTokenSet): ExportResult[] {
+export function exportForFigma(
+  tokens: SiteTokenSet,
+  classes: readonly NamedClass[] = []
+): ExportResult[] {
+  const textStyles = classes.filter(isTextStyle);
   return (["light", "dark"] as const).map(mode => {
     const made = tokensToFigma(tokens, mode);
     const empty = Object.keys(made.document).length === 0;
+    const skipped =
+      mode === "light" ? made.issues.map(entry => entry.message) : [];
     return {
       text: empty ? "" : `${JSON.stringify(made.document, null, 2)}\n`,
       filename: `${mode}.tokens.json`,
+      label: `${mode} mode`,
       mime: "application/json",
-      skipped: mode === "light" ? made.issues.map(entry => entry.message) : [],
+      skipped,
+      gaps: [
+        ...gapsOf(tokens, skipped, []),
+        ...(mode === "light"
+          ? textStyles.map(style =>
+              textStyleGap(style, "left-out", DESIGN_ACTION_WORDS.figmaStyles)
+            )
+          : []),
+      ],
     };
   });
 }
@@ -1070,42 +1377,32 @@ function isJsonLeaf(value: unknown): boolean {
 }
 
 /**
- * The site's tokens as the CSS custom properties a page actually resolves.
+ * The site's variables as the CSS a page reads them from, light and dark,
+ * under the site's prefix: what "Copy CSS variables" hands a developer.
  *
- * Compiled with `compileSiteSheet` rather than assembled here, so what this
- * hands over is the same text a visitor's stylesheet contains. A second
- * renderer would agree today and drift, and the drift would be invisible: the
- * exported file would describe a site that does not exist.
+ * Emitted by `emitTokenBlocks` under `:root`, the call the site sheet makes
+ * for its variable blocks, so the copy is those blocks byte for byte rather
+ * than a second rendering that agrees today and drifts. Variables only: the
+ * sheet's other rules (the content width, block defaults) are not variables.
  *
- * Export only. Reading CSS back would need a parser nothing in this system has,
+ * Copy only. Reading CSS back would need a parser nothing in this system has,
  * and a token table recovered from custom properties would have lost every
- * token's kind — which is what decides where it may be used.
+ * token's kind, which is what decides where it may be used.
  */
-export function exportCss(tokens: SiteTokenSet): ExportResult {
-  const sheet = compileSiteSheet(
-    {
-      tokens,
-      /*
-       * No breakpoints, and TYPED rather than cast. Token declarations are not
-       * emitted under any at-rule, so the axes decide nothing here — but the cast
-       * that used to stand in for them hid the fact that the value was the wrong
-       * SHAPE entirely, and a wrong argument to this call would have gone on
-       * compiling. A `BreakpointSet` with two empty axes says the same thing and
-       * says it in the type.
-       */
-      breakpoints: { viewport: [], container: [] },
-    },
-    // Tokens only: no class is compiled, so no part routes anything.
-    {}
-  );
+export function variableCss(tokens: SiteTokenSet): {
+  readonly css: string;
+  /**
+   * What the writer left out, in its own words: a variable whose CSS name
+   * another already took, or a prefix it could not use. Named to the author,
+   * so a copy that is missing a variable never reads as complete.
+   */
+  readonly skipped: readonly string[];
+} {
+  const { css, issues } = emitTokenBlocks(tokens, ":root");
+  // Empty stays empty: a lone newline would be copied and confirmed, telling
+  // an author their variables were copied when nothing was.
   return {
-    // An empty sheet stays empty rather than becoming a newline. A
-    // one-character file downloads as `tokens.css` and reports as saved, which
-    // tells an author their tokens were written when nothing was — and the
-    // warnings saying why are the report they actually needed.
-    text: sheet.css === "" ? "" : `${sheet.css}\n`,
-    filename: "tokens.css",
-    mime: "text/css",
-    skipped: sheet.warnings.map(warning => warning.message),
+    css: css === "" ? "" : `${css}\n`,
+    skipped: issues.map(issue => issue.message),
   };
 }

@@ -25,6 +25,7 @@
 
 import {
   shapeLeaves,
+  SITE_TEXT_ROOT,
   STYLE_CATALOG,
   styleOrigin,
   BASE_BREAKPOINT,
@@ -41,7 +42,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { BASE_DEVICE_LABEL, isUsableWidth } from "./breakpoints";
-import { offeredTiers } from "./canvas-width";
+import { offeredTiers } from "./canvas/canvas-width";
 
 /** What a control's dot reports. */
 export type StyleProvenance =
@@ -194,8 +195,20 @@ function normalizeDescendant(value: string | undefined): string {
  * judgement `ambiguous` makes one level up.
  */
 function landsOnTheBlock(entry: StyleTraceEntry): boolean {
+  if (onThePageRoot(entry)) return false;
   if (entry.origin.kind !== "page") return true;
   return normalizeDescendant(entry.descendant) !== "";
+}
+
+/**
+ * Whether a declaration is written on the page root itself, which a block
+ * reads only by inheritance: the page's own values, and the element tier's
+ * root, where Site text's Body row is written.
+ */
+function onThePageRoot(entry: StyleTraceEntry): boolean {
+  const { origin } = entry;
+  if (origin.kind === "element") return origin.tag === SITE_TEXT_ROOT;
+  return origin.kind === "page" && normalizeDescendant(entry.descendant) === "";
 }
 
 /*
@@ -535,11 +548,9 @@ function ancestorState(
 function pagePassesDown(
   query: StyleProvenanceQuery
 ): StyleProvenance | undefined {
-  const candidates = query.trace.filter(
-    entry =>
-      entry.origin.kind === "page" &&
-      normalizeDescendant(entry.descendant) === ""
-  );
+  // The page's own values and Body's, ranked by the engine as the cascade
+  // ranks them: the page's, on the doubled root class, outrank Body's.
+  const candidates = query.trace.filter(onThePageRoot);
   const entry = styleOrigin(candidates, query.subject, {
     property: query.cssProperty,
     state: "base",

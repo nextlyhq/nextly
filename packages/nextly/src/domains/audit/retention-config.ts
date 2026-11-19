@@ -11,6 +11,7 @@
  * @since 1.0.0
  */
 
+import { processGlobal } from "../../shared/process-global";
 import {
   CALENDAR_COLUMN_MAX_OFFSET_MS,
   EPOCH_COLUMN_MAX_OFFSET_MS,
@@ -180,7 +181,10 @@ export function resolveAuditRetentionConfig(
  * single answer per process, and threading it through every construction site
  * would reintroduce the carry problem this exists to avoid.
  */
-let publishedAuditRetention: ResolvedAuditRetentionConfig | undefined;
+/** One per process: see {@link processGlobal}. */
+const published = processGlobal("auditRetention", () => ({
+  policy: undefined as ResolvedAuditRetentionConfig | undefined,
+}));
 
 /**
  * Publish a reloaded policy. `undefined` restores whatever was built in.
@@ -193,12 +197,12 @@ let publishedAuditRetention: ResolvedAuditRetentionConfig | undefined;
 export function setAuditRetention(
   policy: ResolvedAuditRetentionConfig | undefined
 ): void {
-  publishedAuditRetention = policy;
+  published.policy = policy;
 }
 
 /** The policy a pass should run with: the reloaded one, else the built-in. */
 export function activeAuditRetention(
   built: ResolvedAuditRetentionConfig | undefined
 ): ResolvedAuditRetentionConfig | undefined {
-  return publishedAuditRetention ?? built;
+  return published.policy ?? built;
 }

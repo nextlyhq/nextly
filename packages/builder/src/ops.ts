@@ -98,7 +98,11 @@ export type {
   UnbindAsk,
   UnbindPlanAnswer,
 } from "./binding-services";
-export { conditionsOp } from "./condition-ops";
+export { conditionsOp } from "./conditions/condition-ops";
+export type {
+  ComponentSettingAnswer,
+  ComponentSettingAsk,
+} from "./make-component-setting";
 
 export {
   TEMPLATE_ACTION_KINDS,

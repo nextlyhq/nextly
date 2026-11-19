@@ -12,13 +12,18 @@
  *
  * Each is observed on the review states, the record of content events and the history's pins.
  */
+import { readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { followWorkflowsAfterMigrate } from "../../../cli/commands/follow-workflows";
+import { runMigrateCreate } from "../../../cli/commands/migrate-create";
+import type { CommandContext } from "../../../cli/program";
+import { createLogger } from "../../../cli/utils/logger";
 import {
   defineCollection,
   defineConfig,
@@ -35,6 +40,8 @@ import {
 import { seedBuilderComponent } from "../../../plugins/__tests__/seed-builder-entity";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import { SchemaEventsRepository } from "../../schema/events/schema-events-repository";
+import { setNonInteractive } from "../../schema/migrate/can-prompt";
 import { setWebhookAuditEnabled } from "../../webhooks/recording-activation";
 import { resetWebhookRecordingPolicy } from "../../webhooks/recording-policy";
 import type { VersionsDbApi } from "../../versions/db-api";
@@ -50,6 +57,7 @@ import {
   entry,
   partOf,
   person,
+  publishedPastReview,
   seedState,
   shownVersion,
   stateDb,
@@ -201,6 +209,69 @@ const deskRedrawn = defineWorkflow({
   removedStages: { factcheck: "draft" },
 });
 
+/** The configuration `migrate:create` loads, set by `appMigrationWritten`. */
+const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
+vi.mock("../../../cli/utils/config-loader", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../cli/utils/config-loader")
+  >()),
+  loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
+}));
+
+/** A placeholder URL for each dialect: `migrate:create` reads only which dialect it writes for. */
+const UNREACHED_URL: Record<TestDialect, string> = {
+  sqlite: "file:unused.db",
+  postgresql: "postgres://unused:unused@localhost:1/unused",
+  mysql: "mysql://unused:unused@localhost:1/unused",
+};
+
+/**
+ * The app's migration for `config`, written into `migrationsDir` by `nextly migrate:create` and
+ * recorded applied, as `migrate:baseline` records a site's history over the tables a development
+ * start made: a start that migrates refuses a configuration whose collections no migration
+ * records, and these tables were not made by a migration.
+ */
+async function appMigrationWritten(
+  dialect: TestDialect,
+  migrationsDir: string,
+  config: unknown
+): Promise<void> {
+  loaded.config = config;
+  vi.stubEnv("DB_DIALECT", dialect);
+  vi.stubEnv("DATABASE_URL", UNREACHED_URL[dialect]);
+  _resetEnvCache();
+  const context = {
+    logger: createLogger({ quiet: true }),
+    options: {},
+    cwd: migrationsDir,
+  } as CommandContext;
+  const exit = vi.spyOn(process, "exit").mockImplementation(code => {
+    throw new Error(`migrate:create exited ${String(code)}`);
+  });
+  setNonInteractive(true);
+  try {
+    await runMigrateCreate("workflows", { cwd: migrationsDir }, context);
+  } finally {
+    setNonInteractive(false);
+    exit.mockRestore();
+    loaded.config = undefined;
+  }
+  const ledger = new SchemaEventsRepository(
+    (app().adapter as unknown as DrizzleAdapter).getDrizzle(),
+    dialect
+  );
+  for (const filename of readdirSync(migrationsDir).filter(f =>
+    f.endsWith(".sql")
+  )) {
+    const id = await ledger.recordStart({
+      eventType: "file_apply",
+      source: "cli-migrate",
+      filename,
+    });
+    await ledger.markApplied(id, { uniqueFilename: filename });
+  }
+}
+
 const DESK = workflowDefinitionHash(desk);
 const drafts = { status: true, versions: { drafts: true } } as const;
 
@@ -328,7 +399,7 @@ async function save(
       ...(locale ? { locale } : {}),
     },
     // An update names its version or says it overwrites; this one read none.
-    { ...data, _overwrite: true }
+    { ...publishedPastReview(data), _overwrite: true }
   );
   // A refused save fails the test rather than leaving the document as it was.
   if (!result.success) {
@@ -815,6 +886,21 @@ describe.each(getConfiguredTestDialects())(
             definitionHash: DESK,
           });
           const migrationsDir = await mkdtemp(join(tmpdir(), "nextly-ns-"));
+          await appMigrationWritten(
+            dialect,
+            migrationsDir,
+            defineConfig({
+              localization: { locales: ["en", "es"], defaultLocale: "en" },
+              collections: collectionsOn({
+                posts: deskRenamed,
+                pages: deskRenamed,
+              }),
+              db: {
+                migrationsDir,
+                uiSchemaFile: join(migrationsDir, "ui-schema.json"),
+              },
+            })
+          );
           const productionStart = async (runMigrationsOnBoot: boolean) => {
             const adapter = app().adapter;
             clearServices();

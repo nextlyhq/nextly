@@ -48,6 +48,7 @@ import {
   sessionIdOfRows,
 } from "../busy-table/ended-waiting";
 import { readHolders } from "../busy-table/holder";
+import { boundMysqlLockWaits } from "../busy-table/mysql-wait-bounds";
 import { tableBusyError, tryNotice } from "../busy-table/report";
 import {
   withBusyTableTries,
@@ -78,11 +79,20 @@ import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
 import {
+  asLateValueFailure,
+  convertingColumns,
+  type ConvertingColumn,
+} from "./classifier/conversion-refusal";
+import {
   countLongerThan as countLongerThanHelper,
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
   querySqlRows,
 } from "./classifier/count-helpers";
+import {
+  typeChangeJudge,
+  type TypeChangeJudge,
+} from "./classifier/judge-type-change";
 import { relationSwitches } from "./companion-shape-switches";
 import { withoutCopyOnlyRebuilds, type LiveTable } from "./copy-only-rebuilds";
 import {
@@ -100,7 +110,12 @@ import {
   introspectLiveSnapshot,
   introspectSqliteRebuildLosses,
 } from "./diff/introspect-live";
-import type { Operation, NextlySchemaSnapshot, TableSpec } from "./diff/types";
+import type {
+  DropIndexOp,
+  Operation,
+  NextlySchemaSnapshot,
+  TableSpec,
+} from "./diff/types";
 import { refuseEnumNarrowingsOverRows } from "./enum-narrowing-refusal";
 import { describePrecondition } from "./errors";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
@@ -130,6 +145,7 @@ import {
   liveUniqueConstraintsToKeep,
   renamesOf,
   uniqueColumnsToKeep,
+  withoutUniquesAlreadyEnforced,
 } from "./live-uniques";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
 import {
@@ -137,10 +153,16 @@ import {
   operationsToJudge,
   planCompanionMoves,
 } from "./moved-to-companion";
+import {
+  keyIndexDropsHeldForUnique,
+  uniqueCreatedBeforeKeyIndexDrop,
+  withHeldKeyIndexDrops,
+} from "./mysql-unique-before-key-index";
 import { pushInActiveSchema } from "./pg-active-schema-push";
 import {
   assertLiveCounts,
   assertPreCleanupAccepted,
+  clearConsentedValues,
   withAddedColumnsLeftToTighten,
 } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
@@ -168,7 +190,11 @@ import type {
 import { withRecordedShapes } from "./recorded-shapes";
 import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
-import type { ClassifierEvent, Resolution } from "./resolution/types";
+import type {
+  ClassificationResult,
+  ClassifierEvent,
+  Resolution,
+} from "./resolution/types";
 import { withRetainedSizesColumn } from "./retained-core-columns";
 import { assertSchemaLockHeld, schemaLockConfirmedUntil } from "./schema-lock";
 import {
@@ -176,6 +202,7 @@ import {
   refuseSwitchesWithRename,
   refuseTargetSwitchesOverValues,
 } from "./several-references-refusal";
+import { splitStatements } from "./sql-statement-utils";
 import {
   sqliteRebuiltTables,
   untrackedConstraintCounts,
@@ -184,6 +211,10 @@ import {
 } from "./sql-templates/sqlite-rebuild";
 import { withCapturedStdout } from "./stdout-capture";
 import type { DesiredSchema } from "./types";
+import {
+  refuseRenamedUiTypeChanges,
+  refuseUiTypeChanges,
+} from "./ui-type-changes";
 import { uniqueColumnLookup } from "./unique-columns";
 import { currentWithheldScopeFields } from "./withheld-scope-fields";
 
@@ -505,7 +536,7 @@ interface TransactionTryBound {
 }
 
 /** What one plan-and-apply of the pipeline leaves for the result and the journal. */
-interface PlannedApply {
+export interface PlannedApply {
   readonly statementsExecuted: number;
   readonly resolvedOps: Operation[];
   readonly renamesApplied: number;
@@ -749,8 +780,14 @@ export class PushSchemaPipeline {
      * caller of the pipeline waits in bounded tries without passing anything.
      */
     busyTable?: PipelineBusyTable;
+    /**
+     * The step that tries a refused type change again, which a code-first apply's refusals end
+     * with: `db:sync` says "run db:sync again". Absent, the development push's step.
+     */
+    nextStep?: string;
   }): Promise<PipelineResult> {
     const { db, dialect, source, promptChannel, databaseName } = args;
+    const nextStep = nextStepOf(args);
     // Merged HERE rather than at each call site. `apply` has many callers —
     // HMR, the collection/single/component dispatchers, the dev server, the
     // DI registration — and adding extensions at each would miss some: a UI
@@ -851,25 +888,52 @@ export class PushSchemaPipeline {
       batch: source === "code" ? -1 : undefined,
     });
 
+    // The type changes this apply judged by the conversion rule and goes on to make (safe, or
+    // cleared under consent): a statement the database refuses over a value written after they
+    // were judged is reported naming them, not as its own error (`lateValueFailure`).
+    let converting: ConvertingColumn[] = [];
     try {
       // Each question Phase B asks is asked once for the whole apply: a try that re-plans after one
       // that waited out its bound reads the answers given to the first.
       const promptDispatcher = askingOnce(this.deps.promptDispatcher);
-      // The statements a try sent and saw finish, counted where the apply hands its statements to
-      // the executor and as the pre-resolution phase reports them; on MySQL and SQLite each has
-      // committed, and stays when the try ends waiting. MySQL's are handed over one at a time
-      // while the tries are on, since each commits as it runs and a batch that waits part-way
-      // would not say how many before it did; elsewhere a batch is handed over whole, as always.
-      let finishedThisTry = 0;
+      // The statements a try sent and saw finish, each with whether it is a schema statement,
+      // recorded where the apply hands its statements to the executor and as the pre-resolution
+      // phase reports them. On SQLite each has committed as it ran; on MySQL a schema statement
+      // commits what ran before it, and itself, while a row change after the last one rolls back
+      // with the try's transaction (`committedOf`). MySQL's and SQLite's are handed over one at a
+      // time while the tries are on, SQLite's split as its executor splits them, since a batch that
+      // waits part-way would not say how many before it did; on PostgreSQL a batch is handed over
+      // whole, as always, its try's transaction rolling back whole.
+      let finishedThisTry: boolean[] = [];
+      // Whether the statement the try is about to send, or is waiting in, is a schema statement:
+      // on MySQL one that waits has already committed everything before it.
+      let nextIsSchema = false;
       let finishedEarlier = 0;
-      const oneByOne = busyTable !== undefined && dialect === "mysql";
+      const oneByOne = busyTable !== undefined && dialect !== "postgresql";
+      // What each MySQL or SQLite try planned, and what the tries that ended waiting planned in
+      // all: a later try plans from the live database, where what an earlier one committed is no
+      // longer a change, so the apply reports that from the earlier plans (`withEarlierTries`).
+      let plannedThisTry: Pick<PlannedApply, "resolvedOps" | "moved"> = {
+        resolvedOps: [],
+        moved: [],
+      };
+      const plannedEarlier: Pick<PlannedApply, "resolvedOps" | "moved">[] = [];
       const executor: DrizzleStatementExecutor = {
         executeStatements: async (tx, statements) => {
-          for (const batch of oneByOne
-            ? statements.map(statement => [statement])
-            : [statements]) {
-            await this.deps.executor.executeStatements(tx, batch);
-            finishedThisTry += batch.length;
+          if (!oneByOne) {
+            await this.deps.executor.executeStatements(tx, statements);
+            for (const statement of statements) {
+              finishedThisTry.push(isSchemaStatement(statement));
+            }
+            return;
+          }
+          for (const statement of statementsOneByOne(statements, dialect)) {
+            nextIsSchema = isSchemaStatement(statement);
+            await this.deps.executor.executeStatements(tx, [statement]);
+            finishedThisTry.push(nextIsSchema);
+            // What runs next is not known here; a wait outside these statements is judged by
+            // the last schema statement that ran.
+            nextIsSchema = false;
           }
         },
       };
@@ -889,7 +953,8 @@ export class PushSchemaPipeline {
         tryBound: TransactionTryBound | undefined,
         laterTry: boolean
       ): Promise<PlannedApply> => {
-        finishedThisTry = 0;
+        finishedThisTry = [];
+        nextIsSchema = false;
         // Resolved once per plan, before anything reads it. A desired schema is consumed by TWO
         // builders — the snapshot the diff compares and the Drizzle tables drizzle-kit turns into
         // DDL — and resolving inside either leaves the other on the raw fields, so a table would
@@ -1004,7 +1069,13 @@ export class PushSchemaPipeline {
         // operations here, so the confirmation, the refusals and the apply read one set, as the
         // preview does (`relationSwitches`).
         const liveWithShapes = withRecordedShapes(liveSnapshot, desired);
-        const diffed = diffSnapshots(liveWithShapes, snapshotBeforeRenames);
+        // Less the unique indexes a column already has, which SQLite's snapshot cannot show: an
+        // inline constraint is backed by an index the snapshot leaves out
+        // (`withoutUniquesAlreadyEnforced`).
+        const diffed = await withoutUniquesAlreadyEnforced(
+          diffSnapshots(liveWithShapes, snapshotBeforeRenames),
+          { db, dialect, live: liveSnapshot }
+        );
         const switches = await relationSwitches({
           db,
           dialect,
@@ -1075,6 +1146,15 @@ export class PushSchemaPipeline {
           // "Fill with one value" is not offered for a column the schema makes unique.
           isUnique: uniqueColumnLookup(snapshotBeforeRenames, desired),
           dialect,
+          // `db:sync` and the development push judge each type change by the repair command's
+          // rule, from the rows the live column holds. A Schema Builder save offers it as before.
+          ...conversionRuleFor(source, nextStep, {
+            db,
+            dialect,
+            live: liveSnapshot,
+            expected: snapshotBeforeRenames,
+            schema: desired,
+          }),
         });
 
         // Drops that have a rename candidate are resolved by the
@@ -1110,6 +1190,14 @@ export class PushSchemaPipeline {
         if (!dispatchResult.proceed) {
           throw new PromptCancelledError();
         }
+
+        // A safe conversion goes ahead without a question, said as it is made; a lossy one goes
+        // ahead only where its clearing was consented to, which the dispatcher has answered.
+        converting = convertingColumns(
+          classificationResult,
+          dispatchResult.clearing
+        );
+        reportSafeConversions(classificationResult);
 
         // F5 PR 4: patch desired.collections inline for make_optional
         // resolutions BEFORE building drizzleSchema, so pushSchema sees the
@@ -1166,6 +1254,7 @@ export class PushSchemaPipeline {
                 .map(c => c.tableName.toLowerCase())
             )
           );
+        plannedThisTry = { resolvedOps, moved: moves.moved };
 
         // A column made NOT NULL over rows no answer fills is refused here, before anything runs:
         // every column the answered plan makes NOT NULL, not only those the classifier raised.
@@ -1174,6 +1263,15 @@ export class PushSchemaPipeline {
           classificationResult,
           dispatchResult,
           resolvedOps
+        );
+        // A Schema Builder field renamed and retyped in one save: its old column's values reach the
+        // new type through the rename the answers confirmed, judged here, before anything runs.
+        await refuseRenamedUiTypeChanges(
+          source,
+          args.desired,
+          dispatchResult.confirmedRenames,
+          db,
+          dialect
         );
         // A relationship switched to or from naming several target collections, while a row holds a
         // value no conversion can carry across; then one switched from many related entries to one,
@@ -1192,6 +1290,7 @@ export class PushSchemaPipeline {
           db: args.db,
           dialect: args.dialect,
           desired: args.desired,
+          live: { tables: [...liveSnapshot.tables, ...switches.tables] },
           operations: resolvedOps,
         });
         await refuseSeveralReferencesForOne({
@@ -1356,6 +1455,8 @@ export class PushSchemaPipeline {
 
         // The lifted foreign keys a failed MySQL apply has to add back (`kitRouteConstraintStatements`).
         let liftedKeysOwed: string[] = [];
+        // The key indexes the pre-resolution pass leaves to the batch (`keyIndexDropsHeldForUnique`).
+        let heldKeyIndexDrops: DropIndexOp[] = [];
         const runApply = async (tx: unknown): Promise<number> => {
           // Route: fast in-memory DDL emission for the common Builder op set
           // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
@@ -1439,6 +1540,7 @@ export class PushSchemaPipeline {
             assertPreCleanupAccepted({
               resolutions: dispatchResult.resolutions,
               events: classificationResult.events,
+              clearing: dispatchResult.clearing,
               fields: aggregatedFields,
               desiredSnapshot,
               dialect,
@@ -1464,6 +1566,14 @@ export class PushSchemaPipeline {
           const preResExecutor =
             this.testHooks._executePreResolutionOverride ??
             executePreResolutionOps;
+          // On MySQL, a key's plain index that a unique one replaces is dropped in the apply's batch,
+          // after that unique index is created, rather than here ahead of every create
+          // (`keyIndexDropsHeldForUnique`).
+          heldKeyIndexDrops = keyIndexDropsHeldForUnique(
+            resolvedOps,
+            dialect,
+            liveSnapshot.tables
+          );
           // From here until the batch that adds them back, the keys lifted for a MySQL type change may
           // be dropped, and MySQL commits the drop as it runs.
           liftedKeysOwed = constraints.liftRestores;
@@ -1472,19 +1582,37 @@ export class PushSchemaPipeline {
             // Counted as each statement finishes: on MySQL and SQLite each commits as it runs, so a
             // try that ends waiting part-way names the ones that stay applied.
             let told = 0;
+            // The leading statements run first, then each rename or drop, a schema statement.
+            const schemaAt = (index: number): boolean =>
+              index < leading.length
+                ? isSchemaStatement(leading[index] ?? "")
+                : true;
+            nextIsSchema = schemaAt(0);
             const preResolved = await preResExecutor(
               tx,
-              withoutSqliteDropsLeftToRebuild(resolvedOps, dialect),
+              withoutSqliteDropsLeftToRebuild(
+                resolvedOps.filter(
+                  op => !heldKeyIndexDrops.some(held => held === op)
+                ),
+                dialect
+              ),
               dialect,
               leading,
               () => {
+                finishedThisTry.push(schemaAt(told));
                 told += 1;
-                finishedThisTry += 1;
+                nextIsSchema = schemaAt(told);
               }
             );
             // An executor that does not tell each one (a stand-in) is counted once it returns, as
             // it reports itself: each rename or drop once.
-            finishedThisTry += Math.max(0, leading.length + preResolved - told);
+            for (
+              let index = told;
+              index < leading.length + preResolved;
+              index += 1
+            ) {
+              finishedThisTry.push(schemaAt(index));
+            }
           } catch (err) {
             // A refusal is not a failed statement. The pre-resolution phase can decline to start —
             // when the stored values would not survive a conversion, for instance — and that answer
@@ -1509,6 +1637,7 @@ export class PushSchemaPipeline {
               operations: resolvedOps,
               fields: aggregatedFields,
               dialect,
+              clearing: dispatchResult.clearing,
             });
           } catch (err) {
             // PromptCancelledError from abort is not a DDL failure — let it
@@ -1914,11 +2043,20 @@ export class PushSchemaPipeline {
             useFastPath ? [] : resolvedOps
           );
           try {
-            await executor.executeStatements(tx, [
-              ...safe,
-              ...restore,
-              ...constraints.after,
-            ]);
+            // On MySQL a unique index replacing a key's plain index is created before that index
+            // is dropped: the kit's drop comes ahead of the restored create, and MySQL refuses to
+            // drop the last index a foreign key can use (`uniqueCreatedBeforeKeyIndexDrop`).
+            await executor.executeStatements(
+              tx,
+              uniqueCreatedBeforeKeyIndexDrop(
+                withHeldKeyIndexDrops(
+                  [...safe, ...restore, ...constraints.after],
+                  heldKeyIndexDrops
+                ),
+                dialect,
+                liveSnapshot.tables
+              )
+            );
             liftedKeysOwed = [];
           } catch (err) {
             throw new DdlExecutionError(
@@ -1940,6 +2078,17 @@ export class PushSchemaPipeline {
           // lock while its last statement ran changes nothing. MySQL's DDL has
           // committed as it ran, and SQLite runs without a transaction, so there
           // a refusal here would report an apply that already landed.
+          // SQLite applies without a transaction, so a lossy type change's consented clearing waits
+          // for its rebuild to succeed (`clearConsentedValues`): the values are only cleared in a
+          // column that was converted.
+          if (dialect === "sqlite") {
+            await clearConsentedValues({
+              tx,
+              dialect,
+              events: classificationResult.events,
+              clearing: dispatchResult.clearing,
+            });
+          }
           if (dialect === "postgresql") await assertSchemaLockHeld();
           return (
             safe.length +
@@ -2030,6 +2179,14 @@ export class PushSchemaPipeline {
         };
       };
 
+      // A Schema Builder save's field type changes are judged over the values their columns hold
+      // before anything is planned or run: a blocked or lossy change refuses the save here, naming
+      // each field (`refuseUiTypeChanges`). Asked once, before the first try; a value written
+      // between this read and the statement that converts its column is not judged again here.
+      if (source === "ui") {
+        await refuseUiTypeChanges(args.desired, db, dialect);
+      }
+
       // MySQL and SQLite keep what a try committed, so each try plans the apply again from the
       // live database, which shows it; Phase B's answers are read from the first try's
       // (`askingOnce`). On SQLite a try's every wait is bounded by the connection's busy timeout,
@@ -2037,35 +2194,46 @@ export class PushSchemaPipeline {
       const { statementsExecuted, resolvedOps, renamesApplied, moved } =
         busyTable === undefined || dialect === "postgresql"
           ? await planAndApply(undefined, false)
-          : await withBusyTableTries(
-              busyTableTries(busyTable, dialect),
-              (tryNumber, tryMs) =>
-                watchedTry(
-                  reader,
-                  dialect,
-                  tryMs,
-                  async bound => {
-                    const restore =
-                      dialect === "sqlite"
-                        ? await boundSqliteWait(db, tryMs)
-                        : undefined;
-                    try {
-                      return await planAndApply(bound, tryNumber > 1);
-                    } finally {
-                      await restore?.();
+          : withEarlierTries(
+              await withBusyTableTries(
+                busyTableTries(busyTable, dialect),
+                (tryNumber, tryMs) =>
+                  watchedTry(
+                    reader,
+                    dialect,
+                    tryMs,
+                    async bound => {
+                      const restore =
+                        dialect === "sqlite"
+                          ? await boundSqliteWait(db, tryMs)
+                          : undefined;
+                      try {
+                        return await planAndApply(bound, tryNumber > 1);
+                      } finally {
+                        await restore?.();
+                      }
+                    },
+                    () => {
+                      // Numbered across the apply's tries, so a statement a later try finished is
+                      // not named by the number of one an earlier try did.
+                      const kept = committedOf(
+                        finishedThisTry,
+                        dialect,
+                        nextIsSchema
+                      );
+                      const committed = Array.from(
+                        { length: kept },
+                        (_, index) => finishedEarlier + index + 1
+                      );
+                      finishedEarlier += kept;
+                      plannedEarlier.push(plannedThisTry);
+                      return { table: waitedTable, undone: false, committed };
                     }
-                  },
-                  () => {
-                    // Numbered across the apply's tries, so a statement a later try finished is
-                    // not named by the number of one an earlier try did.
-                    const committed = Array.from(
-                      { length: finishedThisTry },
-                      (_, index) => finishedEarlier + index + 1
-                    );
-                    finishedEarlier += finishedThisTry;
-                    return { table: waitedTable, undone: false, committed };
-                  }
-                )
+                  )
+              ),
+              // Read once the tries are over, after the last one that ended counted its own.
+              plannedEarlier,
+              finishedEarlier
             );
 
       // F10 PR 2: derive the per-change-kind summary from the
@@ -2109,7 +2277,8 @@ export class PushSchemaPipeline {
         // render an admin toast like "1 field added, 1 renamed".
         summary,
       };
-    } catch (err) {
+    } catch (caught) {
+      const err = asLateValueFailure(caught, converting, nextStep);
       const code = this.classifyErrorCode(err);
       // A refused precondition carries its subject in the payload, not in the message: the
       // validation factory sets a deliberately generic public message. Reading `err.message` here
@@ -2639,6 +2808,37 @@ async function refuseKitRebuildsLosingConstraints(
   }
 }
 
+/**
+ * The step that tries a refused type change again, which a code-first apply's refusals end with:
+ * the caller's (`db:sync` says "run db:sync again"), else the development push's.
+ */
+function nextStepOf(args: { nextStep?: string }): string {
+  return args.nextStep ?? "save nextly.config.ts again";
+}
+
+/**
+ * The repair command's rule for the classifier, for a code-first apply (`db:sync`, the development
+ * push); nothing for a Schema Builder save, which offers a type change as before.
+ */
+function conversionRuleFor(
+  source: "ui" | "code",
+  nextStep: string,
+  bound: Parameters<typeof typeChangeJudge>[0]
+): { judgeConversion?: TypeChangeJudge; nextStep?: string } {
+  return source === "code"
+    ? { judgeConversion: typeChangeJudge(bound), nextStep }
+    : {};
+}
+
+/** Each type change judged safe, said as the apply makes it: no one was asked about it. */
+function reportSafeConversions(classification: ClassificationResult): void {
+  for (const safe of classification.safeConversions ?? []) {
+    consoleLogger.info(
+      `[Nextly schema] ${safe.tableName}.${safe.columnName}: ${safe.fromType} -> ${safe.toType}, safe (rows checked: ${String(safe.rowsChecked)}).`
+    );
+  }
+}
+
 /** A rename candidate as a question: its table and its pair of columns. */
 function candidateKey(candidate: RenameCandidate): string {
   return `${candidate.tableName}::${candidate.fromColumn}::${candidate.toColumn}`;
@@ -2656,6 +2856,7 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
   const askedEvents = new Set<string>();
   const confirmed = new Map<string, RenameCandidate>();
   const resolutions = new Map<string, Resolution>();
+  const clearing = new Set<string>();
   const remember = (
     asked: Parameters<PromptDispatcher["dispatch"]>[0],
     answer: PromptDispatchResult
@@ -2670,6 +2871,7 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
     for (const resolution of answer.resolutions) {
       resolutions.set(resolution.eventId, resolution);
     }
+    for (const eventId of answer.clearing ?? []) clearing.add(eventId);
   };
   return {
     async dispatch(args) {
@@ -2700,9 +2902,112 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
           const answered = resolutions.get(event.id);
           return answered === undefined ? [] : [answered];
         }),
+        clearing: args.events
+          .filter(event => clearing.has(event.id))
+          .map(event => event.id),
       };
     },
   };
+}
+
+/**
+ * What an apply whose MySQL or SQLite tries ended waiting before `last` succeeded did in all: the
+ * statements every try committed (`finishedEarlier` before `last`'s own), and each operation and
+ * moved column an earlier try planned that `last` did not plan again, which that try had applied,
+ * since `last` planned from the live database after it. An operation `last` planned again had not
+ * been applied, and is counted once, as `last`'s. Exported for its tests.
+ */
+export function withEarlierTries(
+  last: PlannedApply,
+  plannedEarlier: readonly Pick<PlannedApply, "resolvedOps" | "moved">[],
+  finishedEarlier: number
+): PlannedApply {
+  // Each item's key, built once: an earlier item counts where no item before it, nor any of
+  // `last`'s, has the same key.
+  const seenOps = new Set(last.resolvedOps.map(stableKey));
+  const seenMoved = new Set(last.moved.map(stableKey));
+  const resolvedOps: Operation[] = [];
+  const moved: PlannedApply["moved"][number][] = [];
+  for (const plan of plannedEarlier) {
+    for (const op of plan.resolvedOps) {
+      const key = stableKey(op);
+      if (seenOps.has(key)) continue;
+      seenOps.add(key);
+      resolvedOps.push(op);
+    }
+    for (const column of plan.moved) {
+      const key = stableKey(column);
+      if (seenMoved.has(key)) continue;
+      seenMoved.add(key);
+      moved.push(column);
+    }
+  }
+  return {
+    statementsExecuted: finishedEarlier + last.statementsExecuted,
+    resolvedOps: [...resolvedOps, ...last.resolvedOps],
+    renamesApplied:
+      last.renamesApplied +
+      resolvedOps.filter(
+        op => op.type === "rename_table" || op.type === "rename_column"
+      ).length,
+    moved: [...moved, ...last.moved],
+  };
+}
+
+/**
+ * The statements an apply hands its executor one at a time while its tries are on. SQLite's
+ * executor splits an element at its statement breakpoints, so one element can hold several
+ * statements: they are split here, so each is counted as it finishes. Exported for its tests.
+ */
+export function statementsOneByOne(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): string[] {
+  return dialect === "sqlite"
+    ? splitStatements([...statements])
+    : [...statements];
+}
+
+/** A value as JSON with every object's keys in order, so two equal values give one key. */
+function stableKey(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner as Record<string, unknown>).sort(([x], [y]) =>
+            x < y ? -1 : x > y ? 1 : 0
+          )
+        )
+      : inner
+  );
+}
+
+/** Leading words of a schema statement, which MySQL commits on its own. */
+const SCHEMA_STATEMENT = /^\s*(ALTER|CREATE|DROP|RENAME|TRUNCATE)\b/i;
+
+/** Whether `statement` is a schema statement (`SCHEMA_STATEMENT`), past its leading comments. */
+export function isSchemaStatement(statement: string): boolean {
+  const body = statement
+    .split("\n")
+    .filter(line => !line.trim().startsWith("--"))
+    .join("\n")
+    .replace(/^\s*\/\*[\s\S]*?\*\//, "");
+  return SCHEMA_STATEMENT.test(body);
+}
+
+/**
+ * How many of the statements a try finished stay applied once it ended waiting. On SQLite every
+ * one, as each committed as it ran. On MySQL a schema statement commits what ran before it, and
+ * itself once it has run: where the statement that waited is a schema statement, everything
+ * before it; otherwise everything up to the last schema statement that ran, the row changes after
+ * it rolled back with the try's transaction. Exported for its tests.
+ */
+export function committedOf(
+  finished: readonly boolean[],
+  dialect: SupportedDialect,
+  waitingIsSchema: boolean
+): number {
+  if (dialect !== "mysql" || waitingIsSchema) return finished.length;
+  return finished.lastIndexOf(true) + 1;
 }
 
 /**
@@ -2731,10 +3036,11 @@ async function runOnTransaction(tx: unknown, text: string): Promise<void> {
 /**
  * Runs `work` in `tx` as one try for a busy table. Each lock the transaction waits for is bounded
  * by the database half a second past the try, as a backstop for a watch that could not ask:
- * PostgreSQL's `SET LOCAL lock_timeout`, which ends with the transaction; MySQL's session
- * `lock_wait_timeout`, which would outlive it on its pooled connection, so it is set back to the
- * server's default before the transaction ends, whatever its outcome. The transaction's session
- * id goes to the try's watch, which stops before the commit (`bound.settle`).
+ * PostgreSQL's `SET LOCAL lock_timeout`, which ends with the transaction; on MySQL the session's
+ * `lock_wait_timeout` (a table's metadata lock) and `innodb_lock_wait_timeout` (a row's lock),
+ * which would outlive it on its pooled connection, so each is set back to the value the session
+ * had before the try, whatever its outcome. The transaction's session id goes to the try's watch,
+ * which stops before the commit (`bound.settle`).
  */
 async function runBoundedTry<T>(
   tx: unknown,
@@ -2748,12 +3054,19 @@ async function runBoundedTry<T>(
       tx,
       `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
     );
-  } else if (dialect === "mysql") {
-    await runOnTransaction(
-      tx,
-      `SET SESSION lock_wait_timeout = ${String(Math.ceil((bound.tryMs + 500) / 1000))}`
-    );
   }
+  // Both of MySQL's per-lock waits, half a second past the try, put back afterwards to what the
+  // session had (`boundMysqlLockWaits`).
+  const restoreMysql =
+    dialect === "mysql"
+      ? await boundMysqlLockWaits(
+          {
+            read: text => querySqlRows(tx, "mysql", sql.raw(text)),
+            run: text => runOnTransaction(tx, text),
+          },
+          (bound.tryMs + 500) / 1000
+        )
+      : undefined;
   try {
     const query = ownSessionId(dialect);
     if (query !== undefined) {
@@ -2766,12 +3079,7 @@ async function runBoundedTry<T>(
     await bound.settle();
     return value;
   } finally {
-    if (dialect === "mysql") {
-      await runOnTransaction(
-        tx,
-        "SET SESSION lock_wait_timeout = DEFAULT"
-      ).catch(() => undefined);
-    }
+    await restoreMysql?.();
   }
 }
 

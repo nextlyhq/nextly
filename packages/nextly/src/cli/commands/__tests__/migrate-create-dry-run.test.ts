@@ -315,9 +315,19 @@ describe("migrate:create --dry-run", () => {
       );
       expect(last[1]).toBe("Dry run: nothing was changed.");
 
-      // The real run refuses the same config.
-      const real = await migrateCreate(changed, { recordSnapshot: true });
-      expect(real.exit).toBe(1);
+      // The real run refuses the same config, under the code for this refusal: read as a config
+      // declaration, it would tell the user to fix `nextly.config.ts`, which declares nothing wrong.
+      const printed: string[] = [];
+      const stderr = vi
+        .spyOn(console, "error")
+        .mockImplementation(message => printed.push(String(message)));
+      try {
+        const real = await migrateCreate(changed, { recordSnapshot: true });
+        expect(real.exit).toBe(1);
+      } finally {
+        stderr.mockRestore();
+      }
+      expect(printed.join("\n")).toContain("(RECORD_SNAPSHOT_HAS_CHANGES)");
     });
   });
 

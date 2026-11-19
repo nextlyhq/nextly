@@ -14,7 +14,10 @@
  *                            stopped part-way: it ran outside a transaction,
  *                            or on MySQL (`assertNotPartiallyApplied`), and
  *                            the snapshot does not prove its whole effect
- *                            (`schemaOnly`).
+ *                            (`schemaOnly`); and, for an app file
+ *                            `nextly migrate` hands its proof
+ *                            (`snapshotProof`), unless its snapshot proves
+ *                            all of it (`refuseUnlessProven`).
  *   - neither              → DRIFT: throw NEXTLY_MIGRATION_DRIFT.
  *
  * Two snapshots are equivalent when the diff engine finds no difference.
@@ -42,6 +45,7 @@ import {
   partiallyAppliedAdvice,
   type MigrationUnit,
 } from "./migration-transaction";
+import { refuseUnlessProven, type SnapshotProof } from "./snapshot-proof";
 
 export type ReconcileState = "in_sync" | "already_applied" | "drift";
 
@@ -82,7 +86,15 @@ export interface ReconcileRepo {
    */
   boundTo(
     db: unknown
-  ): Pick<ReconcileRepo, "recordStart" | "markApplied" | "supersede">;
+  ): Pick<
+    ReconcileRepo,
+    | "recordStart"
+    | "markApplied"
+    | "supersede"
+    | "markFailed"
+    | "markNothingApplied"
+    | "discardAttempt"
+  >;
   /**
    * Every `file_apply` row for one filename: applied, failed, rolled back,
    * with what each row retired, which tells a rollback from a cleared
@@ -154,6 +166,19 @@ export interface ReconcileFileArgs {
    * its statements roll back with it, and it is never recorded applied.
    */
   beforeRecorded?: () => Promise<void>;
+  /**
+   * Runs the record of an attempt that stopped waiting for a busy table, through the handle it is
+   * given, bounded as one try of the run's (`writeLedgerBounded`): the ledger table can be the one
+   * another session holds, and the record must not wait past the bounds the stop kept. Absent, the
+   * record is written as any other is.
+   */
+  recordStopped?: (write: (db: unknown) => Promise<void>) => Promise<void>;
+  /**
+   * For an app file `nextly migrate` runs: what proves the file may be recorded applied without
+   * running when the database stands at its end and not its start (`refuseUnlessProven`). Absent
+   * (a plugin module, or a Schema Builder save), such a file is recorded as before.
+   */
+  snapshotProof?: () => Promise<SnapshotProof>;
   /** Dev/ui/db_sync event ids this file_apply supersedes (ALREADY_APPLIED). */
   supersedableEventIds?: () => Promise<string[]>;
   /**
@@ -433,13 +458,7 @@ export async function assertNotPartiallyApplied(
 ): Promise<void> {
   if (!failedAttemptMayBePartial(file, dialect)) return;
   const outsideTransaction = file.transaction === false;
-  // `findFileApplies` returns the unit's `file_apply` rows, so each is one.
-  const rows = (await repo.findFileApplies(file.filename)).map(row => ({
-    ...row,
-    eventType: "file_apply" as const,
-    filename: file.filename,
-  }));
-  const attempt = standingOf(file.filename, rows).unresolvedAttempt;
+  const attempt = await unresolvedAttemptOf(file.filename, repo);
   if (attempt === undefined) return;
   const unfinished =
     attempt.status === "failed"
@@ -455,6 +474,23 @@ export async function assertNotPartiallyApplied(
     publicMessage: `${why} ${PARTIAL_REFUSALS[refusing]} ${advice ?? partiallyAppliedAdvice(file.filename)}`,
     logContext: { source: file.filename, reason: "partially-applied" },
   });
+}
+
+/**
+ * A unit's unresolved attempt, if it has one (`standingOf`), read from its `file_apply` rows: the
+ * one reading every check of a unit's attempt asks.
+ */
+async function unresolvedAttemptOf(
+  filename: string,
+  repo: Pick<ReconcileRepo, "findFileApplies">
+) {
+  // `findFileApplies` returns the unit's `file_apply` rows, so each is one.
+  const rows = (await repo.findFileApplies(filename)).map(row => ({
+    ...row,
+    eventType: "file_apply" as const,
+    filename,
+  }));
+  return standingOf(filename, rows).unresolvedAttempt;
 }
 
 /** How one kind of operation reads as a drift item. */
@@ -540,7 +576,7 @@ const DRIFT_ITEMS: DriftItemOf = {
  * a refusal tells the operator which column, index, check or foreign key to
  * look at rather than only the kind of change.
  */
-function toDriftItem(op: Operation): DriftItem {
+export function toDriftItem(op: Operation): DriftItem {
   // The table's key and its operation's type are the same member of the
   // union; TypeScript can't correlate the two through an index, so the
   // formatter is widened to the union it is only ever called with.
@@ -573,25 +609,44 @@ async function runAndRecord(
   >,
   id: string | undefined
 ): Promise<void> {
-  const { file, repo } = args;
+  const { file } = args;
   await args.executeSql(
     file.sql,
     { source: file.filename, transaction: file.transaction ?? true },
-    async (db, statementsExecuted) => {
-      await args.beforeRecorded?.();
-      const bound = repo.boundTo(db);
-      await markAppliedOrRefuse(
-        bound,
-        id ?? (await bound.recordStart(attemptStart(file))),
-        {
-          filename: file.filename,
-          statementsExecuted,
-          partial: failedAttemptMayBePartial(file, args.dialect),
-        }
-      );
-      await args.recordApplied?.(db, false);
+    (db, statementsExecuted) =>
+      recordRunInTransaction(args, db, statementsExecuted, id)
+  );
+}
+
+/**
+ * A unit's run recorded on the handle its statements ran on (`db`), in their transaction where they
+ * have one: its attempt started, where it was not recorded first (`id` absent), then marked applied
+ * (`markAppliedOrRefuse`), with whatever else the caller records. What `runAndRecord` records once
+ * a unit's statements have run; a Builder save that runs its files as one unit records each of them
+ * so.
+ */
+export async function recordRunInTransaction(
+  args: Pick<
+    ReconcileFileArgs,
+    "file" | "dialect" | "repo" | "recordApplied" | "beforeRecorded"
+  >,
+  db: unknown,
+  statementsExecuted: number,
+  id: string | undefined
+): Promise<void> {
+  const { file, repo } = args;
+  await args.beforeRecorded?.();
+  const bound = repo.boundTo(db);
+  await markAppliedOrRefuse(
+    bound,
+    id ?? (await bound.recordStart(attemptStart(file))),
+    {
+      filename: file.filename,
+      statementsExecuted,
+      partial: failedAttemptMayBePartial(file, args.dialect),
     }
   );
+  await args.recordApplied?.(db, false);
 }
 
 /**
@@ -614,6 +669,7 @@ export async function runRecordedAttempt(
     | "executeSql"
     | "recordApplied"
     | "beforeRecorded"
+    | "recordStopped"
   >
 ): Promise<void> {
   const { file, repo } = args;
@@ -624,19 +680,20 @@ export async function runRecordedAttempt(
     await runAndRecord(args, id);
   } catch (err) {
     if (id !== undefined) {
-      await recordAttemptFailed(
-        repo,
-        id,
-        err,
-        failedAttemptMayBePartial(file, args.dialect)
-      ).catch((recordError: unknown) => {
-        // A file that stopped waiting for a busy table says so whatever its record does. On SQLite
-        // the holder can still hold the whole database, so the record cannot be written; the
-        // attempt then stays without an outcome, which the next run refuses on until resolved,
-        // as for any attempt left so.
-        if (!(NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY")) {
-          throw recordError;
-        }
+      const partial = failedAttemptMayBePartial(file, args.dialect);
+      const busy = NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY";
+      const record =
+        busy && args.recordStopped !== undefined
+          ? args.recordStopped(db =>
+              recordAttemptFailed(repo.boundTo(db), id, err, partial)
+            )
+          : recordAttemptFailed(repo, id, err, partial);
+      await record.catch((recordError: unknown) => {
+        // A file that stopped waiting for a busy table says so whatever its record does. The
+        // holder can still hold the ledger table (on SQLite, the whole database), so the record
+        // cannot be written within its bound; the attempt then stays without an outcome, which the
+        // next run refuses on until resolved, as for any attempt left so.
+        if (!busy) throw recordError;
       });
     }
     throw err;
@@ -717,6 +774,13 @@ export async function reconcileFile(
   if (equiv(live, target)) {
     if (file.schemaOnly !== true) {
       await assertNotPartiallyApplied(file, args.dialect, repo);
+    }
+    if (args.snapshotProof !== undefined) {
+      refuseUnlessProven({
+        file,
+        proof: await args.snapshotProof(),
+        attempt: await unresolvedAttemptOf(file.filename, repo),
+      });
     }
     await adoptFile(args);
     return { state: "already_applied" };

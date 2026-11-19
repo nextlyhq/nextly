@@ -1,108 +1,244 @@
 ---
-title: Layouts and the default Layout
-description: Choose which header and footer wrap your pages, set the site's default Layout, and switch them off for one page.
+title: Header & footer
+description: Choose which header and footer wrap your pages, set the site's default header & footer set, and switch them off for one page.
 ---
 
-A Layout says which components fill the areas around a page, such as its header and
-footer. Layouts live under **Page Builder → Layouts** in the admin. A Layout is
+A header & footer set says which components fill the areas around a page, such as its header and
+footer. Header & footer sets live under **Page Builder → Header & footer** in the admin. A header & footer set is
 published like a component: its draft can change without the site seeing it until you
 publish.
 
 <Callout type="warn">
-  Layouts are experimental: the fields, the default's rules and the route option
-  may still change before they are marked stable. A page route draws Layouts
-  once it turns them on; see [Draw pages inside their
-  Layout](#draw-pages-inside-their-layout).
+  Header & footer sets are experimental: the fields, the default's rules and the
+  route option may still change before they are marked stable. A page route
+  draws header & footer sets once it turns them on; see [Draw pages inside their
+  header and footer](#draw-pages-inside-their-header-and-footer).
 </Callout>
 
-## Which Layout a page gets
+## Which header & footer set a page gets
 
 Each page has two settings:
 
-- **Layout**: the Layout the page asks for. Leave it empty to use the site's default
-  Layout, which is what most pages do.
-- **No header or footer**: asks for no Layout at all. It always wins, even when the
-  page also names a Layout, so a landing page you switched off stays switched off.
+- **Header & footer**: the header & footer set the page asks for. Leave it empty to use the site's default
+  header & footer set, which is what most pages do.
+- **No header or footer**: asks for no header & footer set at all. It always wins, even when the
+  page also names a header & footer set, so a landing page you switched off stays switched off.
 
-The rule for which Layout a page gets is: the switch first, then the Layout the page
+The rule for which header & footer set a page gets is: the switch first, then the header & footer set the page
 names while it is published, then the site's default while it is published, and
-otherwise none. So a page naming a Layout that is not published (or was deleted) gets
+otherwise none. So a page naming a header & footer set that is not published (or was deleted) gets
 the site's default, and a page whose default is not usable gets no header or footer.
 `effectiveLayoutFor` from `@nextlyhq/plugin-page-builder` answers this for a stored
 page; it is experimental.
 
-### Choose a page's Layout
+### Choose a page's header & footer set
 
-Both settings are one choice, made in one place. The **Layout** picker sits at the top
-of the editor's **Settings** and on the page's Page Builder card in the entry form. It
-offers:
+Both settings are one choice, made in one place. The **Header & footer** menu sits in the
+editor's **Settings**, in the page settings beside the canvas, and on the page's Page Builder card
+in the entry form, and reads the same in each. Every item has a small picture of the set, its
+header above its footer, drawn from the published set as a visitor gets it, then its name and a
+short note. It offers, in order:
 
-- **Site default**, with the default Layout's name beside it in grey, such as
-  "Main". It reads **Site default (none set)** when the site has no published default.
-- Each published Layout, by its title.
-- Each Layout that is not published yet, marked "(not published: the site default
-  shows until it is)".
-- **No header or footer**.
+- **Site default**, with the default set's name, such as **Site default (Main)**, and the note
+  "Follows the site if the default changes". It reads **Site default (none set)** when the site has
+  no published default. The default set is not listed again under its own name.
+- Each other published set, noted "Header and footer", "Header only" or "Footer only". A set that
+  holds no header and no footer is not offered: choose **None** instead.
+- Each set that is not published yet, noted "Not published: the site default shows until it is"
+  (or "…no header or footer shows…" when the site has no usable default).
+- **None**, noted "No header or footer".
+- **Manage headers & footers**: in the editor's Page settings, it closes Settings and
+  opens the **Pages** panel on its **Header & footer** sets. On an entry's own form it
+  opens the list of sets in a new tab.
 
-The line under the picker says which Layout is in effect and why, for example "Follows
-the site default, Main, because this page doesn't choose its own Layout." or "Landing
-(not published, so the site default shows)". A page whose
-Layout was deleted shows "Site default (the chosen Layout was deleted)". An author who
-may not read Layouts sees the choice but cannot change it.
+A page that already names a set the menu would not offer, such as the default set by its own name
+or an empty set, keeps it shown and selected. With more than ten sets, the menu has a **Search
+headers & footers** field above the list, matched by the database as the site's own search is.
 
-### The Layout's regions in the editor
+The line under the menu says which header & footer set is in effect and why, for example "Follows
+the site default, Main, because this page doesn't choose its own header & footer set." or "Landing
+(not published, so the site default shows)". A page naming a set the author cannot see, or one that
+was deleted, says so. When the sets can't be loaded the menu says "Couldn't load headers & footers"
+with **Try again**. An author who may not read header & footer sets sees the choice but cannot
+change it.
 
-The editor draws the header and footer of the Layout in effect around the page, as a
-visitor gets them: the published Layout and the published versions of its components.
-Changing the picker redraws them at once, before you save.
+### The header & footer set's regions in the editor
 
-The regions are locked. A click selects nothing and shows where the region comes
-from, such as "Header, from Layout Main". If you may edit Layouts, **Edit Layout ↗**
-opens it in a new tab, so your page and its undo history stay as they are. Press
-Enter on a focused region to show the same tag, and Escape to close it. When the
-Layout or one of its components has changes that are not published yet, the tag says
-"Draft changes not live" and names which. Layers lists the regions as locked rows
-above and below the page's blocks; selecting one shows it on the canvas.
+The editor draws the header and footer of the header & footer set in effect around the page, as a
+visitor gets them: the published header & footer set and the published versions of its components.
+Changing the menu redraws them at once, and the choice is stored with the page's next save.
 
-Publishing a page that names an unpublished Layout asks first: **Publish page only**
-leaves the Layout as it is, and the site default shows until it is published;
-**Publish both** publishes the Layout too, if you may update and publish Layouts. See
+A click on the header or footer selects it, and the sidebar says where it comes from and how
+many pages show it. Each is one Tab stop on the canvas: Enter selects it. Layers lists them
+above and below the page's blocks. When the header & footer set or one of its components has
+changes that are not published yet, the sidebar says "Draft changes not live" and names which.
+
+### Edit the header or footer on the page
+
+If you may edit components, **Edit header** (or **Edit footer**) in the sidebar edits it right
+on the page; so does a double-click on it, or Enter while it is selected. The rest of the page
+dims, and a bar above the canvas says "Editing the site header · changes show on 11 pages",
+with "Unpublished changes from …" when you open a version that isn't published yet. Layers
+reads **Layers · Site header**, the sidebar edits the header's blocks, and the Add panel adds
+to the header. A click on the dimmed page changes nothing and highlights **Done**.
+
+- **Save header** stores your changes as a draft; visitors still see the published header.
+- **Publish header** asks "Publish the header to 11 pages?" first.
+- If you changed a shared style meanwhile, **Save header** and **Publish header** wait for it
+  to be saved first, and save nothing while it couldn't be, as the page's **Save** does.
+- **Undo** and **Redo** step through the header's changes only, starting from when you came
+  in. After **Done** they step through the page's again, which are kept as you left them.
+- **Done**, or Escape with nothing selected in the header, goes back to the page. With
+  changes not saved it asks "Publish your header changes?": **Publish to 11 pages**, **Save as
+  draft**, **Discard** or **Keep editing**. Without the right to publish components, it offers
+  no publish.
+
+Your page's own unsaved changes stay unsaved and untouched; save them with the page's **Save**
+after **Done**. If someone else has the header open, it doesn't open, and the editor says who
+has it: "Ana Diaz is editing this header. Try again when they're done." Leaving the editor or
+reloading with unsaved header changes asks first, as it does for the page. If the browser
+closes, or someone else takes over the page while you edit its header, the header's changes are
+kept as its recovery point, offered when it is next opened. The header's variants are edited in
+its own view, not here: the inspector says so, and its **Edit component** button opens that view,
+asking first about unsaved header changes as **Done** does.
+
+### Open a header & footer set in the builder
+
+A header & footer set opens in the builder as a screen of its own: from its row in the Pages
+panel's **Header & footer** group, or from **Open in builder** on the admin's Header & footer
+list or in a set's form. **+ New header & footer**, at the end of the group, asks for a name and
+what the set starts from, then opens it the same way, as a draft:
+
+- **A copy of Main**: the site default's header and footer.
+- **The starter header and footer**: a new plain header and footer of its own, published, to edit.
+- **Empty**: no header or footer yet. The builder draws the set's header and footer around a grey **Page
+  content goes here** box, where any page using the set goes. They are the set's working header
+  and footer, so a change you make here shows at once, before you save.
+
+With nothing selected, the right panel shows the set's settings:
+
+- **Name**, the set's name.
+- **Header** and **Footer**, each a menu with a picture of every published component you can
+  choose. The components marked **Use as: Header** (or **Footer**) come first, then **Other
+  components**, then **None**, which leaves that area empty in this set. A component another set
+  uses too says so, "Also used by Landing". Last comes **+ Create a header** (or **+ Create a
+  footer**). It makes a new header like the plain starter header (or footer), marked **Use as: Header** and
+  published, and chooses it here; the toast's **Edit header** edits it in place. Only your own
+  rights to create and publish components are needed, since the set itself changes only when you
+  save or publish it.
+- Under a header another set also uses: "Also used by Landing", with **Make a separate copy**.
+  It copies the header, as **Duplicate** does on a component, and points only this set at the
+  copy, so you can change it without changing the other set's pages.
+- **Used on 11 pages**: how many pages show this set, including the pages that follow the site
+  default when this set is the default.
+- **Site default** when this set is the default. Otherwise, if you may choose the default,
+  **Make site default** (or **Publish it, then make default** for a set that was never
+  published). See [Make another header & footer set the default](#make-another-header--footer-set-the-default).
+- A **⋯** menu with **Rename**, which puts you in the **Name** field, **Duplicate**, which makes
+  a draft copy, and **Delete**, which works as [Removing a header & footer
+  set](#removing-a-header--footer-set) describes. The site default can't be deleted until another
+  set is the default.
+
+Changes to the name, the header and the footer are the set's own: **Save** stores them as the
+set's draft, and pages using the set keep showing it as published. **Publish** asks "Publish to
+11 pages?" first, then every page using the set shows the new header and footer. A set no page
+uses is published without asking.
+
+A click on the header or footer selects it, and **Edit header** edits it in place, exactly as on
+a page (above). There are no page blocks here: the Add panel is offered only while you edit the
+header or footer. **Back to Home** in the top bar returns to the page you opened the set from,
+asking first if the set has changes you haven't saved; opened from the admin, it goes back to the
+Header & footer list.
+
+Publishing a page that names an unpublished header & footer set asks first: **Publish page only**
+leaves the header & footer set as it is, and the site default shows until it is published;
+**Publish both** publishes the header & footer set too, if you may update and publish header & footer sets. See
 [Publishing a page whose parts aren't published](/docs/page-builder/editor#publishing-a-page-whose-parts-arent-published).
 
-Publishing a Layout whose header or footer component isn't published tells you so
+Publishing a header & footer set whose header or footer component isn't published tells you so
 afterwards, the same way a page is told.
 
-## The default Layout
+## The default header & footer set
 
-Your site always has exactly one default Layout. On a new site the plugin creates a
-published Layout called **Site layout**, with no areas filled in, and makes it the
-default. Fill in its areas, or make another Layout the default. A site set up on an
-earlier version keeps the name it was given then, **Default (site)**; the plugin never
-renames it.
+Your site always has exactly one default header & footer set. On a new site the plugin creates a
+published header & footer set called **Main** and makes it the default. Main holds a plain
+**Starter header** and **Starter footer**, two published components (one used as the header, one
+as the footer), so the first page anyone opens already looks like a website:
 
-If you already have a Layout called "Site layout", or one at the address `site-layout`,
-the plugin never takes it over. It gives its own Layout the next free name or address
-instead, such as "Site layout 2" or `site-layout-2`.
+- the header shows the site's name from site settings (**Your site name** until you set one),
+  linking to the home page, links to up to five of your pages (oldest first), and a **Contact us**
+  button linking to `/contact`;
+- the footer shows the site's name, a **Pages** column with links to up to four pages, and
+  `© <current year> <site name>`.
 
-### Make another Layout the default
+The starter header and footer are built only from core blocks, and their colours and spacing come
+from your design variables, so they follow your site's light and dark colours. Edit them like any
+component, or replace them. In the builder it is tagged **Starter header · edit or replace** and **Starter
+footer** until you publish a change to them. The **Contact us** button goes to your site's 404 page
+until you add a `/contact` page or change its link.
 
-Call the make-default route on a published Layout:
+### When the default has no header or footer
+
+If the default header & footer set has no header, the builder draws a dashed **No header yet** band
+in the header's place on every page that follows the default (the same goes for the footer). The
+band is drawn on the canvas only; the published page shows nothing there. It offers two ways to
+fill the area:
+
+- **Create a header** makes a new published header with the starter header's design, called **Header**
+  (or **Header 2**, and so on, when that name is taken), puts it in the default, and opens it for
+  editing in place.
+- **Use a component** lists the published components used as the header and puts the one you
+  choose in the default.
+
+Both need the right to update and publish header & footer sets, and creating one also needs the
+right to create and publish components. Anyone else sees who to ask instead. A site that draws its
+header and footer in code never shows the band. The create is a route of its own, which finds the
+default on the server and refuses an area that already shows a component:
+
+```http
+POST /admin/api/plugins/@nextlyhq/plugin-page-builder/default-layout/areas/:area
+```
+
+The starter header and footer are created once, on a new site only. A site that already had a
+default when it upgraded keeps it, and gets no starter header and footer. If the default is lost later and the plugin re-creates it,
+the new set is empty. A site that draws its header and footer in code
+(`pageBuilder({ siteHeaderFooter: "code" })`) gets an empty Main and no starter header and footer.
+So does a site that keeps its components in a collection of its own
+(`componentReadiness.collection`): the plugin writes nothing into a collection it doesn't own.
+
+A site set up on an earlier version keeps the name it was given then, such as **Site layout** or
+**Default (site)**; the plugin never renames it.
+
+If you already have a header & footer set called "Main", or one at the address `main`, the plugin
+never takes it over. It gives its own header & footer set the next free name or address instead,
+such as "Main 2" or `main-2`. The starter header and footer do the same with "Starter header 2" and
+`starter-header-2`.
+
+### Make another header & footer set the default
+
+Call the make-default route on a published header & footer set:
 
 ```http
 POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/make-default
 ```
 
-Only a published Layout can be the default. The caller needs three permissions:
+Only a published header & footer set can be the default. The caller needs three permissions:
 
 - **Manage page builder site settings** (`manage-page-builder-site`),
-- **update** on Layouts, and
-- **publish** on Layouts.
+- **update** on header & footer sets, and
+- **publish** on header & footer sets.
 
-In the editor, choose it under **Settings**, **Site**, **Default Layout**. If the
-Layout's header or footer is a component that isn't published, you're asked first:
-**Make default anyway**, or publish it, then make the Layout the default.
+In the admin, open **Page Builder → Header & footer** and choose **Make site default** from a set's
+row actions. It is offered on each published set except the current default, and only to someone
+with the three permissions above. If the set's header or footer is a component that isn't
+published, you're asked first: **Make default anyway**, or **Publish it, then make default**. A set
+that isn't published offers **Publish it, then make default** instead, which publishes the set and
+the parts of it you may publish, then makes it the default. This list is the one place the default
+is chosen: the editor's **Site settings** names it, with **Change in Pages ▸ Header & footer**,
+and a write to the page builder's settings that doesn't go through the route is refused with "The
+site default is set from the Header & footer list, with Make site default."
 
-The default changes every page that names no Layout, so it is treated like publishing.
+The default changes every page that names no header & footer set, so it is treated like publishing.
 Send `{ "dryRun": true }` to see what would change without changing it. The answer is
 the usual `{ message, item }` shape, where `item` holds `defaultLayout`,
 `previousDefaultLayout` and `by`, who made the change: `{ kind: "user", userId }`, or
@@ -110,77 +246,93 @@ the usual `{ message, item }` shape, where `item` holds `defaultLayout`,
 
 ### The default is protected
 
-You cannot delete or unpublish the default Layout. Make another Layout the default
+You cannot delete or unpublish the default header & footer set. Make another header & footer set the default
 first. The setting is stored in the `page-builder-settings` Single, and only the
 make-default route can change it: a direct write to that Single is refused, even from
 the API with access checks turned off.
 
 If the default disappears another way, such as an import that skips hooks, the plugin
 repairs it. A background job checks the default every time the jobs runner runs, and
-points the default back at the Layout the plugin created (**Site layout**), creating it
-again if needed.
+points the default back at the header & footer set the plugin created (**Main**), creating it
+again, empty, if needed.
 
-### Components a Layout uses are protected
+### Components a header & footer set uses are protected
 
-You cannot delete or unpublish a component that a Layout uses in any of its areas. A
-Layout appears on every page assigned to it, so the component would leave a gap on all
-of them. The refusal is `409 CONFLICT` and names each Layout that uses the component, so
-remove it from those Layouts first. Draft Layouts count, and so does an unpublished edit
-of a published Layout.
+You cannot delete or unpublish a component that a header & footer set uses in any of its areas. A
+header & footer set appears on every page assigned to it, so the component would leave a gap on all
+of them. The refusal is `409 CONFLICT` and names each header & footer set that uses the component, so
+remove it from those header & footer sets first. Draft header & footer sets count, and so does an unpublished edit
+of a published header & footer set.
 
 Inside a batch write the check can't run safely, so deleting or unpublishing a component
 there is refused. Delete or unpublish it on its own instead.
 
-## Removing a Layout
+### A header & footer set can't name a component that doesn't exist
 
-Delete or unpublish a Layout with **Remove Layout…**, in the bar at the top of the Layout's
-edit screen, beside **History**. The Layout's own delete and unpublish are refused with
-"Use Remove Layout… on the Layout's screen to take it down safely.", from the admin's
-menu, the Layouts list and the API alike, and so is a scheduled release that would
-unpublish a Layout.
+Saving a header & footer set whose area names a component that doesn't exist is refused with
+`400 VALIDATION_ERROR`, on that area's row, for example "The footer names a component
+that doesn't exist. Choose another component for the footer." Nothing is stored.
 
-Remove Layout first checks what stands in the way:
+A header & footer set save that adds a component while that component is being deleted is refused
+too, and so is one racing the delete: a save and a delete made at the same moment never
+leave a header & footer set naming a component that is gone.
 
-- **The site's default** can't be removed. Make another Layout the default first.
-- **Pages that use the Layout**: published pages, unpublished pages, and unpublished edits
+A header & footer set stored before these checks may still name a component that was removed some
+other way. Pages draw that area empty, with no error, and the header & footer set's next save of its
+areas drops the row. The other areas are kept, and a save that fails changes nothing. A
+save inside a batch write keeps the row, because the check can't read safely there; the
+header & footer set's next save on its own drops it.
+
+## Removing a header & footer set
+
+Delete or unpublish a header & footer set with **Remove header & footer set…**, in the bar at the top of the header & footer set's
+edit screen, beside **History**. The header & footer set's own delete and unpublish are refused with
+"Use Remove header & footer set… on the set's screen to take it down safely.", from the admin's
+menu, the Header & footer list and the API alike, and so is a scheduled release that would
+unpublish a header & footer set.
+
+Remove header & footer set first checks what stands in the way:
+
+- **The site's default** can't be removed. Make another header & footer set the default first.
+- **Pages that use the header & footer set**: published pages, unpublished pages, and unpublished edits
   of published pages. The dialog lists them, each a link that opens the page, tagged
   **Published**, **Unpublished** or **Published · unsaved edits**. Pages you can't view are
-  counted but not named. Either choose another Layout for each one yourself, or move them
+  counted but not named. Either choose another header & footer set for each one yourself, or move them
   all to the site default first (below).
 - **A site with many pages**: one removal checks up to 2,000 pages. Past that it says "at
   least" how many it found and refuses, rather than guessing that the rest are clear, and
   offers no move.
 
-With nothing in the way, choose **Unpublish** or **Delete Layout**.
+With nothing in the way, choose **Unpublish** or **Delete header & footer set**.
 
 ### Moving the pages to the site default
 
-When pages use the Layout, the dialog offers **Move N pages, then delete** (and, for a
-published Layout, **Move N pages, then unpublish**). It moves every page to the site's
-default Layout, then removes the Layout:
+When pages use the header & footer set, the dialog offers **Move N pages, then delete** (and, for a
+published header & footer set, **Move N pages, then unpublish**). It moves every page to the site's
+default header & footer set, then removes the header & footer set:
 
-- Every page has its choice of Layout cleared, so it uses the site default: an
+- Every page has its choice of header & footer set cleared, so it uses the site default: an
   unpublished page, a published page's live version, and the unsaved edits of a published
   page. A published page's live version and its unsaved edits change together, and the
   edits stay unsaved edits: nothing an author hasn't published goes live. The dialog says
   before you start how many published pages switch to the site default's header and
   footer right away.
 - Each page's **History** records the change as made by you through the Page Builder,
-  with the reason, such as "Layout "Landing" is being deleted, so this page was moved to
+  with the reason, such as "Header & footer set "Landing" is being deleted, so this page was moved to
   the site default.". No save of the page runs, so its save hooks don't either.
 
 Pages are moved as you, and your own rights decide each one:
 
 - Changing a published page's live version needs permission to publish the page. Where
   you may edit a page but not publish it, only its unsaved edits (or, for an unpublished
-  page, the page itself) are moved. Its live version keeps naming the Layout and draws the
-  site default once the Layout is gone. When the Layout has been removed, the dialog
+  page, the page itself) are moved. Its live version keeps naming the header & footer set and draws the
+  site default once the header & footer set is gone. When the header & footer set has been removed, the dialog
   names those pages, so someone who can publish them knows where to look. A published
-  page's live version that still names a deleted Layout stops naming it the next time the
+  page's live version that still names a deleted header & footer set stops naming it the next time the
   page is published.
-- A page you can't edit at all is left on the Layout and named, with the reason ("You
-  can't edit this page."), and the Layout is not removed while any unpublished page or
-  unsaved edit still uses it. Ask someone who can edit it to choose another Layout, then
+- A page you can't edit at all is left on the header & footer set and named, with the reason ("You
+  can't edit this page."), and the header & footer set is not removed while any unpublished page or
+  unsaved edit still uses it. Ask someone who can edit it to choose another header & footer set, then
   choose **Try again**.
 - A page that someone keeps saving while it is moved is read again and tried a few times.
   If it still keeps changing, it is left and named ("This page kept changing while it was
@@ -188,27 +340,27 @@ Pages are moved as you, and your own rights decide each one:
 
 The dialog moves the pages a batch at a time, with a progress bar, and needs to stay open.
 **Stop**, or closing the dialog, stops the move: the pages already moved stay on the site
-default, the rest stay on the Layout, and the Layout is kept. Open Remove Layout again to
-move the others. While the move runs, no page can be put on the Layout and it can't be made
-the default; the Layout itself can still be edited.
+default, the rest stay on the header & footer set, and the header & footer set is kept. Open Remove header & footer set again to
+move the others. While the move runs, no page can be put on the header & footer set and it can't be made
+the default; the header & footer set itself can still be edited.
 
 While a removal runs, which takes moments:
 
-- the Layout can't be made the default;
-- the Layout can't be edited ("This Layout is being removed. Try again in a moment.");
-- no page can be put on it ("This Layout is being removed, so pages can't choose it.
-  Choose another Layout."). A page that already uses it can still be saved.
+- the header & footer set can't be made the default;
+- the header & footer set can't be edited ("This header & footer set is being removed. Try again in a moment.");
+- no page can be put on it ("This header & footer set is being removed, so pages can't choose it.
+  Choose another header & footer set."). A page that already uses it can still be saved.
 
-A Layout unpublished with Remove Layout can't be made the default, or chosen for a page,
-until it is published again. A page's Layout picker shows such a Layout greyed out, with
-the reason beside its name. If a page save lands at the very moment its Layout is removed,
-the page's choice is cleared and it uses the site's default Layout; a published page's live
+A header & footer set unpublished with Remove header & footer set can't be made the default, or chosen for a page,
+until it is published again. A page's header & footer set picker shows such a header & footer set greyed out, with
+the reason beside its name. If a page save lands at the very moment its header & footer set is removed,
+the page's choice is cleared and it uses the site's default header & footer set; a published page's live
 version keeps its choice and draws the default until it is next published, which clears
-a choice of a deleted Layout.
+a choice of a deleted header & footer set.
 
 The same action is a route, for scripts and other tools. It runs as the caller: the route
-admits anyone who may read Layouts, and the delete or unpublish itself is judged by the
-caller's own rights over that Layout:
+admits anyone who may read header & footer sets, and the delete or unpublish itself is judged by the
+caller's own rights over that header & footer set:
 
 ```http
 POST /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/:id/remove
@@ -220,7 +372,7 @@ Content-Type: application/json
 `action` is `delete` or `unpublish`. A dry run changes nothing. Its `item.check` holds
 `isDefault`, `pages` (`{ id, title, state }`, where `state` is `published`,
 `unpublished` or `edited`), `unreadable`, `complete`, `liveRows` (how many of the pages
-have a published version naming the Layout) and `siteDefault` (the default Layout's
+have a published version naming the header & footer set) and `siteDefault` (the default header & footer set's
 title, or `null`), and every answer's `item.by` says who asked, as make-default's does.
 A real removal that something stops answers `409 CONFLICT`, with the
 reason in the message.
@@ -228,7 +380,7 @@ reason in the message.
 A move runs as repeated calls with `"move": true`. The first starts it; each answer's
 `item.move` says where it stands, and while `state` is `moving` the next call sends back
 its `token` and `after`, and `refused`, the ids of every page an earlier answer named as not
-moved, so a page whose published version alone names the Layout still keeps it from being
+moved, so a page whose published version alone names the header & footer set still keeps it from being
 removed:
 
 ```http
@@ -239,16 +391,16 @@ Content-Type: application/json
 ```
 
 Each call moves up to 25 pages and reports how many it `moved` and how many are `left`.
-The last answers `done` once the Layout is removed, or `refused` with the `pages` that
+The last answers `done` once the header & footer set is removed, or `refused` with the `pages` that
 could not be moved and why. A `done` answer carries `liveLeft` (`{ pages, unreadable }`)
-when published pages' live versions still name the Layout because the caller may not
+when published pages' live versions still name the header & footer set because the caller may not
 publish them. Send `"stop": true` with the token to stop; a move whose calls
 stop for five minutes is stopped by the background check.
 
-If a Layout is made the default at the very moment it is being deleted, the delete loses:
-the Layout comes back from a copy taken just before, under a new id, and the default
+If a header & footer set is made the default at the very moment it is being deleted, the delete loses:
+the header & footer set comes back from a copy taken just before, under a new id, and the default
 points at it. Unpublishing in that race leaves the default to the background repair,
-which points it back at the Layout the plugin created.
+which points it back at the header & footer set the plugin created.
 
 Publishing or unpublishing every language at once (`POST
 /admin/api/collections/layouts/entries/:id/unpublish-all` or `publish-all`) runs the
@@ -257,9 +409,9 @@ it too (see [Publishing or unpublishing every
 language](/docs/configuration/collections#publishing-or-unpublishing-every-language)).
 
 A batch write with hooks turned off skips them. None of the checks above reach it, so
-such a write can take a Layout down without Remove Layout's checks. Two things are
+such a write can take a header & footer set down without Remove header & footer set's checks. Two things are
 repaired afterwards: the background repair points the site's default back at a
-published Layout if the default was taken down this way, and a Layout published again
+published header & footer set if the default was taken down this way, and a header & footer set published again
 this way can be made the default once the next background check has run.
 
 ## Existing sites: run a migration
@@ -275,18 +427,18 @@ npx nextly migrate
 
 In development you can use `npx nextly db:sync` instead.
 
-Remove Layout keeps its records in a table of the plugin's own,
+Remove header & footer set keeps its records in a table of the plugin's own,
 `page_builder__layout_removals`. The plugin ships the migration that creates it, and
 `npx nextly migrate` applies it with your app's own migrations.
 
-## Draw pages inside their Layout
+## Draw pages inside their header and footer
 
 <Callout type="info">
   The `layouts` route option and `pageBuilderLayouts()` are **experimental**:
   their names and shape may change before they are marked stable.
 </Callout>
 
-Your site's page route draws the header and footer only when you turn Layouts on for
+Your site's page route draws the header and footer only when you turn header & footer sets on for
 it. Pass the plugin's provider as the `layouts` option of `createBlocksPage` (or
 `createPublicBlocksPage`):
 
@@ -309,25 +461,71 @@ header is wrapped in a `<header>` element and the footer in a `<footer>` element
 each with a `data-nextly-region` attribute naming its area, so you can style or test
 them. Without the option, the route serves the page exactly as before.
 
-- **Which Layout:** the one the page names while it is published, otherwise the
+- **Which header & footer set:** the one the page names while it is published, otherwise the
   site's default, or none when the page has **No header or footer** switched on.
 - **No JavaScript added:** the header and footer are drawn on the server, like the
   rest of the page.
 - **Titles stay the page's own:** a heading in your header never becomes a page's
   title or description.
-- **Updates reach only the pages they affect:** publishing a Layout, or a component
+- **Updates reach only the pages they affect:** publishing a header & footer set, or a component
   one uses, refreshes the pages drawn inside it. Changing the default refreshes the
-  pages that use the default, including pages whose own Layout is not published.
+  pages that use the default, including pages whose own header & footer set is not published.
 - **No usable default:** pages that use the default are drawn without a header or
   footer, and the server logs a warning. The plugin's background job repairs the
   default, and those pages pick it up within a minute.
 
-A preview shows the page's own draft choice of Layout. A route that serves drafts
-outright (`draft: true`) also shows the Layout's and its components' drafts; a
+A preview shows the page's own draft choice of header & footer set. A route that serves drafts
+outright (`draft: true`) also shows the header & footer set's and its components' drafts; a
 preview link shows their published versions.
 
-If your site renamed the Layouts collection or the `page-builder-settings` Single,
+If your site renamed the header & footer sets collection or the `page-builder-settings` Single,
 pass the new names, or the route reads the old ones:
 `pageBuilderLayouts({ layoutsCollection: "frames", settingsSingle: "site-settings" })`.
 For a route that reads through its own Nextly instance, pass that reader as
 `nextly`. The option is not offered on a Single's route.
+
+## A site that draws its header and footer in code
+
+Some sites already draw their header and footer in their own layout, around the page
+route, and never pass it the `layouts` option above. [rext.ai](https://rext.ai) and
+[nextlyhq.com](https://nextlyhq.com) both work this way. Tell the plugin so with its
+`siteHeaderFooter` option:
+
+```ts title="nextly.config.ts"
+import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  plugins: [
+    pageBuilder({
+      siteHeaderFooter: "code",
+    }),
+  ],
+});
+```
+
+| Value                          | Who draws the header and footer                                                           |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
+| `"page-builder"` (the default) | The header & footer sets authors build, drawn by a page route given the `layouts` option. |
+| `"code"`                       | Your site's own layout, around its page route.                                            |
+
+The option says who draws them; your page route decides what visitors get. A route
+draws a header & footer set only when it is given the `layouts` option, so on a site
+whose code draws its own, leave that option off the route as well. Otherwise visitors
+get both headers whatever the option says.
+
+The option is read when the server starts, and any other value stops it with an
+error that names the option.
+
+With `"code"`, the editor shows no header & footer tools, since they would change nothing your site
+draws: no **Header & footer** group in the Pages panel (one line there says why), no **Header &
+footer** menu in Page settings, on the entry page or in the New page dialog, and no header or
+footer regions on the canvas. Header & footer sets and each page's choice are kept as they are, so
+switching back to `"page-builder"` shows them unchanged.
+
+When the editor's canvas shows your site's own header or footer around the page
+(through the [canvas route](/docs/page-builder#draw-the-canvas-in-your-sites-layout))
+and a header & footer set draws one too, the editor says so once a session, above the
+canvas: visitors may see two. Either let your code draw them (set
+`siteHeaderFooter: "code"` and take the `layouts` option off your page route), or
+remove the header from your site's layout and let the sets draw it.

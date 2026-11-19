@@ -789,8 +789,15 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
         run: pnpm check:doc-samples
 
+      # SOURCE_SIZE_BASE is the commit the Page Builder size check holds its
+      # allowlist to, which may only shrink from there: the checkout's first
+      # parent, which on a pull request's merge commit is the base branch's
+      # tip and on a push the commit before it. The checkout's depth of 2 is
+      # what makes it readable; the check fails rather than skips without it.
       - name: Lint
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
+        env:
+          SOURCE_SIZE_BASE: HEAD^1
         run: pnpm lint
 
       - name: Typecheck
@@ -1969,6 +1976,15 @@ jobs:
         run: pnpm --filter @nextlyhq/e2e test:e2e
         env:
           E2E_DEV_SPECS_ONLY: "1"
+
+      # The specs of a site that draws its header and footer in code, on a
+      # playground started in that mode, by themselves: the runs above leave
+      # them out (see HEADER_FOOTER_IN_CODE_SPECS in e2e/playwright.config.ts).
+      - name: Run the browser tests of a site drawing its header and footer in code
+        if: ${{ !cancelled() }}
+        run: pnpm --filter @nextlyhq/e2e test:e2e
+        env:
+          E2E_HEADER_FOOTER_IN_CODE_ONLY: "1"
 
       - name: Upload report
         if: ${{ !cancelled() }}

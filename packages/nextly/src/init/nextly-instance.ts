@@ -15,6 +15,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { ServiceMap } from "../di/register";
 import type { ContentEventsNamespace } from "../direct-api/namespaces/content-events";
+import type { EmailDeliveriesNamespace } from "../direct-api/namespaces/email";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
 import type { NoticesNamespace } from "../direct-api/namespaces/notices";
@@ -23,6 +24,7 @@ import type {
   ApiKeysNamespace,
 } from "../direct-api/namespaces/rbac";
 import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
+import type { WorkflowsNamespace } from "../direct-api/namespaces/workflows";
 import type {
   AuthResult,
   BulkDeleteArgs,
@@ -75,6 +77,8 @@ import type {
   FindMediaArgs,
   FindMediaByIDArgs,
   FindMediaByIDsArgs,
+  MediaCopyArgs,
+  MediaCopiesArgs,
   FindPermissionByIDArgs,
   FindPermissionsArgs,
   FindRoleByIDArgs,
@@ -133,6 +137,7 @@ import type {
   EmailTemplateComparison,
   OwnerUpdateUndo,
 } from "../domains/email/services/email-template-service";
+import type { MediaCopy } from "../domains/media/copies/media-copies";
 import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import type { NextlyPrincipals } from "../plugins/principals/types";
 import type { PublicSiteSettings } from "../runtime/site-settings-read";
@@ -690,6 +695,20 @@ export interface Nextly {
      * @experimental
      */
     findByIDs: (args: FindMediaByIDsArgs) => Promise<MediaFile[]>;
+    /**
+     * A resized copy of an image at the allowed width nearest `width`, or
+     * `null` where the image is used as it is.
+     *
+     * @experimental
+     */
+    copyOf: (args: MediaCopyArgs) => Promise<MediaCopy | null>;
+    /**
+     * Every resized copy of an image up to `upTo` wide, narrowest first, or
+     * `[]` where no copy can be had. The item is read and checked once.
+     *
+     * @experimental
+     */
+    copiesOf: (args: MediaCopiesArgs) => Promise<MediaCopy[]>;
     update: (args: UpdateMediaArgs) => Promise<MutationResult<MediaFile>>;
     delete: (args: DeleteMediaArgs) => Promise<MutationResult<{ id: string }>>;
     bulkDelete: (args: BulkDeleteMediaArgs) => Promise<BulkOperationResult>;
@@ -1069,6 +1088,18 @@ export interface Nextly {
   releases: ReleasesNamespace;
 
   /**
+   * @experimental Review state under a workflow: read it, take steps, assign,
+   * and list what waits, refused exactly where REST would refuse the caller.
+   */
+  workflows: WorkflowsNamespace;
+
+  /**
+   * @experimental The delivery log and queued email, read as the Email hub's
+   * Activity reads them.
+   */
+  emailDeliveries: EmailDeliveriesNamespace;
+
+  /**
    * A subject's content events — a document's or a release's — newest first,
    * page by page, refused exactly where REST would refuse the caller.
    *
@@ -1079,8 +1110,6 @@ export interface Nextly {
    *   kinds: ["published"],
    * });
    * ```
-   *
-   * @experimental
    */
   contentEvents: ContentEventsNamespace;
 

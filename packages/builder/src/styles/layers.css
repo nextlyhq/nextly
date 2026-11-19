@@ -1,0 +1,420 @@
+/*
+ * A region of the page's Layout in Layers: a read-only row above or below the
+ * page's own blocks, outside the tree so it takes no part in the page's
+ * selection, drag and drop, locks or visibility.
+ */
+.nx-layers-region {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border: 1px dashed var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-builder-text);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The raised surface, not the panel's own: on the panel's surface a hover in
+   that colour would look exactly like rest. */
+.nx-layers-region:hover {
+  background: var(--nx-builder-surface-raised);
+}
+
+/* Selected, as a selected block's row is: the theme's selection surface. */
+.nx-layers-region[aria-pressed="true"] {
+  border-style: solid;
+  background: var(--nx-accent);
+  color: var(--nx-accent-foreground);
+}
+
+.nx-layers-region[aria-pressed="true"] .nx-layers-region__origin {
+  color: inherit;
+}
+
+.nx-layers-region:focus-visible {
+  outline: 2px solid var(--nx-builder-accent);
+  outline-offset: -2px;
+}
+
+.nx-layers-region__name {
+  flex: none;
+}
+
+.nx-layers-region__origin {
+  overflow: hidden;
+  color: var(--nx-builder-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * The layers panel: a search field above a tree that takes the rest of the
+ * height.
+ *
+ * A column with `min-height: 0` so the tree can scroll. Without it the tree's
+ * own overflow never engages — a flex child's default minimum size is its
+ * content, so a tall tree grows the panel instead of scrolling inside it, and
+ * the search field is pushed off the top.
+ */
+.nx-layers-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  gap: 0.5rem;
+  padding: 0.75rem;
+}
+
+.nx-layers-panel__search {
+  flex: none;
+}
+
+.nx-layers-panel__tree {
+  flex: 1;
+  min-height: 0;
+}
+
+/*
+ * A selected row takes the theme's selection surface rather than the grey a
+ * hovered row gets, so the two read apart: the selection is what the canvas
+ * and the inspector are showing, a hover is only where the pointer is.
+ * `--nx-accent` is that surface in light and dark alike.
+ */
+.nx-layers-panel__tree [role="treeitem"][aria-selected="true"] {
+  background: var(--nx-accent);
+  /* The only ink the theme means to be read on that surface, so a brand that
+     sets a strong accent keeps the row's name readable. */
+  color: var(--nx-accent-foreground);
+}
+
+/*
+ * The element a row drag is read on: the tree, and the line drawn over it.
+ *
+ * Positioned so the line and the refusal are placed in its own coordinates,
+ * and a column with `min-height: 0` for the reason the panel is one — without
+ * it the tree inside grows the panel rather than scrolling.
+ */
+.nx-layers-panel__body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/*
+ * The cursor says a row is held, over the gaps and over the rows alike: each
+ * row declares its own pointer cursor, so the drag has to reach them.
+ */
+.nx-layers-panel__body[data-nx-dragging],
+.nx-layers-panel__body[data-nx-dragging] [role="treeitem"] {
+  cursor: grabbing;
+}
+
+/* Over a place that refuses the block, as over one on the canvas. */
+.nx-layers-panel__body[data-nx-dragging="refused"],
+.nx-layers-panel__body[data-nx-dragging="refused"] [role="treeitem"] {
+  cursor: no-drop;
+}
+
+/*
+ * Where a dragged row would land: a line at the gap, starting where a row at
+ * that depth draws its name, so its indent says how deep the block will sit.
+ *
+ * Centred on the gap rather than hanging below it, and never a target itself,
+ * as the canvas line is not. Red, in the danger token the canvas refusal uses,
+ * when the placement rule or a lock refuses the drop there.
+ */
+.nx-layers-drop-line {
+  position: absolute;
+  right: 0.25rem;
+  z-index: 2;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--nx-primary);
+  transform: translateY(-1px);
+  pointer-events: none;
+}
+
+/* The canvas line's terminal, so the two read as one kind of mark. */
+.nx-layers-drop-line::before {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: inherit;
+}
+
+.nx-layers-drop-line[data-refused] {
+  background: var(--nx-destructive);
+}
+
+/*
+ * The row in hand, once it is picked up: what tells a finger that has held a
+ * row that the hold worked, before it moves. The row keeps the selection
+ * surface and gains a hairline, and its content fades as the drag source does
+ * on the canvas. On the row itself, so its corners are the row's.
+ */
+.nx-layers-panel__tree [role="treeitem"]:has([data-nx-drag-source]) {
+  background: var(--nx-accent);
+  color: var(--nx-accent-foreground);
+  box-shadow: inset 0 0 0 1px var(--nx-builder-text-muted);
+}
+
+.nx-layer-row[data-nx-drag-source] {
+  opacity: var(--nx-builder-drag-source-opacity);
+}
+
+/*
+ * The reason a drop is refused, beside the panel and level with the line.
+ *
+ * On the chrome's raised notice surface with a red leading edge and a warning
+ * mark, as the editor's other notices are drawn, rather than a red fill: it
+ * sits among rows of ordinary text and has to read as a sentence. The edge
+ * and the mark carry the refusal; the text keeps the panel's own colours, so
+ * its contrast is the panel's.
+ */
+.nx-layers-drop-refusal {
+  /* Fixed in the window by the component, beside the panel: above the
+     canvas it overlaps, and never on the rows it explains. */
+  position: fixed;
+  z-index: 50;
+}
+
+.nx-layers-panel__note {
+  margin: 0;
+  padding: 0.5rem 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
+ * One row: the name takes the space, the badges keep theirs.
+ *
+ * The name truncates rather than wrapping, because the tree's rows are a fixed
+ * height that the virtualizer depends on — a wrapped label would overflow its
+ * row and overlap the next one.
+ */
+.nx-layer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  width: 100%;
+}
+
+.nx-layer-row__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * A badge states a fact about the block, so it is dimmer than the name without
+ * being decoration.
+ *
+ * `--nx-builder-text-muted` rather than an opacity on the text colour: an
+ * alpha-blended foreground has a contrast ratio that depends on whatever is
+ * behind it, which changes between the panel and a selected row. The token is
+ * the value the design system already checks.
+ */
+.nx-layer-row__badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
+ * A lock, the block's own or one it is held by from a block around it, in the
+ * row's own ink rather than the muted badge colour. The row sets that ink for
+ * each state it can be in (the text colour at rest and on hover, the accent's
+ * foreground when selected), so the icon meets non-text contrast wherever the
+ * row is drawn. The two locks differ by stroke weight, set on the icon.
+ */
+.nx-layer-row__badge[data-lock] {
+  color: inherit;
+}
+
+/*
+ * The tree's label fills the row, so the row's actions sit at its right edge
+ * whatever the name's length, as the design draws them.
+ */
+.nx-layers-panel__tree [role="treeitem"] > .truncate {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
+ * A block hidden on the device being edited: its mark and name dimmed, and
+ * the word "Hidden" beside them. Dimmed by the muted ink rather than by
+ * opacity, so the name keeps the contrast the design system checks; on a
+ * selected row everything takes the row's own ink.
+ */
+.nx-layer-row[data-hidden] .nx-block-icon,
+.nx-layer-row[data-hidden] .nx-layer-row__label {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-layer-row__hidden {
+  flex: none;
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.25rem;
+  background: var(--nx-muted);
+  color: var(--nx-builder-text-muted);
+  font-size: 0.6875rem;
+  line-height: 1rem;
+}
+
+.nx-layers-panel__tree
+  [role="treeitem"][aria-selected="true"]
+  .nx-layer-row[data-hidden]
+  :is(.nx-block-icon, .nx-layer-row__label, .nx-layer-row__hidden) {
+  color: inherit;
+}
+
+.nx-layers-panel__tree
+  [role="treeitem"][aria-selected="true"]
+  .nx-layer-row__hidden {
+  border-color: currentColor;
+  background: transparent;
+}
+
+/*
+ * The eye and the padlock, at the row's right edge. Shown while the row is
+ * hovered and always while they state something (hidden here, locked); kept
+ * in place and only faded otherwise, so showing them moves nothing. A touch
+ * screen cannot hover, so there they are always shown.
+ */
+.nx-layer-row__actions {
+  display: inline-flex;
+  flex: none;
+  gap: 0.125rem;
+  margin-left: auto;
+}
+
+.nx-layer-row__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.nx-layer-row__action:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+@media (hover: hover) {
+  .nx-layers-panel__tree
+    [role="treeitem"]:not(:hover)
+    .nx-layer-row__action:not([data-pinned]) {
+    opacity: 0;
+  }
+}
+
+/* A row being renamed: the field takes the name's place and its height. */
+.nx-layer-row__rename {
+  flex: 1;
+  min-width: 0;
+  height: 1.375rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-ring);
+  border-radius: 0.25rem;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font: inherit;
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--nx-ring) 30%, transparent);
+}
+
+/*
+ * What a row's verb did, or why it could not, under the tree. Always in the
+ * page, so the live region is there before its first message; empty, it
+ * takes no height.
+ */
+.nx-layers-panel__notice {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--nx-builder-text-muted);
+}
+
+/* Why a row menu's verb is held, under its label. */
+.nx-layer-menu__reason {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  color: var(--nx-muted-foreground);
+}
+
+/*
+ * A component placement's row: the component mark in the component colour, as
+ * its ring is on the canvas, and the muted word "component" after its name.
+ * On a selected row both take the row's own ink instead, since the selection
+ * surface is the theme's accent and only its foreground is meant to be read
+ * on it.
+ */
+.nx-layer-row[data-component] .nx-block-icon {
+  color: var(--nx-builder-component);
+}
+
+/*
+ * The word sits on the name's baseline, as the design sets it inline, rather
+ * than centred beside it: a smaller line centred on a larger one floats above
+ * it. Regular weight, so it stays quieter than a selected row's name.
+ */
+.nx-layer-row__label,
+.nx-layer-row__tag {
+  align-self: baseline;
+}
+
+.nx-layer-row__tag {
+  flex: none;
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-layers-panel__tree
+  [role="treeitem"][aria-selected="true"]
+  .nx-layer-row[data-component]
+  .nx-block-icon,
+.nx-layers-panel__tree
+  [role="treeitem"][aria-selected="true"]
+  .nx-layer-row__tag {
+  color: inherit;
+}
+
+/*
+ * A block's mark, wherever one is drawn.
+ *
+ * `flex: none` for the same reason the badge has it: the mark is a fixed-size
+ * glyph beside text that may be long, and a shrinkable icon squashes to an
+ * unreadable sliver rather than letting the name ellipsise as it is meant to.
+ *
+ * `--nx-builder-text-muted` rather than an alpha on the foreground, which is
+ * the token the design system checks and the reason the badge beside it uses
+ * the same one: a blended colour's contrast depends on whatever is behind it,
+ * and that changes between a panel row and a selected one.
+ */
+.nx-block-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--nx-builder-text-muted);
+}

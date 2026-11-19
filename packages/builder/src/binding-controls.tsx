@@ -5,26 +5,30 @@
  *
  * The picker lists only the fields that fit the prop, by the engine's own
  * rule (`canBindFieldToProp`), from what the host reads for the person
- * editing (`ContentServices.listBindingFields`): fields visitors may not read
- * say so, and a draft's value is marked rather than shown, in each option's
+ * editing (`ContentServices.listBindingFields`), and, for a block inside a
+ * collection list, the list item's own fields first, with their values from
+ * the list's first entry (`readListSample`): fields visitors may not read say
+ * so, and a draft's value is shown with "Draft" beside it, in each option's
  * own text, so a screen reader announces both. An unbind is planned by the
  * host, by the decision the page actions API takes, and applied here as any
  * edit; the reason it gives is said under the field.
+ *
+ * This module holds the bind button and the bound field with its chip, menu,
+ * fallback and values, and is the entry for the rest: the picker is in
+ * `binding-picker.tsx`, the names a bound prop is said by in
+ * `binding-bound-names.ts`, and the note an unbind leaves in
+ * `binding-notes.tsx`.
  *
  * @module binding-controls
  */
 import {
   bindablePropKind,
-  canBindFieldToProp,
-  fieldFitsProp,
   findNode,
+  followsSetting,
   getBlock,
-  isPlainRecord,
   sameJsonValue,
   type Binding,
-  type BindingFieldShape,
   type BindingFormat,
-  type BindingRunInput,
   type BlockDocument,
   type BuilderOp,
 } from "@nextlyhq/blocks-engine";
@@ -41,168 +45,40 @@ import {
   PopoverTrigger,
   Textarea,
 } from "@nextlyhq/ui";
-import {
-  Check,
-  ChevronDown,
-  Database,
-  ExternalLink,
-  EyeOff,
-  Unlink,
-} from "lucide-react";
+import { ChevronDown, Database, ExternalLink, Unlink } from "lucide-react";
 import * as React from "react";
 
 import {
-  BindingFormatField,
-  defaultFormatFor,
-  offersFormat,
-  previewWithFormat,
-} from "./binding-format-field";
+  boundField,
+  boundNames,
+  boundSource,
+  useBoundFrom,
+} from "./binding-bound-names";
+import { BindingFormatField, offersFormat } from "./binding-format-field";
+import { noteFor, type UnbindNote, UnboundNote } from "./binding-notes";
 import { bindOp, unbindOp } from "./binding-ops";
+import {
+  BindingPicker,
+  clearHeld,
+  type EntryLink,
+  type NamedField,
+  pickOp,
+} from "./binding-picker";
 import type {
-  BindingFieldChoice,
   BindingFieldSource,
   UnbindAsk,
   UnbindPlanAnswer,
 } from "./binding-services";
-import { ChoiceList, type ListedChoice } from "./choice-list";
 import type { UnbindAnswer } from "./composition-actions";
 import type { ContentServices } from "./content-controls";
 import { ImageBindingFallback } from "./image-binding-fallback";
-import { fieldLabel, propLabel, type EditableProp } from "./inspector";
-import { useItemSource, type ItemSource } from "./item-binding-source";
-import { withArticle } from "./with-article";
+import { propLabel, type EditableProp } from "./inspector";
+import type { ItemSource } from "./item-binding-source";
 
-/** One field the picker offers, with where it is read from. */
-interface FieldOption extends ListedChoice {
-  readonly path: string;
-  readonly source: BindingFieldSource;
-  readonly field: BindingFieldChoice;
-  /** The relation or group it sits in, named, for a field one step in. */
-  readonly parent?: string;
-  /**
-   * The format a pick writes, for a date or a number filling a text prop,
-   * which reaches it only through one; named in the option.
-   */
-  readonly format?: { readonly label: string; readonly format: BindingFormat };
-}
-
-/**
- * A link's props, where the prop being bound is a link's destination: its
- * address and the two halves of the entry reference it follows first.
- */
-interface EntryLink {
-  readonly link: string;
-  readonly collection: string;
-  readonly id: string;
-  /**
-   * Whether a related entry's pick may be written where the block sits: it
-   * writes both halves of the reference and removes the address's binding,
-   * so it is offered only where all three may change.
-   */
-  readonly writable: boolean;
-}
-
-/** The edit a pick makes, and the prop it binds, whose chip is drawn after. */
-interface PickEdit {
-  readonly op: BuilderOp | null;
-  readonly bound: string;
-}
-
-/**
- * The edit a pick makes. A related entry's id fills the link's entry: its
- * collection is set to the relation's in the same edit, since a pick writes
- * both halves of the reference at once, and a stored entry id is emptied.
- * The address the link was bound to is unbound, since the entry replaces it,
- * as is a bound collection, which would otherwise overlay the one set,
- * and its fallback is not carried over, being an address rather than an id;
- * the address stored on the block is kept, so the link still goes there
- * where the entry is not read. Any other pick binds `prop`, emptying
- * `clearsOnBind`.
- */
-function pickOp(
-  at: {
-    readonly document: BlockDocument;
-    readonly nodeId: string;
-    readonly prop: string;
-    readonly clearsOnBind: readonly string[] | undefined;
-    readonly entryLink: EntryLink | undefined;
-  },
-  picked: FieldOption,
-  kept: Binding | undefined
-): PickEdit {
-  const entry = at.entryLink;
-  const collection = picked.field.linksTo;
-  if (entry === undefined || collection === undefined) {
-    const op = bindOp(
-      at.document,
-      at.nodeId,
-      at.prop,
-      bindingFor(picked, kept),
-      at.clearsOnBind
-    );
-    return { op, bound: at.prop };
-  }
-  const op = bindOp(
-    at.document,
-    at.nodeId,
-    entry.id,
-    bindingFor(picked, at.prop === entry.id ? kept : undefined),
-    [entry.id],
-    {
-      set: { [entry.collection]: collection },
-      // The collection is set, so a binding of it, which the page would fill
-      // over the value set, goes too.
-      unbind: [entry.link, entry.collection],
-    }
-  );
-  return { op, bound: entry.id };
-}
-
-/**
- * The binding a pick writes: the path, the source when not the entry, and
- * the format the option names, where it names one.
- */
-function bindingFor(option: FieldOption, kept: Binding | undefined): Binding {
-  const source = option.source.binding;
-  // The fallback is kept across a change of field, and the option's format
-  // is written with the pick, so a date or a number shows from the start.
-  const carried = {
-    ...(kept !== undefined && "fallback" in kept
-      ? { fallback: kept.fallback }
-      : {}),
-    ...(option.format === undefined ? {} : { format: option.format.format }),
-  };
-  if (source.source === "single") {
-    return {
-      $bind: option.path,
-      source: "single",
-      sourceKey: source.sourceKey,
-      ...carried,
-    };
-  }
-  return {
-    $bind: option.path,
-    ...(source.source === "entry" ? {} : { source: source.source }),
-    ...carried,
-  };
-}
-
-/**
- * Whether a bind would empty a prop that may not be written: one of
- * `locked` the block holds. A held bind is not offered; one that would empty
- * nothing is, whatever the lock.
- */
-function clearHeld(
-  document: BlockDocument,
-  nodeId: string,
-  locked: readonly string[] | undefined
-): boolean {
-  if (locked === undefined || locked.length === 0) return false;
-  const props = findNode(document.nodes, nodeId)?.props;
-  return (
-    isPlainRecord(props) && locked.some(name => Object.hasOwn(props, name))
-  );
-}
+// The picker, the names a bound prop is said by and the notes under a field
+// live in modules of their own beside the controls; every name this module
+// exported still is.
+export { useBoundFieldOf } from "./binding-bound-names";
 
 /** The binding with `fallback` as its fallback; none when it is empty. */
 function withFallback(binding: Binding, fallback: string): Binding {
@@ -212,395 +88,9 @@ function withFallback(binding: Binding, fallback: string): Binding {
   return (fallback === "" ? rest : { ...rest, fallback }) as Binding;
 }
 
-/** Whether `option` is the field and source `binding` reads. */
-function isBoundTo(option: FieldOption, binding: Binding): boolean {
-  if (option.path !== binding.$bind) return false;
-  const source = option.source.binding;
-  if (source.source !== (binding.source ?? "entry")) return false;
-  return (
-    source.source !== "single" ||
-    ("sourceKey" in binding && binding.sourceKey === source.sourceKey)
-  );
-}
-
 /** The binding with `format` as its format, through the same write as a fallback. */
 function withFormat(binding: Binding, format: BindingFormat): Binding {
   return { ...binding, format };
-}
-
-/** A source's name as the chip and the picker say it: "This post", "Site". */
-function sourceName(source: BindingFieldSource): string {
-  return source.binding.source === "entry"
-    ? `This ${source.label.toLowerCase()}`
-    : source.label;
-}
-
-/**
- * The fields of `sources` that fit `prop`, one step into a relation or a
- * group, in the order the picker lists them. A relation or group whose own
- * value does not fit is not offered itself, only what is inside it. A value
- * shown formatted is formatted in `formatIn`, as the page's render formats it.
- *
- * A related entry's id (`linksTo`) is offered only for a link, whose entry it
- * fills; the link's entry id, bound, is changed only to another such id.
- */
-function fittingOptions(
-  sources: readonly BindingFieldSource[],
-  prop: EditableProp,
-  formatIn: PreviewFormatIn,
-  entryLink: EntryLink | undefined
-): readonly FieldOption[] {
-  // A related entry is offered only where visitors may read it: a link
-  // bound to one they can't read never goes there, so it is not a choice.
-  const offered = (field: BindingFieldChoice): boolean =>
-    field.linksTo !== undefined
-      ? entryLink?.writable === true && field.public
-      : prop.name !== entryLink?.id && fits(field, prop);
-  const options: FieldOption[] = [];
-  sources.forEach((source, index) => {
-    const group = String(index);
-    for (const field of source.fields) {
-      const label = choiceLabel(field);
-      if (offered(field)) {
-        options.push(
-          withFormatOnBind(
-            option(source, group, field, field.name, label),
-            prop,
-            formatIn
-          )
-        );
-      }
-      for (const inner of field.fields ?? []) {
-        if (!offered(inner)) continue;
-        options.push(
-          withFormatOnBind(
-            option(
-              source,
-              group,
-              inner,
-              `${field.name}.${inner.name}`,
-              choiceLabel(inner),
-              label
-            ),
-            prop,
-            formatIn
-          )
-        );
-      }
-    }
-  });
-  return options;
-}
-
-/**
- * Whether a field fills the prop: as it is, or, for a date or a number into
- * text, with the format a pick writes (see {@link formatOnBind}). One that
- * fills it neither way is not offered, since a binding to it shows its
- * fallback.
- */
-function fits(field: BindingFieldChoice, prop: EditableProp): boolean {
-  return (
-    canBindFieldToProp(field, prop.schema) &&
-    (fieldFitsProp(field, prop.schema) ||
-      formatOnBind(field, prop) !== undefined)
-  );
-}
-
-/**
- * The format a pick of `field` writes: the inspector's starting preset where
- * the field fills the prop only through a format, none where it fills it as
- * it is.
- */
-function formatOnBind(
-  field: BindingFieldChoice,
-  prop: EditableProp
-): FieldOption["format"] {
-  if (fieldFitsProp(field, prop.schema)) return undefined;
-  return defaultFormatFor(bindablePropKind(prop.schema), field);
-}
-
-/**
- * An option with the format its pick writes, where it writes one, its value
- * previewed in that format in `formatIn`: the page's language and the site's
- * time zone.
- */
-function withFormatOnBind(
-  choice: FieldOption,
-  prop: EditableProp,
-  formatIn: PreviewFormatIn
-): FieldOption {
-  const format = formatOnBind(choice.field, prop);
-  if (format === undefined) return choice;
-  const { preview } = choice.field;
-  if (preview === undefined) return { ...choice, format };
-  // Its value as the pick will show it, in the format the option names.
-  const shown = previewWithFormat(
-    preview,
-    format.format,
-    bindablePropKind(prop.schema),
-    choice.field,
-    formatIn
-  );
-  return {
-    ...choice,
-    format,
-    field: { ...choice.field, preview: shown },
-    search: [choice.label, shown].join(" "),
-  };
-}
-
-/** One option, with its text as the list searches it and a reader hears it. */
-function option(
-  source: BindingFieldSource,
-  group: string,
-  field: BindingFieldChoice,
-  path: string,
-  label: string,
-  parent?: string
-): FieldOption {
-  return {
-    key: `${group}:${path}`,
-    label: parent === undefined ? label : `${parent} › ${label}`,
-    group,
-    path,
-    source,
-    field,
-    ...(parent === undefined ? {} : { parent }),
-    // A related entry whose collection has no page yet is listed, said why,
-    // and can't be picked: the link would find no page to go to.
-    ...(field.noPageFor === undefined ? {} : { disabled: true }),
-    search: [parent, label, field.preview].filter(Boolean).join(" "),
-  };
-}
-
-/**
- * A row's tooltip: its name, then why it can't be picked yet, or the value
- * as the author reads it, whole where the row cuts it short.
- */
-function optionTitle(option: FieldOption): string {
-  const { field } = option;
-  if (field.noPageFor !== undefined) {
-    return `${option.label}: No page for ${field.noPageFor} yet`;
-  }
-  return field.preview === undefined
-    ? option.label
-    : `${option.label}: ${field.preview}`;
-}
-
-/** The picker's row: the name, then the value as the author reads it, or why not. */
-function OptionRow({ option }: { option: FieldOption }): React.JSX.Element {
-  const { field } = option;
-  return (
-    <span className="nx-binding-option">
-      <span className="nx-binding-option__name">
-        {option.parent === undefined ? null : (
-          <span className="nx-binding-option__parent">{option.parent} › </span>
-        )}
-        {choiceLabel(field)}
-      </span>
-      {/* The format a pick writes, said quietly beside the name and read
-          with it, so the author knows the value will be formatted. */}
-      {option.format === undefined ? null : (
-        <span className="nx-binding-option__tag">{option.format.label}</span>
-      )}
-      {/* Words, not a colour or an icon alone: each is part of the option's
-          own text, so a screen reader announces it with the field. */}
-      {field.noPageFor !== undefined ? (
-        // Why a related entry can't be picked yet, in words read with it.
-        <span className="nx-binding-option__tag">
-          {`No page for ${field.noPageFor} yet`}
-        </span>
-      ) : !field.public ? (
-        <span className="nx-binding-option__tag" data-tone="private">
-          <EyeOff aria-hidden="true" size={12} />
-          Not public
-        </span>
-      ) : field.draft === true ? (
-        <span className="nx-binding-option__tag">Draft</span>
-      ) : field.preview === undefined ? null : (
-        <span className="nx-binding-option__preview">{field.preview}</span>
-      )}
-    </span>
-  );
-}
-
-/** The language and time zone the picker previews a formatted value in. */
-type PreviewFormatIn = Pick<BindingRunInput, "locale" | "timeZone">;
-
-/**
- * The language and zone the picker previews in: the page's language, and the
- * site's zone, asked of the host when the picker opens rather than with the
- * canvas, which reads it only for a page already formatting a date. Until
- * the zone is in, and where the host has none or its read fails, the preview
- * is in UTC, as a page rendered with no zone; it is drawn again once it is.
- */
-function usePreviewFormatIn(
-  services: ContentServices | undefined
-): PreviewFormatIn {
-  const locale = services?.bindingLocale;
-  const readZone = services?.readSiteTimeZone;
-  const [read, setRead] = React.useState<{
-    readonly from: () => Promise<string | undefined>;
-    readonly zone: string | undefined;
-  }>();
-  React.useEffect(() => {
-    if (readZone === undefined) return;
-    let current = true;
-    readZone().then(
-      zone => {
-        if (current) setRead({ from: readZone, zone });
-      },
-      () => {
-        // No zone to show: the previews stay in UTC.
-      }
-    );
-    return () => {
-      current = false;
-    };
-  }, [readZone]);
-  // Only the zone this host's read gave, so another host's is never shown.
-  const timeZone = read?.from === readZone ? read?.zone : undefined;
-  return React.useMemo(
-    () => ({
-      ...(locale === undefined ? {} : { locale }),
-      ...(timeZone === undefined ? {} : { timeZone }),
-    }),
-    [locale, timeZone]
-  );
-}
-
-/** The host's read of the fields a binding can read. */
-type ListBindingFields = () => Promise<readonly BindingFieldSource[]>;
-
-/**
- * The read in flight, per host function, shared only while it runs, as the
- * list controls share theirs (`collection-loop-controls`): the controls drawn
- * together for one block (a bound image's chip and its alt note) make one
- * read and see one answer, so they can't disagree. Dropped once it settles:
- * an answer is one signed-in author's, read with their access.
- */
-const sourcesInFlight = new WeakMap<
-  ListBindingFields,
-  Promise<readonly BindingFieldSource[]>
->();
-
-/** The host's binding sources, one read shared by every control asking at once. */
-function readBindingSources(
-  list: ListBindingFields
-): Promise<readonly BindingFieldSource[]> {
-  const held = sourcesInFlight.get(list);
-  if (held !== undefined) return held;
-  const answer = list();
-  sourcesInFlight.set(list, answer);
-  const settle = (): void => {
-    if (sourcesInFlight.get(list) === answer) sourcesInFlight.delete(list);
-  };
-  answer.then(settle, settle);
-  return answer;
-}
-
-/** The fields a binding can read, as the host reads them; read once per open. */
-function useBindingSources(
-  services: ContentServices | undefined,
-  wanted: boolean
-): readonly BindingFieldSource[] | "loading" | "failed" {
-  const [sources, setSources] = React.useState<
-    readonly BindingFieldSource[] | "loading" | "failed"
-  >("loading");
-  const list = services?.listBindingFields;
-  React.useEffect(() => {
-    if (!wanted || list === undefined) return;
-    let current = true;
-    setSources("loading");
-    readBindingSources(list).then(
-      read => {
-        if (current) setSources(read);
-      },
-      () => {
-        if (current) setSources("failed");
-      }
-    );
-    return () => {
-      current = false;
-    };
-  }, [list, wanted]);
-  return sources;
-}
-
-/** The picker: the fitting fields by source, searched, moved through by key. */
-function BindingPicker({
-  prop,
-  blockLabel,
-  services,
-  current,
-  entryLink,
-  onPick,
-}: {
-  prop: EditableProp;
-  blockLabel: string;
-  services: ContentServices | undefined;
-  /** The link's entry, where the prop is a link's destination. */
-  entryLink: EntryLink | undefined;
-  /** The prop's binding when it has one, marked in the list. */
-  current: Binding | undefined;
-  onPick: (option: FieldOption) => void;
-}): React.JSX.Element {
-  const sources = useBindingSources(services, true);
-  const formatIn = usePreviewFormatIn(services);
-  const name = propLabel(prop.name, prop.schema);
-  if (sources === "loading") {
-    return <p className="nx-binding-picker__note">Reading the fields…</p>;
-  }
-  if (sources === "failed") {
-    return (
-      <p className="nx-binding-picker__note" role="alert">
-        The fields could not be read. Close this and try again.
-      </p>
-    );
-  }
-  // Previewed in the page's language and the site's zone.
-  const options = fittingOptions(sources, prop, formatIn, entryLink);
-  // A source with nothing to offer this prop is not listed: an empty group
-  // only lengthens the list.
-  const offering = new Set(options.map(option => option.group));
-  // A source the host could not read is said, above the fields that did.
-  const failed = sources.filter(source => source.readFailed === true);
-  return (
-    <div className="nx-binding-picker">
-      <ChoiceList
-        choices={options}
-        currentKey={
-          current === undefined
-            ? undefined
-            : options.find(option => isBoundTo(option, current))?.key
-        }
-        onPick={onPick}
-        label={`Fields for ${name}`}
-        searchLabel="Find a field"
-        noMatch="No field matches."
-        groups={sources.flatMap((source, index) =>
-          offering.has(String(index))
-            ? [{ group: String(index), heading: sourceName(source) }]
-            : []
-        )}
-        renderChoice={choice => <OptionRow option={choice} />}
-        choiceTitle={optionTitle}
-        searchFrom={0}
-        leading={
-          failed.length === 0 ? undefined : (
-            <p className="nx-binding-picker__failed" role="status">
-              {`Could not read ${failed.map(sourceName).join(", ")}. Close this and try again.`}
-            </p>
-          )
-        }
-      />
-      <p className="nx-binding-picker__hint">
-        {options.length === 0
-          ? `No field can fill ${withArticle(blockLabel.toLowerCase())}'s ${name.toLowerCase()}.`
-          : `Only fields ${withArticle(blockLabel.toLowerCase())}'s ${name.toLowerCase()} can show are listed.`}
-      </p>
-    </div>
-  );
 }
 
 /** What the bound and bindable rows are handed. */
@@ -739,6 +229,8 @@ function BindButton({
         <BindingPicker
           prop={prop}
           blockLabel={blockLabel}
+          document={document}
+          nodeId={nodeId}
           services={services}
           current={undefined}
           entryLink={entryLink}
@@ -788,249 +280,6 @@ function takesTextFallback(prop: EditableProp): boolean {
 
 /** Said under a field where the editor refused the binding's edit. */
 const EDIT_REFUSED = "The page refused this edit, so nothing changed.";
-
-/**
- * What an unbind said, and how: kept as visitors saw it, kept in place of a
- * field visitors can't read, or refused.
- */
-interface UnbindNote {
-  readonly text: string;
-  readonly tone: "kept" | "private" | "refused";
-}
-
-/** The note an unbind leaves under its field. */
-function UnboundNote({ note }: { note: UnbindNote }): React.JSX.Element {
-  return (
-    <p className="nx-binding-note" data-tone={note.tone} role="status">
-      {note.tone === "kept" ? <Check aria-hidden="true" size={14} /> : null}
-      {note.tone === "private" ? <EyeOff aria-hidden="true" size={14} /> : null}
-      <span>
-        {note.tone === "refused" ? note.text : `Unbound. ${note.text}`}
-      </span>
-    </p>
-  );
-}
-
-/**
- * What an unbind kept, said as the author reads it: the block keeps what
- * visitors saw, the fallback, or its own value. The answer's own reason
- * says more, for an API client; the note says what changed on the page.
- */
-function noteFor(
-  answer: UnbindAnswer,
-  blockLabel: string,
-  propName: string,
-  /** The bound field, named as the chip names it. */
-  fieldName: string,
-  /** The block's label for the prop an image's address went into. */
-  intoLabel?: string
-): string {
-  const block = `The ${blockLabel.toLowerCase()}`;
-  const value =
-    typeof answer.value === "string" && answer.value !== ""
-      ? `: “${answer.value}”`
-      : "";
-  // A field visitors can't read: its value was never copied in, and the note
-  // says so before what was kept in its place. Said first, since what was
-  // kept matters less than that the field is private.
-  if (answer.unreadable === true) {
-    const unread = `Visitors can't read “${fieldName}”, so its value wasn't copied in.`;
-    return answer.kept === "fallback"
-      ? `${unread} ${block} keeps the fallback${value}.`
-      : `${unread} ${block} keeps its own ${propName.toLowerCase()}.`;
-  }
-  // A link's entry kept by reference: the link goes on to the page visitors
-  // were sent to, named by its title where a visitor may read it, never by
-  // the id the prop now holds.
-  if (answer.entry !== undefined) {
-    const title = answer.entry.title;
-    const page =
-      title === undefined ? "the page visitors saw" : `${title}'s page`;
-    return `The link keeps going to ${page}.`;
-  }
-  // An image kept by its address goes to another prop than the one unbound,
-  // which is left empty, so the note names where the address went.
-  if (answer.into !== undefined) {
-    const into = intoLabel ?? fieldLabel(answer.into);
-    switch (answer.kept) {
-      case "visitor":
-        return `Visitors saw an image address, not a library image, so it's kept in ${into}.`;
-      // The fallback is said where it is what visitors saw: the binding's
-      // own address, not one the field gave.
-      case "fallback":
-        return `Visitors saw the fallback's image address, so it's kept in ${into}.`;
-      default:
-        return `The image address given is kept in ${into}.`;
-    }
-  }
-  switch (answer.kept) {
-    case "visitor":
-      return `${block} keeps what visitors saw${value}.`;
-    case "fallback":
-      return `Visitors saw the fallback, so ${block.toLowerCase()} keeps it${value}.`;
-    case "own":
-      return `${block} keeps its own ${propName.toLowerCase()}.`;
-    default:
-      return `${block} keeps the value given${value}.`;
-  }
-}
-
-/** A field as the chip names it and a format judges it, wherever it was read. */
-type NamedField = Omit<BindingFieldShape, "fields"> & {
-  readonly label?: string;
-  readonly fields?: readonly NamedField[];
-};
-
-/**
- * The name a field is listed by: the host's label where it gives one ("Site
- * URL"), else its stored name as a person reads it.
- */
-function choiceLabel(field: NamedField): string {
-  return field.label ?? fieldLabel(field.name);
-}
-
-/**
- * A bound path named segment by segment as the picker names it, through the
- * source's fields where they are read; a segment the source does not list is
- * named from its own key.
- */
-function pathName(
-  path: string,
-  fields: readonly NamedField[] | undefined
-): string {
-  const names: string[] = [];
-  let level = fields;
-  for (const segment of path.split(".")) {
-    const field = level?.find(candidate => candidate.name === segment);
-    names.push(field === undefined ? fieldLabel(segment) : choiceLabel(field));
-    level = field?.fields;
-  }
-  return names.join(" › ");
-}
-
-/** The source a binding reads, once the sources are read and it is among them. */
-function boundSource(
-  binding: Binding,
-  sources: readonly BindingFieldSource[] | "loading" | "failed"
-): BindingFieldSource | undefined {
-  if (typeof sources === "string") return undefined;
-  const wanted = binding.source ?? "entry";
-  return sources.find(
-    candidate =>
-      candidate.binding.source === wanted &&
-      (candidate.binding.source !== "single" ||
-        ("sourceKey" in binding &&
-          candidate.binding.sourceKey === binding.sourceKey))
-  );
-}
-
-/**
- * A source named from the binding alone, for one the host did not list: a
- * Single with nothing saved yet, or an entry it could not read. Named from
- * its key, so the chip still says where the field comes from.
- */
-function unlistedSourceName(binding: Binding): string {
-  if (binding.source === "single") return fieldLabel(binding.sourceKey);
-  return binding.source === "site" ? "Site" : "This entry";
-}
-
-/** Where a binding reads, named, and that source's fields where they are read. */
-interface BoundFrom {
-  /** `undefined` only while the sources are being read. */
-  readonly name: string | undefined;
-  readonly fields: readonly NamedField[] | undefined;
-}
-
-/**
- * Where a binding reads: a list's item from its list's collection, any other
- * source from the host's sources, and one the host did not list from the
- * binding itself once the sources are read.
- */
-function boundFrom(
-  binding: Binding,
-  sources: readonly BindingFieldSource[] | "loading" | "failed",
-  item: ItemSource | undefined
-): BoundFrom {
-  if (item !== undefined) return { name: item.name, fields: item.fields };
-  const found = boundSource(binding, sources);
-  if (found !== undefined) {
-    return { name: sourceName(found), fields: found.fields };
-  }
-  return {
-    name: sources === "loading" ? undefined : unlistedSourceName(binding),
-    fields: undefined,
-  };
-}
-
-/** The field a binding reads, named, and its source. */
-function boundNames(
-  binding: Binding,
-  from: BoundFrom,
-  /** The bound prop, and the link it is the entry of, where it is one. */
-  at: { readonly prop: string; readonly entryLink?: EntryLink | undefined }
-): { readonly field: string; readonly source: string | undefined } {
-  // A link's entry is named by the relation it goes through ("Author"): the
-  // entry the link goes to, not the id the binding reads of it.
-  const segments = binding.$bind.split(".");
-  const path =
-    at.prop === at.entryLink?.id && segments.length > 1
-      ? segments.slice(0, -1).join(".")
-      : binding.$bind;
-  return { field: pathName(path, from.fields), source: from.name };
-}
-
-/**
- * The field a binding reads, as its source lists it: one step into a
- * relation or a group at most, as a path may go. `undefined` until the
- * source's fields are read, and for a field they don't list.
- */
-function boundField(binding: Binding, from: BoundFrom): NamedField | undefined {
-  const [first, inner, ...rest] = binding.$bind.split(".");
-  if (rest.length > 0) return undefined;
-  const top = from.fields?.find(field => field.name === first);
-  if (inner === undefined) return top;
-  return top?.fields?.find(field => field.name === inner);
-}
-
-/**
- * Where a bound prop reads, as the chip names it: the host's sources read
- * once, or the list's collection for an item, then `boundFrom`. The one way
- * the editor finds a binding's source, for the chip and for any control that
- * asks what the bound field is.
- */
-function useBoundFrom(
-  binding: Binding,
-  document: BlockDocument,
-  nodeId: string,
-  services: ContentServices | undefined
-): {
-  /** Where the binding reads, named, with its fields once they are read. */
-  readonly from: BoundFrom;
-  /** The host's sources as read, for what else is worded from them. */
-  readonly sources: ReturnType<typeof useBindingSources>;
-  /** The list's item source, for an item binding. */
-  readonly item: ItemSource | undefined;
-} {
-  const sources = useBindingSources(services, true);
-  const item = useItemSource(binding, document, nodeId, services);
-  return { from: boundFrom(binding, sources, item), sources, item };
-}
-
-/**
- * The field a bound prop reads, as its source lists it: `undefined` while the
- * sources are read, and for a field they don't list. Derived from the same
- * source the chip names, so a control reading the field's type and the chip
- * naming it cannot disagree.
- */
-export function useBoundFieldOf(
-  binding: Binding,
-  document: BlockDocument,
-  nodeId: string,
-  services: ContentServices | undefined
-): Omit<BindingFieldShape, "fields"> | undefined {
-  const { from } = useBoundFrom(binding, document, nodeId, services);
-  return boundField(binding, from);
-}
 
 /** What the block names a prop, for a note naming another prop than the bound one. */
 function blockPropLabel(
@@ -1090,6 +339,17 @@ function fallbackShownWhen(
   }
   const article = /^[aeiou]/i.test(one) ? "an" : "a";
   return `Shown when ${article} ${one} has no ${field.toLowerCase()}.`;
+}
+
+/**
+ * A bound prop's rows under its chip, none for a binding following a
+ * component's setting: composing fills it from the setting and drops it, so
+ * neither a fallback nor a format it carried would ever show.
+ */
+function BoundRows(
+  props: React.ComponentProps<typeof BoundValueRows>
+): React.JSX.Element | null {
+  return followsSetting(props.binding) ? null : <BoundValueRows {...props} />;
 }
 
 /** A bound prop's own rows under its chip: its Fallback, and its Format. */
@@ -1582,6 +842,8 @@ function BoundField({
             <BindingPicker
               prop={prop}
               blockLabel={blockLabel}
+              document={document}
+              nodeId={nodeId}
               services={services}
               current={binding}
               entryLink={entryLink}
@@ -1605,7 +867,7 @@ function BoundField({
             />
           )}
         />
-        <BoundValueRows
+        <BoundRows
           prop={prop}
           binding={binding}
           field={boundField(binding, from)}

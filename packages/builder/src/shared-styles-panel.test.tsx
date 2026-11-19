@@ -19,6 +19,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -29,12 +30,29 @@ import {
   type SharedStyleUsesPage,
 } from "./shared-style-library";
 import {
+  SharedStylesHostSearch,
   SharedStylesPanel,
   USAGE_RECOUNT_MS,
   USAGE_RECOUNT_IDLE_MAX,
   type SharedStylesAccess,
   type SharedStylesPanelProps,
 } from "./shared-styles-panel";
+
+/**
+ * An element's accessible name, as a screen reader hears it: from its content
+ * where it has no label of its own. Read through the role query, which
+ * computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
 
 afterEach(cleanup);
 
@@ -171,9 +189,46 @@ describe("the list", () => {
     expect(card.textContent).toContain(".nx-c-card");
     // A style made before names shows its class name as its name.
     expect(row(/^hero, \.nx-c-hero/)).toBeTruthy();
+    // Named by the words it shows, with no label laid over them, so the
+    // name and class an author reads are the start of what is heard.
+    expect(card.getAttribute("aria-label")).toBeNull();
+    expect(nameOf(card)).toMatch(/^Card, \.nx-c-card, /);
   });
 
-  it("lists no look among the shared styles, only among the block looks", async () => {
+  it("names its two sections, Block styles and Shared styles, each with its line", async () => {
+    const outline: NamedClass = {
+      id: "look:core/button:outline",
+      slug: "button-outline",
+      label: "Outline",
+      orderIndex: 0,
+      blockType: "core/button",
+      styles: {},
+    };
+    await panel({ library: [CARD, outline] });
+    const lineOf = (name: string) => {
+      const region = screen.getByRole("region", { name });
+      return document.getElementById(
+        region.getAttribute("aria-describedby") ?? ""
+      )?.textContent;
+    };
+    expect(lineOf("Block styles")).toBe(
+      "Saved looks for one kind of block. ★ is the look a block has until you pick another."
+    );
+    expect(lineOf("Shared styles")).toBe("Your own styles for any block.");
+    // Shown as text, not only said.
+    expect(screen.getByText("Your own styles for any block.").tagName).toBe(
+      "P"
+    );
+    // Block styles come first, as the tab reads top to bottom.
+    const blockStyles = screen.getByRole("region", { name: "Block styles" });
+    const shared = screen.getByRole("region", { name: "Shared styles" });
+    expect(
+      blockStyles.compareDocumentPosition(shared) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it("lists no look among the shared styles, only among the block styles", async () => {
     const outline: NamedClass = {
       id: "look:core/button:outline",
       slug: "button-outline",
@@ -187,11 +242,11 @@ describe("the list", () => {
     const shared = screen.getByRole("region", { name: "Shared styles" });
     expect(within(shared).queryByText("Outline")).toBeNull();
     // It is listed with its block type's looks instead.
-    const looks = screen.getByRole("region", { name: "Block looks" });
+    const looks = screen.getByRole("region", { name: "Block styles" });
     expect(within(looks).getByText("Outline")).toBeTruthy();
   });
 
-  it("lists each block type's own look first, with a Default chip and no count, and edits a look on a click", async () => {
+  it("lists each block type's own look first, with the ★ Default chip and no count, and edits a look on a click", async () => {
     const primary: NamedClass = {
       id: "look:core/button:primary",
       slug: "button-primary",
@@ -217,11 +272,19 @@ describe("the list", () => {
         editing: { id: outline.id, blockType: "core/button" },
       },
     });
-    const looks = screen.getByRole("region", { name: "Block looks" });
-    const rows = within(looks).getAllByRole("button");
-    expect(rows.map(each => each.textContent)).toEqual([
-      expect.stringMatching(/^ButtonPrimaryown lookDefault$/),
-      expect.stringMatching(/^ButtonOutline\.nx-l-button-outline/),
+    const looks = screen.getByRole("region", { name: "Block styles" });
+    const rows = [
+      ...looks.querySelectorAll<HTMLElement>(".nx-block-styles__row"),
+    ];
+    // What each row draws: its name is heard from a hidden text of its own.
+    const drawn = (each: HTMLElement): string => {
+      const copy = each.cloneNode(true) as HTMLElement;
+      for (const heard of copy.querySelectorAll(".nx-sr-only")) heard.remove();
+      return copy.textContent ?? "";
+    };
+    expect(rows.map(drawn)).toEqual([
+      "ButtonPrimary★ Default",
+      "ButtonOutline",
     ]);
     // The own look says what it covers, on hover and to a screen reader.
     expect(rows[0]?.getAttribute("aria-description")).toBe(
@@ -258,11 +321,9 @@ describe("the list", () => {
     // One read for the tab: the styles and the worn look together.
     expect(usageReads).toHaveLength(1);
     expect(usageReads[0]).toEqual([CARD.id, outline.id]);
-    const looks = screen.getByRole("region", { name: "Block looks" });
+    const looks = screen.getByRole("region", { name: "Block styles" });
     expect(
-      within(looks)
-        .getByRole("button", { name: /^Outline, \.nx-l-button-outline, / })
-        .getAttribute("aria-label")
+      nameOf(within(looks).getByRole("button", { name: /^Outline, / }))
     ).toMatch(/3 pages/);
   });
 
@@ -294,16 +355,14 @@ describe("the list", () => {
       },
       looks: { onEdit: () => {}, editing: null },
     });
-    const looks = screen.getByRole("region", { name: "Block looks" });
+    const looks = screen.getByRole("region", { name: "Block styles" });
     const look = within(looks).getByRole("button", { name: /^Outline, / });
-    expect(look.getAttribute("aria-label")).toBe(
-      "Outline, .nx-l-button-outline, 2 blocks on this page · on 3 pages"
-    );
+    expect(nameOf(look)).toBe("Outline, 2 blocks on this page · on 3 pages");
     expect(look.getAttribute("title")).toBe(
       "2 blocks on this page · on 3 pages"
     );
     // The control: the shared style beside it says its page blocks the same way.
-    expect(row(/^Card, \.nx-c-card/).getAttribute("aria-label")).toBe(
+    expect(nameOf(row(/^Card, \.nx-c-card/))).toBe(
       "Card, .nx-c-card, 1 block on this page · on 4 pages"
     );
   });
@@ -333,15 +392,15 @@ describe("the list", () => {
     });
     const search = screen.getByRole("searchbox", { name: /Search/ });
     const lookNames = () =>
-      within(screen.getByRole("region", { name: "Block looks" }))
-        .getAllByRole("button")
-        .map(each => each.getAttribute("aria-label"));
+      within(screen.getByRole("region", { name: "Block styles" }))
+        .getAllByRole("button", { pressed: false })
+        .map(each => nameOf(each));
     // The control: with no search, both are listed.
-    expect(lookNames()).toEqual(["Primary, own look", "Square, own look"]);
+    expect(lookNames()).toEqual(["Primary, default", "Square, default"]);
     fireEvent.change(search, { target: { value: "Square" } });
-    expect(lookNames()).toEqual(["Square, own look"]);
+    expect(lookNames()).toEqual(["Square, default"]);
     fireEvent.change(search, { target: { value: "Primary" } });
-    expect(lookNames()).toEqual(["Primary, own look"]);
+    expect(lookNames()).toEqual(["Primary, default"]);
   });
 
   it("finds a look by a value it sets, as it finds a shared style", async () => {
@@ -365,7 +424,7 @@ describe("the list", () => {
     fireEvent.change(screen.getByRole("searchbox", { name: /Search/ }), {
       target: { value: "0.25" },
     });
-    const looks = screen.getByRole("region", { name: "Block looks" });
+    const looks = screen.getByRole("region", { name: "Block styles" });
     expect(within(looks).getByText("Outline")).toBeTruthy();
     expect(within(looks).queryByText("Text")).toBeNull();
   });
@@ -440,9 +499,7 @@ describe("the row's preview", () => {
       prefersDark();
       await panel({ tokens: { tokens: [] }, library: [CARD, LIGHT_TEXT] });
       const card = row(/^Card, \.nx-c-card/);
-      expect(card.getAttribute("aria-label")).toContain(
-        "Hard to read in dark mode"
-      );
+      expect(nameOf(card)).toContain("Hard to read in dark mode");
       const tile = card.querySelector<HTMLElement>(".nx-shared-styles__tile");
       expect(tile?.style.backgroundColor).toBe("rgb(255, 255, 255)");
       // Said where keyboard and touch users meet it too: the row's tooltip,
@@ -460,7 +517,7 @@ describe("the row's preview", () => {
       fireEvent.keyDown(opened, { key: "Escape" });
       // CONTROL: a style that reads on the dark page keeps it, unmarked.
       const light = row(/^Light text, \.nx-c-light-text/);
-      expect(light.getAttribute("aria-label")).not.toContain("dark mode");
+      expect(nameOf(light)).not.toContain("dark mode");
       expect(
         light.querySelector<HTMLElement>(".nx-shared-styles__tile")?.style
           .backgroundColor
@@ -557,7 +614,7 @@ describe("counts", () => {
       pageBlocks: { counts: new Map([["c-card", 3]]), complete: true },
     });
     const card = row(/^Card, \.nx-c-card/);
-    expect(card.getAttribute("aria-label")).toBe(
+    expect(nameOf(card)).toBe(
       "Card, .nx-c-card, 3 blocks on this page · on 4 pages and 1 component"
     );
     expect(card.textContent).toContain("5");
@@ -571,9 +628,7 @@ describe("counts", () => {
     });
     await panel({ access });
     const card = row(/^Card, \.nx-c-card/);
-    expect(card.getAttribute("aria-label")).toBe(
-      "Card, .nx-c-card, On at least 4 pages"
-    );
+    expect(nameOf(card)).toBe("Card, .nx-c-card, On at least 4 pages");
     expect(card.textContent).toContain("4+ pages");
     const note = screen.getByText(
       "Some pages haven't been counted yet, so the numbers are minimums and no style can be called unused or removed."
@@ -657,7 +712,7 @@ describe("counts", () => {
     });
     await panel({ library: [odd], access, suppliedClassIds: ["a\nb"] });
     expect(usageReads).toEqual([["a\nb"]]);
-    expect(row(/^Odd, \.nx-c-odd/).getAttribute("aria-label")).toBe(
+    expect(nameOf(row(/^Odd, \.nx-c-odd/))).toBe(
       "Odd, .nx-c-odd, set in your site’s code, On 3 pages"
     );
   });
@@ -965,7 +1020,7 @@ describe("counts", () => {
     });
     try {
       await panel({ access });
-      expect(row(/^Card, \.nx-c-card/).getAttribute("aria-label")).toBe(
+      expect(nameOf(row(/^Card, \.nx-c-card/))).toBe(
         "Card, .nx-c-card, On at least 4 pages"
       );
       counted = true;
@@ -975,7 +1030,7 @@ describe("counts", () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(row(/^Card, \.nx-c-card/).getAttribute("aria-label")).toBe(
+    expect(nameOf(row(/^Card, \.nx-c-card/))).toBe(
       "Card, .nx-c-card, On 4 pages"
     );
     expect(
@@ -1941,5 +1996,83 @@ describe("a role that may not change the site's design", () => {
     expect(
       within(details).queryByRole("button", { name: "Remove" })
     ).toBeNull();
+  });
+});
+
+describe("a search the host keeps", () => {
+  it("lists what the host's search matches, and draws no search box of its own", async () => {
+    // The Design panel keeps one search across its tabs.
+    render(
+      <SharedStylesHostSearch.Provider
+        value={{ query: "old", onQuery: () => undefined }}
+      >
+        <SharedStylesPanel
+          library={[CARD, HERO, OLD]}
+          pageBlocks={NO_BLOCKS}
+          onRename={async () => ({ ok: true })}
+        />
+      </SharedStylesHostSearch.Provider>
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(
+      screen.queryByRole("searchbox", { name: "Search shared styles" })
+    ).toBeNull();
+    const shown = screen
+      .queryAllByRole("button")
+      .filter(button => button.hasAttribute("data-shared-style"))
+      .map(button => button.getAttribute("data-shared-style"));
+    expect(shown).toEqual(["c-old"]);
+  });
+});
+
+describe("a removal under a search the host keeps", () => {
+  it("hands focus to the host's search box once the style is gone", async () => {
+    // The host stores the removal, and the style leaves the list.
+    let drop: (ids: readonly string[]) => void = () => undefined;
+    const { access } = accessOf({
+      remove: async ids => {
+        drop(ids);
+      },
+    });
+    function Host(): React.JSX.Element {
+      const searchRef = React.useRef<HTMLInputElement>(null);
+      const [library, setLibrary] = React.useState([CARD, HERO, OLD]);
+      drop = ids => setLibrary(all => all.filter(c => !ids.includes(c.id)));
+      return (
+        <>
+          <input ref={searchRef} aria-label="Search Design" />
+          <SharedStylesHostSearch.Provider
+            value={{ query: "", onQuery: () => undefined, searchRef }}
+          >
+            <SharedStylesPanel
+              library={library}
+              pageBlocks={NO_BLOCKS}
+              access={access}
+              onRename={async () => ({ ok: true })}
+            />
+          </SharedStylesHostSearch.Provider>
+        </>
+      );
+    }
+    render(<Host />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const details = await open(/^Old note/, "Old note");
+    fireEvent.click(within(details).getByRole("button", { name: "Remove" }));
+    await act(async () => {
+      fireEvent.click(
+        within(details).getByRole("button", { name: "Remove Old note" })
+      );
+    });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Search Design")
+      )
+    );
   });
 });

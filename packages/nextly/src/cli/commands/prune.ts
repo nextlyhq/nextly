@@ -49,6 +49,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import { nextlyI18nArchiveTables } from "../../schemas/nextly-i18n-archive";
 import { UNKNOWN_ARCHIVE_KIND } from "../../schemas/nextly-i18n-archive/ddl";
+import { busyTableNotices } from "../busy-table-options";
 import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors/index";
 import { createContext, type CommandContext } from "../program";
@@ -190,6 +191,8 @@ export function pruneUnderSchemaLock(
     waitMs?: number;
     ttlSeconds?: number;
     logger?: { warn?: (m: string) => void; info?: (m: string) => void };
+    /** The command's busy-table bounds, for a busy SQLite database met while the lock is taken. */
+    busyBounds?: BusyTableBounds;
   } = {}
 ): PruneLock {
   return async work => {
@@ -204,6 +207,9 @@ export function pruneUnderSchemaLock(
         ttlSeconds: options.ttlSeconds,
         releaseOnInterrupt: true,
         logger: options.logger,
+        ...(options.busyBounds === undefined
+          ? {}
+          : { busyBounds: options.busyBounds }),
       }
     );
     // Only a wait given `isSettled` ends without running, and this one is not.
@@ -754,11 +760,12 @@ export async function runPruneCommand(
       keptColumns: kept.live,
       releasedByMigration: kept.inMigration,
       dryRun: options.dryRun === true,
-      // Each drop waits for a busy table in tries; each try's notice goes to standard error.
+      // Each drop waits for a busy table in tries; each try's notice goes to standard error, kept
+      // back under --quiet.
       busyTable: {
         adapter: drizzleAdapter,
         bounds,
-        notify: line => process.stderr.write(`${line}\n`),
+        notify: busyTableNotices(logger),
       },
       registry,
       adapter: adapter as unknown as Parameters<typeof runPrune>[0]["adapter"],
@@ -781,6 +788,7 @@ export async function runPruneCommand(
           warn: message => logger.warn(message),
           info: message => logger.info(message),
         },
+        busyBounds: bounds,
       }),
       // Compiled here, not published: this command serves nothing, and only
       // reads what the configured plugins and the app declare.

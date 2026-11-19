@@ -11,7 +11,7 @@
 import { getTableConfig } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 
-import { registerConfigTablesInResolver } from "../register";
+import { registerConfigTablesInResolver } from "../register-config-tables";
 
 /** The tables a boot registered, by name. */
 async function registered(config: Record<string, unknown>) {

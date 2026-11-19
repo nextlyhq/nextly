@@ -79,10 +79,26 @@ describe("the ops module stays server-safe", () => {
       "./binding-ops",
       "./binding-services",
       "./composition-actions",
-      "./condition-ops",
+      "./conditions/condition-ops",
+      "./make-component-setting",
       "./op-vocabulary",
       "./prop-label",
       "./template-actions",
+      "@nextlyhq/blocks-engine",
+    ]);
+  });
+
+  it("reaches through a new setting's ask only the engine and the prop labels", () => {
+    // Its types are re-exported for the host that answers the ask.
+    const specifiers = [
+      ...importedSpecifiers(
+        read("src/make-component-setting.ts"),
+        "make-component-setting.ts"
+      ),
+    ];
+
+    expect([...new Set(specifiers)].sort()).toEqual([
+      "./prop-label",
       "@nextlyhq/blocks-engine",
     ]);
   });
@@ -122,7 +138,7 @@ describe("the ops module stays server-safe", () => {
   });
 
   it("reaches through its binding and condition ops only the engine", () => {
-    for (const module of ["binding-ops.ts", "condition-ops.ts"]) {
+    for (const module of ["binding-ops.ts", "conditions/condition-ops.ts"]) {
       const loaded = moduleSpecifierRefs(read(`src/${module}`), module)
         .filter(ref => !ref.typeOnly)
         .map(ref => ref.specifier);
@@ -152,12 +168,19 @@ describe("the ops module stays server-safe", () => {
 });
 
 describe("the editor does not load the composition schemas", () => {
+  // Every module in every folder, by its path under `src`.
+  const modules = (
+    readdirSync(join(pkgRoot, "src"), { recursive: true }) as string[]
+  ).filter(name => /\.(ts|tsx)$/.test(name));
+  /** The module an import names, by its path under `src`: `../ops` from `canvas/` is `ops`. */
+  const named = (name: string, specifier: string) =>
+    join(dirname(name), specifier);
+
   it("imports the op vocabulary, never the published entry or the actions", () => {
     // The client build keeps every module the shell reaches, so an editor
     // module importing `./ops` would carry zod and every action schema into
     // each editor load. Only the published entry may reach them.
-    const reaching = readdirSync(join(pkgRoot, "src"))
-      .filter(name => /\.(ts|tsx)$/.test(name))
+    const reaching = modules
       .filter(name => !/\.test(-d)?\.(ts|tsx)$/.test(name))
       .filter(name => name !== "ops.ts")
       .filter(name =>
@@ -166,20 +189,18 @@ describe("the editor does not load the composition schemas", () => {
         moduleSpecifierRefs(read(`src/${name}`), name).some(
           ({ specifier, typeOnly }) =>
             !typeOnly &&
-            (specifier === "./ops" ||
-              specifier === "./composition-actions" ||
-              specifier === "./template-actions")
+            (named(name, specifier) === "ops" ||
+              named(name, specifier) === "composition-actions" ||
+              named(name, specifier) === "template-actions")
         )
       );
 
     // The control: the vocabulary itself is imported widely, so the scan
     // reads real imports rather than finding nothing anywhere.
-    const vocabulary = readdirSync(join(pkgRoot, "src")).filter(
-      name =>
-        /\.(ts|tsx)$/.test(name) &&
-        importedSpecifiers(read(`src/${name}`), name).includes(
-          "./op-vocabulary"
-        )
+    const vocabulary = modules.filter(name =>
+      importedSpecifiers(read(`src/${name}`), name).some(
+        specifier => named(name, specifier) === "op-vocabulary"
+      )
     );
     expect(vocabulary.length).toBeGreaterThan(10);
     expect(reaching).toEqual([]);

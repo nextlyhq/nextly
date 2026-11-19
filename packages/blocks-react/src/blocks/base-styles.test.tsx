@@ -365,14 +365,30 @@ describe("every default the core library declares", () => {
       DECLARING_PARTS.map(([block, part]) => `${block}#${part}`).sort()
     ).toEqual([
       "core/accordion-item#title",
+      "core/accordion-item#toggle",
       "core/collection-loop#current-page",
       "core/collection-loop#page-gap",
       "core/collection-loop#page-link",
       "core/collection-loop#pages",
+      "core/form#choice",
       "core/form#control",
+      "core/form#error",
+      "core/form#field",
+      "core/form#help",
+      "core/form#message",
+      "core/form#note",
+      "core/form#spoken",
       "core/form#submit",
+      "core/form#tick",
+      "core/form#trap",
       "core/image#caption",
+      "core/image#close",
+      "core/image#empty",
+      "core/image#enlarge",
       "core/image#frame",
+      "core/image#full",
+      "core/image#lightbox",
+      "core/image#lightbox-caption",
       "core/image#link",
       "core/image#linked",
       "core/image#picture",
@@ -778,5 +794,122 @@ describe("a token a default depends on must be one the site set defines", () => 
         base: { base: { backgroundColor: { $token: "color.surface" } } },
       } as NodeStyles)
     ).toEqual([]);
+  });
+});
+
+/**
+ * Whether a declared colour paints text on whatever is behind the element:
+ * a colour other than the inherited one, in a style map that gives the
+ * element no background of its own.
+ *
+ * A colour beside a background is a filled control (a button, a page link, a
+ * field) that is legible on any container. A colour on its own beats the
+ * text colour a container passes down, so a white Section would show that
+ * block's text in the block's own colour, dark on dark.
+ */
+function coloursTextDirectly(values: Record<string, unknown>): boolean {
+  const colour = values.color;
+  if (colour === undefined) return false;
+  if (typeof colour === "string") {
+    const word = colour.trim().toLowerCase();
+    if (word === "inherit" || word === "currentcolor") return false;
+  }
+  const background = values.backgroundColor;
+  return (
+    background === undefined ||
+    (typeof background === "string" &&
+      background.trim().toLowerCase() === "transparent")
+  );
+}
+
+/** Each state and breakpoint at which a style map colours text directly. */
+function textColoursIn(styles: NodeStyles): string[] {
+  const found: string[] = [];
+  for (const [state, byBreakpoint] of Object.entries(styles)) {
+    if (byBreakpoint === undefined) continue;
+    for (const [breakpoint, values] of Object.entries(byBreakpoint)) {
+      if (values === undefined) continue;
+      if (coloursTextDirectly(values as Record<string, unknown>)) {
+        found.push(`${state}/${breakpoint}`);
+      }
+    }
+  }
+  return found;
+}
+
+describe("text colour inside a container", () => {
+  /**
+   * The Form's quiet words (help and the "* Required" note, muted) and its
+   * error line keep colours of their own. The Form's look is its own block's
+   * to change, so they are named here rather than missed: a container's text
+   * colour does not reach them.
+   */
+  const KEPT_BY_THE_FORM = [
+    "core/form#error",
+    "core/form#help",
+    "core/form#note",
+  ];
+
+  it("reaches every core block's text: no block's or part's defaults colour text directly", () => {
+    const found = [
+      ...DECLARING.flatMap(block =>
+        textColoursIn(block.baseStyles as NodeStyles).length === 0
+          ? []
+          : [block.name]
+      ),
+      ...DECLARING_PARTS.flatMap(([name, part, styles]) =>
+        textColoursIn(styles).length === 0 ? [] : [`${name}#${part}`]
+      ),
+    ].sort();
+    expect(found).toEqual(KEPT_BY_THE_FORM);
+  });
+
+  it("tells a colour on the text from a filled control's colour", () => {
+    // The control: the check finds a bare colour, and passes a colour with a
+    // background or one that inherits.
+    expect(
+      textColoursIn({ base: { base: { color: "#111" } } } as never)
+    ).toEqual(["base/base"]);
+    expect(
+      textColoursIn({
+        base: { base: { color: "#111", backgroundColor: "#fff" } },
+      } as never)
+    ).toEqual([]);
+    expect(
+      textColoursIn({ hover: { base: { color: "inherit" } } } as never)
+    ).toEqual([]);
+  });
+});
+
+describe("a new container's padding", () => {
+  const named = (name: string) =>
+    (coreBlocks as AnyBlockDefinition[]).find(block => block.name === name) as
+      | AnyBlockDefinition
+      | undefined;
+  /** The declarations of the block type's own default rules, joined. */
+  const defaultRule = (name: string): string => {
+    const css = compiledCss(named(name) as AnyBlockDefinition);
+    const opening = `:where(.${blockTypeClassName(name)}) {`;
+    const rules = css.split("\n").filter(line => line.includes(opening));
+    // The control: the type's rules are found at all, so an empty answer
+    // below means no padding rather than no rule read.
+    expect(rules.length).toBeGreaterThan(0);
+    return rules.join("\n");
+  };
+
+  it("is the site's section spacing variables on a Section, above, below and at the sides", () => {
+    const rule = defaultRule("core/section");
+    expect(rule).toContain("padding-block-start: var(--site-space-section-y)");
+    expect(rule).toContain("padding-block-end: var(--site-space-section-y)");
+    expect(rule).toMatch(
+      /padding-inline-start: max\(var\(--site-space-gutter\), var\(--nx-contain-inset, 0px\)\)/
+    );
+    expect(rule).toMatch(
+      /padding-inline-end: max\(var\(--site-space-gutter\), var\(--nx-contain-inset, 0px\)\)/
+    );
+  });
+
+  it("is 0 on a Box: no default writes a padding", () => {
+    expect(defaultRule("core/box")).not.toContain("padding");
   });
 });

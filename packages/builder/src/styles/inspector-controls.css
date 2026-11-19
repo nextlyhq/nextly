@@ -1,0 +1,921 @@
+/*
+ * A chosen media item: a small picture beside its name, the name cut short
+ * on one line with the whole of it in its tooltip, and its alt text below.
+ */
+.nx-inspector__media-chosen {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-inline-size: 0;
+  /*
+   * Sized by the row it sits in, never by its name. A style row's control
+   * column is at least its content's narrowest width, and a name on one
+   * line, a library file's long generated name above all, made that column
+   * as wide as the name, so the row ran past the panel's edge and its
+   * ellipsis never showed. Contained, the row adds no width of its own, and
+   * the name is cut where the panel ends.
+   */
+  contain: inline-size;
+}
+
+.nx-inspector__media-thumb {
+  flex: none;
+  inline-size: 2.5rem;
+  block-size: 2.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-md);
+  object-fit: cover;
+  background: var(--nx-muted);
+}
+
+.nx-inspector__media-text {
+  min-inline-size: 0;
+}
+
+.nx-inspector__media-name {
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * An on/off row's switch at the start of the control column, its own size,
+ * rather than stretched across it.
+ */
+.nx-inspector__field[data-content-control="checkbox"] > [role="switch"],
+.nx-inspector__field[data-display="switch"] > [role="switch"] {
+  justify-self: start;
+}
+
+/*
+ * A loop's sort on one row: the field menu takes the room, the direction
+ * toggle beside it keeps its own square.
+ */
+.nx-inspector__sort,
+.nx-content-width__entry {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-inspector__sort > .nx-font-pick {
+  flex: 1;
+}
+
+.nx-inspector__sort-direction {
+  flex: none;
+}
+
+.nx-inspector__exposed [role="switch"] {
+  align-self: flex-start;
+}
+
+/*
+ * Text decoration: its line's icons, then Style… for the line's style,
+ * thickness and colour, in a popover laid out as label and control rows.
+ */
+.nx-style-inspector__decoration {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+/* A square "…" at the control height: a decoration's style, a focal point's CSS. */
+.nx-focal__more,
+.nx-style-inspector__decoration-style {
+  display: grid;
+  place-items: center;
+  block-size: var(--nx-builder-control-height);
+  inline-size: var(--nx-builder-control-height);
+  padding: 0;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+  cursor: pointer;
+}
+
+/*
+ * The popover is mounted outside the inspector, so it takes the inspector's
+ * density itself: 12px text, and the shared controls at the control height.
+ */
+[data-slot="popover-content"].nx-style-inspector__decoration-popover {
+  --nx-control-height: var(--nx-builder-control-height);
+  --nx-control-height-sm: var(--nx-builder-control-height);
+  --nx-control-height-md: var(--nx-builder-control-height);
+  --nx-control-height-lg: var(--nx-builder-control-height);
+  inline-size: auto;
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+.nx-style-inspector__decoration-popover
+  :is(input, button, label, [data-slot="select-trigger"]) {
+  font-size: var(--nx-builder-font-size);
+}
+
+.nx-style-inspector__decoration-parts {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 14rem;
+}
+
+.nx-style-inspector__decoration-part {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--nx-builder-font-size);
+}
+
+/*
+ * A focal point: nine points over the block's own picture, a readout of the
+ * point beside them, and "…" for a point written as CSS under them. The
+ * frame is a square three points across, each point a 24px target.
+ */
+/*
+ * The points on the left with "…" at the top right of the same row, and the
+ * readout under them at the field's full width, so its words read on one or
+ * two natural lines whatever the column's width.
+ */
+.nx-focal {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "frame more"
+    "readout readout"
+    "css css";
+  align-items: start;
+  column-gap: 0.5rem;
+  row-gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-focal__frame {
+  grid-area: frame;
+}
+
+.nx-focal__readout {
+  grid-area: readout;
+}
+
+.nx-focal__more {
+  grid-area: more;
+  justify-self: end;
+}
+
+.nx-focal__frame {
+  position: relative;
+  inline-size: 4.5rem;
+  block-size: 4.5rem;
+  overflow: hidden;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: var(--nx-muted);
+}
+
+.nx-focal__picture,
+.nx-focal__swatch {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+}
+
+/* No picture to aim over: a quiet field of the muted surface. */
+.nx-focal__swatch {
+  background: linear-gradient(
+    135deg,
+    var(--nx-muted) 0 50%,
+    var(--nx-builder-border) 50% 100%
+  );
+}
+
+.nx-focal__points {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+}
+
+.nx-focal__point {
+  display: grid;
+  place-items: center;
+  min-inline-size: 24px;
+  min-block-size: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* Each point a dot with a ring, legible over any picture. */
+.nx-focal__point::after {
+  content: "";
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  background: var(--nx-background);
+  box-shadow: 0 0 0 1px var(--nx-foreground);
+  opacity: 0.75;
+}
+
+.nx-focal__point[aria-checked="true"]::after,
+.nx-focal__point[data-inherited]::after {
+  inline-size: 12px;
+  block-size: 12px;
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--nx-foreground);
+}
+
+/* Inherited: drawn, but hollow, so it never reads as set here. */
+.nx-focal__point[data-inherited]::after {
+  background: transparent;
+}
+
+.nx-focal__point:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: -2px;
+}
+
+.nx-focal__point:disabled {
+  cursor: default;
+}
+
+.nx-focal__readout {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  font-size: var(--nx-builder-font-size);
+  line-height: var(--nx-builder-line-height);
+}
+
+.nx-focal__readout b {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.nx-focal__readout span {
+  color: var(--nx-builder-text-muted);
+}
+
+.nx-focal__css {
+  grid-area: css;
+}
+
+/*
+ * A background's size: Cover, Fit and Tile as one row of buttons across the
+ * field's whole width, and under them the readout with "…" at its end for a
+ * size written as CSS. Beside the buttons, "…" left the three words 30px
+ * each at the default width and cut "Cover" to "Cov"; across the column they
+ * read whole and start and end where every other control does.
+ */
+.nx-background-size {
+  display: grid;
+  /*
+   * The first column is at least the buttons' words' width, so where even the
+   * whole column is too narrow, the label gives way rather than a word being
+   * cut; past that, it takes what is left.
+   */
+  grid-template-columns: minmax(min-content, 1fr) auto;
+  grid-template-areas:
+    "choices choices"
+    "readout more"
+    "css css";
+  align-items: start;
+  column-gap: 0.5rem;
+  row-gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-background-size__choices {
+  grid-area: choices;
+}
+
+.nx-background-size__more {
+  grid-area: more;
+}
+
+/*
+ * Each choice is at least as wide as its word. A toggle's buttons may shrink
+ * to nothing so most strips fit any column; these hold their words instead.
+ * Named through the field as well, to outweigh the toggle's own rule.
+ */
+.nx-background-size .nx-background-size__choices > button {
+  min-width: max-content;
+}
+
+/* Inherited: drawn, but not pressed, so it never reads as set here. */
+.nx-background-size__choices > button[data-inherited] {
+  border-style: dashed;
+}
+
+.nx-background-size .nx-focal__css {
+  grid-area: css;
+}
+
+/*
+ * A Columns row's layout tiles: four to a line at the panel's width, each a
+ * glyph of its tracks over its name. The glyphs are muted foreground, enough
+ * contrast as graphics in both schemes, and filled where chosen.
+ */
+/* The tiles take the panel's width, under their label, so each reads whole. */
+.nx-inspector__field.nx-columns-layout__layout {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.375rem;
+}
+
+.nx-columns-layout__tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-columns-layout__tile {
+  display: grid;
+  justify-items: stretch;
+  gap: 0.125rem;
+  min-block-size: 2.75rem;
+  padding: 0.25rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-builder-text-muted);
+  font-size: 0.6875rem;
+  line-height: 1.2;
+  text-align: center;
+  cursor: pointer;
+}
+
+.nx-columns-layout__tile[aria-checked="true"] {
+  border-color: var(--nx-foreground);
+  box-shadow: 0 0 0 1px var(--nx-foreground);
+  color: var(--nx-foreground);
+}
+
+.nx-columns-layout__tile[aria-disabled="true"],
+.nx-content-width__choice:disabled,
+.nx-content-width__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.nx-columns-layout__tile:focus-visible,
+.nx-content-width__choice:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 1px;
+}
+
+.nx-columns-layout__glyph {
+  display: flex;
+  gap: 2px;
+  block-size: 0.875rem;
+}
+
+.nx-columns-layout__glyph i {
+  min-inline-size: 0;
+  border: 1px solid var(--nx-builder-text-muted);
+  border-radius: 2px;
+}
+
+.nx-columns-layout__tile[aria-checked="true"] .nx-columns-layout__glyph i {
+  border-color: var(--nx-foreground);
+  background: var(--nx-foreground);
+}
+
+.nx-segment {
+  display: inline-flex;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/*
+ * An option is at least a control tall and grows to hold its words: in a
+ * narrow panel two words ("Fit content") wrap to two lines, and a fixed
+ * height let the second line spill under the row below. One line stays a
+ * control tall, since the block padding and line height fit inside it.
+ */
+.nx-segment__option {
+  min-block-size: var(--nx-builder-control-height);
+  padding: 0.25rem 0.625rem;
+  line-height: 1.2;
+  border: 0;
+  border-inline-end: 1px solid var(--nx-builder-border);
+  background: transparent;
+  color: var(--nx-foreground);
+  font-size: var(--nx-builder-font-size);
+  cursor: pointer;
+}
+
+.nx-segment__option:last-child {
+  border-inline-end: 0;
+}
+
+.nx-segment__option:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: -2px;
+}
+
+/*
+ * An aspect ratio: the menu, and under it a custom ratio's width and height
+ * on one line, split by a colon as the ratio is written.
+ */
+.nx-style-inspector__ratio {
+  display: grid;
+  row-gap: 0.375rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__ratio-custom {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 0.375rem;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
+ * Opacity: the slider across the row for "more or less", then the number for
+ * an exact value, holding three digits, and its percent sign.
+ */
+.nx-style-inspector__opacity {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__opacity > .nx-style-inspector__numeric {
+  flex: 0 0 3.5rem;
+}
+
+.nx-style-inspector__percent {
+  margin-inline-start: -0.25rem;
+  font-size: var(--nx-builder-font-size);
+  color: var(--nx-builder-text-muted);
+}
+
+/* A time in milliseconds: the number, holding five digits, and its unit. */
+.nx-style-inspector__unit-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__unit-field > .nx-style-inspector__numeric {
+  flex: 0 0 4.5rem;
+}
+
+.nx-style-inspector__unit {
+  margin-inline-start: -0.25rem;
+  font-size: var(--nx-builder-font-size);
+  color: var(--nx-builder-text-muted);
+}
+
+/* A property's heading with an action at its end: Play, beside "Animation
+   when it appears". The button is a 24px target, as the switch below is. */
+.nx-style-inspector__property-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.nx-style-inspector__play {
+  flex: none;
+  min-height: 1.5rem;
+  height: 1.5rem;
+  gap: 0.25rem;
+  padding-inline: 0.5rem;
+  margin-inline-start: auto;
+  font-size: var(--nx-builder-font-size);
+}
+
+/*
+ * A switch in the inspector is a 24px target on its own. The shared switch is
+ * 18px tall, which passes only while no other target sits within 12px of its
+ * centre, and an on/off row ends directly above "Visible on". The thumb grows
+ * with the track, so the 18px its checked travel covers still ends one pixel
+ * inside the far edge.
+ */
+:is(.nx-inspector, .nx-style-inspector) [data-slot="switch"] {
+  block-size: 1.5rem;
+  inline-size: 2.5rem;
+}
+
+:is(.nx-inspector, .nx-style-inspector) [data-slot="switch-thumb"] {
+  block-size: 1.25rem;
+  inline-size: 1.25rem;
+}
+
+/*
+ * A placement whose variant was deleted: said with an icon and words, in the
+ * warning tone, with the way to let it go beside it.
+ */
+.nx-variant-picker__removed {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.25rem 0.25rem 0.5rem;
+  border: 1px solid color-mix(in oklch, var(--nx-warning) 45%, transparent);
+  border-radius: var(--radius-md, 0.375rem);
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--nx-foreground);
+  background: color-mix(in oklch, var(--nx-warning) 10%, transparent);
+}
+
+.nx-variant-picker__removed svg {
+  flex: none;
+  color: var(--nx-warning);
+}
+
+.nx-variant-picker__removed span {
+  flex: 1 1 auto;
+}
+
+/*
+ * The exposure picker in the make-component forms: one row per block, indented
+ * by its depth in the selection, each value with its switch, its type in
+ * words, and its name once picked. Base tokens, since the form is drawn in a
+ * dialog outside the builder's chrome.
+ */
+.nx-expose-picker {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.nx-expose-picker__legend {
+  padding: 0;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--nx-foreground);
+}
+
+.nx-expose-picker__hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-expose-picker__blocks,
+.nx-expose-picker__values {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-expose-picker__blocks {
+  max-height: 16rem;
+  overflow-y: auto;
+  padding: 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  background: var(--nx-muted);
+}
+
+.nx-expose-picker__block {
+  display: grid;
+  gap: 0.25rem;
+  padding-inline-start: calc(var(--nx-expose-depth, 0) * 1rem);
+}
+
+.nx-expose-picker__block-name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-expose-picker__value {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  background: var(--nx-background);
+}
+
+.nx-expose-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.75rem;
+}
+
+.nx-expose-picker__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.875rem;
+}
+
+.nx-expose-picker__label {
+  height: 2rem;
+}
+
+.nx-expose-picker__reason {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-expose-picker__reason[role="alert"] {
+  color: var(--nx-destructive);
+}
+
+/*
+ * Alignment and direction as one segmented strip, the design's icon group:
+ * each icon a 24px target (WCAG 2.2's minimum, so five icons, More and a
+ * Clear fit beside a label), the chosen one on the
+ * theme's accent surface in its own foreground, and the values without an
+ * icon in the strip's last segment. The strip sits on the input surface, as
+ * the panel's fields and lists do, in both schemes. A Clear follows it at the
+ * row's end while a value is set.
+ */
+.nx-icon-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* What the value that applies does, on its own line under the icons. */
+.nx-icon-choice__help {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.nx-icon-choice__strip {
+  display: inline-flex;
+  /* Whole or stacked under its label, never clipped. */
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+}
+
+.nx-icon-choice__group {
+  display: inline-flex;
+}
+
+.nx-icon-choice__option,
+.nx-icon-choice .nx-icon-choice__more {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 1.5rem;
+  block-size: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--nx-muted-foreground);
+  background: transparent;
+}
+
+.nx-icon-choice__option + .nx-icon-choice__option,
+.nx-icon-choice .nx-icon-choice__more {
+  border-inline-start: 1px solid var(--nx-builder-border);
+}
+
+/* A value from the list, shown by its own spelling, widens the segment. */
+.nx-icon-choice .nx-icon-choice__more:not([data-placeholder]) {
+  inline-size: auto;
+  padding-inline: 0.375rem;
+  font-size: var(--text-xs);
+}
+
+.nx-icon-choice .nx-icon-choice__more > svg:last-child {
+  display: none;
+}
+
+/* Not over the chosen one, whose fill says which is chosen. */
+.nx-icon-choice__option:not(:disabled):not([aria-checked="true"]):hover,
+.nx-icon-choice .nx-icon-choice__more:not(:disabled):hover {
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+}
+
+/*
+ * The icon of a value inherited from another tier, while none is set here:
+ * ringed rather than filled, so the group shows what the canvas draws without
+ * reading as this block's own choice. Inside the button, clear of the strip's
+ * borders; the focus ring, an outline too and written after this, takes its
+ * place while the icon has focus.
+ */
+.nx-icon-choice__option[data-inherited],
+.nx-icon-choice .nx-icon-choice__more[data-inherited] {
+  outline: 1px dashed var(--nx-builder-text-muted);
+  outline-offset: -3px;
+}
+
+.nx-icon-choice__option:focus-visible,
+.nx-icon-choice .nx-icon-choice__more:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--nx-ring);
+  outline-offset: -2px;
+}
+
+/* In a locked section the controls read as unavailable, as the toggles do. */
+.nx-icon-choice__option:disabled,
+.nx-icon-choice .nx-icon-choice__more:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* A text icon for lines that run down the page, turned a quarter. */
+.nx-icon-choice__rotated {
+  rotate: 90deg;
+}
+
+/*
+ * An image's alt text field: one line tall, growing with its words up to six
+ * lines and scrolling past them, so a short alt does not hold a tall box and
+ * a long one is never cut off.
+ */
+.nx-inspector textarea.nx-inspector__growing {
+  min-height: 0;
+  max-height: 9em;
+  overflow-y: auto;
+  resize: none;
+}
+
+/*
+ * Whose words the alt field holds while the page stores none of its own:
+ * "From the media library", led by a small dot so it reads as a tag on the
+ * words above rather than as another sentence of advice.
+ */
+.nx-inspector .nx-image-alt__source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-inspector .nx-image-alt__source::before {
+  content: "";
+  inline-size: 0.375rem;
+  block-size: 0.375rem;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
+/* "Use the media library's alt text": sized to its words, under the field. */
+.nx-inspector .nx-image-alt__reset {
+  justify-self: start;
+}
+
+/* "Decorative, no alt text": the box and its words on one line. */
+.nx-image-alt__decorative {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-block-start: 0.5rem;
+}
+
+/* "When clicked", with the link's own settings under Link. */
+.nx-when-clicked {
+  display: grid;
+  gap: 0.5rem;
+  min-inline-size: 0;
+}
+
+/* A note with the action it offers beside it, wrapping when the rail is narrow. */
+.nx-inspector__note-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/*
+ * A Section's Padding above the spacing box: Compact, Normal and Roomy, then
+ * the line saying where the space comes from, or that a side is Custom.
+ */
+.nx-section-padding {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.25rem;
+  min-inline-size: 0;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  border: 0;
+}
+
+/*
+ * A container's Content width: Boxed and Full width as picture buttons, each
+ * picture the result in small, then the line saying the width in force.
+ */
+.nx-content-width {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.375rem;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.nx-content-width__choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.nx-content-width__choice {
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.25rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--nx-builder-text-muted);
+  font-size: var(--nx-builder-font-size);
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.nx-content-width__choice[aria-checked="true"] {
+  border-color: var(--nx-foreground);
+  box-shadow: 0 0 0 1px var(--nx-foreground);
+  color: var(--nx-foreground);
+  font-weight: 600;
+}
+
+/* The band, with the content inside it: inset for Boxed, edge to edge else. */
+.nx-content-width__picture {
+  position: relative;
+  inline-size: 2.875rem;
+  block-size: 1.375rem;
+  border: 1px solid var(--nx-builder-text-muted);
+  border-radius: 3px;
+}
+
+.nx-content-width__picture i {
+  position: absolute;
+  inset-block: 4px;
+  inset-inline: 3px;
+  border-radius: 2px;
+  background: var(--nx-builder-text-muted);
+}
+
+.nx-content-width__picture[data-shape="boxed"] i {
+  inset-inline: 12px;
+}
+
+.nx-content-width__choice[aria-checked="true"] .nx-content-width__picture {
+  border-color: var(--nx-foreground);
+}
+
+.nx-content-width__choice[aria-checked="true"] .nx-content-width__picture i {
+  background: var(--nx-foreground);
+}
+
+/* Wraps rather than clips in a narrow panel. */
+.nx-content-width__line {
+  margin: 0;
+  color: var(--nx-builder-text-muted);
+  font-size: var(--nx-builder-font-size);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.nx-content-width__line b {
+  color: var(--nx-foreground);
+  font-weight: 600;
+}
+
+.nx-content-width__action {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--nx-foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.nx-content-width__action:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}

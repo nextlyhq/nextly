@@ -28,7 +28,7 @@ import {
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { BlockToolbar } from "./block-toolbar";
+import { BlockToolbar } from "./canvas/block-toolbar";
 import {
   CANVAS_ROOT_CLASS,
   CHROME_ATTRIBUTE,
@@ -36,10 +36,14 @@ import {
   contextMenuTargetOf,
   DropRefusal,
   nodeIdFromEvent,
-} from "./canvas";
-import type { CanvasDragState } from "./canvas-drag";
-import { escapeOutcome, isTextEntry } from "./canvas-escape";
-import { CommandPalette } from "./command-palette";
+} from "./canvas/canvas";
+import type { CanvasDragState } from "./canvas/canvas-drag";
+import {
+  escapeOutcome,
+  isTextEntry,
+  pressOrigin,
+} from "./canvas/canvas-escape";
+import { CommandPalette } from "./shell/command-palette";
 import {
   deepActiveElement,
   isElement,
@@ -232,16 +236,36 @@ describe("who owns Escape, with fields in another realm", () => {
   });
 
   it("leaves Escape to a field focused inside a frame", () => {
-    // Asked of the host document, which is what the shortcut reads. From
-    // there focus inside the frame is the iframe, and an iframe is no field —
-    // so a shallow read would deselect under someone who is typing.
+    // Where the press started is read off the keydown, which the frame's own
+    // document delivers with the field as its target. From the host, focus
+    // inside the frame is the iframe, and an iframe is no field — so a read of
+    // the host's focus would move the selection under someone who is typing.
+    // The frame here is the canvas, so the field also has to win over "a
+    // press on the canvas moves the selection".
     const { frame, doc } = otherRealm();
     const field = foreign(doc, "textarea");
     doc.body.appendChild(field);
     field.focus();
     expect(document.activeElement).toBe(frame);
+    const view = doc.defaultView;
+    if (view === null) throw new Error("the frame has no window");
+    let outcome: ReturnType<typeof escapeOutcome> | undefined;
+    doc.addEventListener(
+      "keydown",
+      event => {
+        outcome = escapeOutcome(document, {
+          origin: pressOrigin(event),
+          canvasFrame: frame,
+        });
+      },
+      { once: true }
+    );
 
-    expect(escapeOutcome(document)).toBe("leave-to-field");
+    field.dispatchEvent(
+      new view.KeyboardEvent("keydown", { key: "Escape", bubbles: true })
+    );
+
+    expect(outcome).toBe("leave-to-field");
   });
 });
 

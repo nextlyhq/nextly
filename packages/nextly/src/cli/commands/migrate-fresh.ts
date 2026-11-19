@@ -57,6 +57,10 @@ import {
   judgeDataLoss,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
+import {
+  unwrittenChangesError,
+  unwrittenChangesOf,
+} from "../../domains/schema/migrate/unwritten-changes";
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
@@ -66,6 +70,7 @@ import {
 } from "../../domains/schema/pipeline/schema-lock";
 import { describeError, immediateMessage } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
+import { busyTableNotices } from "../busy-table-options";
 import { reportDryRun } from "../dry-run";
 import { exitWithError } from "../errors";
 import { CliError } from "../errors/cli-error";
@@ -253,6 +258,33 @@ export async function runMigrateFresh(
 
   logger.keyValue("Dialect", getDialectDisplayName(dialect));
 
+  // A configuration holding a change no migration records is refused before anything is
+  // dropped, a dry run's too: the re-applied migrations would rebuild a database the
+  // configuration is ahead of, and the `nextly migrate` run inside would refuse it only once
+  // every table was gone. Compared offline, as `migrate:check` compares, since the database the
+  // migrations rebuild starts empty.
+  try {
+    const cwd = options.cwd ?? process.cwd();
+    const refusal = unwrittenChangesError(
+      await unwrittenChangesOf({
+        config: configResult.config,
+        ...(configResult.deferredExtends === undefined
+          ? {}
+          : { deferredExtends: configResult.deferredExtends }),
+        projectRoot: cwd,
+        migrationsDir: resolve(cwd, configResult.config.db.migrationsDir),
+        dialect,
+        logger: {
+          warn: message => logger.warn(message),
+          error: message => logger.error(message),
+        },
+      })
+    );
+    if (refusal !== undefined) throw refusal;
+  } catch (error) {
+    exitWithError(logger, error);
+  }
+
   if (options.dryRun === true) {
     await previewMigrateFresh(options, dbValidation, configResult, context);
     return;
@@ -325,6 +357,8 @@ export async function runMigrateFresh(
           warn: message => logger.warn(message),
           info: message => logger.info(message),
         },
+        // The command's own bounds, for a busy SQLite database met while the lock is taken.
+        busyBounds: bounds,
       }
     );
     // Only a wait given `isSettled` ends without running, and this one is not.
@@ -450,8 +484,8 @@ async function dropAndReapply(
     logger,
     {
       bounds,
-      // Each try's notice goes to standard error, as `nextly migrate`'s do.
-      notify: line => process.stderr.write(`${line}\n`),
+      // Each try's notice goes to standard error, as `nextly migrate`'s do, kept back under --quiet.
+      notify: busyTableNotices(logger),
     }
   );
 

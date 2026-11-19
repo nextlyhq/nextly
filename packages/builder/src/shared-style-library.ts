@@ -12,6 +12,7 @@
 import {
   classNameOf,
   isLook,
+  isTextStyle,
   MAX_NAMED_CLASS_NAME_LENGTH,
   tokenLabelIssue,
   type NamedClass,
@@ -38,8 +39,40 @@ export interface SharedStyleReach {
   readonly documents: number;
   /** The same documents, by kind. */
   readonly byKind: Readonly<Record<SharedStyleKind, number>>;
-  /** False makes both numbers floors: "at least". */
+  /**
+   * How many blocks wear it across those documents, as saved. Optional, so a
+   * host written before it existed still compiles; absent, the sentence names
+   * the open page's blocks and the documents apart.
+   */
+  readonly blocks?: number;
+  /**
+   * What the open document contributes as saved, when the host could name it,
+   * in the parts the sentence needs to count the open field from its live
+   * copy instead, so an unsaved edit counts at once. Absent while the open
+   * document is saved nowhere yet.
+   */
+  readonly here?: SharedStyleHereParts;
+  /** False makes every number a floor: "at least". */
   readonly complete: boolean;
+}
+
+/**
+ * The open document's saved blocks wearing a style, in parts. With the open
+ * field's saved rows set aside: `alongside` is the largest saved copy the
+ * open field is part of (its language, or each language for a field they
+ * all share), `elsewhere` the largest of the document's other copies (its
+ * other languages, its other stored form, and the open copy as saved where
+ * that stays live until the edit is published), so with the live blocks
+ * the document counts `max(alongside + live, elsewhere)`. `saved` is what
+ * the document adds to `SharedStyleReach.blocks` as saved, 0 when it holds
+ * none. `null` where a count is not known.
+ */
+export interface SharedStyleHereParts {
+  readonly saved: number | null;
+  readonly alongside: number | null;
+  readonly elsewhere: number | null;
+  /** The kind of document it is, which its place is counted under. */
+  readonly kind: SharedStyleKind;
 }
 
 /** One read of how widely some shared styles are used. */
@@ -147,6 +180,11 @@ export interface SharedStyleRow {
   readonly inCode: boolean;
   /** A look, bound to one block type, rather than a shared style. */
   readonly look?: boolean;
+  /**
+   * A text style, worn from the Style tab's "Text style" picker rather than
+   * as a shared style.
+   */
+  readonly text?: boolean;
   readonly styles: NodeStyles;
 }
 
@@ -168,17 +206,20 @@ export function sharedStyleRows(
     locked: entry.locked === true,
     inCode: suppliedIds.has(entry.id),
     ...(isLook(entry) ? { look: true } : {}),
+    ...(isTextStyle(entry) ? { text: true } : {}),
     styles: entry.styles,
   }));
 }
 
 /**
- * The library without its looks: the shared styles an author applies to any
- * block, as the Shared styles tab and the picker list them. A look is bound
- * to one block type and is picked from that block's own tiles.
+ * The library without its looks and text styles: the shared styles an author
+ * applies to any block, as the Shared styles tab and the picker list them. A
+ * look is bound to one block type and is picked from that block's own tiles;
+ * a text style is picked from the Style tab's "Text style" and listed in
+ * Design's Type tab.
  */
 export function sharedStylesOnly(library: readonly NamedClass[]): NamedClass[] {
-  return library.filter(entry => !isLook(entry));
+  return library.filter(entry => !isLook(entry) && !isTextStyle(entry));
 }
 
 /** A style's name: its label, or its slug for a style made before labels. */
@@ -607,8 +648,8 @@ export const SHARED_STYLE_DARK_UNREADABLE = "Hard to read in dark mode";
 const KIND_WORDS: Record<SharedStyleKind, readonly [string, string]> = {
   pages: ["page", "pages"],
   components: ["component", "components"],
-  patterns: ["pattern", "patterns"],
-  layouts: ["layout", "layouts"],
+  patterns: ["saved section", "saved sections"],
+  layouts: ["header & footer set", "header & footer sets"],
 };
 
 /** A kind as a document is labelled in a list: "Page", "Component". */
@@ -638,38 +679,135 @@ export interface BlocksOnThisPage {
   readonly complete: boolean;
 }
 
+/** What a reach sentence says before the site has answered. */
+export const SHARED_STYLE_COUNTING = "Counting where it’s used…";
+
 /**
- * How widely a style is used, in words: "3 blocks on this page · on 4 pages
- * and 1 component". The blocks come from the open page, the documents from
- * the site's index; "at least" goes before a number that is a floor.
- * Empty while neither is known.
+ * How widely a style is used, in words: "Used on 12 blocks on 4 pages and 1
+ * component". The site's saved counts, with the open page counted from its
+ * live copy in place of its saved one, so an unsaved edit counts at once and
+ * none is counted twice. "At least" goes before a floor; "Counting where it’s
+ * used…" before the site has answered; "Not used anywhere" only when every
+ * count is whole. Empty where there is nothing to count from.
  */
 export function sharedStyleReachSentence(
   blocks: BlocksOnThisPage | undefined,
   reach: SharedStyleReach | undefined
 ): string {
-  const parts: string[] = [];
-  if (blocks !== undefined && blocks.count > 0) {
-    const count = counted(blocks.count, ["block", "blocks"]);
-    parts.push(`${blocks.complete ? "" : "at least "}${count} on this page`);
+  if (reach === undefined) {
+    return blocks === undefined ? "" : SHARED_STYLE_COUNTING;
   }
-  if (reach !== undefined) {
-    const kinds = (Object.keys(KIND_WORDS) as SharedStyleKind[])
-      .filter(kind => reach.byKind[kind] > 0)
-      .map(kind => counted(reach.byKind[kind], KIND_WORDS[kind]));
-    if (kinds.length > 0) {
-      parts.push(
-        `on ${reach.complete ? "" : "at least "}${listedWords(kinds)}`
-      );
-    }
+  if (reach.blocks !== undefined) {
+    return siteWideSentence(blocks, reach, reach.blocks);
+  }
+  return pageAndPlacesSentence(blocks, reach);
+}
+
+/**
+ * The sentence from a host that counts no blocks: the open page's blocks and
+ * the site's documents said apart, "3 blocks on this page · on 4 pages".
+ */
+function pageAndPlacesSentence(
+  blocks: BlocksOnThisPage | undefined,
+  reach: SharedStyleReach
+): string {
+  const parts = onThisPage(blocks);
+  const kinds = placesIn(reach.byKind);
+  if (kinds.length > 0) {
+    parts.push(`on ${reach.complete ? "" : "at least "}${listedWords(kinds)}`);
   }
   if (parts.length > 0) {
     const sentence = parts.join(" · ");
     return sentence.charAt(0).toUpperCase() + sentence.slice(1);
   }
-  if (reach === undefined) return "";
   const exact = reach.complete && (blocks?.complete ?? true);
   return exact ? "Not used anywhere" : "No uses counted yet";
+}
+
+/** The open page's blocks, "3 blocks on this page", or nothing when none. */
+function onThisPage(blocks: BlocksOnThisPage | undefined): string[] {
+  if (blocks === undefined || blocks.count === 0) return [];
+  const count = counted(blocks.count, ["block", "blocks"]);
+  return [`${blocks.complete ? "" : "at least "}${count} on this page`];
+}
+
+/** Each kind of place that holds the style, counted: "4 pages", "1 component". */
+function placesIn(byKind: Readonly<Record<SharedStyleKind, number>>): string[] {
+  return (Object.keys(KIND_WORDS) as SharedStyleKind[])
+    .filter(kind => byKind[kind] > 0)
+    .map(kind => counted(byKind[kind], KIND_WORDS[kind]));
+}
+
+/**
+ * The site-wide sentence, from a host that counts blocks: the saved counts
+ * with the open document counted from the open page's live field.
+ */
+function siteWideSentence(
+  live: BlocksOnThisPage | undefined,
+  reach: SharedStyleReach,
+  /** The blocks the site's saved documents hold: `reach.blocks`, present. */
+  saved: number
+): string {
+  const counts = reachWithLivePage(live, reach, saved);
+  const kinds = placesIn(counts.byKind);
+  if (counts.blocks <= 0 || kinds.length === 0) {
+    return counts.complete ? "Not used anywhere" : "No uses counted yet";
+  }
+  const many = counted(counts.blocks, ["block", "blocks"]);
+  const floor = counts.complete ? "" : "at least ";
+  return `Used on ${floor}${many} on ${listedWords(kinds)}`;
+}
+
+/** A style's site-wide counts, with the open page counted as it stands. */
+interface ReachCounts {
+  readonly blocks: number;
+  readonly byKind: Readonly<Record<SharedStyleKind, number>>;
+  /** False makes every number a floor. */
+  readonly complete: boolean;
+}
+
+/**
+ * The site's saved counts with the open document counted once, from the open
+ * page's live field: its saved count swapped for `max(alongside + live,
+ * elsewhere)`, and its place counted while that is above 0. A document saved
+ * nowhere yet (no `here`) is added as a page. Where any part is unknown, the
+ * saved counts stand as a floor: the document is in them already, so it is
+ * neither added again nor taken away.
+ */
+function reachWithLivePage(
+  live: BlocksOnThisPage | undefined,
+  reach: SharedStyleReach,
+  /** The blocks the site's saved documents hold: `reach.blocks`. */
+  saved: number
+): ReachCounts {
+  const counts: ReachCounts = {
+    blocks: saved,
+    byKind: reach.byKind,
+    complete: reach.complete && (live?.complete ?? true),
+  };
+  // Without the open page's live count (a caller that has none), the saved
+  // counts stand as they are.
+  if (live === undefined) return counts;
+  const here = reach.here;
+  if (here === undefined) return swapped(counts, "pages", 0, live.count);
+  const { saved: was, alongside, elsewhere } = here;
+  if (was === null || alongside === null || elsewhere === null) {
+    return { ...counts, complete: false };
+  }
+  const now = Math.max(alongside + live.count, elsewhere);
+  return swapped(counts, here.kind, was, now);
+}
+
+/** The counts with one document's blocks `was` replaced by `now`. */
+function swapped(
+  counts: ReachCounts,
+  kind: SharedStyleKind,
+  was: number,
+  now: number
+): ReachCounts {
+  const byKind = { ...counts.byKind };
+  byKind[kind] += (now > 0 ? 1 : 0) - (was > 0 ? 1 : 0);
+  return { ...counts, blocks: counts.blocks - was + now, byKind };
 }
 
 /** A row's count in words, and whether it is a zero not counted yet. */
@@ -718,6 +856,27 @@ export type SharedStyleRemoval =
   | { readonly kind: "refused"; readonly reason: string }
   | { readonly kind: "quiet" };
 
+/** Why a style in use, on the open page or a saved document, can't go. */
+const SHARED_STYLE_IN_USE_REMOVAL =
+  "In use, so it can’t be removed. Take it off the blocks that use it first.";
+
+/**
+ * Why a style a block on the open page wears can't go, saying where, since
+ * the site's saved counts may not hold that block yet.
+ */
+export const USED_ON_THIS_PAGE_REMOVAL =
+  "Used on this page, so it can’t be removed. Take it off the blocks that use it first.";
+
+/**
+ * Whether the open page keeps a style from being removed: a block on it wears
+ * the style, or the page could not be read in full, which reads as worn. The
+ * saved documents are the route's to judge; this is what the route can't see,
+ * an unsaved edit, so it is asked before the route is.
+ */
+export function heldByThisPage(blocks: BlocksOnThisPage | undefined): boolean {
+  return blocks === undefined || !blocks.complete || blocks.count > 0;
+}
+
 export function sharedStyleRemoval(
   row: Pick<SharedStyleRow, "locked" | "inCode">,
   blocks: BlocksOnThisPage | undefined,
@@ -729,11 +888,7 @@ export function sharedStyleRemoval(
   if (!whole)
     return { kind: "refused", reason: SHARED_STYLE_NOT_WHOLE_REMOVAL };
   if (!isUnused(blocks, reach)) {
-    return {
-      kind: "refused",
-      reason:
-        "In use, so it can’t be removed. Take it off the blocks that use it first.",
-    };
+    return { kind: "refused", reason: SHARED_STYLE_IN_USE_REMOVAL };
   }
   return { kind: "removable" };
 }

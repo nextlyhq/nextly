@@ -7,7 +7,7 @@
  * (`vercel-pool.ts` says why). So this reads the real package against a real,
  * never-connected mysql2 pool, through `vercelPoolView` as the adapter hands
  * it: attached, and a released connection makes the function wait out the
- * pool's idle timeout and mysql2's idle sweep, not a minute.
+ * pool's idle timeout and the adapter's idle sweep, not a minute.
  */
 import { attachDatabasePool } from "@vercel/functions/db-connections";
 import mysql from "mysql2/promise";
@@ -35,7 +35,7 @@ describe("attachDatabasePool and the adapter's mysql2 pool", () => {
     const pool = mysql.createPool({
       uri: "mysql://user:pass@127.0.0.1:1/app",
       connectionLimit: 3,
-      maxIdle: 2,
+      maxIdle: 3,
       idleTimeout: 5000,
     });
     const core = pool.pool as unknown as ReleasingPool & {
@@ -55,7 +55,7 @@ describe("attachDatabasePool and the adapter's mysql2 pool", () => {
       void waited.then(() => {
         settled = true;
       });
-      // Still waiting past the idle timeout, while mysql2's sweep may not
+      // Still waiting past the idle timeout, while the idle sweep may not
       // have closed the connection yet...
       await vi.advanceTimersByTimeAsync(5900);
       expect(settled).toBe(false);

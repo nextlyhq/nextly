@@ -8,8 +8,10 @@
  * an unused variable from a used one and refused every one. The index answers
  * exactly for every page it does cover. For the pages it does not, this reads
  * their stored documents and looks for the variable's reference as written
- * (`tokenRefText`): no walk of the blocks, so neither the walk bound that made
- * a page undetermined nor a field the walk cannot address hides one.
+ * (`tokenRefText`), and for a `var()` of the custom property it is written
+ * under in any string the page holds (`propertyKeysAnywhere`): no walk of the
+ * blocks, so neither the walk bound that made a page undetermined nor a field
+ * the walk cannot address hides one.
  *
  * Which pages those are is the index's own record, never a scan of the site:
  * its undetermined marker rows name each page it could not read whole, and the
@@ -23,6 +25,11 @@
  */
 import { tokenRefText } from "@nextlyhq/blocks-engine";
 
+import {
+  isIdentityKey,
+  propertyKeysAnywhere,
+  type VariablesAsked,
+} from "./token-usage";
 import type { UnaddressableType } from "./usage-backfill-wiring";
 import type { UsageRowReader } from "./usage-count";
 import type { UsageScope } from "./usage-index";
@@ -61,8 +68,9 @@ export type UncoveredOutcome =
   | { readonly kind: "unlisted" };
 
 /**
- * Whether any of the variables `identities` is used on a page the index does
- * not cover, reading each such page until `deadline`.
+ * Whether any of the variables `asked` is used on a page the index does not
+ * cover, reading each such page until `deadline`: by a `$token` naming its
+ * identity, or a `var()` of the property it is written under.
  *
  * Every read is held to the time left, not only checked between pages: a read
  * that stalls (a slow hook on a page, a listing that does not return) would
@@ -70,7 +78,7 @@ export type UncoveredOutcome =
  * the box ends is left to finish unobserved; it writes nothing.
  */
 export async function variablesOnUncoveredPages(args: {
-  identities: readonly string[];
+  asked: VariablesAsked;
   pages: UncoveredPages;
   /** When the read must stop, by `now`. */
   deadline: number;
@@ -78,9 +86,9 @@ export async function variablesOnUncoveredPages(args: {
 }): Promise<UncoveredOutcome> {
   const now = args.now ?? (() => Date.now());
   const left = () => args.deadline - now();
-  const needles = args.identities.map(
-    identity => [identity, tokenRefText(identity)] as const
-  );
+  const needles = args.asked.keys
+    .filter(isIdentityKey)
+    .map(identity => [identity, tokenRefText(identity)] as const);
   const uses = new Map<string, UncoveredPage[]>();
   const listing = args.pages.list()[Symbol.asyncIterator]();
   try {
@@ -89,10 +97,9 @@ export async function variablesOnUncoveredPages(args: {
       if (next === TIMED_OUT) return { kind: "unlisted" };
       if (next.done === true) break;
       const page = next.value;
-      const text = await pageText(args.pages, page, left);
-      if (text === undefined) return { kind: "unread", page };
-      for (const [identity, needle] of needles) {
-        if (!text.includes(needle)) continue;
+      const forms = await pageForms(args.pages, page, left);
+      if (forms === undefined) return { kind: "unread", page };
+      for (const identity of variablesIn(forms, needles, args.asked)) {
         uses.set(identity, [...(uses.get(identity) ?? []), page]);
       }
     }
@@ -106,15 +113,35 @@ export async function variablesOnUncoveredPages(args: {
 }
 
 /**
- * A page's stored forms as one text, or nothing where they were not read
- * whole in the time `left`: the time was already spent, the read failed, or it
- * did not finish first.
+ * The variables asked about that a page's stored forms use: a `$token`
+ * naming one, found in the forms' text as the reference is spelled (each
+ * identity's `needle`), or a `var()` of its property in any string.
  */
-async function pageText(
+function variablesIn(
+  forms: readonly unknown[],
+  needles: readonly (readonly [string, string])[],
+  asked: VariablesAsked
+): Set<string> {
+  // The stored forms as the database holds them, serialized as the
+  // reference's spelling is derived: JSON.stringify, no whitespace.
+  const text = JSON.stringify(forms);
+  const found = propertyKeysAnywhere(forms);
+  for (const [identity, needle] of needles) {
+    if (text.includes(needle)) found.add(identity);
+  }
+  return asked.identitiesIn(found);
+}
+
+/**
+ * A page's stored forms, or nothing where they were not read whole in the
+ * time `left`: the time was already spent, the read failed, or it did not
+ * finish first.
+ */
+async function pageForms(
   pages: UncoveredPages,
   page: UncoveredPage,
   left: () => number
-): Promise<string | undefined> {
+): Promise<readonly unknown[] | undefined> {
   if (left() <= 0) return undefined;
   let forms: readonly unknown[] | typeof TIMED_OUT;
   try {
@@ -122,9 +149,7 @@ async function pageText(
   } catch {
     return undefined;
   }
-  // The stored forms as the database holds them, serialized as the
-  // reference's spelling is derived: JSON.stringify, no whitespace.
-  return forms === TIMED_OUT ? undefined : JSON.stringify(forms);
+  return forms === TIMED_OUT ? undefined : forms;
 }
 
 /** Rows of the index's own table one read of its markers takes. */

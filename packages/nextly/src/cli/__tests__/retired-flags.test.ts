@@ -8,6 +8,9 @@
  * consents to deleting data, so it is refused the same way, at a terminal or
  * not, before the database is reached. `nextly init` is retired whole,
  * so its `-f/--force` keeps overwriting with no notice of its own.
+ * `nextly migrate --confirm-backed-up` is the backup confirmation
+ * `--backup-confirmed`, which the run needs before it moves an earlier
+ * release's migration records.
  *
  * Each command is declared as the program declares it and run through
  * Commander, so the spelling is read by the option parser the CLI uses; the
@@ -26,6 +29,12 @@ import { consentCovers } from "../../domains/schema/migrate/data-loss-consent";
 import { registerDbSyncCommand } from "../commands/db-sync.command";
 import { registerGenerateWidgetCommand } from "../commands/generate-widget.command";
 import { registerInitCommand } from "../commands/init.command";
+import { runMigrate } from "../commands/migrate";
+// Loaded here, so the action the command loads when it runs is the one that
+// reaches the run stood in for below: loaded first by the command's own
+// module, it would reach the real run.
+import "../commands/migrate-action";
+import { registerMigrateCommand } from "../commands/migrate.command";
 import { registerMigrateFreshCommand } from "../commands/migrate-fresh.command";
 import { pruneConsent } from "../commands/prune";
 import { registerPruneCommand } from "../commands/prune.command";
@@ -68,6 +77,19 @@ vi.mock("../utils/adapter", () => ({
 
 vi.mock("../utils/config-loader", () => ({
   loadConfig: configRead,
+}));
+
+// The configurations here declare nothing a migration could record, so the comparison
+// `migrate:fresh` makes before anything is dropped finds nothing; it reads a project folder these
+// runs have none of.
+vi.mock("../../domains/schema/migrate/unwritten-changes", () => ({
+  unwrittenChangesOf: async () => ({
+    tables: [],
+    settings: [],
+    permissions: [],
+    noSnapshot: true,
+  }),
+  unwrittenChangesError: () => undefined,
 }));
 
 class Exited extends Error {
@@ -118,7 +140,11 @@ beforeEach(() => {
   connect.mockReset();
   connect.mockRejectedValue(new Error("connected"));
   configRead.mockReset();
-  configRead.mockResolvedValue({ config: { db: {} }, configPath: undefined });
+  // A loaded configuration always names its migrations folder (the default when unset).
+  configRead.mockResolvedValue({
+    config: { db: { migrationsDir: "./migrations" } },
+    configPath: undefined,
+  });
   const record = (...parts: unknown[]) => {
     output.push(parts.map(String).join(" "));
   };
@@ -344,5 +370,47 @@ describe("nextly init --force", () => {
     );
     expect(printed()).not.toMatch(/--force (is|was) (deprecated|retired)/);
     expect(printed()).not.toMatch(/use --(overwrite|accept-data-loss)/);
+  });
+});
+
+describe("nextly migrate --confirm-backed-up", () => {
+  beforeEach(() => {
+    vi.mocked(runMigrate).mockClear();
+  });
+
+  /** The options the run was started with. */
+  const startedWith = () => vi.mocked(runMigrate).mock.calls[0]?.[0];
+
+  it("confirms the backup as --backup-confirmed does, naming --backup-confirmed", async () => {
+    await run(program(registerMigrateCommand), [
+      "migrate",
+      "--confirm-backed-up",
+    ]);
+    // The run starts with the backup confirmed, as the new spelling starts it.
+    expect(startedWith()).toMatchObject({ backupConfirmed: true });
+    expect(printed()).toMatch(
+      /migrate's --confirm-backed-up is deprecated and will be removed: use --backup-confirmed/
+    );
+  });
+
+  it("--backup-confirmed confirms the backup with no notice", async () => {
+    await run(program(registerMigrateCommand), [
+      "migrate",
+      "--backup-confirmed",
+    ]);
+    expect(startedWith()).toMatchObject({ backupConfirmed: true });
+    expect(printed()).not.toMatch(/deprecated/);
+  });
+
+  it("neither spelling given leaves the backup unconfirmed", async () => {
+    await run(program(registerMigrateCommand), ["migrate"]);
+    expect(vi.mocked(runMigrate)).toHaveBeenCalledTimes(1);
+    expect(startedWith()?.backupConfirmed).not.toBe(true);
+  });
+
+  it("is not listed in the help, which lists --backup-confirmed", () => {
+    const text = help(program(registerMigrateCommand), "migrate");
+    expect(text).toContain("--backup-confirmed");
+    expect(text).not.toContain("--confirm-backed-up");
   });
 });

@@ -58,18 +58,42 @@ export function judgeSchemaVersion(
 }
 
 /**
+ * The data-loss consent's refusal of the migrations a start ran, which the
+ * start served through: the refusal in a start's words (`refusalForStart`),
+ * naming each file refused above what it deletes, and the consent to give.
+ */
+export interface ConsentRefusal {
+  message: string;
+}
+
+/**
  * Refuse a boot the plugin's schema cannot support: in production, where a
  * `behind` verdict refuses; development logs it. Whether the plugin is
  * installed at all is judged before this, by `plugin-install-gate.ts`.
+ *
+ * `consentRefusal` is given where this start ran its migrations and the
+ * data-loss consent refused them. The whole run is refused then, so every
+ * plugin with a pending module is behind for it, and "run nextly migrate"
+ * would only be refused again: the refusal says so instead, carrying the
+ * consent check's listing and the consent to give.
  */
 export function assertSchemaVersionUsable(
   state: PluginSchemaState,
-  opts: { production: boolean; warn: (message: string) => void }
+  opts: {
+    production: boolean;
+    warn: (message: string) => void;
+    consentRefusal?: ConsentRefusal;
+  }
 ): void {
   const verdict = judgeSchemaVersion(state);
   if (verdict.kind === "ok") return;
 
-  const message = `The plugin "${state.name}" expects schema version ${String(verdict.declared)}, and the database has ${verdict.applied === null ? "none" : String(verdict.applied)}. Run "nextly migrate" or "nextly plugins install ${state.name}".`;
+  const behind = `The plugin "${state.name}" expects schema version ${String(verdict.declared)}, and the database has ${verdict.applied === null ? "none" : String(verdict.applied)}`;
+  const refused = opts.consentRefusal;
+  const message =
+    refused === undefined
+      ? `${behind}. Run "nextly migrate" or "nextly plugins install ${state.name}".`
+      : `${behind}, because this start did not apply its pending migrations.\n${refused.message}`;
 
   if (!opts.production) {
     // Development push reconciles from config on every reload, so this
@@ -85,6 +109,7 @@ export function assertSchemaVersionUsable(
       plugin: state.name,
       declared: verdict.declared,
       applied: verdict.applied,
+      ...(refused === undefined ? {} : { reason: "data-loss-consent" }),
     },
   });
 }
@@ -121,6 +146,8 @@ export async function assertPluginSchemaVersionsUsable(args: {
   ledgerExists: () => Promise<boolean>;
   production: boolean;
   warn: (message: string) => void;
+  /** See {@link assertSchemaVersionUsable}. */
+  consentRefusal?: ConsentRefusal;
 }): Promise<void> {
   let ledger: SchemaEventRow[] = [];
   try {
@@ -142,7 +169,13 @@ export async function assertPluginSchemaVersionsUsable(args: {
           plugin.migrations
         ),
       },
-      { production: args.production, warn: args.warn }
+      {
+        production: args.production,
+        warn: args.warn,
+        ...(args.consentRefusal === undefined
+          ? {}
+          : { consentRefusal: args.consentRefusal }),
+      }
     );
   }
 }

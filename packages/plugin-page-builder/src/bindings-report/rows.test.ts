@@ -3,8 +3,7 @@
  * wrong and what a visitor sees instead.
  */
 import {
-  clearBlocks,
-  registerBlocks,
+  createBlockRegistry,
   type BindingFieldShape,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
@@ -13,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DeclaredShapesReader } from "../fields/binding-judgement";
 
 import { documentBindingReport } from "./rows";
+
+/** The site's block registry these tests seed and judge against. */
+const blocks = createBlockRegistry();
 
 const DECLARED: Readonly<Record<string, readonly BindingFieldShape[]>> = {
   "collection:posts": [
@@ -39,17 +41,17 @@ const report = (nodes: unknown[], settings?: unknown) =>
   documentBindingReport(
     { nodes, ...(settings === undefined ? {} : { settings }) },
     { collection: "posts" },
-    { shapesOf }
+    { blocks, shapesOf }
   );
 
 describe("a document's bindings to fix", () => {
   // The core blocks, as the plugin registers them at boot: which props a
   // block has, and what each will take, is read from the block.
   beforeEach(() => {
-    registerBlocks([...coreBlocks], { source: "bindings-report-test" });
+    blocks.register([...coreBlocks], { source: "bindings-report-test" });
   });
   afterEach(() => {
-    clearBlocks();
+    blocks.clear();
   });
 
   it("lists a missing field with the fallback a visitor sees", async () => {
@@ -98,6 +100,34 @@ describe("a document's bindings to fix", () => {
       shows: { kind: "own", value: 2 },
     });
     expect(rows[0]?.codes).toContain("binding-fallback-invalid");
+  });
+
+  it("quotes a Text's own one paragraph by its words", async () => {
+    const { rows } = await report([
+      node(
+        "x",
+        "core/text",
+        {
+          text: {
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "paragraph",
+                  children: [
+                    { type: "text", text: "Opening ", format: 0 },
+                    { type: "text", text: "hours", format: 1 },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        // The field is gone and there is no fallback: the block's own shows.
+        { text: { $bind: "headline" } }
+      ),
+    ]);
+    expect(rows[0]?.shows).toEqual({ kind: "own", value: "Opening hours" });
   });
 
   it("names the site setting a misfit reaches, and its type", async () => {

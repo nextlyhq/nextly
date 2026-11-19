@@ -7,6 +7,11 @@
  * headings exist to prevent: the level describes the content's structure, not
  * the editor's.
  *
+ * Every heading with words carries an id, its anchor in the page outline
+ * (`../outline`): unique on the whole page, so a link to a section lands on
+ * the right one. A heading an author leaves out of the table of contents
+ * (`tocExclude`) keeps its anchor; only the contents list skips it.
+ *
  * @module blocks/heading
  */
 import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
@@ -14,39 +19,84 @@ import { createElement } from "react";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
+import { headingAnchors } from "../outline";
 
 import { CONTENT } from "./categories";
-import { boundText, oneOf, relFor, text, url } from "./props";
+import { rankOfTag } from "./heading-anchors";
+import {
+  addressLinkFor,
+  boundText,
+  canLink,
+  LINK_PROPS,
+  linkFor,
+  linksToEntry,
+  readClaimOf,
+  text,
+  type LinkAttributes,
+  type LinkProps,
+} from "./props";
+import { HEADING_CONVERTERS } from "./text-conversions";
 
 /** The levels a heading may render. */
 export const HEADING_LEVELS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
 
 export type HeadingLevel = (typeof HEADING_LEVELS)[number];
 
-export interface HeadingProps {
+/**
+ * A heading's props. Its optional link is the shared one every linking block
+ * declares (an address or an entry, and how it opens), wrapped INSIDE the
+ * heading, not around it.
+ */
+export interface HeadingProps extends LinkProps {
   /** The heading text. */
   text?: string;
   /** Which heading level to render. */
   level?: HeadingLevel;
-  /** An optional link wrapped INSIDE the heading, not around it. */
-  href?: string;
-  /** Where the link opens. */
-  target?: "_self" | "_blank";
-  /** Extra `rel` tokens; `noopener noreferrer` are added for `_blank`. */
-  rel?: string;
+  /**
+   * Left out of a table of contents. The heading keeps its anchor, so a link
+   * written by hand still reaches it.
+   */
+  tocExclude?: boolean;
 }
 
-export function renderHeading({
-  props,
-  className,
-  markProp,
-  bound,
-}: BlockRenderArgs<HeadingProps>): ReactElement {
-  const level = oneOf(props.level, HEADING_LEVELS, "h2");
+/**
+ * Render a heading, linked where its props say. Only a link to an entry
+ * waits, for the entry's path; a heading linking by address, or not at all,
+ * renders at once, as it always did.
+ */
+export function renderHeading(
+  args: BlockRenderArgs<HeadingProps>
+): ReactElement | Promise<ReactElement> {
+  const { props, ctx, node } = args;
+  if (linksToEntry(props)) {
+    // Claimed as this block's, as every linking block's entry read is.
+    return linkFor(props, (collection, id) =>
+      ctx.resolveEntryPath(collection, id, readClaimOf(node))
+    ).then(link => drawHeading(args, link));
+  }
+  return drawHeading(args, addressLinkFor(props));
+}
+
+/** The heading element, with its words inside the link where it has one. */
+function drawHeading(
+  {
+    props,
+    className,
+    markProp,
+    bound,
+    ctx,
+    node,
+  }: BlockRenderArgs<HeadingProps>,
+  link: LinkAttributes | undefined
+): ReactElement {
+  // Drawn at the level the page outline lists it at: `h1` to `h6`, else `h2`.
+  const level: HeadingLevel = `h${rankOfTag(props.level)}`;
+  // Its anchor in the page outline. An author's own CSS id is that anchor,
+  // and the boundary draws it on the same element.
+  const [anchor] = headingAnchors(ctx, node, text(props.text));
   // A bound date keeps its machine-readable value, inside the anchor or the
   // heading itself.
   const label = boundText(text(props.text), bound?.text);
-  const href = url(props.href);
 
   // The text moves between two elements, which is why the block marks it rather
   // than an editor inferring it: linked, the words live inside the anchor;
@@ -57,22 +107,20 @@ export function renderHeading({
   // would put a block-level element in a phrasing context and, more usefully,
   // would make a screen reader announce the whole heading as a link even when
   // only part of it is meant to be one.
-  const content = href
-    ? createElement(
-        "a",
-        {
-          href,
-          ...(props.target === "_blank" ? { target: "_blank" } : {}),
-          ...(relFor(props.target, props.rel) === undefined
-            ? {}
-            : { rel: relFor(props.target, props.rel) }),
-          ...mark,
-        },
-        label
-      )
-    : label;
+  const content =
+    link === undefined
+      ? label
+      : createElement("a", { ...link, ...mark }, label);
 
-  return createElement(level, { className, ...(href ? {} : mark) }, content);
+  return createElement(
+    level,
+    {
+      className,
+      ...(anchor === undefined ? {} : { id: anchor }),
+      ...(link === undefined ? mark : {}),
+    },
+    content
+  );
 }
 
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
@@ -99,37 +147,44 @@ export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
     text: { label: "Text", role: "content", type: "text", inline: true },
     level: {
       label: "Level",
+      hint: "Use Heading 1 once per page.",
       optionLabels: {
-        h1: "H1",
-        h2: "H2",
-        h3: "H3",
-        h4: "H4",
-        h5: "H5",
-        h6: "H6",
+        h1: "Heading 1",
+        h2: "Heading 2",
+        h3: "Heading 3",
+        h4: "Heading 4",
+        h5: "Heading 5",
+        h6: "Heading 6",
       },
       type: "select",
       options: [...HEADING_LEVELS],
     },
-    href: { label: "Link", role: "content", type: "url" },
-    target: {
-      label: "Open link in",
-      optionLabels: { _self: "This tab", _blank: "New tab" },
-      type: "select",
-      options: ["_self", "_blank"],
+    // The shared link, in its own Content › Link section as a Box's is: a
+    // page, an entry or an address, and "Open in a new tab". The stored names
+    // are the ones the heading always used; the relationship is in Advanced.
+    href: { ...LINK_PROPS.href, section: "Link" },
+    entryCollection: { ...LINK_PROPS.entryCollection, section: "Link" },
+    entryId: { ...LINK_PROPS.entryId, section: "Link" },
+    target: { ...LINK_PROPS.target, section: "Link" },
+    rel: LINK_PROPS.rel,
+    // Off by default: every heading is listed until its author says not.
+    tocExclude: {
+      label: "Leave out of table of contents",
+      type: "checkbox",
+      group: "advanced",
+      section: "Visibility",
     },
-    rel: { label: "Link relationship", type: "text" },
   },
   defaultProps: { text: "", level: "h2" },
-  // A heading is what a page calls itself, so the first one is the best title
-  // available when nobody filled the SEO field in.
-  // Normalized exactly as the render does, so the title metadata claims is the
-  // heading a visitor sees: a stored `2024` renders as text and must not be
-  // skipped here for not being a string.
-  seo: props => ({ title: text(props.text) }),
+  // No `seo` offer: a heading never sets the page's title. The browser tab and
+  // a search result read the page's SEO title, else its title in the content
+  // type's pattern; a heading's wording is written for the reader of the
+  // page, and the first one on it is often a slogan, not a name.
   example: { props: { text: "A section title", level: "h2" } },
   supports: {
     typography: true,
     color: true,
+    background: true,
     spacing: true,
     dimensions: true,
     border: true,
@@ -137,10 +192,10 @@ export const heading: BlockDefinition<HeadingProps, PageContext> = defineBlock({
     position: true,
   },
   // A heading with a destination renders an `<a>` inside it, so it is
-  // interactive while linked. Read through `url()`, as the renderer reads it.
+  // interactive while linked, to an address or an entry.
   contentModel: props =>
-    url(props.href) === undefined
-      ? { is: ["flow"] }
-      : { is: ["flow", "interactive"] },
+    canLink(props) ? { is: ["flow", "interactive"] } : { is: ["flow"] },
+  // "Turn into" Text or Rich text: the words, and a link to an address.
+  converters: HEADING_CONVERTERS,
   render: renderHeading,
 });

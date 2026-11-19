@@ -9,7 +9,7 @@ process.env.NEXTLY_SECRET =
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { cp, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,8 +35,12 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { SchemaEventsRepository } from "../../../schema/events/schema-events-repository";
+import { migrateCore } from "../../../../cli/commands/migrate";
+import { createLogger } from "../../../../cli/utils/logger";
+import { NO_CONSENT } from "../../../schema/migrate/data-loss-consent";
 import { introspectLiveSnapshot } from "../../../schema/pipeline/diff/introspect-live";
 import { _resetApplyDesiredSchemaForTests } from "../../../schema/pipeline/index";
+import { refuseTargetSwitchesOverValues } from "../../../schema/pipeline/several-references-refusal";
 
 const SERVER_URL_ENV = {
   postgresql: "TEST_POSTGRES_URL",
@@ -257,6 +261,14 @@ for (const dialect of getConfiguredTestDialects()) {
       _resetEnvCache();
     });
 
+    /** The posts table as `adapter`'s database holds it: its columns, keys and indexes. */
+    async function postsTable(adapter: DrizzleAdapter) {
+      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+        "dc_posts",
+      ]);
+      return live.tables[0];
+    }
+
     /** The foreign keys the live table declares, by the column they constrain. */
     async function foreignKeyColumns(table: string): Promise<string[]> {
       const live = await introspectLiveSnapshot(
@@ -266,6 +278,94 @@ for (const dialect of getConfiguredTestDialects()) {
       );
       return (live.tables[0]?.foreignKeys ?? []).flatMap(fk => fk.columns);
     }
+
+    it("creates a relationship sent as the editor writes it, its target in relationTo alone, and saves and reads one id", async () => {
+      const t = await boot();
+      await createCollection("authors", [{ name: "name", type: "text" }]);
+      // No options: the target as the editor writes it, many-to-one as it is unstated.
+      await createCollection("posts", [
+        { name: "author", type: "relationship", relationTo: "authors" },
+      ]);
+      const a = await t.nextly.create({
+        collection: "authors",
+        data: { title: "A", name: "A" },
+      });
+      const post = await t.nextly.create({
+        collection: "posts",
+        data: { title: "P", author: a.item.id },
+      });
+      const read = (await t.nextly.findByID({
+        collection: "posts",
+        id: post.item.id as string,
+        depth: 0,
+      })) as unknown as { author: unknown };
+      expect(read.author).toEqual(a.item.id);
+    });
+
+    it("creates a list relationship sent as the editor writes it, relationTo and hasMany with no options, and saves and reads two ids", async () => {
+      const t = await boot();
+      await createCollection("authors", [{ name: "name", type: "text" }]);
+      await createCollection("posts", [
+        {
+          name: "writers",
+          type: "relationship",
+          relationTo: "authors",
+          hasMany: true,
+        },
+      ]);
+      const a = await t.nextly.create({
+        collection: "authors",
+        data: { title: "A", name: "A" },
+      });
+      const b = await t.nextly.create({
+        collection: "authors",
+        data: { title: "B", name: "B" },
+      });
+      const ids = [a.item.id, b.item.id] as string[];
+      const post = await t.nextly.create({
+        collection: "posts",
+        data: { title: "P", writers: ids },
+      });
+      const read = (await t.nextly.findByID({
+        collection: "posts",
+        id: post.item.id as string,
+        depth: 0,
+      })) as unknown as { writers: unknown };
+      expect(read.writers).toEqual(ids);
+    });
+
+    it("creates a relationship to several collections sent as the editor writes it, with no options, and saves and reads one", async () => {
+      const t = await boot();
+      await createCollection("authors", [{ name: "name", type: "text" }]);
+      await createCollection("tags", [{ name: "label", type: "text" }]);
+      await createCollection("posts", [
+        {
+          name: "subject",
+          type: "relationship",
+          relationTo: ["authors", "tags"],
+        },
+      ]);
+      const a = await t.nextly.create({
+        collection: "authors",
+        data: { title: "A", name: "A" },
+      });
+      const post = await t.nextly.create({
+        collection: "posts",
+        data: {
+          title: "P",
+          subject: { relationTo: "authors", value: a.item.id },
+        },
+      });
+      const read = (await t.nextly.findByID({
+        collection: "posts",
+        id: post.item.id as string,
+        depth: 0,
+      })) as unknown as { subject: unknown };
+      expect(read.subject).toMatchObject({
+        relationTo: "authors",
+        value: a.item.id,
+      });
+    });
 
     it("stores a hasMany relationship the Builder creates as a list, and saves and reads two ids", async () => {
       const t = await boot();
@@ -310,7 +410,9 @@ for (const dialect of getConfiguredTestDialects()) {
       t: TestNextly,
       hasMany: boolean,
       relationTo: string | string[] = "authors",
-      required = false
+      required = false,
+      // Fields `posts` holds beside `author`, which a switch of `author` leaves as they are.
+      others: Record<string, unknown>[] = []
     ) {
       await createCollection("authors", [{ name: "name", type: "text" }]);
       await createCollection("tags", [{ name: "label", type: "text" }]);
@@ -323,6 +425,7 @@ for (const dialect of getConfiguredTestDialects()) {
           ...(required ? { required } : {}),
           options: { target: "authors", relationType: "manyToOne" },
         },
+        ...others,
       ]);
       const a = (
         await t.nextly.create({
@@ -368,6 +471,36 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await authorOf(t, withAuthor)).toEqual([a]);
       expect([null, []]).toContainEqual(await authorOf(t, without));
       expect(await foreignKeyColumns("dc_posts")).not.toContain("author");
+    });
+
+    // A relationship's storage switch applies by the push, so the drift a hand-added column makes
+    // is refused before the push runs, naming the column, with the switch's values untouched.
+    it("refuses a switch over a column the history does not record, naming it, and changes nothing", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, false);
+      const post = (
+        await t.nextly.create({
+          collection: "posts",
+          data: { title: "P1", author: a },
+        })
+      ).item.id as string;
+      await database.adapter.executeQuery(
+        `ALTER TABLE dc_posts ADD COLUMN extra text`
+      );
+
+      const outcome = await switchAuthor(database.adapter, true);
+
+      expect(outcome).toEqual({
+        refused: expect.stringContaining(
+          "dc_posts.extra present in DB"
+        ) as unknown as string,
+      });
+      expect(await authorOf(t, post)).toBe(a);
+      expect(
+        (await storedPosts(database.adapter)).fields.find(
+          f => f.name === "author"
+        )
+      ).toMatchObject({ hasMany: false });
     });
 
     it("switches a relationship from many to one when no row holds more than one", async () => {
@@ -498,6 +631,99 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await authorOf(t, empty)).toEqual([]);
     });
 
+    // JSON null holds no entry either, and the switch's conversion writes it as NULL too, which a
+    // required column refuses: the switch names that row before anything changes.
+    it("refuses switching a required relationship to one while a row holds JSON null, naming it", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, true, "authors", true);
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P1", author: [a] },
+      });
+      const held = (
+        await t.nextly.create({
+          collection: "posts",
+          data: { title: "P2", author: [a] },
+        })
+      ).item.id as string;
+      await database.adapter.executeQuery(
+        `UPDATE dc_posts SET author = 'null' WHERE id = '${held}'`
+      );
+
+      const outcome = await switchAuthor(database.adapter, {
+        relationTo: "authors",
+        required: true,
+      });
+      expect(outcome).toEqual({
+        refused: expect.stringContaining("is required") as unknown as string,
+      });
+      expect((outcome as { refused: string }).refused).toContain(
+        "1 row holds none"
+      );
+      expect(
+        (await storedPosts(database.adapter)).fields.find(
+          f => f.name === "author"
+        )
+      ).toMatchObject({ hasMany: true });
+    });
+
+    // Made required in the save that switches it: the conversion writes the row holding none as
+    // NULL, which the column then refuses, so the switch names that row before anything changes.
+    it("refuses switching a relationship to one and making it required while a row holds none", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, true);
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P1", author: [a] },
+      });
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P2", author: [] },
+      });
+
+      const outcome = await switchAuthor(database.adapter, {
+        relationTo: "authors",
+        required: true,
+      });
+      expect(outcome).toEqual({
+        refused: expect.stringContaining("is required") as unknown as string,
+      });
+      expect((outcome as { refused: string }).refused).toContain(
+        "1 row holds none"
+      );
+      expect(
+        (await storedPosts(database.adapter)).fields.find(
+          f => f.name === "author"
+        )
+      ).toMatchObject({ hasMany: true });
+    });
+
+    it("refuses switching a relationship to several collections and making it required while a row holds none", async () => {
+      const t = await boot();
+      await postsWithAuthors(t, true);
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P1", author: [] },
+      });
+
+      const outcome = await switchAuthor(database.adapter, {
+        relationTo: ["authors", "tags"],
+        hasMany: true,
+        required: true,
+      });
+      expect(outcome).toEqual({
+        refused: expect.stringContaining("is required") as unknown as string,
+      });
+      expect((outcome as { refused: string }).refused).toContain(
+        "1 row holds none"
+      );
+      expect(
+        (await storedPosts(database.adapter)).fields.find(
+          f => f.name === "author"
+        )
+      ).toMatchObject({ relationTo: "authors" });
+    });
+
     it("adds a required hasMany relationship over rows, filling each with an empty list before requiring it", async () => {
       const t = await boot();
       await postsWithAuthors(t, false);
@@ -610,6 +836,50 @@ for (const dialect of getConfiguredTestDialects()) {
           f => f.name === "author"
         )
       ).toMatchObject({ relationTo: "authors" });
+    });
+
+    // The refusal of a switch to or from naming several collections counts, where the column
+    // refuses NULL, the rows holding none: on a one-link column, whose bare ids are not JSON, that
+    // count reads them as text, so the switch is refused for its value rather than by a failed
+    // read. Asked directly: every save road's own type-change judgement refuses this switch first
+    // today, so no road reaches the count over such a column.
+    it("counts a required one-link column's rows for a switch naming several collections, reading its ids as text", async () => {
+      const t = await boot();
+      const { a } = await postsWithAuthors(t, false, "authors", true);
+      await t.nextly.create({
+        collection: "posts",
+        data: { title: "P1", author: a },
+      });
+
+      const refused = await refuseTargetSwitchesOverValues({
+        db: database.adapter.getDrizzle(),
+        dialect,
+        desired: { collections: {}, singles: {}, components: {} } as never,
+        live: {
+          tables: [
+            {
+              name: "dc_posts",
+              columns: [{ name: "author", nullable: false }],
+            },
+          ],
+        } as never,
+        operations: [
+          {
+            type: "change_column_type",
+            tableName: "dc_posts",
+            columnName: "author",
+            fromType: "text",
+            toType: "jsonb",
+            conversion: "requireEmpty",
+          },
+        ] as never,
+      }).then(
+        () => "accepted",
+        (error: unknown) => JSON.stringify(error)
+      );
+      expect(refused).toContain("RELATIONSHIP_TARGETS_HOLD_VALUES");
+      expect(refused).toContain("1 row holds a value");
+      expect(refused).not.toContain("RELATIONSHIP_REQUIRED_HOLDS_NONE");
     });
 
     it("refuses switching from several collections to one while a row holds a value", async () => {
@@ -741,6 +1011,66 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await foreignKeyColumns("single_site")).not.toContain("author");
     });
 
+    it("switches a Single's relationship from many to one, keeping its one link", async () => {
+      const t = await boot();
+      await createCollection("authors", [{ name: "name", type: "text" }]);
+      const a = (
+        await t.nextly.create({
+          collection: "authors",
+          data: { title: "A", name: "A" },
+        })
+      ).item.id as string;
+      const author = (hasMany: boolean) => ({
+        name: "author",
+        type: "relationship",
+        relationTo: "authors",
+        hasMany,
+      });
+      await inDevelopment(() =>
+        dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: "site",
+            label: "Site",
+            fields: [
+              {
+                ...author(true),
+                options: { target: "authors", relationType: "manyToOne" },
+              },
+            ],
+          }
+        )
+      );
+      await t.nextly.updateSingle({
+        slug: "site",
+        data: { author: [a], _overwrite: true },
+      });
+      const [row] = await database.adapter.executeQuery<{
+        schema_version: unknown;
+      }>(`SELECT schema_version FROM dynamic_singles WHERE slug = 'site'`);
+
+      await inDevelopment(() =>
+        dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "site" },
+          {
+            fields: [author(false)],
+            confirmed: true,
+            schemaVersion: Number(row?.schema_version ?? 1),
+            eventResolutions: [],
+            renameResolutions: [],
+          }
+        )
+      );
+
+      const site = (await t.nextly.findSingle({
+        slug: "site",
+        depth: 0,
+      })) as unknown as { author: unknown };
+      expect(site.author).toBe(a);
+    });
+
     it("stores a relationship to several collections the Builder creates as a list", async () => {
       const t = await boot();
       await createCollection("authors", [{ name: "name", type: "text" }]);
@@ -830,6 +1160,119 @@ for (const dialect of getConfiguredTestDialects()) {
               ).isFileApplied(added[0])
             ).toBe(true);
           }
+        });
+
+        // SQLite drops a key only by rebuilding its table, so the file the switch writes rebuilds it:
+        // replayed on an empty database, the files leave the table as it stood before the switch,
+        // with only the relationship's column, its key and its index changed as the switch changes
+        // them here. (This database takes the switch through the push, whose rebuild is judged
+        // elsewhere; the replay is the files' own.)
+        it.runIf(dialect === "sqlite" && road !== "the push")(
+          "rebuilds the table on replay when a switch to many drops the relationship's key, keeping everything else",
+          async () => {
+            const t = await boot();
+            // A second keyed relationship, which the rebuild must carry whole: a rebuild that
+            // dropped every key would otherwise pass as one that dropped only the switched one.
+            await postsWithAuthors(t, false, "authors", false, [
+              {
+                name: "editor",
+                type: "relationship",
+                relationTo: "authors",
+                hasMany: false,
+                options: { target: "authors", relationType: "manyToOne" },
+              },
+            ]);
+            expect(await foreignKeyColumns("dc_posts")).toEqual(
+              expect.arrayContaining(["author", "editor"])
+            );
+            const before = await postsTable(database.adapter);
+
+            expect(await switchAuthor(database.adapter, true)).toEqual({
+              accepted: true,
+            });
+            expect(await foreignKeyColumns("dc_posts")).not.toContain("author");
+            expect(await foreignKeyColumns("dc_posts")).toContain("editor");
+            const here = await postsTable(database.adapter);
+
+            // The folder a deploy receives, copied out before the next instance's boot replaces
+            // this one's project.
+            const { migrationsDir: written } = container.get<{
+              migrationsDir: string;
+            }>("builderSaveSetup");
+            const migrationsDir = await mkdtemp(
+              join(tmpdir(), "nextly-has-many-replay-")
+            );
+            await cp(written, migrationsDir, { recursive: true });
+            const files = (await readdir(migrationsDir)).filter(file =>
+              file.endsWith(".sql")
+            );
+            // A deploy's database: empty of the app's tables, with Nextly's own, as a booted
+            // instance leaves it.
+            const replay = await openDatabase(dialect);
+            try {
+              clearServices();
+              _resetApplyDesiredSchemaForTests();
+              await createTestNextly({ adapter: replay.adapter as never });
+              const replayed = await migrateCore({
+                extensionSchema: undefined,
+                dialect,
+                db: replay.adapter.getDrizzle(),
+                adapter: replay.adapter as never,
+                migrationsDir,
+                logger: createLogger({ quiet: true }),
+                lockMode: "fail-fast",
+                consent: NO_CONSENT,
+                interactive: false,
+              } as never);
+
+              expect({ applied: replayed.applied, ran: replayed.ran }).toEqual({
+                applied: files.length,
+                ran: true,
+              });
+              const replayedTable = await postsTable(replay.adapter);
+              const otherColumns = (table: typeof before) =>
+                table?.columns.filter(c => c.name !== "author");
+              const authorColumn = (table: typeof before) =>
+                table?.columns.find(c => c.name === "author");
+              // Every key the table keeps, as it stands here, and none on `author`.
+              expect(replayedTable?.foreignKeys).toEqual(here?.foreignKeys);
+              expect(
+                replayedTable?.foreignKeys?.flatMap(fk => fk.columns) ?? []
+              ).not.toContain("author");
+              expect(authorColumn(replayedTable)).toEqual(authorColumn(here));
+              expect(replayedTable?.indexes).toEqual(here?.indexes);
+              expect(otherColumns(replayedTable)).toEqual(otherColumns(before));
+            } finally {
+              await replay.close();
+              await rm(migrationsDir, { recursive: true, force: true });
+            }
+          }
+        );
+
+        // Each road converts a one-link list into its link and an empty list into no link
+        // (`referenceScalar`), so the change it carries is judged as carried, not as values to
+        // rewrite first.
+        it("switches many to one where no row holds several, keeping each link", async () => {
+          const t = await boot();
+          const { a } = await postsWithAuthors(t, true);
+          const one = (
+            await t.nextly.create({
+              collection: "posts",
+              data: { title: "P1", author: [a] },
+            })
+          ).item.id as string;
+          const none = (
+            await t.nextly.create({
+              collection: "posts",
+              data: { title: "P2", author: [] },
+            })
+          ).item.id as string;
+
+          expect(await switchAuthor(database.adapter, false)).toEqual({
+            accepted: true,
+          });
+          expect(await authorOf(t, one)).toBe(a);
+          expect(await authorOf(t, none)).toBeNull();
         });
 
         it("refuses many to one while a row holds several, naming the field and its rows", async () => {

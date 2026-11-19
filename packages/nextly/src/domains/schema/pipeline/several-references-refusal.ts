@@ -18,6 +18,7 @@ import { querySqlRows } from "./classifier/count-helpers";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
 import { conversionBetweenShapes } from "./diff/types";
 import { liveTableName, renamesOf, type ApplyRenames } from "./live-uniques";
+import { EMPTY_REFERENCE_TEXTS } from "./reference-list-conversion";
 import type { DesiredSchema } from "./types";
 
 /** Each dialect's condition on a column, given its quoted identifier. */
@@ -50,23 +51,35 @@ const SEVERAL_REFERENCES: RowCondition = {
     sql`CASE WHEN json_valid(${c}) THEN json_type(${c}) = 'array' AND json_array_length(${c}) > 1 ELSE 0 END`,
 };
 
-/** An empty JSON list: a relation holding no entry. Guarded by CASE as the condition above is. */
+/** The stored empties a conversion clears to NULL (`EMPTY_REFERENCE_TEXTS`), as a SQL list. */
+const EMPTY_TEXTS = sql.join(
+  EMPTY_REFERENCE_TEXTS.map(text => sql`${text}`),
+  sql`, `
+);
+
+/**
+ * A relation holding no entry that the conversion writes as NULL: one of the stored empties, or an
+ * empty JSON list however it is spaced. Asked first, so the JSON reads below never see a blank,
+ * and guarded by CASE as the condition above is. It also counts a one-link column, whose bare ids
+ * are not JSON: PostgreSQL, which has no check of JSON before 16, casts only a value written as a
+ * list (starting `[`), as MySQL and SQLite ask whether it is JSON first.
+ */
 const NO_REFERENCES: RowCondition = {
   postgresql: c =>
-    sql`CASE WHEN jsonb_typeof(${c}::jsonb) = 'array' THEN jsonb_array_length(${c}::jsonb) = 0 ELSE FALSE END`,
+    sql`CASE WHEN btrim(${c}::text) IN (${EMPTY_TEXTS}) THEN TRUE WHEN left(btrim(${c}::text), 1) = '[' THEN jsonb_array_length(${c}::text::jsonb) = 0 ELSE FALSE END`,
   mysql: c =>
-    sql`CASE WHEN JSON_VALID(${c}) THEN JSON_TYPE(${c}) = 'ARRAY' AND JSON_LENGTH(${c}) = 0 ELSE FALSE END`,
+    sql`CASE WHEN TRIM(CAST(${c} AS CHAR)) IN (${EMPTY_TEXTS}) THEN TRUE WHEN JSON_VALID(${c}) THEN JSON_TYPE(${c}) = 'ARRAY' AND JSON_LENGTH(${c}) = 0 ELSE FALSE END`,
   sqlite: c =>
-    sql`CASE WHEN json_valid(${c}) THEN json_type(${c}) = 'array' AND json_array_length(${c}) = 0 ELSE 0 END`,
+    sql`CASE WHEN trim(${c}) IN (${EMPTY_TEXTS}) THEN 1 WHEN json_valid(${c}) THEN json_type(${c}) = 'array' AND json_array_length(${c}) = 0 ELSE 0 END`,
 };
 
-/** A value: not NULL, an empty string, an empty list or JSON null. */
+/** A value: not NULL and none of the stored empties (`EMPTY_REFERENCE_TEXTS`). */
 const HOLDS_A_VALUE: RowCondition = {
   postgresql: c =>
-    sql`${c} IS NOT NULL AND btrim(${c}::text) NOT IN ('', '[]', 'null')`,
+    sql`${c} IS NOT NULL AND btrim(${c}::text) NOT IN (${EMPTY_TEXTS})`,
   mysql: c =>
-    sql`${c} IS NOT NULL AND TRIM(CAST(${c} AS CHAR)) NOT IN ('', '[]', 'null')`,
-  sqlite: c => sql`${c} IS NOT NULL AND trim(${c}) NOT IN ('', '[]', 'null')`,
+    sql`${c} IS NOT NULL AND TRIM(CAST(${c} AS CHAR)) NOT IN (${EMPTY_TEXTS})`,
+  sqlite: c => sql`${c} IS NOT NULL AND trim(${c}) NOT IN (${EMPTY_TEXTS})`,
 };
 
 /**
@@ -121,6 +134,44 @@ interface RefusalError {
   path: string;
   code: string;
   message: string;
+}
+
+/**
+ * The columns that refuse NULL once the apply has run, keyed `table.column` in lower case: those
+ * NOT NULL in the database now, and those the apply makes NOT NULL (`change_column_nullable`), as
+ * the required-column gate finds them. A conversion that writes a row as NULL breaks either, and
+ * the gate, counting the values as they stand before the conversion, never sees that row.
+ */
+function notNullAfter(
+  live: NextlySchemaSnapshot | undefined,
+  operations: readonly Operation[]
+): Set<string> {
+  const key = (table: string, column: string) =>
+    `${table.toLowerCase()}.${column.toLowerCase()}`;
+  return new Set([
+    ...(live?.tables ?? []).flatMap(table =>
+      table.columns
+        .filter(column => column.nullable === false)
+        .map(column => key(table.name, column.name))
+    ),
+    ...operations.flatMap(op =>
+      op.type === "change_column_nullable" && !op.toNullable
+        ? [key(op.tableName, op.columnName)]
+        : []
+    ),
+  ]);
+}
+
+/** Whether `op`'s column refuses NULL once the apply has run, by its name now or in the plan. */
+function refusesNull(
+  notNull: ReadonlySet<string>,
+  op: { tableName: string; columnName: string },
+  live: { table: string; column: string }
+): boolean {
+  return (
+    notNull.has(`${live.table.toLowerCase()}.${live.column.toLowerCase()}`) ||
+    notNull.has(`${op.tableName.toLowerCase()}.${op.columnName.toLowerCase()}`)
+  );
 }
 
 /** `rows` counted, as a refusal words it: "1 row holds", "3 rows hold". */
@@ -190,15 +241,8 @@ export async function refuseSeveralReferencesForOne(args: {
 }): Promise<void> {
   const errors: RefusalError[] = [];
   const renames = renamesOf(args.operations);
-  const notNull = new Set(
-    args.live.tables.flatMap(table =>
-      table.columns
-        .filter(column => column.nullable === false)
-        .map(
-          column => `${table.name.toLowerCase()}.${column.name.toLowerCase()}`
-        )
-    )
-  );
+  // Made required in this apply too: the conversion writes a row holding none as NULL first.
+  const notNull = notNullAfter(args.live, args.operations);
   for (const op of args.operations) {
     if (
       op.type !== "change_column_type" ||
@@ -210,9 +254,7 @@ export async function refuseSeveralReferencesForOne(args: {
     errors.push(
       ...(await oneReferenceRefusals(args, op, {
         ...live,
-        notNull: notNull.has(
-          `${live.table.toLowerCase()}.${live.column.toLowerCase()}`
-        ),
+        notNull: refusesNull(notNull, op, live),
       }))
     );
   }
@@ -221,6 +263,47 @@ export async function refuseSeveralReferencesForOne(args: {
     errors,
     logContext: { reason: "relationship-holds-several-for-one" },
   });
+}
+
+/**
+ * What a switch of `op`'s column to or from naming several collections finds in its rows: a row
+ * holding a value no conversion carries across, and, where the column is or becomes NOT NULL, a
+ * row holding none, which the guard clears to NULL and the column then refuses.
+ */
+async function targetSwitchRefusals(
+  args: { db: unknown; dialect: SupportedDialect; desired: DesiredSchema },
+  op: Extract<Operation, { type: "change_column_type" }>,
+  live: { table: string; column: string; notNull: boolean }
+): Promise<RefusalError[]> {
+  const count = async (condition: RowCondition): Promise<number> => {
+    const [row] = await querySqlRows<{ n: number | string }>(
+      args.db,
+      args.dialect,
+      rowsWhere(args.dialect, live.table, live.column, condition)
+    );
+    return Number(row?.n ?? 0);
+  };
+  const { label, field } = subjectOf(args.desired, op.tableName, op.columnName);
+  const errors: RefusalError[] = [];
+  const none = live.notNull ? await count(NO_REFERENCES) : 0;
+  if (none > 0) {
+    const these = none === 1 ? "that row" : "those rows";
+    errors.push({
+      path: `fields.${field}`,
+      code: "RELATIONSHIP_REQUIRED_HOLDS_NONE",
+      message: `${label}: field '${field}' is required and cannot change how its related entries are stored while ${rowsHold(none)} none. The change needs the field empty on every row, which a required field cannot be: delete ${these} first, or make the field optional.`,
+    });
+  }
+  const rows = await count(HOLDS_A_VALUE);
+  if (rows > 0) {
+    const those = rows === 1 ? "that row" : "those rows";
+    errors.push({
+      path: `fields.${field}`,
+      code: "RELATIONSHIP_TARGETS_HOLD_VALUES",
+      message: `${label}: field '${field}' cannot change how its related entries are stored (between one target collection and several, or one entry and many across several) while ${rowsHold(rows)} a value. Clear the field on ${those} first, or keep its targets as they are.`,
+    });
+  }
+  return errors;
 }
 
 /**
@@ -240,34 +323,25 @@ export async function refuseTargetSwitchesOverValues(args: {
   db: unknown;
   dialect: SupportedDialect;
   desired: DesiredSchema;
+  /** The tables as they stand, for each column's nullability before the apply. */
+  live?: NextlySchemaSnapshot;
   /** The apply's operations: its guards, and its renames, which say where each column is now. */
   operations: readonly Operation[];
 }): Promise<void> {
   const renames = renamesOf(args.operations);
   const errors: RefusalError[] = [];
+  const notNull = notNullAfter(args.live, args.operations);
   for (const op of args.operations) {
     if (op.type !== "change_column_type" || op.conversion !== "requireEmpty") {
       continue;
     }
     const live = liveNames(renames, op.tableName, op.columnName);
-    const [row] = await querySqlRows<{ n: number | string }>(
-      args.db,
-      args.dialect,
-      rowsWhere(args.dialect, live.table, live.column, HOLDS_A_VALUE)
+    errors.push(
+      ...(await targetSwitchRefusals(args, op, {
+        ...live,
+        notNull: refusesNull(notNull, op, live),
+      }))
     );
-    const rows = Number(row?.n ?? 0);
-    if (rows === 0) continue;
-    const { label, field } = subjectOf(
-      args.desired,
-      op.tableName,
-      op.columnName
-    );
-    const those = rows === 1 ? "that row" : "those rows";
-    errors.push({
-      path: `fields.${field}`,
-      code: "RELATIONSHIP_TARGETS_HOLD_VALUES",
-      message: `${label}: field '${field}' cannot change how its related entries are stored (between one target collection and several, or one entry and many across several) while ${rowsHold(rows)} a value. Clear the field on ${those} first, or keep its targets as they are.`,
-    });
   }
   if (errors.length === 0) return;
   throw NextlyError.validation({

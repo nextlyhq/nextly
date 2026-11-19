@@ -24,6 +24,7 @@ import {
   assertBuilderFieldNames,
   assertValidFieldsPayload,
   assertValidPluginFieldOptions,
+  readRequestedLifecycle,
 } from "../../api/fields-payload";
 import {
   respondAction,
@@ -51,6 +52,7 @@ import type {
   BuilderSaveSetup,
   writeCollectionSave,
 } from "../../domains/schema/builder-save/collection-save";
+import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
@@ -64,7 +66,9 @@ import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-t
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
+  fieldsAsStored,
   recordedFieldsOf,
+  refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -84,6 +88,7 @@ import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlis
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
+import { afterEnclosingCommit } from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -94,6 +99,11 @@ import {
   readAuthenticatedUser,
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
+import {
+  NOTHING_TO_REVIEW,
+  reviewOf,
+  type BuilderSaveReview,
+} from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { refuseChangeDefinedInCode } from "../helpers/defined-in-code";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
@@ -104,6 +114,7 @@ import {
   getLoggerFromDI,
   getSchemaRegistryFromDI,
 } from "../helpers/di";
+import { entryWithStored } from "../helpers/entry-with-stored";
 import { readRequestLocalized } from "../helpers/request-localized";
 import {
   paginatedResponseToMeta,
@@ -113,6 +124,8 @@ import {
 import {
   isTruthyParam,
   parseCountParam,
+  parseFallbackParam,
+  parseTranslationsParam,
   parseRichTextFormat,
   parseRichTextStyles,
   parseSelectParam,
@@ -132,6 +145,7 @@ import type { MethodHandler, Params } from "../types";
 
 import { respondAddressCheck } from "./address-check-route";
 import { readListOwner, slugListsForOwner } from "./list-owner";
+import { PublishPartsBody } from "./publish-parts-body";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
 // all three entity kinds, so a stale UI save is rejected before any DDL runs.
@@ -246,22 +260,6 @@ function allLocalesLifecycle(
 }
 
 /**
- * The body of a publish or unpublish of an entry's chosen parts: the languages, or `"all"`, whether
- * the shared part is chosen too, and whether to only say what it would do. The version fields
- * (`_rev`, `_overwrite`) are read beside it, as for every lifecycle move.
- */
-const PublishPartsBody = z
-  .object({
-    locales: z.union([
-      z.literal("all"),
-      z.array(z.string().min(1).max(64)).max(500),
-    ]),
-    shared: z.boolean().optional(),
-    describe: z.boolean().optional(),
-  })
-  .passthrough();
-
-/**
  * Publishing or unpublishing the parts of one entry the body chooses (@experimental). Forwarded as
  * the every-language moves forward theirs: the caller's identity and scope, `routeAuthorized`
  * false, and the version the move was made from.
@@ -291,6 +289,9 @@ function partsLifecycle(
           routeAuthorized: false,
           authenticatedScope: readAuthenticatedScope(),
           data: versionInputOf(body),
+          ...(parts.withoutReview === undefined
+            ? {}
+            : { withoutReview: parts.withoutReview }),
         },
         {
           direction,
@@ -336,6 +337,28 @@ function parseTogetherParam(value: string | undefined): string[] {
     if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
     throw error;
   }
+}
+
+/**
+ * A collection update as it is written: the fields it sends (a settings save sends them as the
+ * editor read them) with each earlier-shaped relationship back in its stored shape, as the schema
+ * apply writes them (`fieldsAsStored`). An update without a field list, or for a collection the
+ * registry does not hold, is passed on as sent, for the service to judge.
+ */
+async function withFieldsAsStored(
+  collectionName: string,
+  body: object
+): Promise<object> {
+  const sent = (body as { fields?: unknown }).fields;
+  if (!Array.isArray(sent)) return body;
+  const collection =
+    await getCollectionRegistryFromDI()?.getCollectionBySlug(collectionName);
+  if (!collection) return body;
+  // A collection's stored built-in fields stay: the admin never sends them (`keepBuiltIns`).
+  return {
+    ...body,
+    fields: fieldsAsStored(sent, collection, [], { keepBuiltIns: true }),
+  };
 }
 
 /**
@@ -434,6 +457,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized document resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // `?part=shared` discards the shared part's pending change alone.
+        shared: p.part === "shared",
         // The version the change was read at, from the query: a DELETE
         // carries no body to read it from.
         version: versionInputOfQuery(p),
@@ -683,7 +708,12 @@ const COLLECTIONS_METHODS: Record<
       const [marked] = await withRemovedFromCodeMarks("collection", [
         collectionWithViews as unknown as Record<string, unknown>,
       ]);
-      return respondDoc(marked as unknown);
+      // As the Builder's editor reads it: a relationship the earlier Builder stored gets the
+      // target and the Unique mark the editor reads (`withEditorRelationshipShape`).
+      const { withEditorRelationshipShape } = await import(
+        "../../domains/schema/services/editor-relationship-fields"
+      );
+      return respondDoc(withEditorRelationshipShape(marked) as unknown);
     },
   },
   updateCollection: {
@@ -698,7 +728,7 @@ const COLLECTIONS_METHODS: Record<
       }
       const result = await svc.updateCollection(
         { collectionName: p.collectionName },
-        body
+        await withFieldsAsStored(p.collectionName, body)
       );
       const collection = unwrapServiceResult(result, {
         slug: p.collectionName,
@@ -775,16 +805,24 @@ const COLLECTIONS_METHODS: Record<
       const collection = await registry.getCollectionBySlug(p.collectionName);
       if (!collection) throw new Error("Collection not found");
       refuseChangeDefinedInCode(collection, "collection", p.collectionName);
-      const { fields } = body as { fields: unknown[] };
-      if (!fields) throw new Error("fields is required in request body");
+      const { fields: sentFields } = body as { fields: unknown[] };
+      if (!sentFields) throw new Error("fields is required in request body");
       const previewLocalized = readRequestLocalized(body);
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       // A field name the collection already holds keeps working whatever its case.
-      assertValidFieldsPayload(fields, {
+      assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: collection.fields ?? [],
+        // The lifecycle as stored, or as the Builder's pending settings will set it.
+        lifecycleEnabled:
+          collection.status === true || readRequestedLifecycle(body) === true,
+      });
+      // Planned as the apply will write them: an earlier-shaped relationship in its stored shape.
+      // A collection's stored built-in fields stay: the admin never sends them (`keepBuiltIns`).
+      const fields = fieldsAsStored(sentFields, collection, [], {
+        keepBuiltIns: true,
       });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
@@ -860,7 +898,7 @@ const COLLECTIONS_METHODS: Record<
       // show before they confirm: each conversion, fill and delete. The
       // answers are optional here, so the review can ask again once chosen.
       const answers = body as SchemaChangeAnswers;
-      const notices = await reviewLinesOf({
+      const review = await reviewLinesOf({
         slug: p.collectionName,
         collection: writerRowOf(collection),
         fields: fields as FieldDefinition[],
@@ -878,7 +916,7 @@ const COLLECTIONS_METHODS: Record<
             : { acknowledgedConversions: answers.acknowledgedConversions }),
         },
       });
-      return respondData({ ...preview, notices });
+      return respondData({ ...preview, ...review });
     },
   },
   // Apply confirmed schema changes via the in-process schema service.
@@ -900,7 +938,7 @@ const COLLECTIONS_METHODS: Record<
         throw new Error("Collection registry not initialized");
       }
       const {
-        fields,
+        fields: sentFields,
         confirmed,
         schemaVersion,
         resolutions,
@@ -940,11 +978,14 @@ const COLLECTIONS_METHODS: Record<
       if (!confirmed) {
         throw new Error("Schema changes must be confirmed");
       }
-      if (!fields) throw new Error("fields is required in request body");
+      if (!sentFields) throw new Error("fields is required in request body");
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, {
+      // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
+      // before the lock is taken.
+      const requestedLifecycle = readRequestedLifecycle(body);
+      assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
       });
@@ -972,6 +1013,11 @@ const COLLECTIONS_METHODS: Record<
           // the console.
           logger: getLoggerFromDI() ?? consoleLogger,
           label: `apply schema changes to collection "${p.collectionName}"`,
+          // The apply writes a migration where a writer is registered: its folder is held first.
+          migrationsDir: container.has("builderSaveSetup")
+            ? container.get<{ migrationsDir: string }>("builderSaveSetup")
+                .migrationsDir
+            : undefined,
           // This road runs the push pipeline, so it issues DDL and may create the lock table.
           issuesDdl: true,
         },
@@ -983,9 +1029,25 @@ const COLLECTIONS_METHODS: Record<
           );
           if (!collection) throw new Error("Collection not found");
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
+          // An earlier-shaped relationship the editor read is written back in its stored shape,
+          // through a rename the save makes, against the row this save is checked and written
+          // against.
+          // A collection's stored built-in fields stay: the admin never sends them (`keepBuiltIns`).
+          const fields = fieldsAsStored(
+            sentFields,
+            collection,
+            renameResolutions,
+            { keepBuiltIns: true }
+          );
           // A field name the collection already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the row as stored now.
-          assertBuilderFieldNames(fields, collection.fields ?? []);
+          // A new field may not take a name the lifecycle declares itself, on now or once the
+          // pending settings land.
+          assertBuilderFieldNames(fields, collection.fields ?? [], {
+            surface: "collection",
+            lifecycleEnabled:
+              collection.status === true || requestedLifecycle === true,
+          });
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write; one the entity already holds keeps working. Asked here because this
           // road reaches its DDL through no shared service that could ask it.
@@ -1059,6 +1121,17 @@ const COLLECTIONS_METHODS: Record<
             },
             { collection: p.collectionName }
           );
+          // A column made unique over entries that already repeat a value is refused before
+          // anything runs, on either road below: the save writer runs no push that would ask it.
+          await refuseUniqueOverRepeats({
+            adapter,
+            tableName,
+            oldFields: collection.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+            renames: renameResolutions,
+          });
 
           // One apply of the schema pipeline, with the admin's answers from the dialog, then the
           // companion brought in step: the same path a Builder save of the collection takes. Legacy
@@ -1086,11 +1159,54 @@ const COLLECTIONS_METHODS: Record<
               : undefined,
           };
           let pushedSummary: PushSummary | undefined;
-          const push = async (): Promise<void> => {
-            pushedSummary = (await applyCollectionSchemaChange(change)).summary;
+          // A push that fails after changing the database keeps its files, recorded applied
+          // nowhere, and the failure tells the admin so (`partWayPush`); one that fails before
+          // withdraws them.
+          const push = partWayPush(async onLanded => {
+            pushedSummary = (
+              await applyCollectionSchemaChange({ ...change, onLanded })
+            ).summary;
+          });
+          const newSchemaVersion = currentVersion + 1;
+          // The registry's row of the save: the fields as stored, the advanced schema version and
+          // the translation state this apply ran with, written with the stored version in one
+          // transaction so its count moves with the save it records (`writeRegistryRows`).
+          // `pending` is a file written but not run, outside development.
+          const writeRow = async (
+            storedFields: FieldDefinition[],
+            pending: boolean
+          ): Promise<void> => {
+            await writeRegistryRows(adapter, tx =>
+              tx.update(
+                "dynamic_collections",
+                {
+                  fields: JSON.stringify(storedFields),
+                  schema_version: newSchemaVersion,
+                  // Written but not run outside development: `nextly migrate`
+                  // applies it on deploy.
+                  ...(pending ? { migration_status: "pending" } : {}),
+                  // i18n: persist the state this apply actually ran with (mirrors
+                  // the singles apply). The DDL above already performed any
+                  // false→true transition, so leaving the stored flag behind would
+                  // make the settings write that follows read another false→true
+                  // transition and reconcile the companion a second time.
+                  localized: isLocalized,
+                  updated_at: new Date(),
+                },
+                { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+              )
+            );
+            // Written past the registry services, so the cached rows are cleared
+            // here: a read during the save may have cached the row from before it.
+            clearRegistryRowCache();
+            // And again once a file's transaction it joined commits (`afterEnclosingCommit`).
+            await afterEnclosingCommit(adapter);
           };
           const written = await saveThroughWriter({
-            appliedBy: push,
+            // Where the save runs its file, the row is written in the file's own transaction, so a
+            // failed write leaves the save as it was and is answered as the failure it is.
+            registry: storedFields => writeRow(storedFields, false),
+            appliedBy: push.appliedBy,
             // Whether the push applies the change in development, the writer recording its
             // migration once the push has run: a translated collection, or one turning
             // translation on or off, whose push carries its values across the change; and a change
@@ -1124,6 +1240,9 @@ const COLLECTIONS_METHODS: Record<
                 : { acknowledgedConversions }),
             },
           });
+          // Thrown before the registry row is written: the row keeps the fields the database
+          // held before, as the kept files record the change still to finish.
+          push.throwIfFailed(written?.files ?? []);
           const storedFields =
             written === undefined
               ? (fields as unknown as FieldDefinition[])
@@ -1151,36 +1270,15 @@ const COLLECTIONS_METHODS: Record<
           // never changes and a second stale save would pass the guard. The
           // write is non-fatal (the DDL already succeeded), but track whether it
           // landed so the response never reports a version the DB did not persist.
-          const newSchemaVersion = currentVersion + 1;
           let versionPersisted = true;
           try {
-            // The row and the stored schema version in one transaction, so the
-            // version's count moves with the save it records (`writeRegistryRows`).
-            await writeRegistryRows(adapter, tx =>
-              tx.update(
-                "dynamic_collections",
-                {
-                  fields: JSON.stringify(storedFields),
-                  schema_version: newSchemaVersion,
-                  // Written but not run outside development: `nextly migrate`
-                  // applies it on deploy.
-                  ...(written !== undefined && !written.applied
-                    ? { migration_status: "pending" }
-                    : {}),
-                  // i18n: persist the state this apply actually ran with (mirrors
-                  // the singles apply). The DDL above already performed any
-                  // false→true transition, so leaving the stored flag behind would
-                  // make the settings write that follows read another false→true
-                  // transition and reconcile the companion a second time.
-                  localized: isLocalized,
-                  updated_at: new Date(),
-                },
-                { and: [{ column: "slug", op: "=", value: p.collectionName }] }
-              )
-            );
-            // Written past the registry services, so the cached rows are cleared
-            // here: a read during the save may have cached the row from before it.
-            clearRegistryRowCache();
+            // Written already, in the file's transaction, where the save ran its file.
+            if (written?.registryWritten !== true) {
+              await writeRow(
+                storedFields,
+                written !== undefined && !written.applied
+              );
+            }
           } catch (err) {
             versionPersisted = false;
             const msg = err instanceof Error ? err.message : String(err);
@@ -1319,6 +1417,20 @@ const COLLECTIONS_METHODS: Record<
     // translate to canonical PaginationMeta via paginatedResponseToMeta.
     execute: async (svc, p, _body, request) => {
       requireParam(p, "collectionName");
+      // Whole-document fallback answers for one document in the first
+      // language it is published in; a list has no one such language, so it
+      // is refused rather than read without it.
+      if (parseFallbackParam(p.fallback)) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "fallback",
+              code: "INVALID_VALUE",
+              message: "fallback=document applies to a read of one document.",
+            },
+          ],
+        });
+      }
 
       // Build sort parameter from sortBy and sortOrder.
       // Frontend sends: sortBy=createdAt&sortOrder=desc
@@ -1375,6 +1487,10 @@ const COLLECTIONS_METHODS: Record<
         fallbackLocale: p["fallback-locale"],
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?source-locales=1` attaches `_sources`, each translatable value's language.
+        sourceLocales: isTruthyParam(p["source-locales"]),
+        // `?translations=all` attaches every language's values (`_allLocales`).
+        translations: parseTranslationsParam(p.translations),
         // `?count=capped` counts the total no further than the list shows.
         countUpTo: parseCountParam(p.count),
       });
@@ -1482,8 +1598,9 @@ const COLLECTIONS_METHODS: Record<
       // path where a missing user matters most: without it the gate falls
       // through to the permission-less default on a direct read.
       const user = readAuthenticatedUser();
-
-      const result = await svc.getEntry({
+      // Who reads, which entry, and in which language and view: shared by the
+      // entry's read and, with `?stored=1`, its stored read.
+      const scope = {
         // The request this operation's hooks are told about.
         request,
         collectionName: p.collectionName,
@@ -1494,12 +1611,6 @@ const COLLECTIONS_METHODS: Record<
         // permissions of the user that owns it, matching listEntries, countEntries
         // and the publish gate.
         authenticatedScope: readAuthenticatedScope(),
-        depth:
-          p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
-        select: parseSelectParam(p.select),
-        richTextFormat: parseRichTextFormat(p.richTextFormat),
-        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
-        richTextStyles: parseRichTextStyles(p.richTextStyles),
         status,
         // `?draft=true` overlays the pending working draft in place of the live
         // row (draft/published split), matching Payload's read-side `draft`
@@ -1510,14 +1621,45 @@ const COLLECTIONS_METHODS: Record<
         // disables fallback. Non-localized collections ignore both.
         locale: p.locale,
         fallbackLocale: p["fallback-locale"],
+        // `?fallback=document`: answer in the first published language of the
+        // chain where the entry is not published in the requested one.
+        wholeDocumentFallback: parseFallbackParam(p.fallback),
+      };
+      const read = async (params: Parameters<typeof svc.getEntry>[0]) =>
+        unwrapServiceResult(await svc.getEntry(params), {
+          collectionName: p.collectionName,
+          entryId: p.entryId,
+        });
+
+      const entry = read({
+        ...scope,
+        depth:
+          p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
+        select: parseSelectParam(p.select),
+        richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?source-locales=1` attaches `_sources`, each translatable value's language.
+        sourceLocales: isTruthyParam(p["source-locales"]),
+        // `?translations=all` attaches every language's values (`_allLocales`).
+        translations: parseTranslationsParam(p.translations),
+        // `?details=1` attaches `_details` (address, who made and changed it),
+        // only for a signed-in admin user: anyone else gets the plain entry.
+        details:
+          isTruthyParam(p.details) && readAuthenticatedActor()?.type === "user",
       });
-      const entry = unwrapServiceResult(result, {
-        collectionName: p.collectionName,
-        entryId: p.entryId,
-      });
-      return respondDoc(entry);
+      if (!isTruthyParam(p.stored)) return respondDoc(await entry);
+      // `?stored=1` attaches `_stored`: the entry as a depth-0 read in the
+      // same language and view gives it, every link as stored, read beside
+      // the entry's own read as the same caller. Either failing fails both.
+      return respondDoc(
+        await entryWithStored(
+          entry as Promise<object>,
+          read({ ...scope, depth: 0 })
+        )
+      );
     },
   },
   updateEntry: {
@@ -1932,15 +2074,30 @@ async function writerSaveOf(change: WriterChange): Promise<
 async function saveThroughWriter(
   change: WriterChange & {
     /** Applies the change in development instead of the file (`writeCollectionSave`). */
-    appliedBy?: () => Promise<void>;
+    appliedBy?: () => Promise<void | "partly-applied">;
     /**
      * Whether `appliedBy` applies this change rather than the file. Asked only where the
      * answer is used, a save the writer runs in development, so a production save or one with
      * no writer reads nothing for it. Absent, `appliedBy` applies whenever it is given.
      */
     pushWhen?: () => Promise<boolean>;
+    /**
+     * The caller's registry write for the save, given the fields as stored. Where the writer runs
+     * the save's file in development, it runs inside the last file's transaction, after its ledger
+     * row, so a failed write leaves the save as it was (`inLastTransaction`); elsewhere the caller
+     * writes it once this returns.
+     */
+    registry?: (fields: FieldDefinition[]) => Promise<void>;
   }
-): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
+): Promise<
+  | {
+      fields: FieldDefinition[];
+      applied: boolean;
+      files: readonly string[];
+      registryWritten: boolean;
+    }
+  | undefined
+> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return undefined;
   const viaPush =
@@ -1952,28 +2109,37 @@ async function saveThroughWriter(
   const { writeCollectionSave } = await import(
     "../../domains/schema/builder-save/collection-save"
   );
+  const registry = change.registry;
+  const inFile = prepared.deps.applies && !viaPush && registry !== undefined;
   const result = await writeCollectionSave(
     prepared.deps,
     prepared.save,
     viaPush && change.appliedBy !== undefined
       ? { appliedBy: change.appliedBy }
-      : {}
+      : inFile
+        ? { inLastTransaction: () => registry(prepared.fields) }
+        : {}
   );
-  return { fields: prepared.fields, applied: result.applied };
+  return {
+    fields: prepared.fields,
+    applied: result.applied,
+    files: result.files,
+    registryWritten: inFile,
+  };
 }
 
 /**
- * The lines the review shows for a field change through the writer: each
+ * What the review shows for a field change through the writer: each
  * conversion an adoption makes, each fill and each delete
  * (`previewCollectionSave`). None without a writer.
  */
-async function reviewLinesOf(change: WriterChange): Promise<string[]> {
+async function reviewLinesOf(change: WriterChange): Promise<BuilderSaveReview> {
   const prepared = await writerSaveOf(change);
-  if (prepared === undefined) return [];
+  if (prepared === undefined) return NOTHING_TO_REVIEW;
   const { previewCollectionSave } = await import(
     "../../domains/schema/builder-save/collection-save"
   );
-  return (await previewCollectionSave(prepared.deps, prepared.save)).notices;
+  return reviewOf(await previewCollectionSave(prepared.deps, prepared.save));
 }
 
 /** What a push reports of the change it applied. */

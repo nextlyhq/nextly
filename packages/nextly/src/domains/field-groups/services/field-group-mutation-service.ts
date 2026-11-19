@@ -42,6 +42,7 @@ import {
   coerceDateFieldsToDate,
   normalizeRelationshipFields,
 } from "../../../shared/lib/field-transform";
+import { fieldWriteCaller } from "../../../shared/lib/field-write-caller";
 import { toJsonColumnValue } from "../../../shared/lib/json-column-value";
 import {
   carryStoredPasswords,
@@ -470,14 +471,34 @@ function instancesWrittenBy(
 export function instanceWriteOf(
   host: EntryWriteContext,
   /** The instance's own field names: the reads that would mistake the host's. */
-  ownFields: ReadonlySet<string>
+  ownFields: ReadonlySet<string>,
+  /**
+   * Who the instance's write is made as: the access the entry's write hands
+   * its field-group save, so a validator inside the instance is told the
+   * caller the entry's own fields are, from the same grants.
+   */
+  access?: FieldGroupWriteAccess
 ): EntryWriteContext {
   return {
     ...host,
+    ...(access === undefined ? {} : { caller: fieldWriteCaller(access) }),
+    inFieldGroup: true,
     readStored: (allowedType, target) =>
       ownFields.has(topLevelName(target.field)) && readsTheHost(host, target)
         ? Promise.resolve({ kind: "absent" as const })
         : host.readStored(allowedType, target),
+    // The same rule for each entry read: the host's own entry is left out of
+    // the read, so its answer holds nothing for it, and every other entry is
+    // the host's own read.
+    readStoredOf: (allowedType, target) =>
+      host.readStoredOf(
+        allowedType,
+        ownFields.has(topLevelName(target.field)) &&
+          host.kind === "collection" &&
+          target.collection === host.slug
+          ? { ...target, ids: target.ids.filter(id => id !== host.id) }
+          : target
+      ),
   };
 }
 
@@ -785,7 +806,7 @@ export class FieldGroupMutationService extends BaseService {
   private async writeFieldGroupsPooled(
     params: Omit<SaveComponentDataParams, "access">
   ): Promise<void> {
-    const { parentId, parentTable, fields, data, locale, req } = params;
+    const { parentId, parentTable, fields, data, locale, req, write } = params;
     const { assembledFromStorage } = params;
     await this.eachFieldGroupWrite(fields, data, {
       clear: async f => {
@@ -801,6 +822,7 @@ export class FieldGroupMutationService extends BaseService {
             data: fieldData,
             locale,
             req,
+            write,
             assembledFromStorage,
           });
         } else if (f.component) {
@@ -813,6 +835,7 @@ export class FieldGroupMutationService extends BaseService {
               data: fieldData,
               locale,
               req,
+              write,
               assembledFromStorage,
             });
           } else {
@@ -824,6 +847,7 @@ export class FieldGroupMutationService extends BaseService {
               data: fieldData as ComponentInstanceData,
               locale,
               req,
+              write,
               assembledFromStorage,
             });
           }
@@ -1129,6 +1153,8 @@ export class FieldGroupMutationService extends BaseService {
     data: ComponentInstanceData;
     locale?: string;
     req?: Record<string, unknown>;
+    /** See {@link SaveComponentDataParams.write}. */
+    write?: EntryWriteContext;
     /** See {@link SaveComponentDataParams.assembledFromStorage}. */
     assembledFromStorage?: boolean;
   }): Promise<void> {
@@ -1167,7 +1193,9 @@ export class FieldGroupMutationService extends BaseService {
         componentMeta.slug,
         // The row this field's single instance is, whatever id is sent.
         existing[0]?.id,
-        undefined,
+        // The host write, seen through `instanceWriteOf`, as the write in a
+        // transaction hands it: a validator judging by it is not left blind.
+        params.write,
         assembledFromStorage
       );
 
@@ -1231,7 +1259,7 @@ export class FieldGroupMutationService extends BaseService {
       // The field groups placed directly in it, as rows whose parent is this one.
       await this.writeNestedPooled(
         { id: instanceId, tableName, fields: componentFields, data },
-        { locale, req, assembledFromStorage }
+        { locale, req, write: params.write, assembledFromStorage }
       );
     } catch (error) {
       // Rethrow already-mapped NextlyErrors (and ServiceError shims, which
@@ -1387,6 +1415,8 @@ export class FieldGroupMutationService extends BaseService {
     data: unknown;
     locale?: string;
     req?: Record<string, unknown>;
+    /** See {@link SaveComponentDataParams.write}. */
+    write?: EntryWriteContext;
     /** See {@link SaveComponentDataParams.assembledFromStorage}. */
     assembledFromStorage?: boolean;
   }): Promise<void> {
@@ -1441,7 +1471,9 @@ export class FieldGroupMutationService extends BaseService {
           componentMeta.slug,
           // The stored row an existing instance is, for its stored passwords.
           instanceId && existingMap.has(instanceId) ? instanceId : undefined,
-          undefined,
+          // The host write, seen through `instanceWriteOf`, as the write in a
+          // transaction hands it: a validator judging by it is not left blind.
+          params.write,
           assembledFromStorage
         );
 
@@ -1472,7 +1504,7 @@ export class FieldGroupMutationService extends BaseService {
         });
         await this.writeNestedPooled(
           { ...written, fields: componentFields, data: instance },
-          { locale, req, assembledFromStorage }
+          { locale, req, write: params.write, assembledFromStorage }
         );
       }
 
@@ -1664,6 +1696,8 @@ export class FieldGroupMutationService extends BaseService {
     data: unknown;
     locale?: string;
     req?: Record<string, unknown>;
+    /** See {@link SaveComponentDataParams.write}. */
+    write?: EntryWriteContext;
     /** See {@link SaveComponentDataParams.assembledFromStorage}. */
     assembledFromStorage?: boolean;
   }): Promise<void> {
@@ -1760,6 +1794,8 @@ export class FieldGroupMutationService extends BaseService {
         }
 
         const prepared = await this.prepareZoneBlock({
+          // The host write, as the write in a transaction hands it.
+          write: params.write,
           instance,
           componentType,
           metaCache,
@@ -1795,7 +1831,7 @@ export class FieldGroupMutationService extends BaseService {
         });
         await this.writeNestedPooled(
           { ...written, fields: componentFields, data: instance },
-          { locale, req, assembledFromStorage }
+          { locale, req, write: params.write, assembledFromStorage }
         );
       }
 
@@ -2353,7 +2389,8 @@ export class FieldGroupMutationService extends BaseService {
                   componentFields.flatMap(field =>
                     typeof field.name === "string" ? [field.name] : []
                   )
-                )
+                ),
+                writeScope.getStore()?.access
               ),
             }),
       }

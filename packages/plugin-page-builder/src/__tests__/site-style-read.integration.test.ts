@@ -185,7 +185,7 @@ describe.each(getConfiguredTestDialects())(
       expect(answer.body.classes).toEqual(CLASSES);
     });
 
-    it("answers the four stored sections, the spacing model and the version, and nothing else", async () => {
+    it("answers the four stored sections and the version, and nothing else", async () => {
       const t = await boot();
       const author = await holding(t, "read-pages", "update-pages");
       const answer = await read(author);
@@ -195,7 +195,6 @@ describe.each(getConfiguredTestDialects())(
         "breakpoints",
         "classes",
         "fonts",
-        "spacingMode",
         "tokens",
       ]);
       // A section the Single does not hold reads as empty, not as missing.
@@ -220,6 +219,15 @@ describe.each(getConfiguredTestDialects())(
     it("lets a role holding Design's read permission read it", async () => {
       const t = await boot();
       const designer = await holding(t, "read-site-style");
+      const answer = await read(designer);
+      expect(answer.status).toBe(200);
+      expect(answer.body.tokens).toEqual(TOKENS);
+    });
+
+    it("lets a role that may change Design, without its read, read it", async () => {
+      const t = await boot();
+      // What the admin's Fonts page asks of whoever opens it.
+      const designer = await holding(t, "update-site-style");
       const answer = await read(designer);
       expect(answer.status).toBe(200);
       expect(answer.body.tokens).toEqual(TOKENS);

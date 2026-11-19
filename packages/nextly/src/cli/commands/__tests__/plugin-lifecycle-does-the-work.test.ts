@@ -18,6 +18,7 @@ import { describe, expect, it, vi, beforeAll } from "vitest";
 import type { PluginLifecycleRecord } from "../../../domains/schema/ownership/plugin-lifecycle-state";
 import {
   previewPluginInstall,
+  previewPluginInstallAll,
   runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
@@ -212,6 +213,210 @@ describe("plugins install over a pending module that deletes data", () => {
     });
     expect(askToDelete).toHaveBeenCalledTimes(1);
     expect(reached).toEqual([]);
+  });
+});
+
+describe("an install of every plugin over pending modules that delete data", () => {
+  const second: LifecyclePlugin = { ...plugin, name: "@acme/gx" };
+  /** Each plugin's pending module, removing rows of its own table. */
+  const pruningEach = () =>
+    vi.fn(async (asked: LifecyclePlugin) => {
+      const prefix = asked.name === second.name ? "gx" : "fx";
+      return [
+        {
+          label: `plugin:${asked.name}/0002_prune`,
+          text: `DELETE FROM ${prefix}__notes`,
+          deletions: [{ kind: "rows" as const, table: `${prefix}__notes` }],
+        },
+      ];
+    });
+  const everyInstall = (over: Partial<PluginLifecycleDeps> = {}) =>
+    deps({
+      plugins: [plugin, second],
+      installDeletions: pruningEach(),
+      interactive: false,
+      // Both recorded installed, so neither waits on a dependency.
+      readLifecycle: vi.fn(
+        async () =>
+          new Map([
+            ["@acme/core", { state: "installed" as const }],
+            [plugin.name, { state: "installed" as const }],
+            [second.name, { state: "installed" as const }],
+          ])
+      ),
+      ...over,
+    });
+
+  it("refuses before installing any, naming every plugin's module and deletion and the one consent", async () => {
+    const d = everyInstall();
+    await expect(
+      // Consent for the first plugin's deletion alone: the first is not
+      // installed while the second's is left out.
+      runPluginInstallAllCommand(d, {
+        consent: resolveDataLossConsent({ flag: "fx__notes", env: {} }),
+      })
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringMatching(
+        /plugin:@acme\/gx\/0002_prune[\s\S]*gx__notes[\s\S]*--accept-data-loss=fx__notes,gx__notes/
+      ),
+    });
+    expect(d.applyMigrations).not.toHaveBeenCalled();
+
+    const none = everyInstall();
+    await expect(runPluginInstallAllCommand(none)).rejects.toMatchObject({
+      publicMessage: expect.stringMatching(
+        /plugin:@acme\/fx\/0002_prune[\s\S]*plugin:@acme\/gx\/0002_prune[\s\S]*--accept-data-loss=fx__notes,gx__notes/
+      ),
+    });
+    expect(none.applyMigrations).not.toHaveBeenCalled();
+  });
+
+  it("asks the person at the terminal once for every plugin, and installs each with what was agreed", async () => {
+    const askToDelete = vi.fn(async () => true);
+    const d = everyInstall({ interactive: true, askToDelete });
+    await runPluginInstallAllCommand(d);
+    expect(askToDelete).toHaveBeenCalledTimes(1);
+    expect(d.applyMigrations).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses a deletion that appears after the question, under the plugin's lock, rather than asking again", async () => {
+    const askToDelete = vi.fn(async () => true);
+    const installDeletions = pruningEach();
+    const d = everyInstall({
+      interactive: true,
+      askToDelete,
+      installDeletions,
+    });
+    // Once the first plugin is installed, the second's module reads as
+    // deleting from another table too.
+    (d.applyMigrations as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => {
+        installDeletions.mockImplementation(async asked => [
+          {
+            label: `plugin:${asked.name}/0002_prune`,
+            text: "DELETE FROM gx__notes",
+            deletions: [
+              { kind: "rows" as const, table: "gx__notes" },
+              { kind: "rows" as const, table: "gx__replies" },
+            ],
+          },
+        ]);
+      }
+    );
+    await expect(runPluginInstallAllCommand(d)).rejects.toMatchObject({
+      publicMessage: expect.stringMatching(/gx__replies/),
+    });
+    expect(askToDelete).toHaveBeenCalledTimes(1);
+    expect(d.applyMigrations).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses before installing any, and asks nobody, when a later plugin cannot be installed", async () => {
+    // The second plugin requires one that is configured after it and not
+    // installed, so its own install would refuse it.
+    const required: LifecyclePlugin = {
+      ...plugin,
+      name: "@acme/hx",
+      declaredModules: ["0001_hx"],
+    };
+    const askToDelete = vi.fn(async () => true);
+    const d = everyInstall({
+      plugins: [plugin, { ...second, requires: [required.name] }, required],
+      interactive: true,
+      askToDelete,
+      readLifecycle: vi.fn(
+        async () => new Map([[plugin.name, { state: "installed" as const }]])
+      ),
+    });
+    await expect(runPluginInstallAllCommand(d)).rejects.toMatchObject({
+      publicMessage: expect.stringContaining(required.name),
+    });
+    expect(askToDelete).not.toHaveBeenCalled();
+    expect(d.applyMigrations).not.toHaveBeenCalled();
+  });
+
+  it("reads a plugin as installable once the plugins before it in the run are installed", async () => {
+    // The control for the refusal above: the required plugin comes first.
+    const required: LifecyclePlugin = {
+      ...plugin,
+      name: "@acme/hx",
+      declaredModules: ["0001_hx"],
+    };
+    const applied = new Set<string>();
+    const lifecycle = new Map([[plugin.name, { state: "installed" as const }]]);
+    const d = everyInstall({
+      plugins: [required, { ...second, requires: [required.name] }],
+      installDeletions: vi.fn(async () => []),
+      readAppliedModules: vi.fn(async () => applied),
+      readLifecycle: vi.fn(async () => lifecycle),
+      // Each install leaves its module applied and itself recorded.
+      applyMigrations: vi.fn(async (installed: LifecyclePlugin) => {
+        for (const module of installed.declaredModules) {
+          applied.add(`plugin:${installed.name}/${module}`);
+        }
+        lifecycle.set(installed.name, { state: "installed" as const });
+      }),
+    });
+    await runPluginInstallAllCommand(d);
+    expect(d.applyMigrations).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses before installing any when a later plugin's modules cannot be read", async () => {
+    const unreadable = new Error("the modules could not be read");
+    const installDeletions = vi.fn(async (asked: LifecyclePlugin) => {
+      if (asked.name === second.name) throw unreadable;
+      return [];
+    });
+    const d = everyInstall({ installDeletions });
+    await expect(runPluginInstallAllCommand(d)).rejects.toBe(unreadable);
+    expect(d.applyMigrations).not.toHaveBeenCalled();
+  });
+
+  it("plans no change in a dry run a later plugin's refusal ends, as the real run makes none", async () => {
+    const required: LifecyclePlugin = {
+      ...plugin,
+      name: "@acme/hx",
+      declaredModules: ["0001_hx"],
+    };
+    const disabled: LifecyclePlugin = {
+      ...plugin,
+      name: "@acme/off",
+      enabled: false,
+    };
+    const d = everyInstall({
+      plugins: [
+        disabled,
+        plugin,
+        { ...second, requires: [required.name] },
+        required,
+      ],
+      readLifecycle: vi.fn(
+        async () => new Map([[plugin.name, { state: "installed" as const }]])
+      ),
+    });
+    const plan = await previewPluginInstallAll(d);
+    expect(plan.refusals).toEqual([expect.stringContaining(required.name)]);
+    // The first plugin's module and its deletion are not listed as planned.
+    expect(plan.changes).toEqual([]);
+    expect(plan.notes).toEqual([expect.stringContaining("Skipping @acme/off")]);
+
+    // The control: with the refused plugin away, the first plugin's module is planned.
+    const planned = await previewPluginInstallAll(
+      everyInstall({ plugins: [disabled, plugin] })
+    );
+    expect(planned.refusals ?? []).toEqual([]);
+    expect(planned.changes).toContainEqual({
+      action: "run",
+      target: "plugin module plugin:@acme/fx/0002_prune",
+    });
+  });
+
+  it("names in a dry run the one consent that covers every plugin's deletions", async () => {
+    const plan = await previewPluginInstallAll(everyInstall());
+    expect(
+      (plan.notes ?? []).filter(note => note.includes("--accept-data-loss"))
+    ).toEqual([
+      expect.stringContaining("--accept-data-loss=fx__notes,gx__notes"),
+    ]);
   });
 });
 

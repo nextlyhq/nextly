@@ -14,13 +14,20 @@
  *
  * ## The header is the Design panel's
  *
- * The preview switch and the import-and-export menu belong in the Design
- * panel's own header, beside its title, and stay there whichever of its tabs
- * is open. A host that draws that header holds them with
- * {@link useVariablesHeader} and hands the result in as `header`; this view
- * then takes its preview mode from it and draws no controls of its own.
- * Without one, the view holds them itself: drawn into `headerActions` when
- * the host gives that element, else at the top of this view.
+ * The import-and-export menu belongs in the Design panel's own header,
+ * beside its title, and stays there whichever of its tabs is open. A host
+ * that draws that header holds it with {@link useVariablesHeader} and hands
+ * the result in as `header`; this view then takes its mode from it and draws
+ * no controls of its own. Without one, the view holds them itself: drawn into
+ * `headerActions` when the host gives that element, else at the top of this
+ * view.
+ *
+ * ## The mode shown is the canvas's
+ *
+ * Swatches and specimens show the values of the mode the canvas is drawn in.
+ * The panel has no light and dark switch of its own: the host that draws the
+ * canvas offers the preview (the editor's, in its top bar) and hands the mode
+ * in, so the panel and the canvas never show different modes.
  *
  * ## Edits are lifted, not saved here
  *
@@ -34,63 +41,52 @@ import {
   type NamedClass,
   type SiteToken,
   type SiteTokenSet,
-  type SpacingMode,
-  type TokenKind,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
-import {
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Input,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@nextlyhq/ui";
-import {
-  Braces,
-  Bold,
-  Hash,
-  Plus,
-  Ruler,
-  Search,
-  SquareRoundCorner,
-  Timer,
-  Type,
-} from "lucide-react";
+import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 import { createPortal } from "react-dom";
 
-import { ShowMore, withOpenRow } from "./panel-actions";
-import { useCanvasTokenModeAt } from "./prefers-dark";
-import { SpacingModeChoice } from "./spacing-mode-choice";
-import { colourHexOf, colourPairOf } from "./style-colour";
-import { lengthInPx, variableValueText } from "./style-variables";
+import { useCanvasTokenModeAt } from "./canvas/prefers-dark";
+import { ColourCleanUp, type CleanUpColours } from "./colour-cleanup";
 import {
-  addVariable,
-  labelNewVariable,
-  lengthFamilyOf,
-  variableGroups,
-  type NewVariable,
+  ColourGroupHead,
+  ColourGroupHostContext,
+  NewGroupButton,
+  useColourGroupDrop,
+  useColourGroupHost,
+} from "./colour-group-ui";
+import { colourGroups } from "./colour-groups";
+import { ColoursTabEnd, useColoursOfView } from "./colours-of-view";
+import {
+  GroupToggle,
+  OwnSearch,
+  ViewBody,
+  markOf,
+  useListedGroups,
+  useViewSearch,
+} from "./design-group-toggle";
+import { HOW_TEXT_WORKS_DOCS_HREF } from "./docs-links";
+import { FluidRangeFields } from "./fluid-popover";
+import { ShowMore, withOpenRow } from "./panel-actions";
+import { SiteTextSection } from "./site-text-panel";
+import { useOpenVariable, type OnAddTo } from "./tokens-panel-open-variable";
+import {
+  fluidRangeOf,
+  setFluidRange,
+  searchVariableGroups,
   type VariableEntry,
   type VariableGroup,
 } from "./tokens-studio";
-import { VariableEditor } from "./variable-editor";
-import { ColourPair, swatchStyle } from "./variable-swatch";
+import { ADDS, AddRows, EmptyGroup, type OnAdd } from "./variable-adds";
+import { VariableRow } from "./variable-row";
+import { useReachTogether } from "./variable-together-reads";
+import type { VariableReach, VariablesAccess } from "./variable-usage";
 import {
-  combinedReach,
-  variableCount,
-  type VariableReach,
-  type VariablesAccess,
-} from "./variable-usage";
-import {
-  CountTip,
   useVariableUsage,
-  VariableRowCount,
   type VariableUsageHere,
 } from "./variable-usage-view";
+import { VariablePreview } from "./variable-value-controls";
 import { useVariablesTransfer } from "./variables-transfer";
 
 /** A save's note to the author, and the way to read the variables again. */
@@ -107,6 +103,13 @@ export interface TokensPanelProps {
   tokens: SiteTokenSet | undefined;
   /** An edit. The host owns the site style and decides when to persist. */
   onChange: (tokens: SiteTokenSet) => void;
+  /**
+   * Draws a variable's value on the canvas while it is typed or picked,
+   * without storing it: the whole set with the value in it, or `null` once
+   * the edit ends, said before the edit's one `onChange`. Absent, a value is
+   * drawn once it is handed to `onChange`.
+   */
+  onPreview?: (tokens: SiteTokenSet | null) => void;
   /**
    * The author is still at work here: typing in a field before it commits.
    * For a host that waits for a pause before persisting, so a save is not
@@ -142,14 +145,13 @@ export interface TokensPanelProps {
    */
   notice?: TokensPanelNotice;
   /**
-   * Which mode the preview opens on.
+   * Which mode's values the swatches and specimens show, for a view that
+   * holds its header itself.
    *
    * - `true`: Dark, whatever the device prefers.
    * - `false`: Light, whatever the device prefers.
    * - omitted: the mode the canvas draws, followed live: the page's own
    *   theme marker where it states one, else the device's scheme.
-   *
-   * Either way the author can switch it afterwards.
    */
   prefersDark?: boolean;
   /** Why there are no variables to show: a read in flight, or one that failed. */
@@ -168,11 +170,6 @@ export interface TokensPanelProps {
    */
   header?: VariablesHeader;
   /**
-   * The site's spacing model, shown as "Space between blocks" above the
-   * spacing variables. Absent, the choice is not drawn.
-   */
-  spacing?: SpacingModeControl;
-  /**
    * How widely each variable is used, read through the host: a count at the
    * end of each row, and Remove refusing in place while a variable is used.
    * Absent: no counts, and Remove confirms as it always has.
@@ -187,87 +184,88 @@ export interface TokensPanelProps {
    * @experimental Settles with the Variables tab's usage.
    */
   classes?: readonly NamedClass[];
+  /**
+   * The variable groups this view lists, in this order: one Design tab's.
+   * Absent: every group.
+   */
+  groups?: readonly VariableGroup[];
+  /**
+   * A search the host keeps across several views, as the Design panel keeps
+   * one across its tabs. Given, this view lists what it matches and draws no
+   * search box of its own.
+   */
+  search?: string;
+  /** The host's search field, where focus goes once a variable is removed. */
+  searchRef?: React.RefObject<HTMLInputElement | null>;
+  /** Which groups are folded, and the way to fold one. Absent: none fold. */
+  folds?: GroupFolds;
+  /**
+   * The variables the open page and its components use, by identity, for
+   * the Colours tab's "Used on this page"; read by the host from the
+   * editor's document, so it follows unsaved edits. Absent: none.
+   */
+  usedOnPage?: ReadonlySet<string>;
+  /**
+   * Remove the colours the site made that nothing uses, each judged on its
+   * own: "Clean up unused…" under the Colours tab's filter. Absent: not
+   * offered.
+   *
+   * @experimental Settles with the Colours tab's clean-up.
+   */
+  onCleanUp?: CleanUpColours;
 }
 
-/** The site's spacing model as the Variables view offers it. */
-export interface SpacingModeControl {
-  /** The model as it is now. */
-  readonly mode: SpacingMode;
-  /** A new model. The host saves it, as it saves an edit. */
-  readonly onChange: (mode: SpacingMode) => void;
+/**
+ * Which of the Design panel's groups the author folded, by group id, and
+ * the way to fold or open one. The host keeps it, so a group stays folded
+ * for that author across reloads.
+ */
+export interface GroupFolds {
+  readonly folded: ReadonlySet<string>;
+  readonly onFold: (group: string, folded: boolean) => void;
 }
 
-/** The Design panel's header controls, and the preview mode they choose. */
+/** The Design panel's header controls, and the mode its views show. */
 export interface VariablesHeader {
   /** Which mode's values the swatches and specimens show. */
   readonly mode: TokenMode;
-  /** The preview switch and the import-and-export menu. */
+  /** The import-and-export menu. */
   readonly controls: React.JSX.Element;
   /** What an import or an export reports, and the import's preview. */
   readonly overlays: React.JSX.Element;
 }
 
 /**
- * The preview mode held by a host rather than by the header, for a host that
- * draws its canvas in the mode the author picks too, so the switch and the
- * canvas cannot disagree.
- */
-export interface VariablesPreview {
-  /**
-   * The mode the author picked, or `null` while nothing is picked and the
-   * switch shows the mode the canvas draws by itself.
-   */
-  readonly picked: TokenMode | null;
-  /** The author picked a mode on the switch. */
-  readonly onPick: (mode: TokenMode) => void;
-}
-
-/**
  * The header controls and their state, for a host that keeps them while the
- * Design panel's tabs change under them: the preview mode, the switch that
- * chooses it, and the import-and-export menu with what it reports.
+ * Design panel's tabs change under them: the mode its views show, and the
+ * import-and-export menu with what it reports.
  *
- * `prefersDark` is as {@link TokensPanelProps.prefersDark} reads it. Given
- * `preview`, the host holds the picked mode and `prefersDark` is not read;
- * without it, the header holds the mode itself.
+ * The mode is the host's `mode` where it hands one in: the mode it draws its
+ * canvas in, so the swatches show what the canvas shows. Without one,
+ * `prefersDark` as {@link TokensPanelProps.prefersDark} reads it, else the
+ * mode the canvas draws by itself.
  */
 export function useVariablesHeader({
-  onChange,
-  currentTokens,
-  readOnly,
   prefersDark,
-  preview,
-}: {
-  onChange: (tokens: SiteTokenSet) => void;
-  currentTokens: () => SiteTokenSet | undefined;
-  readOnly: boolean;
+  mode: hosted,
+  ...transferring
+}: Parameters<typeof useVariablesTransfer>[0] & {
   prefersDark?: boolean;
-  preview?: VariablesPreview;
+  mode?: TokenMode;
 }): VariablesHeader {
   /*
-   * Until a mode is picked, the one the canvas actually draws: the marker on
+   * Without a host's mode, the one the canvas actually draws: the marker on
    * the page it shows, which a site's own page may state, else the device's
    * scheme. The bare device setting would name the wrong mode on a page that
    * states its own.
    */
   const drawn = useCanvasTokenModeAt(null);
-  const [own, setOwn] = React.useState<TokenMode | null>(() =>
-    statedPreview(prefersDark)
-  );
-  const picked = preview === undefined ? own : preview.picked;
-  const mode: TokenMode = picked ?? drawn;
-  const transfer = useVariablesTransfer({ onChange, currentTokens, readOnly });
+  const mode: TokenMode = hosted ?? statedMode(prefersDark) ?? drawn;
+  // The writers, and what an export and import carry beyond the variables.
+  const transfer = useVariablesTransfer(transferring);
   return {
     mode,
-    controls: (
-      <div className="nx-vars__controls">
-        <PreviewSwitch
-          mode={mode}
-          onMode={preview === undefined ? setOwn : preview.onPick}
-        />
-        {transfer.menu}
-      </div>
-    ),
+    controls: <div className="nx-vars__controls">{transfer.menu}</div>,
     overlays: transfer.overlays,
   };
 }
@@ -277,10 +275,16 @@ const PAGE_SIZE = 50;
 
 export function TokensPanel(props: TokensPanelProps): React.JSX.Element {
   const { header } = props;
-  if (header !== undefined) {
-    return <VariablesView {...props} header={header} placed={false} />;
-  }
-  return <OwnHeader {...props} />;
+  // The editors draw what is typed through the host's preview.
+  return (
+    <VariablePreview.Provider value={props.onPreview}>
+      {header === undefined ? (
+        <OwnHeader {...props} />
+      ) : (
+        <VariablesView {...props} header={header} placed={false} />
+      )}
+    </VariablePreview.Provider>
+  );
 }
 
 /** The view holding its header itself, where no host draws one. */
@@ -309,7 +313,6 @@ function VariablesView({
   headerActions,
   header,
   placed,
-  spacing,
   ...hosted
 }: TokensPanelProps & {
   header: VariablesHeader;
@@ -317,23 +320,42 @@ function VariablesView({
   placed: boolean;
 }): React.JSX.Element {
   const { mode } = header;
-  const [query, setQuery] = React.useState("");
-  const { root, openKey, toggle, add, forget, commitFrom } = useOpenVariable({
-    tokens,
-    onChange,
-    currentTokens,
-    onAdded: () => setQuery(""),
-    onSettle,
-  });
-  const search = React.useRef<HTMLInputElement>(null);
-
-  const groups = React.useMemo(
-    () => (tokens === undefined ? [] : variableGroups(tokens, mode)),
-    [tokens, mode]
+  const { query, needle, searching, setQuery, own } = useViewSearch(
+    hosted.search
   );
-  const needle = query.trim().toLowerCase();
-  const shown = searched(groups, needle);
+  const {
+    root,
+    openKey,
+    fresh,
+    toggle,
+    add,
+    duplicate,
+    forget,
+    commitFrom,
+    focus,
+  } = useOpenVariable({ tokens, onChange, currentTokens, onSettle });
+  const ownSearch = React.useRef<HTMLInputElement>(null);
+  // Where focus goes once a variable is removed: the host's search where it
+  // keeps one, else the view's own.
+  const search = hosted.searchRef ?? ownSearch;
+
+  const groups = useListedGroups(tokens, mode, hosted.groups);
+  // A row just added stays shown while its editor is open, though the
+  // search would hide it: added where the author is, it is not lost.
+  const { shown: matched, held } = searched(groups, needle, fresh);
   const usage = useUsageOfRows(hosted, groups, issue);
+  // The Colours tab's usage filter, over what the search matched, without
+  // the built-in colours the site hides.
+  const colourFilter = useColoursOfView({
+    shown: matched,
+    groups,
+    tokens,
+    usage,
+    builtIn: identity => suppliedFor(supplied, identity) !== undefined,
+    usedOnPage: hosted.usedOnPage,
+    openKey,
+  });
+  const { shown, hidden, marksBuiltIn } = colourFilter;
 
   if (tokens === undefined) {
     return <Unread absence={absence} />;
@@ -345,49 +367,203 @@ function VariablesView({
     <div
       className="nx-vars"
       ref={root}
-      data-read-only={readOnly ? "" : undefined}
+      data-read-only={markOf(readOnly)}
       onInput={onActivity}
     >
-      {placed ? (
-        <HeaderControls slot={headerActions}>{header.controls}</HeaderControls>
-      ) : null}
-      <div className="nx-vars__search">
-        <Search aria-hidden="true" size={16} />
-        <Input
-          ref={search}
-          type="search"
-          aria-label="Search variables"
-          placeholder="Search variables"
-          value={query}
-          onChange={event => setQuery(event.target.value)}
+      <PlacedControls placed={placed} slot={headerActions} header={header} />
+      <OwnSearch ref={ownSearch} shown={own} query={query} onQuery={setQuery} />
+      <ViewBody
+        adds={
+          <HiddenGroupAdds
+            groups={groups}
+            searching={searching}
+            readOnly={readOnly}
+            folds={hosted.folds}
+            onAdd={add}
+          />
+        }
+        notes={
+          <PanelNotes
+            readOnly={readOnly}
+            issue={issue}
+            notice={hosted.notice}
+          />
+        }
+        overlays={placedOverlays(placed, header)}
+      >
+        <TypeTabHelp groups={hosted.groups} />
+        <TypeTabSiteText
+          groups={hosted.groups}
+          tokens={tokens}
+          onChange={onChange}
+          readOnly={readOnly}
+          mode={mode}
+          supplied={supplied?.siteText}
+          // The text styles a row may follow ("Heading 1 uses Display").
+          classes={hosted.classes}
         />
-      </div>
-      <div className="nx-vars__body">
-        <PanelNotes readOnly={readOnly} issue={issue} notice={hosted.notice} />
-        {placed ? header.overlays : null}
+        <TypeTabRange
+          groups={hosted.groups}
+          tokens={tokens}
+          onChange={onChange}
+          readOnly={readOnly}
+        />
+        {colourFilter.control}
+        <ColourCleanUp
+          groups={groups}
+          tokens={tokens}
+          usage={usage}
+          usedOnPage={hosted.usedOnPage}
+          builtIn={identity => suppliedFor(supplied, identity) !== undefined}
+          readOnly={readOnly}
+          onCleanUp={hosted.onCleanUp}
+        />
         <VariableGroups
           shown={shown}
-          searching={needle !== ""}
-          spacing={spacing}
+          searching={searching}
+          folds={hosted.folds}
           onAdd={add}
-          rows={{
+          rows={rowsHostOf({
             tokens,
             mode,
             readOnly,
             openKey,
-            suppliedOf: identity => suppliedFor(supplied, identity),
+            supplied,
             toggle,
             commitFrom,
+            duplicate,
             usage,
-            onRemoved: key => {
-              forget(key);
-              search.current?.focus();
-            },
-          }}
+            held,
+            fresh,
+            forget,
+            search,
+            focus,
+            hidden,
+            marksBuiltIn,
+          })}
         />
-      </div>
+        <ColoursTabEnd
+          groups={groups}
+          tokens={tokens}
+          readOnly={readOnly}
+          onChange={commitFrom(BUILT_IN_COLOURS_KEY)}
+        />
+      </ViewBody>
     </div>
   );
+}
+
+/**
+ * "How text works", first where the view lists the type scale: the docs page
+ * on how its parts fit together, in a new tab so the panel stays as it was.
+ * Drawn as "Manage fonts…" above it is, a target at least 24px tall.
+ */
+function TypeTabHelp({
+  groups,
+}: {
+  groups: readonly VariableGroup[] | undefined;
+}): React.JSX.Element | null {
+  if (groups !== undefined && !groups.includes("type")) return null;
+  return (
+    <a
+      className="nx-vars__link nx-fonts-manage"
+      href={HOW_TEXT_WORKS_DOCS_HREF}
+      target="_blank"
+      rel="noreferrer"
+    >
+      How text works
+    </a>
+  );
+}
+
+/**
+ * The site's text, first where the view lists the type scale: what every
+ * page's headings, body text, links, buttons and captions look like.
+ */
+function TypeTabSiteText({
+  groups,
+  ...section
+}: React.ComponentProps<typeof SiteTextSection> & {
+  groups: readonly VariableGroup[] | undefined;
+}): React.JSX.Element | null {
+  if (groups !== undefined && !groups.includes("type")) return null;
+  return <SiteTextSection {...section} />;
+}
+
+/**
+ * The site's fluid range, where the view lists the type scale: the Type
+ * tab, or a view of every group. Changing it remakes every size made with
+ * "Fluid…", in the same edit, so it saves and undoes as one.
+ */
+function TypeTabRange({
+  groups,
+  tokens,
+  onChange,
+  readOnly,
+}: {
+  groups: readonly VariableGroup[] | undefined;
+  tokens: SiteTokenSet;
+  onChange: (tokens: SiteTokenSet) => void;
+  readOnly: boolean;
+}): React.JSX.Element | null {
+  if (groups !== undefined && !groups.includes("type")) return null;
+  return (
+    <FluidRangeFields
+      range={fluidRangeOf(tokens)}
+      onRange={range => onChange(setFluidRange(tokens, range))}
+      readOnly={readOnly}
+    />
+  );
+}
+
+/** What an import or export reported, drawn by the view placed to draw it. */
+function placedOverlays(
+  placed: boolean,
+  header: VariablesHeader
+): React.JSX.Element | undefined {
+  return placed ? header.overlays : undefined;
+}
+
+/** The header's controls, drawn by the view that is placed to draw them. */
+function PlacedControls({
+  placed,
+  slot,
+  header,
+}: {
+  placed: boolean;
+  slot: HTMLElement | null | undefined;
+  header: VariablesHeader;
+}): React.JSX.Element | null {
+  return placed ? (
+    <HeaderControls slot={slot}>{header.controls}</HeaderControls>
+  ) : null;
+}
+
+/**
+ * What the view's rows are drawn from: the view's state, with a variable
+ * removed putting focus back on the search, the place a removed row's
+ * focus has to go.
+ */
+function rowsHostOf({
+  supplied,
+  forget,
+  search,
+  ...rows
+}: Omit<RowsHost, "suppliedOf" | "onRemoved"> & {
+  supplied: SiteTokenSet | undefined;
+  forget: (key: string) => void;
+  search: React.RefObject<HTMLInputElement | null>;
+}): RowsHost {
+  return {
+    ...rows,
+    suppliedOf: identity => suppliedFor(supplied, identity),
+    onRemoved: key => {
+      forget(key);
+      // After the removed row's editor has closed: closing hands focus back
+      // to its trigger, which went with the row, and would leave it nowhere.
+      window.setTimeout(() => search.current?.focus(), 0);
+    },
+  };
 }
 
 /** What every row of the view is drawn from, and what its editor reports to. */
@@ -404,13 +580,25 @@ interface RowsHost {
   readonly usage: VariableUsageHere | undefined;
   /** The variable whose row this is was removed. */
   readonly onRemoved: (key: string) => void;
+  /** Adds a copy of a row's variable right below it, and opens it. */
+  readonly duplicate: (entry: VariableEntry) => void;
+  /** The new row a search would hide, shown marked "New" meanwhile. */
+  readonly held: string | null;
+  /** The row just added or copied, never saved, while its editor is open. */
+  readonly fresh: string | null;
+  /** Focuses a row once it is drawn, wherever it is drawn now. */
+  readonly focus: (key: string) => void;
+  /** The built-in colours the site hides, left out with any group they empty. */
+  readonly hidden: ReadonlySet<string>;
+  /** Whether a built-in colour's row says so: while the site hides the rest. */
+  readonly marksBuiltIn: boolean;
 }
 
-/** The groups a search leaves, each under its spacing choice, or that none match. */
+/** The groups a search leaves, or that none match. */
 function VariableGroups({
   shown,
   searching,
-  spacing,
+  folds,
   onAdd,
   rows,
 }: {
@@ -420,89 +608,183 @@ function VariableGroups({
     readonly entries: readonly VariableEntry[];
   }[];
   searching: boolean;
-  spacing: SpacingModeControl | undefined;
-  onAdd: (what: NewVariable) => void;
+  folds: GroupFolds | undefined;
+  onAdd: OnAddTo;
   rows: RowsHost;
 }): React.JSX.Element {
+  const colours = useColourGroupHost(
+    rows.tokens,
+    rows.readOnly,
+    rows.commitFrom(COLOUR_GROUPS_KEY)
+  );
   if (shown.length === 0) {
     return <p className="nx-vars__note">No variables match this search.</p>;
   }
   return (
-    <>
-      {shown.map(group => (
-        <React.Fragment key={group.group}>
-          <SpacingModeAbove
-            group={group.group}
-            spacing={spacing}
-            readOnly={rows.readOnly}
-          />
-          <Group
-            group={group.group}
-            heading={group.heading}
-            entries={group.entries}
-            searching={searching}
-            readOnly={rows.readOnly}
-            openKey={rows.openKey}
-            onAdd={onAdd}
-          >
-            {(entry: VariableEntry) => (
-              <VariableRow
-                key={entry.row.key}
-                entry={entry}
-                tokens={rows.tokens}
-                mode={rows.mode}
-                suppliedOf={rows.suppliedOf}
-                readOnly={rows.readOnly}
-                open={rows.openKey === entry.row.key}
-                onOpenChange={open => rows.toggle(entry.row.key, open)}
-                onChange={rows.commitFrom(entry.row.key)}
-                usage={rows.usage}
-                onRemoved={() => rows.onRemoved(entry.row.key)}
-              />
-            )}
-          </Group>
-        </React.Fragment>
-      ))}
-    </>
+    <ColourGroupHostContext.Provider
+      value={{
+        ...colours,
+        onMoved: (row, next) => movedInto(row, next, folds, rows.focus),
+      }}
+    >
+      {shown
+        .flatMap(group =>
+          sectionsOf(
+            group,
+            rows.tokens,
+            searching,
+            colours.pending,
+            rows.hidden
+          )
+        )
+        .map(section => (
+          <React.Fragment key={section.key}>
+            <Group
+              group={section.group}
+              heading={section.heading}
+              entries={section.entries}
+              searching={searching}
+              folds={folds}
+              readOnly={rows.readOnly}
+              openKey={rows.openKey}
+              onAdd={onAdd}
+              named={section.named}
+            >
+              {(entry: VariableEntry) => (
+                <VariableRow
+                  key={entry.row.key}
+                  entry={entry}
+                  tokens={rows.tokens}
+                  mode={rows.mode}
+                  suppliedOf={rows.suppliedOf}
+                  readOnly={rows.readOnly}
+                  open={rows.openKey === entry.row.key}
+                  onOpenChange={open => rows.toggle(entry.row.key, open)}
+                  onChange={rows.commitFrom(entry.row.key)}
+                  onDuplicate={() => rows.duplicate(entry)}
+                  fresh={
+                    rows.fresh === entry.row.key
+                      ? { marked: rows.held === entry.row.key }
+                      : undefined
+                  }
+                  usage={rows.usage}
+                  reach={rowReach(entry, rows.usage)}
+                  builtIn={
+                    rows.marksBuiltIn &&
+                    rows.suppliedOf(entry.row.identity) !== undefined
+                  }
+                  onRemoved={() => rows.onRemoved(entry.row.key)}
+                />
+              )}
+            </Group>
+          </React.Fragment>
+        ))}
+    </ColourGroupHostContext.Provider>
   );
 }
 
 /**
- * Each editor's commit, settling where the author's work has already ended,
- * and a settle when the view goes away.
- *
- * Going away ends the author's work here as closing an editor does: a tab
- * change or the panel closing. An edit committed by an editor that is
- * already closed, such as a colour picker writing what it held as it
- * unmounts, comes after the settle its closing made, so it settles again
- * rather than wait for a pause the author has already ended.
+ * After a colour row moved: moved into another group it is drawn there anew,
+ * so that group is opened and the row keeps the focus.
  */
-function useCommitsSettled(
-  onChange: (tokens: SiteTokenSet) => void,
-  onSettle: (() => void) | undefined,
-  openKey: string | null
-): (key: string) => (next: SiteTokenSet) => void {
-  // The latest callback, so the effect runs only on unmount rather than on
-  // every render that hands a new one.
-  const settle = React.useRef(onSettle);
-  settle.current = onSettle;
-  // Which editor is open as of the latest render, and whether the panel is
-  // still mounted: read when an editor commits, which it may do as it goes
-  // away, after the close or the unmount has already settled.
-  const openNow = React.useRef(openKey);
-  openNow.current = openKey;
-  const mounted = React.useRef(true);
-  React.useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-      settle.current?.();
-    };
-  }, []);
-  return key => next => {
-    onChange(next);
-    if (!mounted.current || openNow.current !== key) settle.current?.();
-  };
+function movedInto(
+  row: { readonly key: string; readonly identity: string },
+  next: SiteTokenSet,
+  folds: GroupFolds | undefined,
+  focus: (key: string) => void
+): void {
+  const into = colourGroups(next).find(group =>
+    group.identities.includes(row.identity)
+  );
+  if (into !== undefined) openFold(folds, colourGroupFoldKey(into.name));
+  focus(row.key);
+}
+
+/** What the Colours tab's group changes commit under: no row's editor. */
+const COLOUR_GROUPS_KEY = "colour-groups";
+
+/** What the built-in colours setting commits under: no row's editor. */
+const BUILT_IN_COLOURS_KEY = "built-in-colours";
+
+/** One section of the list: a group, or one named group of colours. */
+interface ListSection {
+  readonly key: string;
+  readonly group: VariableGroup;
+  readonly heading: string;
+  readonly entries: readonly VariableEntry[];
+  readonly named?: { readonly name: string; readonly last: boolean };
+}
+
+/**
+ * The sections a group is listed in: the Colours group as its named groups,
+ * in the site's order, each holding its own colours; any other group whole.
+ * A search lists only the named groups it matches in.
+ */
+function sectionsOf(
+  group: {
+    readonly group: VariableGroup;
+    readonly heading: string;
+    readonly entries: readonly VariableEntry[];
+  },
+  tokens: SiteTokenSet,
+  searching: boolean,
+  /** Groups made with "+ New group" that hold no colour yet. */
+  pending: readonly string[] = [],
+  /** The built-in colours the site hides: a group of only these is left out. */
+  hidden: ReadonlySet<string> = new Set()
+): ListSection[] {
+  const whole: ListSection = { ...group, key: group.group };
+  if (group.group !== "colours" || group.entries.length === 0) return [whole];
+  const byIdentity = new Map(
+    group.entries.map(entry => [entry.row.identity, entry])
+  );
+  const named = colourGroups(tokens)
+    .map(colourGroup => ({
+      name: colourGroup.name,
+      identities: colourGroup.identities,
+      entries: colourGroup.identities.flatMap(identity => {
+        const entry = byIdentity.get(identity);
+        return entry === undefined ? [] : [entry];
+      }),
+    }))
+    .filter(colourGroup => !searching || colourGroup.entries.length > 0)
+    .filter(
+      colourGroup =>
+        colourGroup.identities.length === 0 ||
+        !colourGroup.identities.every(identity => hidden.has(identity))
+    )
+    .concat(
+      searching
+        ? []
+        : pending.map(name => ({ name, identities: [], entries: [] }))
+    );
+  return named.map((colourGroup, at) => ({
+    key: colourGroupFoldKey(colourGroup.name),
+    group: group.group,
+    heading: colourGroup.name,
+    entries: colourGroup.entries,
+    named: { name: colourGroup.name, last: at === named.length - 1 },
+  }));
+}
+
+/** What a named group with no colour in it says. */
+const NEW_GROUP_EMPTY = "Drag a colour here, or use Move to group…";
+
+/** A named group's heading with its name field and ⋯; any other as it is. */
+function ColourGroupHeadIf({
+  name,
+  children,
+}: {
+  name: string | undefined;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  if (name === undefined) return <>{children}</>;
+  return <ColourGroupHead name={name}>{children}</ColourGroupHead>;
+}
+
+/** What a named group of colours keeps its fold under. */
+function colourGroupFoldKey(name: string): string {
+  return `colour-group:${name}`;
 }
 
 /**
@@ -533,7 +815,13 @@ function useUsageOfRows(
     [groups]
   );
   const reads = useVariableUsage(access, identities);
-  const { values, counter, reread, readAgain } = reads;
+  const { values, reread, readAgain } = reads;
+  // Each row's variables, counted together where it stands for two.
+  const rows = React.useMemo(
+    () => groups.flatMap(group => group.entries.map(rowIdentities)),
+    [groups]
+  );
+  const reachTogether = useReachTogether(access, rows, values);
   // The identities as of the latest render, read when a refusal arrives
   // rather than closed over, so the effect follows the issue alone.
   const listed = React.useRef(identities);
@@ -549,12 +837,12 @@ function useUsageOfRows(
         ? undefined
         : {
             reachOf: id => values.get(id),
+            reachTogether,
             readAgain,
             access,
-            counter,
             classes,
           },
-    [access, values, readAgain, counter, classes]
+    [access, values, reachTogether, readAgain, classes]
   );
 }
 
@@ -571,31 +859,7 @@ function rowReach(
   usage: VariableUsageHere | undefined
 ): VariableReach | undefined {
   if (usage === undefined) return undefined;
-  return combinedReach(rowIdentities(entry).map(usage.reachOf));
-}
-
-/**
- * "Space between blocks", drawn above the spacing variables (the model they
- * space by), and nothing above any other group or when the host offers no
- * choice.
- */
-function SpacingModeAbove({
-  group,
-  spacing,
-  readOnly,
-}: {
-  group: VariableGroup;
-  spacing: SpacingModeControl | undefined;
-  readOnly: boolean;
-}): React.JSX.Element | null {
-  if (group !== "spacing" || spacing === undefined) return null;
-  return (
-    <SpacingModeChoice
-      mode={spacing.mode}
-      onChange={spacing.onChange}
-      readOnly={readOnly}
-    />
-  );
+  return usage.reachTogether(rowIdentities(entry));
 }
 
 /** What shows while the variables are being read, or after a read failed. */
@@ -674,214 +938,106 @@ function PanelNotes({
 }
 
 /**
- * Which variable's editor is open, what opening and closing one does, and
- * each editor's commit, which settles once the editor has closed.
- *
- * A variable added from a "+" opens straight away, and is "fresh" until its
- * editor closes: nothing can reference it yet, so its code name may still
- * follow the name it was given, which happens on close. The row is keyed by
- * that code name, so focus is put back on it once it has re-rendered.
+ * The adds of the groups hidden while they hold nothing, as a worded line at
+ * the end of the view: hidden, their own "+" would go with them, and the
+ * first variable of such a group could not be made.
  */
-function useOpenVariable({
-  tokens,
-  onChange,
-  currentTokens,
-  onAdded,
-  onSettle,
+function HiddenGroupAdds({
+  groups,
+  searching,
+  readOnly,
+  folds,
+  onAdd,
 }: {
-  tokens: SiteTokenSet | undefined;
-  onChange: (tokens: SiteTokenSet) => void;
-  currentTokens: () => SiteTokenSet | undefined;
-  onAdded: () => void;
-  /** The author is done with a variable; see `TokensPanelProps.onSettle`. */
-  onSettle: (() => void) | undefined;
-}): {
-  /** The panel's element, which rows are found in to be focused. */
-  root: React.RefObject<HTMLDivElement | null>;
-  openKey: string | null;
-  toggle: (key: string, open: boolean) => void;
-  add: (what: NewVariable) => void;
-  forget: (key: string) => void;
-  /** Each row editor's commit; see {@link useCommitsSettled}. */
-  commitFrom: (key: string) => (next: SiteTokenSet) => void;
-} {
-  const root = React.useRef<HTMLDivElement>(null);
-  const [openKey, setOpenKey] = React.useState<string | null>(null);
-  const [focusKey, setFocusKey] = React.useState<string | null>(null);
-  const fresh = React.useRef(new Set<string>());
-  // Focus a row after its key changed under it (a just-added variable named
-  // after its label) or after the editor closed onto a new row.
-  React.useEffect(() => {
-    if (focusKey === null) return;
-    const row = root.current?.querySelector<HTMLElement>(
-      `[data-variable-key="${CSS.escape(focusKey)}"]`
-    );
-    row?.focus();
-    setFocusKey(null);
-  }, [focusKey, tokens]);
-
-  const add = (what: NewVariable): void => {
-    const made = addVariable(currentTokens() ?? tokens, what);
-    const added = made.tokens.tokens[made.at];
-    if (added === undefined) return;
-    onChange(made.tokens);
-    onAdded();
-    const key = tokenIdentity(added);
-    fresh.current.add(key);
-    setOpenKey(key);
-  };
-
-  const close = (key: string): void => {
-    setOpenKey(null);
-    // Settled after the renaming below, so a just-added variable's code name
-    // is part of what is persisted with the rest of its edit.
-    if (fresh.current.delete(key)) {
-      const named = namedAfterLabel(currentTokens(), key);
-      if (named !== undefined) {
-        onChange(named.tokens);
-        setFocusKey(named.key);
-      }
-    }
-    onSettle?.();
-  };
-
-  const forget = (key: string): void => {
-    fresh.current.delete(key);
-    setOpenKey(null);
-    onSettle?.();
-  };
-
-  const toggle = (key: string, open: boolean): void => {
-    if (open) setOpenKey(key);
-    else close(key);
-  };
-
-  const commitFrom = useCommitsSettled(onChange, onSettle, openKey);
-  return { root, openKey, toggle, add, forget, commitFrom };
-}
-
-/**
- * A just-added variable given a code name made from the name the author gave
- * it, with the row key it now has; nothing when it has no name of its own or
- * the code name would not change.
- */
-function namedAfterLabel(
-  set: SiteTokenSet | undefined,
-  key: string
-): { tokens: SiteTokenSet; key: string } | undefined {
-  if (set === undefined) return undefined;
-  const at = set.tokens.findIndex(token => tokenIdentity(token) === key);
-  const token = set.tokens[at];
-  if (token?.label === undefined) return undefined;
-  const named = labelNewVariable(set, at, token.label);
-  const renamed = named.tokens[at];
-  if (renamed === undefined || renamed.name === token.name) return undefined;
-  return { tokens: named, key: tokenIdentity(renamed) };
-}
-
-/** The groups narrowed to a search; Other only when it has rows. */
-function searched<
-  G extends { group: VariableGroup; entries: readonly VariableEntry[] },
->(groups: readonly G[], needle: string): G[] {
-  if (needle === "") {
-    return groups.filter(
-      group => group.group !== "other" || group.entries.length > 0
-    );
-  }
-  return groups
-    .map(group => ({
-      ...group,
-      entries: group.entries.filter(
-        entry =>
-          entry.label.toLowerCase().includes(needle) ||
-          entry.row.name.toLowerCase().includes(needle)
-      ),
-    }))
-    .filter(group => group.entries.length > 0);
-}
-
-/**
- * The mode a host asked the preview to open on, or `null` to follow the
- * device: `false` is an explicit choice of light, not an absence.
- */
-function statedPreview(prefersDark: boolean | undefined): TokenMode | null {
-  if (prefersDark === undefined) return null;
-  return prefersDark ? "dark" : "light";
-}
-
-/**
- * The preview switch: which mode's values the swatches and specimens show,
- * and, where the host holds the mode (see {@link VariablesPreview}), the mode
- * the canvas draws the page in as well. It changes nothing that is stored, so
- * a published page is untouched; each variable's editor shows both values.
- */
-function PreviewSwitch({
-  mode,
-  onMode,
-}: {
-  mode: TokenMode;
-  onMode: (mode: TokenMode) => void;
-}): React.JSX.Element {
+  groups: readonly { group: VariableGroup; entries: readonly unknown[] }[];
+  searching: boolean;
+  readOnly: boolean;
+  folds: GroupFolds | undefined;
+  onAdd: OnAdd;
+}): React.JSX.Element | null {
+  const hidden = groups.filter(
+    group => SHOWN_WHEN_FILLED.has(group.group) && group.entries.length === 0
+  );
+  if (readOnly || searching || hidden.length === 0) return null;
   return (
-    <div className="nx-vars__preview" role="group" aria-label="Preview">
-      <span className="nx-vars__preview-label" aria-hidden="true">
-        Preview
-      </span>
-      <div className="nx-vars__seg">
-        {(["light", "dark"] as const).map(candidate => (
-          <button
-            key={candidate}
-            type="button"
-            aria-pressed={mode === candidate}
-            onClick={() => onMode(candidate)}
-          >
-            {candidate === "light" ? "Light" : "Dark"}
-          </button>
-        ))}
-      </div>
+    <div className="nx-vars__hidden-adds">
+      {hidden.map(group => (
+        <AddRows
+          key={group.group}
+          group={group.group}
+          onAdd={(what, from) => {
+            openFold(folds, group.group);
+            onAdd(what, from);
+          }}
+        />
+      ))}
     </div>
   );
 }
 
-/** What each group's "+" offers: one variable, or a short menu of kinds. */
-const ADDS: Readonly<
-  Record<
-    VariableGroup,
-    { label: string; empty: string; options: readonly [NewVariable, string][] }
-  >
-> = {
-  colours: {
-    label: "Add colour",
-    empty: "No colours yet.",
-    options: [["colour", "Colour"]],
-  },
-  type: {
-    label: "Add type size",
-    empty: "No type sizes yet.",
-    options: [["type size", "Type size"]],
-  },
-  spacing: {
-    label: "Add spacing, radius or shadow",
-    empty: "No spacing, radii or shadows yet.",
-    options: [
-      ["spacing", "Spacing"],
-      ["radius", "Radius"],
-      ["shadow", "Shadow"],
-    ],
-  },
-  other: {
-    label: "Add another variable",
-    empty: "",
-    options: [
-      ["dimension", "Size"],
-      ["fontFamily", "Font"],
-      ["fontWeight", "Font weight"],
-      ["number", "Number"],
-      ["duration", "Duration"],
-      ["custom", "Custom value"],
-    ],
-  },
-};
+/**
+ * Opens a group the author folded, for a variable about to be added to it,
+ * so its row and editor are drawn: the stored fold, which a search only
+ * sets aside and would bring back once the add clears it.
+ */
+function openFold(folds: GroupFolds | undefined, group: string): void {
+  if (folds?.folded.has(group) === true) folds.onFold(group, false);
+}
+
+/** The groups that list only what they hold, hidden while they hold none. */
+const SHOWN_WHEN_FILLED: ReadonlySet<VariableGroup> = new Set<VariableGroup>([
+  "fonts",
+  "content",
+  "other",
+]);
+
+/**
+ * The groups narrowed to a search, through the one search rule; with no
+ * search, "Fonts and weights" and "Other values" only when they have rows.
+ * The row `kept` is listed at the end of its group whatever the search, so
+ * a variable just added stays in view while its editor is open; `held` is
+ * that row when the search alone would have hidden it, so it is marked
+ * "New". One search decides both, so the row kept and the row marked never
+ * disagree.
+ */
+function searched<
+  G extends { group: VariableGroup; entries: readonly VariableEntry[] },
+>(
+  groups: readonly G[],
+  needle: string,
+  kept: string | null
+): { shown: G[]; held: string | null } {
+  if (needle === "") {
+    return {
+      shown: groups.filter(
+        group => !SHOWN_WHEN_FILLED.has(group.group) || group.entries.length > 0
+      ),
+      held: null,
+    };
+  }
+  const found = searchVariableGroups(groups, needle);
+  if (kept === null) return { shown: found, held: null };
+  let held: string | null = null;
+  const shown = groups.flatMap(group => {
+    const hit = found.find(candidate => candidate.group === group.group);
+    const keep = group.entries.find(entry => entry.row.key === kept);
+    if (keep === undefined || hit?.entries.includes(keep) === true) {
+      return hit === undefined ? [] : [hit];
+    }
+    held = kept;
+    return [{ ...group, entries: [...(hit?.entries ?? []), keep] }];
+  });
+  return { shown, held };
+}
+
+/**
+ * The mode a host asked the view to show, or `null` to follow the canvas:
+ * `false` is an explicit choice of light, not an absence.
+ */
+function statedMode(prefersDark: boolean | undefined): TokenMode | null {
+  if (prefersDark === undefined) return null;
+  return prefersDark ? "dark" : "light";
+}
 
 /** One group: its heading, its "+", and its rows, a page at a time. */
 function Group({
@@ -889,22 +1045,208 @@ function Group({
   heading,
   entries,
   searching,
+  folds,
   readOnly,
   openKey,
   onAdd,
+  named,
   children,
 }: {
   group: VariableGroup;
   heading: string;
+  /**
+   * A named group of colours within the Colours group: its name, which keys
+   * its fold, and whether it ends the list and so holds the add row.
+   */
+  named?: { readonly name: string; readonly last: boolean } | undefined;
   entries: readonly VariableEntry[];
   searching: boolean;
+  /** Present: the heading folds the group, and shows how many it holds. */
+  folds: GroupFolds | undefined;
   readOnly: boolean;
   /** The row whose editor is open, which is drawn even past the page. */
   openKey: string | null;
-  onAdd: (what: NewVariable) => void;
+  onAdd: OnAddTo;
   children: (entry: VariableEntry) => React.ReactNode;
 }): React.JSX.Element {
   const id = React.useId();
+  // A search opens every group it matches in and folds none; the folds come
+  // back as they were once it is cleared.
+  const { foldKey, folded } = foldOf(group, named, folds, searching);
+  return (
+    <section
+      className="nx-vars__group"
+      aria-labelledby={id}
+      // Which group this is, for a host bringing one into view.
+      data-group={group}
+      data-colour-group={named?.name}
+      data-folded={folded ? "" : undefined}
+    >
+      <GroupHead
+        id={id}
+        name={named?.name}
+        foldKey={foldKey}
+        heading={heading}
+        count={entries.length}
+        folds={folds}
+        folded={folded}
+        searching={searching}
+      />
+      {folded ? null : (
+        <GroupRows
+          entries={entries}
+          empty={named === undefined ? ADDS[group].empty : NEW_GROUP_EMPTY}
+          searching={searching}
+          openKey={openKey}
+        >
+          {children}
+        </GroupRows>
+      )}
+      {readOnly || folded ? null : (
+        <GroupEnd
+          group={group}
+          named={named}
+          onAdd={(what, from) => {
+            openFold(folds, foldKey);
+            onAdd(what, from, named?.name);
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+/**
+ * What a group's fold is kept under, and whether it is folded: a search
+ * opens every group it matches in and folds none, and the folds come back
+ * as they were once it is cleared.
+ */
+function foldOf(
+  group: VariableGroup,
+  named: { readonly name: string } | undefined,
+  folds: GroupFolds | undefined,
+  searching: boolean
+): { foldKey: string; folded: boolean } {
+  const foldKey = named === undefined ? group : colourGroupFoldKey(named.name);
+  return {
+    foldKey,
+    folded: folds !== undefined && !searching && folds.folded.has(foldKey),
+  };
+}
+
+/**
+ * A group's heading: its name, folding where the group folds; a named group
+ * of colours with its name field, its ⋯ and a drop for a dragged colour.
+ */
+function GroupHead({
+  id,
+  name,
+  foldKey,
+  heading,
+  count,
+  folds,
+  folded,
+  searching,
+}: {
+  id: string;
+  /** A named group of colours' name. */
+  name: string | undefined;
+  foldKey: string;
+  heading: string;
+  count: number;
+  folds: GroupFolds | undefined;
+  folded: boolean;
+  searching: boolean;
+}): React.JSX.Element {
+  // A colour dropped on a named group's heading goes to its end.
+  const dropOnHead = useColourGroupDrop(name ?? "");
+  return (
+    <div
+      className="nx-vars__group-head"
+      {...(name === undefined ? {} : dropOnHead)}
+    >
+      <ColourGroupHeadIf name={name}>
+        <h3 className="nx-vars__group-name" id={id}>
+          <GroupHeading
+            group={foldKey}
+            heading={heading}
+            count={count}
+            folds={folds}
+            folded={folded}
+            searching={searching}
+          />
+        </h3>
+      </ColourGroupHeadIf>
+    </div>
+  );
+}
+
+/**
+ * What ends an open group's list, so a new row is added where it is: its
+ * add row, and under the last named group of colours, "+ New group". A named
+ * group before the last ends with neither.
+ */
+function GroupEnd({
+  group,
+  named,
+  onAdd,
+}: {
+  group: VariableGroup;
+  named: { readonly name: string; readonly last: boolean } | undefined;
+  onAdd: OnAdd;
+}): React.JSX.Element | null {
+  if (named?.last === false) return null;
+  return (
+    <>
+      <AddRows group={group} onAdd={onAdd} />
+      {named === undefined ? null : <NewGroupButton />}
+    </>
+  );
+}
+
+/** A group's name, or, where the group folds, the button that folds it. */
+function GroupHeading({
+  group,
+  heading,
+  count,
+  folds,
+  folded,
+  searching,
+}: {
+  /** What the group's fold is kept under. */
+  group: string;
+  heading: string;
+  count: number;
+  folds: GroupFolds | undefined;
+  folded: boolean;
+  searching: boolean;
+}): React.JSX.Element {
+  if (folds === undefined) return <>{heading}</>;
+  return (
+    <GroupToggle
+      heading={heading}
+      count={count}
+      open={!folded}
+      onToggle={searching ? undefined : () => folds.onFold(group, !folded)}
+    />
+  );
+}
+
+/** An open group's rows, a page at a time, or its one empty line. */
+function GroupRows({
+  entries,
+  empty,
+  searching,
+  openKey,
+  children,
+}: {
+  entries: readonly VariableEntry[];
+  /** What an empty group says. */
+  empty: string;
+  searching: boolean;
+  openKey: string | null;
+  children: (entry: VariableEntry) => React.ReactNode;
+}): React.JSX.Element {
   const [pages, setPages] = React.useState(1);
   // A variable is added at the end of its group, so in a group longer than a
   // page its row would not mount and the editor opened for it would have
@@ -914,412 +1256,20 @@ function Group({
     pages * PAGE_SIZE,
     entry => entry.row.key === openKey
   );
-  const hidden = entries.length - shown.length;
-  const adds = ADDS[group];
   return (
-    <section className="nx-vars__group" aria-labelledby={id}>
-      <div className="nx-vars__group-head">
-        <h3 className="nx-vars__group-name" id={id}>
-          {heading}
-        </h3>
-        {/* The two small swatches on a colour row are its light and dark
-            values; this names those columns for sight. Each row's accessible
-            name already says which value is which, so it is not read. */}
-        {group === "colours" ? (
-          <span className="nx-vars__group-hint" aria-hidden="true">
-            Light / Dark
-          </span>
-        ) : null}
-        {/* An empty type scale offers its add in the line below instead. */}
-        {readOnly || (group === "type" && entries.length === 0) ? null : (
-          <AddButton adds={adds} onAdd={onAdd} />
-        )}
-      </div>
+    <>
       {entries.length === 0 && !searching ? (
-        <EmptyGroup
-          group={group}
-          text={adds.empty}
-          readOnly={readOnly}
-          onAdd={onAdd}
-        />
+        <EmptyGroup text={empty} />
       ) : (
         <ul className="nx-vars__list">{shown.map(children)}</ul>
       )}
       <ShowMore
-        hidden={hidden}
+        hidden={entries.length - shown.length}
         pageSize={PAGE_SIZE}
         onMore={() => setPages(count => count + 1)}
       />
-    </section>
+    </>
   );
-}
-
-/** An empty group's one line; an empty type scale offers its add here. */
-function EmptyGroup({
-  group,
-  text,
-  readOnly,
-  onAdd,
-}: {
-  group: VariableGroup;
-  text: string;
-  readOnly: boolean;
-  onAdd: (what: NewVariable) => void;
-}): React.JSX.Element {
-  return (
-    <p className="nx-vars__empty">
-      {text}
-      {group === "type" && !readOnly ? (
-        <button
-          type="button"
-          className="nx-vars__link"
-          onClick={() => onAdd("type size")}
-        >
-          Add type size
-        </button>
-      ) : null}
-    </p>
-  );
-}
-
-/** A group's "+": a button for one kind, a menu for several. */
-function AddButton({
-  adds,
-  onAdd,
-}: {
-  adds: (typeof ADDS)[VariableGroup];
-  onAdd: (what: NewVariable) => void;
-}): React.JSX.Element {
-  const icon = <Plus aria-hidden="true" size={14} />;
-  const [only] = adds.options;
-  if (adds.options.length === 1 && only !== undefined) {
-    return (
-      <button
-        type="button"
-        className="nx-vars__icon-button nx-vars__add"
-        aria-label={adds.label}
-        title={adds.label}
-        onClick={() => onAdd(only[0])}
-      >
-        {icon}
-      </button>
-    );
-  }
-  return (
-    // Not modal: a modal menu marks the editor around it aria-hidden while
-    // its controls stay focusable (axe: aria-hidden-focus).
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="nx-vars__icon-button nx-vars__add"
-          aria-label={adds.label}
-          title={adds.label}
-        >
-          {icon}
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="nx-vars__menu">
-        {adds.options.map(([what, label]) => (
-          <DropdownMenuItem key={what} onSelect={() => onAdd(what)}>
-            {label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-/**
- * One variable: a button that opens its editor beside the panel.
- *
- * The button's name is the plain name followed by the values in words, so a
- * screen reader hears what the swatches show.
- */
-function VariableRow({
-  entry,
-  tokens,
-  mode,
-  suppliedOf,
-  readOnly,
-  open,
-  onOpenChange,
-  onChange,
-  onRemoved,
-  usage,
-}: {
-  entry: VariableEntry;
-  tokens: SiteTokenSet;
-  mode: TokenMode;
-  suppliedOf: (identity: string) => SiteToken | undefined;
-  readOnly: boolean;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onChange: (tokens: SiteTokenSet) => void;
-  onRemoved: () => void;
-  /** How widely it is used, where the host reads it. */
-  usage: VariableUsageHere | undefined;
-}): React.JSX.Element {
-  const token = tokens.tokens[entry.row.at];
-  const reach = rowReach(entry, usage);
-  return (
-    <li>
-      <Popover open={open} onOpenChange={onOpenChange} modal>
-        <CountTip reach={reach}>
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              className="nx-vars__row"
-              data-variable-key={entry.row.key}
-              // The visible name first, then the values the swatches show, so
-              // a screen reader hears both and speech input still matches.
-              aria-label={`${shownName(entry)}${describe(entry, token, tokens, mode)}${countWords(reach)}`}
-              data-kind={entry.row.kind}
-              // A fourth column for the count, only where usage is read.
-              data-counted={usage === undefined ? undefined : ""}
-              // Drawn as chosen while its editor is open. Its own mark: the
-              // row's tooltip sets `data-state` too, over the popover's.
-              data-open={open ? "" : undefined}
-            >
-              <RowLead
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                mode={mode}
-              />
-              <span className="nx-vars__name">
-                {entry.label}
-                {entry.kindWord === undefined ? null : (
-                  <span className="nx-vars__name-kind">{` · ${entry.kindWord}`}</span>
-                )}
-              </span>
-              <RowTail
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                mode={mode}
-              />
-              <VariableRowCount reach={reach} />
-            </button>
-          </PopoverTrigger>
-        </CountTip>
-        <PopoverContent
-          side="right"
-          align="start"
-          sideOffset={12}
-          className="nx-vars-editor"
-          aria-label={`${readOnly ? "" : "Edit "}${entry.label}`}
-        >
-          <VariableEditor
-            entry={entry}
-            tokens={tokens}
-            suppliedOf={suppliedOf}
-            readOnly={readOnly}
-            onChange={onChange}
-            onRemoved={onRemoved}
-            {...(usage === undefined ? {} : { usage })}
-          />
-        </PopoverContent>
-      </Popover>
-    </li>
-  );
-}
-
-/** The row's count in words, after its name and values, once it is read. */
-function countWords(reach: VariableReach | undefined): string {
-  return reach === undefined ? "" : `. ${variableCount(reach).words}`;
-}
-
-/**
- * The row's name as it is read: its label, and its kind when another row is
- * shown under the same name.
- */
-function shownName(entry: VariableEntry): string {
-  return entry.kindWord === undefined
-    ? entry.label
-    : `${entry.label} · ${entry.kindWord}`;
-}
-
-/** The value a variable shows for the preview mode, falling back to light. */
-function valueFor(token: SiteToken | undefined, mode: TokenMode): string {
-  if (token === undefined) return "";
-  return mode === "dark"
-    ? (token.values.dark ?? token.values.light)
-    : token.values.light;
-}
-
-/** The row's leading preview: a swatch, a type specimen, or a kind icon. */
-function RowLead({
-  entry,
-  token,
-  tokens,
-  mode,
-}: {
-  entry: VariableEntry;
-  token: SiteToken | undefined;
-  tokens: SiteTokenSet;
-  mode: TokenMode;
-}): React.JSX.Element {
-  const kind = entry.row.kind;
-  if (kind === "color") {
-    return (
-      <span
-        className="nx-vars__swatch nx-vars__swatch--main"
-        aria-hidden="true"
-        data-mode={mode}
-        style={swatchStyle(
-          entry.row.written
-            ? colourHexOf(valueFor(token, mode), undefined)
-            : undefined
-        )}
-      />
-    );
-  }
-  if (entry.row.name.startsWith("font-size.")) {
-    return (
-      <span
-        className="nx-vars__specimen"
-        aria-hidden="true"
-        style={{
-          fontSize: `${String(specimenSize(valueFor(token, mode)))}px`,
-          fontFamily: siteFamily(tokens, mode),
-        }}
-      >
-        Aa
-      </span>
-    );
-  }
-  // A radius draws a corner, so it is told from a spacing step at a glance.
-  const radius = lengthFamilyOf(entry.row) === "radius";
-  const Icon = radius ? SquareRoundCorner : KIND_ICONS[kind];
-  return (
-    <span
-      className="nx-vars__kind"
-      aria-hidden="true"
-      data-variable-icon={lengthFamilyOf(entry.row) ?? kind}
-    >
-      {kind === "shadow" ? (
-        <span
-          className="nx-vars__shadow"
-          style={{ boxShadow: valueFor(token, mode) }}
-        />
-      ) : (
-        <Icon size={14} />
-      )}
-    </span>
-  );
-}
-
-const KIND_ICONS: Readonly<
-  Record<TokenKind, React.ComponentType<{ size?: number }>>
-> = {
-  color: Hash,
-  dimension: Ruler,
-  fontFamily: Type,
-  fontWeight: Bold,
-  number: Hash,
-  shadow: Hash,
-  duration: Timer,
-  custom: Braces,
-};
-
-/**
- * The specimen's drawn size: the type size scaled into the row, so a heading
- * still reads larger than body text without growing the row.
- */
-function specimenSize(value: string): number {
-  // Read through the inspector's own reading of a length, so a type size is
-  // measured the same way in both places; a value it cannot measure is drawn
-  // at body size, as before.
-  const px = lengthInPx(value) ?? 16;
-  return Math.min(18, Math.max(11, Math.round(10 + px * 0.2)));
-}
-
-/** The site's body font, when it names a family this panel can draw. */
-function siteFamily(tokens: SiteTokenSet, mode: TokenMode): string | undefined {
-  // By identity, the one a rename leaves alone: the body font keeps drawing
-  // after an author renames it.
-  const body = tokens.tokens.find(
-    token => tokenIdentity(token) === "font.body"
-  );
-  const family = valueFor(body, mode);
-  return family === "" || /var\s*\(/i.test(family) ? undefined : family;
-}
-
-/** The row's trailing values: the light and dark swatches, or a value chip. */
-function RowTail({
-  entry,
-  token,
-  mode,
-}: {
-  entry: VariableEntry;
-  token: SiteToken | undefined;
-  tokens: SiteTokenSet;
-  mode: TokenMode;
-}): React.JSX.Element | null {
-  if (token === undefined) return null;
-  if (entry.row.kind === "color") {
-    return <ColourPair {...colourPairOf(token)} />;
-  }
-  const own = valueFor(token, mode);
-  const words = chipText(entry, own);
-  return (
-    <span
-      className="nx-vars__chip"
-      aria-hidden="true"
-      // The whole value on hover when the chip says it in fewer words, as
-      // "Fluid" does; the row's name says it to a screen reader already.
-      title={words === chipText(entry, own, "raw") ? undefined : own}
-    >
-      {words}
-    </span>
-  );
-}
-
-/**
- * "16 / 26" for a type size with its line height, or the value itself, in
- * the picker's words: "Fluid" for a length that changes with the page, whose
- * whole `clamp()` crowded the name out of the row. `raw` keeps the value as
- * written, to tell whether the words shortened it.
- */
-function chipText(
-  entry: VariableEntry,
-  own: string,
-  form: "words" | "raw" = "words"
-): string {
-  const text =
-    form === "raw"
-      ? own
-      : variableValueText({ kind: entry.row.kind, value: own });
-  if (entry.lineHeight === undefined) return text;
-  return `${bare(text)} / ${bare(entry.lineHeight.value)}`;
-}
-
-/** A px value without its unit, as designers write a type scale. */
-function bare(value: string): string {
-  return value.trim().replace(/^(-?\d*\.?\d+)px$/, "$1");
-}
-
-/** The row's values in words, for the button's accessible name. */
-function describe(
-  entry: VariableEntry,
-  token: SiteToken | undefined,
-  tokens: SiteTokenSet,
-  mode: TokenMode
-): string {
-  if (token === undefined) return "";
-  // A colour row shows both its swatches, so both values are said whatever
-  // the preview; every other row shows the preview mode's value, so that is
-  // the one said, read through the same projection the row draws with.
-  if (entry.row.kind === "color") {
-    const dark = token.values.dark;
-    return `, light ${token.values.light}, dark ${dark ?? "same as light"}`;
-  }
-  if (entry.lineHeight !== undefined) {
-    const line = valueFor(tokens.tokens[entry.lineHeight.at], mode);
-    return `, size ${valueFor(token, mode)}, line height ${line}`;
-  }
-  return `, ${valueFor(token, mode)}`;
 }
 
 /** The supplied version of a variable, matched the way the merge does. */

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 /**
- * An Accordion's icon and its position, drawn in the real Style panel.
+ * An Accordion's icon position, drawn in the real Style panel. The icon
+ * itself is chosen in the Content tab (`accordion-question-settings.test.tsx`).
  *
  * @module accordion-settings.test
  */
@@ -98,24 +99,11 @@ function open(section: string): void {
 }
 
 describe("an Accordion's Icon section", () => {
-  it("names its rows Icon and Position, as an author says them", () => {
+  it("holds Icon position alone: the icon is chosen in Content", () => {
     mount();
     open("Icon");
-    // Each control is named by its row's label.
-    expect(screen.getByRole("radiogroup", { name: "Icon" })).toBeDefined();
-    expect(screen.getByRole("group", { name: "Position" })).toBeDefined();
-  });
-
-  it("offers each icon by name, and writes the one chosen", () => {
-    const editor = mount();
-    open("Icon");
-    for (const name of ["Chevron", "Plus", "None", "Browser default"]) {
-      expect(screen.getByRole("radio", { name })).toBeDefined();
-    }
-    fireEvent.click(screen.getByRole("radio", { name: "Plus" }));
-    expect(JSON.stringify(editor.applyAll.mock.calls[0]?.[0])).toContain(
-      '"disclosureIcon":"plus"'
-    );
+    expect(screen.getByRole("group", { name: "Icon position" })).toBeDefined();
+    expect(screen.queryByRole("radiogroup", { name: "Icon" })).toBeNull();
   });
 
   it("offers the icon's position as Before and After", () => {
@@ -134,20 +122,27 @@ describe("an Accordion's Icon section", () => {
 });
 
 describe("an Accordion's icon position, offered where an icon is drawn", () => {
-  it("is not offered while the icon is the browser's own or none", () => {
+  it("is not offered while the icon is none", () => {
     // An escaped spelling, which the engine reads as the same keyword.
-    for (const icon of ["browser", "none", "br\\6f wser"]) {
+    for (const icon of ["none", "n\\6f ne"]) {
       mount({ base: { [BASE_BREAKPOINT]: { disclosureIcon: icon } } });
-      open("Icon");
-      expect(screen.queryByRole("group", { name: "Position" })).toBeNull();
+      // Its one row hidden, the section has nothing to open.
+      expect(screen.queryByRole("button", { name: /^Icon/ })).toBeNull();
+      expect(screen.queryByRole("group", { name: "Icon position" })).toBeNull();
       cleanup();
       clearBlocks();
     }
   });
 
-  it("is offered while a chevron or a plus is drawn", () => {
-    mount({ base: { [BASE_BREAKPOINT]: { disclosureIcon: "plus" } } });
-    open("Icon");
-    expect(screen.getByRole("group", { name: "Position" })).toBeDefined();
+  it("is offered while a chevron, a plus or a stored Browser default is drawn", () => {
+    for (const icon of ["plus", "chevron", "browser"]) {
+      mount({ base: { [BASE_BREAKPOINT]: { disclosureIcon: icon } } });
+      open("Icon");
+      expect(
+        screen.getByRole("group", { name: "Icon position" })
+      ).toBeDefined();
+      cleanup();
+      clearBlocks();
+    }
   });
 });

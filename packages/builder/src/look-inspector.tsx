@@ -4,19 +4,35 @@
  * who an edit reaches and how to go back, and the Style controls bound to the
  * look.
  *
+ * The bar carries the same State switch a block's Style tab has (Normal,
+ * Hover, Focus, Pressed) and names the device the top bar edits, so a look's
+ * hover and other states, at each device, are set where its normal values
+ * are. The choice is the look editor's own, held per look: no block is
+ * selected while a look is edited, so the host's choice, which is what the
+ * selected block shows on the canvas, stays Normal.
+ *
  * The controls are the Style tab's own, read and written as a shared style
  * is. They are drawn over a stand-in editor holding one block of the look's
  * type, so they offer what that block type supports; it takes no page edit,
  * so nothing the controls do can reach the page except through the look.
  *
+ * A look has no element of its own on the canvas, so its sides and corners
+ * are named in the site's own direction, read from the canvas root: the same
+ * Top, Right, Bottom, Left box a block of that site shows, mirrored on a
+ * right-to-left site.
+ *
  * @module look-inspector
  * @experimental Settles with the Design panel's Block looks group.
  */
 
-import type {
-  BlockDocument,
-  BlockNode,
-  NamedClass,
+import {
+  BASE_BREAKPOINT,
+  type BlockDocument,
+  type BlockNode,
+  type BreakpointId,
+  type BreakpointSet,
+  type NamedClass,
+  type StyleState,
 } from "@nextlyhq/blocks-engine";
 import { ArrowLeft } from "lucide-react";
 import * as React from "react";
@@ -26,13 +42,18 @@ import {
   type BlockLookRow,
   type LookKey,
 } from "./block-look-rows";
+import { useSiteOrientation } from "./canvas/use-canvas-reading";
+import { stateLookLine } from "./editing-bar";
 import type { EditorState } from "./editor-state";
-import { blockLabel } from "./inserter";
 import { lookReach, markLookReach } from "./look-reach";
+import { blockLabel } from "./panels/add/inserter";
+import { deviceLabel } from "./shell/breakpoint-switcher";
+import { StyleStateField } from "./state-switcher";
 import {
   StyleInspectorPanel,
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
+import { breakpointLabel } from "./style-provenance-indicators";
 import { useLookTarget, type SharedStylesHost } from "./style-target";
 
 /** What the host lends the inspector while a look is edited on its own. */
@@ -44,14 +65,20 @@ export interface LookEditing {
 }
 
 export interface LookInspectorProps
-  extends Omit<StyleInspectorPanelProps, "editor" | "target"> {
+  extends Omit<
+    StyleInspectorPanelProps,
+    "editor" | "target" | "sideOrientation" | "state"
+  > {
   readonly editor: EditorState;
   readonly look: BlockLookRow;
   readonly host: SharedStylesHost | undefined;
   readonly onExit: () => void;
   /** The site's class library, which decides the look each block wears. */
   readonly library: readonly NamedClass[];
-  /** The canvas, where the blocks the edit reaches are marked. */
+  /**
+   * The canvas, where the blocks the edit reaches are marked, and whose root
+   * says which way the site runs.
+   */
   readonly canvasRoot?: HTMLElement | null;
 }
 
@@ -89,11 +116,102 @@ function standInEditor(editor: EditorState, blockType: string): EditorState {
   };
 }
 
-/** What an edit to the look changes, under the bar's first line. */
+/**
+ * What an edit to the look changes, under the bar's first line: every block
+ * of the type for its own look, which every other look is laid on, and every
+ * block of the type using it for any other.
+ */
 function lookChangeWords(look: BlockLookRow, title: string): string {
   return look.own
     ? `Changes every ${title} on every page. Where another look, a shared style or the block's own values set something, they win.`
-    : `Changes ${look.name} on every page that uses it. A shared style and a block's own values still win.`;
+    : `Changes every ${title} using ${look.name} on every page`;
+}
+
+/**
+ * The controls on the tint a block's Style tab draws them on, under the line
+ * that names the state while one other than Normal is edited.
+ */
+function StateTint({
+  state,
+  children,
+}: {
+  readonly state: StyleState;
+  readonly children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <div className="nx-style-tab__body" data-state={state}>
+      {state === "base" ? null : (
+        <p className="nx-style-tab__state-line" data-editing-state-line="">
+          {stateLookLine(state)}
+        </p>
+      )}
+      {children}
+    </div>
+  );
+}
+
+/** The device an edit lands on, named as the top bar's switcher names it. */
+function editedDevice(
+  breakpoints: BreakpointSet | undefined,
+  breakpoint: BreakpointId | undefined
+): string {
+  const id = breakpoint ?? BASE_BREAKPOINT;
+  return deviceLabel(breakpoints, id) ?? breakpointLabel(breakpoints, id);
+}
+
+/**
+ * Which state the look editor edits, for the look open now: a look opened
+ * afresh, another one chosen, or one returned to starts at Normal. The
+ * choice is replaced as soon as another look is open, during that render,
+ * so a look left at Hover never comes back at Hover.
+ */
+function useLookState(
+  look: LookKey
+): readonly [StyleState, (state: StyleState) => void] {
+  const key = JSON.stringify([look.blockType, look.id]);
+  const [chosen, setChosen] = React.useState<{
+    readonly key: string;
+    readonly state: StyleState;
+  }>({ key, state: "base" });
+  if (chosen.key !== key) setChosen({ key, state: "base" });
+  const choose = React.useCallback(
+    (state: StyleState) => setChosen({ key, state }),
+    [key]
+  );
+  return [chosen.key === key ? chosen.state : "base", choose];
+}
+
+/**
+ * Where the look's edit lands: the device the top bar edits, and the State
+ * switch, its dots read from the look's own styles, so a state is marked
+ * where the look sets something.
+ */
+function LookPlace({
+  state,
+  onState,
+  styles,
+  breakpoints,
+  breakpoint,
+}: {
+  readonly state: StyleState;
+  readonly onState: (state: StyleState) => void;
+  readonly styles: BlockLookRow["styles"] | undefined;
+  readonly breakpoints: BreakpointSet | undefined;
+  readonly breakpoint: BreakpointId | undefined;
+}): React.JSX.Element {
+  return (
+    <p className="nx-look-bar__place">
+      <span className="nx-look-bar__device">
+        {editedDevice(breakpoints, breakpoint)}
+      </span>
+      <StyleStateField
+        state={state}
+        onSelect={onState}
+        node={styles === undefined ? null : { styles }}
+        breakpoints={breakpoints}
+      />
+    </p>
+  );
 }
 
 export function LookInspector({
@@ -106,6 +224,7 @@ export function LookInspector({
   ...style
 }: LookInspectorProps): React.JSX.Element {
   const read = useLookTarget(look, host);
+  const [state, setState] = useLookState(look);
   // An own look whose id another look or shared style carries is held: a
   // write by id would reach both, so the bar says why and nothing is written.
   const target =
@@ -127,6 +246,15 @@ export function LookInspector({
     () => standInEditor(editor, look.blockType),
     [editor, look.blockType]
   );
+  // The site's direction names the look's sides, as a block's box names its
+  // own. Re-read on the signals that can restyle the page.
+  const sideOrientation = useSiteOrientation(canvasRoot, {
+    document: editor.document,
+    state,
+    breakpoint: style.breakpoint,
+    cascade: style.cascade,
+    previewContainer: style.previewContainer,
+  });
   const title = blockLabel(look.blockType);
   return (
     <div className="nx-inspector nx-look-inspector" data-look={look.id}>
@@ -141,6 +269,15 @@ export function LookInspector({
         title={title}
         onExit={onExit}
         readOnly={target?.kind === "shared" ? target.readOnly : undefined}
+        place={
+          <LookPlace
+            state={state}
+            onState={setState}
+            styles={target?.kind === "shared" ? target.style.styles : undefined}
+            breakpoints={style.breakpoints}
+            breakpoint={style.breakpoint}
+          />
+        }
       />
       {target === undefined ? (
         <p className="nx-inspector__note">
@@ -149,7 +286,15 @@ export function LookInspector({
           }
         </p>
       ) : (
-        <StyleInspectorPanel {...style} editor={stand} target={target} />
+        <StateTint state={state}>
+          <StyleInspectorPanel
+            {...style}
+            state={state}
+            editor={stand}
+            target={target}
+            sideOrientation={sideOrientation}
+          />
+        </StateTint>
       )}
     </div>
   );
@@ -164,12 +309,15 @@ function LookBar({
   title,
   onExit,
   readOnly,
+  place,
 }: {
   readonly look: BlockLookRow;
   readonly title: string;
   readonly onExit: () => void;
   /** Why the look's values can't be changed, when they can't. */
   readonly readOnly: string | undefined;
+  /** The device and the State switch the edit lands on. */
+  readonly place: React.ReactNode;
 }): React.JSX.Element {
   return (
     <div
@@ -190,6 +338,7 @@ function LookBar({
         </span>
       </p>
       <p className="nx-look-bar__note">{lookChangeWords(look, title)}</p>
+      {place}
       {/* The controls below are held: the bar says why, as the editing bar
           does for a shared style the block wears. */}
       {readOnly === undefined ? null : (

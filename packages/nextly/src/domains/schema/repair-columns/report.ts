@@ -7,6 +7,12 @@
 //
 // @module domains/schema/repair-columns/report
 
+import {
+  describeKey,
+  describeReason,
+  isBlockingKind,
+  ownerCanFor,
+} from "../value-conversion/describe";
 import type {
   ConversionClass,
   ConversionReason,
@@ -15,7 +21,6 @@ import type {
 } from "../value-conversion/types";
 
 import { consentFlagFor } from "./consent";
-import { OWNER_CAN } from "./conversion/carry";
 import type {
   BlockedWhileRunning,
   CannotCarry,
@@ -99,6 +104,8 @@ export interface RepairRecord {
   pending: {
     applied: StateRecord | null;
     configured: StateRecord | null;
+    /** The table the column moves from, where the next migration moves it to another. */
+    renamedFrom: string | null;
   } | null;
   cause: CauseRecord | null;
   class: ConversionClass | null;
@@ -150,39 +157,13 @@ function reasonRecord(reason: ConversionReason): ReasonRecord {
   };
 }
 
-/** The reasons that block a column; the rest clear values, which a consent can allow. */
-type BlockingReasonKind = Exclude<
-  ConversionReasonKind,
-  "not-json" | "kept-unreadable"
->;
-
-/** What the owner can change for each reason that blocks a column. */
-const REASON_OWNER_CAN: Record<BlockingReasonKind, string> = {
-  "too-long":
-    "shorten the named values so each fits the new type, then run the repair again",
-  "null-under-not-null":
-    "give the named rows a value, or make the field optional, then run the repair again",
-  "unreadable-reference-list":
-    "correct the named values to a list of references, then run the repair again",
-  "stored-differently": OWNER_CAN.definition,
-  "no-conversion": OWNER_CAN.definition,
-  "late-write": OWNER_CAN.definition,
-  "cleared-under-not-null":
-    "give the named rows a value the new type holds, or make the field optional, then run the repair again",
-};
-
-function isBlockingKind(
-  kind: ConversionReasonKind
-): kind is BlockingReasonKind {
-  return Object.hasOwn(REASON_OWNER_CAN, kind);
-}
-
 /**
  * Every change the owner can make for a blocked column, each said once: for each reason that
- * blocks it, then for each thing the new type cannot keep. A reason that only clears values has
- * nothing to add, since the column is blocked whatever is cleared.
+ * blocks it (the shared sentence, ending with this command's next step), then for each thing the
+ * new type cannot keep. A reason that only clears values has nothing to add, since the column is
+ * blocked whatever is cleared.
  */
-function ownerCanFor(
+function ownerCanForColumn(
   reasons: readonly ReasonRecord[],
   cannotCarry: readonly CannotCarry[]
 ): string[] {
@@ -191,7 +172,7 @@ function ownerCanFor(
       ...reasons
         .map(reason => reason.kind)
         .filter(isBlockingKind)
-        .map(kind => REASON_OWNER_CAN[kind]),
+        .map(kind => ownerCanFor(kind, "run the repair again")),
       ...cannotCarry.map(problem => problem.ownerCan),
     ]),
   ];
@@ -255,6 +236,7 @@ function findingFacts(finding: ColumnFinding): FindingFacts {
         pending: {
           applied: stateRecord(finding.applied),
           configured: stateRecord(finding.configured),
+          renamedFrom: finding.renamedFrom ?? null,
         },
       };
     case "differs":
@@ -297,7 +279,8 @@ function differsFacts(finding: DiffersFinding): Partial<FindingFacts> {
     reasons,
     cannotCarry,
     notCarried: [...(finding.conversion?.notCarried ?? [])],
-    ownerCan: cls === "blocked" ? ownerCanFor(reasons, cannotCarry) : null,
+    ownerCan:
+      cls === "blocked" ? ownerCanForColumn(reasons, cannotCarry) : null,
   };
 }
 
@@ -406,40 +389,9 @@ function describeCause(cause: CauseRecord | null): string {
     : "; created by the current version's generator";
 }
 
-/** What each reason means for the column's values, as the report says it. */
-const REASON_TEXT: Record<ConversionReasonKind, string> = {
-  "not-json": "values that do not parse as JSON would be cleared",
-  "kept-unreadable":
-    "values the new type would keep in a form the field cannot read would be cleared",
-  "too-long": "values longer than the new type holds would be cut",
-  "stored-differently":
-    "values the database would accept and store as a different value",
-  "null-under-not-null": "rows hold a null where the column is to be NOT NULL",
-  "unreadable-reference-list": "values cannot be read as a list of references",
-  "no-conversion": "Nextly has no conversion from this type to that one",
-  "late-write":
-    "MySQL checks the rows and changes the column in separate transactions, so a value written meanwhile could be changed with no error",
-  "cleared-under-not-null":
-    "values that would be cleared, where the column does not allow a null, so a value would have to be invented",
-};
-
-/** A row as every report and question names it: by its key, never by its value. */
-export function describeKey(key: RowKey): string {
-  return "id" in key
-    ? `id ${key.id}`
-    : `parent ${key.parent} locale ${key.locale}`;
-}
-
-/** One reason with the rows that give it, by key and never by value. */
-function describeReason(reason: ReasonRecord): string {
-  const text = REASON_TEXT[reason.kind];
-  if (reason.rows === null) return text;
-  const { first, count } = reason.rows;
-  const keys = first.map(describeKey).join(", ");
-  const rows = count === 1 ? "1 row" : `${count} rows`;
-  const shown = first.length < count ? `, first ${first.length}` : "";
-  return `${text} (${rows}${shown}: ${keys})`;
-}
+// A row is named, and each reason said, in the words every path that judges a conversion shares
+// (`value-conversion/describe`), so the repair's report and `db:sync`'s offer read alike.
+export { describeKey };
 
 /** One thing the new type cannot keep. */
 function describeCannotCarry(problem: CannotCarry): string {
@@ -510,7 +462,10 @@ function describeExpected(record: RepairRecord): string {
     : ` (expected ${describeState(record.expected)})`;
 }
 
-/** A change no migration has applied: the field as applied and as configured. */
+/**
+ * A change no migration has applied: the table the column moves from, where it moves, and the
+ * field as applied and as configured, where the two differ.
+ */
 function describePending(
   pending: NonNullable<RepairRecord["pending"]>
 ): string {
@@ -518,7 +473,16 @@ function describePending(
     pending.applied === null ? "not applied" : describeState(pending.applied);
   const to =
     pending.configured === null ? "removed" : describeState(pending.configured);
-  return ` ${from} as applied, ${to} as configured. Run \`nextly migrate:create\`, then \`nextly migrate\`.`;
+  const change = `${from} as applied, ${to} as configured`;
+  // A column a renamed table keeps as it is has only the move to report.
+  const what =
+    pending.renamedFrom === null
+      ? change
+      : from === to
+        ? `moves from ${pending.renamedFrom}`
+        : `moves from ${pending.renamedFrom}, ${change}`;
+  // `migrate:create` refuses to write a migration with no name, so the step names one.
+  return ` ${what}. Run \`nextly migrate:create --name="<migration-name>"\`, then \`nextly migrate\`.`;
 }
 
 /** What the record's own finding says, without the run's facts. */

@@ -23,7 +23,7 @@ import {
   resolveSiteTokens,
   tokenDisplayLabel,
   tokenIdentity,
-  type SpacingMode,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
 import { NextlyError } from "nextly/errors";
@@ -36,8 +36,16 @@ import {
 import { restoreClasses } from "./breakpoint-removal/restore";
 import { stripClass } from "./breakpoint-removal/strip";
 import { documentVersionOf } from "./document-version";
-import type { StoredSiteStyle } from "./library-contract";
-import { resolveSiteStyle, type SiteStyleData } from "./site-style";
+import {
+  SHARED_STYLE_IN_USE_CODE,
+  type StoredSiteStyle,
+} from "./library-contract";
+import {
+  resolveSiteStyle,
+  siteCssPrefix,
+  type SiteStyleData,
+} from "./site-style";
+import { fluidClassesFollowRange } from "./site-style-fluid-classes";
 import {
   checkStoredBreakpoints,
   checkStoredClasses,
@@ -47,10 +55,7 @@ import {
   type SectionCheck,
   type SectionPolicy,
 } from "./site-style-record";
-import {
-  spacingModeReaderOf,
-  type SpacingModeReader,
-} from "./spacing-mode-reader";
+import { siteTextReasons } from "./site-text-uses";
 import { readStoredJson, sameStoredValue } from "./stored-json";
 import {
   sharedStyleVariables,
@@ -123,6 +128,70 @@ export function refuseBreakpointsOutsideSettings(hook: {
     publicMessage: BREAKPOINTS_OUTSIDE_SETTINGS,
     logContext: { reason: "site-breakpoints-outside-settings" },
   });
+}
+
+/** What any other write that changes the site's CSS variable prefix is told. */
+const PREFIX_OUTSIDE_SETTINGS =
+  "The CSS variable prefix is changed in Settings → Site.";
+
+/**
+ * The prefix a stored `tokens` section has the site's pages written under,
+ * over the code's: `siteCssPrefix`'s own answer, so the guard judges the
+ * prefix the compiler writes and not the spelling stored. SQLite hands the
+ * section back as text.
+ */
+function writtenPrefixOf(
+  defaults: SiteStyleData | undefined,
+  section: unknown
+): string {
+  const held = readStoredJson(section);
+  const prefix =
+    isPlainRecord(held) && typeof held.prefix === "string"
+      ? held.prefix
+      : undefined;
+  return siteCssPrefix(
+    defaults,
+    prefix === undefined ? undefined : { tokens: { tokens: [], prefix } }
+  ).current;
+}
+
+/**
+ * Refuse a write to this Single that changes the prefix the site's variables
+ * are written under, unless the Settings route made it.
+ *
+ * The prefix has one door, as the breakpoints do: it is a site setting under
+ * the site permission, since a change breaks any CSS of the site's own that
+ * names the old prefix, and the `tokens` section it is stored in is otherwise
+ * Design's to save. A save that carries the prefix through unchanged passes
+ * (judged on the prefix written, so dropping a saved prefix equal to the
+ * code's passes too), as does server code acting as nobody.
+ */
+function prefixOutsideSettingsGuard(
+  defaults: SiteStyleData | undefined
+): (hook: {
+  data?: Record<string, unknown>;
+  originalData?: Record<string, unknown>;
+  user?: { id: string };
+  principal?: unknown;
+  context?: Record<string, unknown>;
+}) => void {
+  return hook => {
+    if (hook.context?.[SITE_SETTINGS_WRITE] === true) return;
+    const data = hook.data;
+    if (data === undefined || !Object.hasOwn(data, "tokens")) return;
+    if (hook.user === undefined && hook.principal === undefined) return;
+    if (
+      writtenPrefixOf(defaults, data.tokens) ===
+      writtenPrefixOf(defaults, hook.originalData?.tokens)
+    ) {
+      return;
+    }
+    throw new NextlyError({
+      code: "FORBIDDEN",
+      publicMessage: PREFIX_OUTSIDE_SETTINGS,
+      logContext: { reason: "site-css-prefix-outside-settings" },
+    });
+  };
 }
 
 /** The mark the shared-style lock route puts on its own write. */
@@ -375,12 +444,16 @@ export function suppliedVariableIds(
 
 /**
  * Whether the variables are still used, refusing (by throwing) when any is:
- * the one check a removal makes, handed the site's shared styles as they
- * will be once the write lands. The plugin supplies it once installed.
+ * the one check a removal makes, handed the site's shared styles and its
+ * variables (every tier merged, {@link siteTokensOverCode}) as they will be
+ * once the write lands. The variables say which custom property each one is
+ * written under, so a `var()` naming it counts, and which of them name
+ * another in their own values. The plugin supplies it once installed.
  */
 export type VariablesInUseCheck = (
   removable: readonly NamedVariable[],
-  classes: readonly unknown[]
+  classes: readonly unknown[],
+  variables: SiteTokenSet
 ) => Promise<void>;
 
 /**
@@ -424,6 +497,12 @@ function variableRemovalGuard(
       suppliedVariableIds(defaults)
     );
     if (dropped.length === 0) return;
+    // A Site text row the write leaves pointing at a dropped variable, from
+    // the section in hand: a value of this write, asked before any read.
+    refuseDroppedSiteTextUses(
+      dropped,
+      siteTokensOverCode(defaults, data.tokens)
+    );
     const inUse = check?.();
     if (inUse === undefined) return;
     // The shared styles as they will be once this write lands: the classes it
@@ -431,8 +510,33 @@ function variableRemovalGuard(
     const classes = Object.hasOwn(data, "classes")
       ? data.classes
       : hook.originalData?.classes;
-    await inUse(dropped, sharedStylesOverCode(defaults, classes));
+    await inUse(
+      dropped,
+      sharedStylesOverCode(defaults, classes),
+      siteTokensOverCode(defaults, data.tokens)
+    );
   };
+}
+
+/**
+ * Refuse a write that drops a variable a Site text row still points at, the
+ * code's rows included, as the write leaves them, naming each row, as the
+ * remove route does.
+ */
+function refuseDroppedSiteTextUses(
+  dropped: readonly NamedVariable[],
+  merged: SiteTokenSet
+): void {
+  const reasons = siteTextReasons(dropped, merged);
+  if (reasons.length === 0) return;
+  throw NextlyError.validation({
+    errors: reasons.map(reason => ({
+      path: "tokens",
+      code: SHARED_STYLE_IN_USE_CODE,
+      message: reason.message,
+    })),
+    logContext: { variableIds: dropped.map(variable => variable.id) },
+  });
 }
 
 /**
@@ -468,6 +572,23 @@ export function sharedStylesOverCode(
   );
 }
 
+/**
+ * The site's variables as the stylesheet resolves them: the engine's, the
+ * code's, then the stored tokens section `tokens` over them (as stored or as
+ * written; SQLite hands it back as text), with the site's prefix.
+ */
+export function siteTokensOverCode(
+  defaults: SiteStyleData | undefined,
+  tokens: unknown
+): SiteTokenSet {
+  return resolveSiteTokens(
+    resolveSiteStyle(
+      defaults,
+      readSiteStyleRecord({ tokens: readStoredJson(tokens) })
+    ).tokens
+  );
+}
+
 /** Every variable the stored shared styles name, the first entry per id. */
 function sharedStylesVariables(raw: unknown): Set<string> {
   const found = new Set<string>();
@@ -492,12 +613,7 @@ export function undefinedSharedStyleVariables(
   // Nothing named, nothing to resolve: an ordinary class save pays nothing.
   if (used.size === 0) return [];
   const defined = new Set(
-    resolveSiteTokens(
-      resolveSiteStyle(
-        defaults,
-        readSiteStyleRecord({ tokens: readStoredJson(sections.tokens) })
-      ).tokens
-    ).tokens.map(tokenIdentity)
+    siteTokensOverCode(defaults, sections.tokens).tokens.map(tokenIdentity)
   );
   return newUndefinedIds(used, defined, sharedStylesVariables(sections.held));
 }
@@ -691,7 +807,12 @@ export function siteStyleSingle(
     // change is made rather than what is wrong with a value it may not set.
     hooks: {
       beforeValidate: [
+        // First, so every guard below judges the classes it remakes: a text
+        // style's fluid size follows a change of the range in this same write.
+        fluidClassesFollowRange(policy.defaults, sharedStyleName),
         refuseBreakpointsOutsideSettings,
+        // The prefix's one door, judged like the breakpoints' above.
+        prefixOutsideSettingsGuard(policy.defaults),
         sharedStyleGuard(openRemoval, policy.defaults?.classes),
         variableRemovalGuard(variablesInUse, policy.defaults),
         sharedStyleVariableGuard(policy.defaults),
@@ -724,7 +845,7 @@ export function siteStyleSingle(
         validate: refusing(raw => checkStoredTokens(raw, policy)),
         admin: {
           description:
-            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? } }], prefix?, darkMode? }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity.',
+            'A token set: { tokens: [{ id?, name, label?, kind, values: { light, dark? }, fluid?: { small, large }, group? }], prefix?, darkMode?, fluidRange?: { min, max }, order?: [identity], builtInColoursShown?: boolean, siteText?: { body?, h1?…h6?, link?, button?, caption? } }. Values are per mode; "light" is what a reader with no mode set resolves. `id` is the token\'s stable identity — set it once and a later rename of `name` leaves every page that references the token working; omit it and the name is the identity. `fluid` is the two sizes in px a fluid size was made from, and `fluidRange` the screen widths in px it grows between (360 to 1280 when absent). `group` is the named group a colour is listed under and `order` the identities of the colours in the order they are listed, both display-only. `builtInColoursShown: false` leaves the built-in colours the site does not use out of the Design panel and the colour pickers; they are still written on every page. `siteText` sets the text of every page: each row holds `fontFamily`, `fontSize` and `lineHeight` (a variable reference such as { $token: "font-size.h2" } or a value; the Body font is `body.fontFamily` set to { $token: "font.body" } and the Headings font is `fontFamily` set to { $token: "font.heading" } on every heading row), and the `link` row `color`, `hoverColor` and `underline` ("always", "hover" or "never") instead; a row left out keeps its built-in value.',
         },
       }),
       json({
@@ -774,25 +895,14 @@ export interface SiteStyleReader {
     slug: string;
     overrideAccess?: boolean;
   }): Promise<unknown>;
-  /**
-   * The plugin services the Direct API offers, where the site's spacing model
-   * is read (it lives in the plugin's own table, not in the Single). Optional:
-   * a reader without it reads no model, and the engine's default applies.
-   */
-  readonly plugins?: Readonly<
-    Record<string, Readonly<Record<string, unknown>> | undefined>
-  >;
 }
 
 /**
  * The stored document's four sections exactly as stored, each `null` where
  * nothing is stored, and nothing else the row carries (its id, timestamps or
- * any field a host added), with the site's recorded spacing model beside them.
+ * any field a host added).
  */
-function storedSiteStyleOf(
-  doc: unknown,
-  spacingMode: SpacingMode | null
-): StoredSiteStyle {
+function storedSiteStyleOf(doc: unknown): StoredSiteStyle {
   const record =
     typeof doc === "object" && doc !== null
       ? (doc as Record<string, unknown>)
@@ -802,7 +912,6 @@ function storedSiteStyleOf(
     fonts: record.fonts ?? null,
     classes: record.classes ?? null,
     breakpoints: record.breakpoints ?? null,
-    spacingMode,
   };
 }
 
@@ -823,12 +932,6 @@ export async function readStoredSiteStyle(args: {
   slug?: string;
   /** Read past the Single's own read permission. */
   overrideAccess?: true;
-  /**
-   * Where to read the model when `nextly` offers no plugin services: a server
-   * path hands the booted instance's reader (`spacing-mode-booted`). Handed in
-   * rather than imported, so this module stays safe for a browser entry.
-   */
-  bootedReader?: () => Promise<SpacingModeReader | undefined>;
 }): Promise<StoredSiteStyle> {
   return (await readStoredSiteStyleVersioned(args)).stored;
 }
@@ -840,34 +943,11 @@ export async function readStoredSiteStyle(args: {
 export async function readStoredSiteStyleVersioned(
   args: Parameters<typeof readStoredSiteStyle>[0]
 ): Promise<{ stored: StoredSiteStyle; rev: string | undefined }> {
-  // Read beside the Single, so every reader of the stored style, the
-  // published render and the editor's route alike, compiles under the model
-  // the site recorded.
-  const readDoc = () =>
-    args.nextly.findSingle({
-      slug: args.slug ?? SITE_STYLE_SLUG,
-      ...(args.overrideAccess === true ? { overrideAccess: true } : {}),
-    });
-  const own = spacingModeReaderOf(args.nextly);
-  if (own !== undefined) {
-    const [doc, spacingMode] = await Promise.all([readDoc(), own.read()]);
-    return {
-      stored: storedSiteStyleOf(doc, spacingMode),
-      rev: documentVersionOf(doc),
-    };
-  }
-  // The booted instance only AFTER the document read: a lazy reader boots
-  // the instance on its first read, and asked before that there is none, so
-  // the page would render with no model.
-  const doc = await readDoc();
-  const booted = await args.bootedReader?.();
-  return {
-    stored: storedSiteStyleOf(
-      doc,
-      booted === undefined ? null : await booted.read()
-    ),
-    rev: documentVersionOf(doc),
-  };
+  const doc = await args.nextly.findSingle({
+    slug: args.slug ?? SITE_STYLE_SLUG,
+    ...(args.overrideAccess === true ? { overrideAccess: true } : {}),
+  });
+  return { stored: storedSiteStyleOf(doc), rev: documentVersionOf(doc) };
 }
 
 /**
@@ -888,8 +968,6 @@ export async function loadSiteStyle(args: {
   defaults?: SiteStyleData;
   /** The Single's RESOLVED slug, where a host renamed it. */
   slug?: string;
-  /** As {@link readStoredSiteStyle} takes it. */
-  bootedReader?: () => Promise<SpacingModeReader | undefined>;
 }): Promise<SiteStyleData> {
   return (await loadSiteStyleVersioned(args)).style;
 }
@@ -906,15 +984,12 @@ export async function loadSiteStyleVersioned(
   const { stored, rev } = await readStoredSiteStyleVersioned({
     nextly: args.nextly,
     ...(args.slug === undefined ? {} : { slug: args.slug }),
-    ...(args.bootedReader === undefined
-      ? {}
-      : { bootedReader: args.bootedReader }),
   });
   return { style: resolvedSiteStyleOf(stored, args.defaults), rev };
 }
 
 /** The site style a stored record resolves to over the code's defaults. */
-function resolvedSiteStyleOf(
+export function resolvedSiteStyleOf(
   stored: StoredSiteStyle,
   defaults: SiteStyleData | undefined
 ): SiteStyleData {
@@ -923,17 +998,16 @@ function resolvedSiteStyleOf(
 
 /**
  * The site style the Single's document `doc` resolves to over the code's
- * defaults, as {@link loadSiteStyle} resolves it, with no spacing model: the
- * one reading for every judgement of a write against the site's definitions,
- * whether `doc` was read through the Direct API or on a write's own
- * transaction. The spacing model changes no class, variable or breakpoint.
- * Each section is read as stored, SQLite's text included.
+ * defaults, as {@link loadSiteStyle} resolves it: the one reading for every
+ * judgement of a write against the site's definitions, whether `doc` was read
+ * through the Direct API or on a write's own transaction. Each section is
+ * read as stored, SQLite's text included.
  */
 export function siteStyleOfDocument(
   doc: unknown,
   defaults: SiteStyleData | undefined
 ): SiteStyleData {
-  const stored = storedSiteStyleOf(doc, null);
+  const stored = storedSiteStyleOf(doc);
   return resolvedSiteStyleOf(
     {
       ...stored,

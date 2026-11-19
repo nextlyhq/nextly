@@ -11,6 +11,8 @@
  *
  * @module page-content
  */
+import type { ReactNode } from "react";
+
 import {
   CONTENT_ADDRESS_SERVICE,
   type ContentAddressHolder,
@@ -24,7 +26,6 @@ import {
   TEMPLATES_SLUG,
 } from "./collections/templates";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
-import { fieldOf } from "./spacing-mode-reader";
 import { drawingDesign } from "./templates/entry-designs";
 
 export type { ContentAddressHolder } from "./address-claims/content-addresses";
@@ -51,6 +52,15 @@ export interface PageBuilderContentOptions {
   readonly nextly?: PageBuilderContentDirectApi;
   /** The templates collection's slug, where the host renamed it. */
   readonly templatesCollection?: string;
+  /**
+   * The site's per-request nonce, where its policy uses one: read once per
+   * page and handed to the page's own code in both places, as a site hands
+   * it to `<SiteCode>`. Reading it makes the page dynamic, which a
+   * nonce-based policy already does.
+   *
+   * @experimental Settles with page code.
+   */
+  readonly nonce?: () => string | undefined | Promise<string | undefined>;
 }
 
 /**
@@ -76,6 +86,18 @@ export interface PageBuilderContentTemplate {
  * is marked stable.
  */
 export interface PageBuilderContentProvider {
+  /**
+   * What the route draws around every page and entry it serves: the page's
+   * own code (`<PageCode>`), its head's before the page and its end of
+   * body's after it, from the page's own stored document. Restated rather
+   * than imported, so this plugin's root never depends on the route's
+   * package.
+   *
+   * @experimental Settles with page code.
+   */
+  readonly around: (args: {
+    readonly document: unknown;
+  }) => Promise<{ readonly before?: ReactNode; readonly after?: ReactNode }>;
   readonly resolveAddress: (
     locale: string | undefined,
     path: string
@@ -175,6 +197,18 @@ export function pageBuilderContent(
   const service = async (): Promise<ContentAddressService> =>
     addressServiceOf(await nextly());
   return {
+    around: async ({ document }) => {
+      // Imported at call time: this module is reached from the package
+      // root, which a browser bundle imports, and `<PageCode>` reads the
+      // request's draft mode.
+      const { PageCode } = await import("./site");
+      const nonce = await options.nonce?.();
+      const withNonce = nonce === undefined ? {} : { nonce };
+      return {
+        before: await PageCode({ slot: "head", document, ...withNonce }),
+        after: await PageCode({ slot: "body", document, ...withNonce }),
+      };
+    },
     resolveAddress: async (locale, path) =>
       (await service()).holderAt(locale, path),
     addresses: async (locale, limit, under) => {
@@ -277,4 +311,10 @@ function addressServiceOf(
   throw new Error(
     "[page-builder] the content route reads addresses through the page builder plugin, which this Nextly instance does not have installed."
   );
+}
+
+/** One field of a value read as an object, or `undefined` when it is not one. */
+function fieldOf(value: unknown, key: string): unknown {
+  if (typeof value !== "object" || value === null) return undefined;
+  return (value as Readonly<Record<string, unknown>>)[key];
 }

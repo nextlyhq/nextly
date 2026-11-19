@@ -3,6 +3,7 @@
   "date": "2026-11-13T14:31:15.107Z",
   "routes": {
     "AddDocumentsDialog": 49946,
+    "AllPinsDialog": 15763,
     "auth-accept-invite": 36473,
     "auth-forgot-password": 29750,
     "auth-login": 40184,
@@ -21,16 +22,18 @@
     "IconInput": 18277,
     "liquid-variables": 1639,
     "LiquidEditor": 262978,
+    "MediaEditDialog": 56929,
     "over-time-drawing": 24607,
     "page.dashboard.account.index": 47642,
     "page.dashboard.collection.index": 49144,
-    "page.dashboard.collections.builder._slug_": 116200,
-    "page.dashboard.collections.builder.index": 86640,
+    "page.dashboard.collections.builder._slug_": 144207,
+    "page.dashboard.collections.builder.index": 103890,
     "page.dashboard.content.collections": 42369,
     "page.dashboard.content.index": 42366,
     "page.dashboard.content.singles": 42370,
+    "page.dashboard.email.activity": 30550,
     "page.dashboard.email.design": 63115,
-    "page.dashboard.email.index": 26684,
+    "page.dashboard.email.index": 29974,
     "page.dashboard.email.messages.create": 84125,
     "page.dashboard.email.messages.edit._id_": 84491,
     "page.dashboard.email.sending.create": 25568,
@@ -41,7 +44,7 @@
     "page.dashboard.entries._slug_.api": 200243,
     "page.dashboard.entries._slug_.create": 376575,
     "page.dashboard.entries._slug_.index": 54549,
-    "page.dashboard.field-group.builder._slug_": 118876,
+    "page.dashboard.field-group.builder._slug_": 147052,
     "page.dashboard.field-group.builder.index": 108515,
     "page.dashboard.field-group.index": 50695,
     "page.dashboard.index": 146595,
@@ -71,7 +74,7 @@
     "page.dashboard.singles._slug_.api": 200242,
     "page.dashboard.singles._slug_.index": 212269,
     "page.dashboard.singles._slug_.versions": 134061,
-    "page.dashboard.singles.builder._slug_": 115856,
+    "page.dashboard.singles.builder._slug_": 144223,
     "page.dashboard.singles.builder.index": 108606,
     "page.dashboard.singles.index": 48571,
     "page.dashboard.translations.index": 15751,
@@ -90,5 +93,49 @@
     "TextMarkdown": 134517,
     "UploadTray": 40982,
     "VersionHistorySheet": 203162
+  },
+  "raised": {
+    "page.dashboard.collections.builder._slug_": {
+      "from": 116200,
+      "to": 144207,
+      "measuredAt": "cbac578b21",
+      "reason": "Schema Builder features since the last pin: settings as pending changes (#4423), templates that make what they need (#4624), the one-dialog create (#4202), Rename that keeps values (#4427), a field group made from the field picker (#4469), the template gallery (#4450) and the outline's focused container (#4391)"
+    },
+    "page.dashboard.singles.builder._slug_": {
+      "from": 115856,
+      "to": 144223,
+      "measuredAt": "cbac578b21",
+      "reason": "Schema Builder features since the last pin: settings as pending changes (#4423), templates that make what they need (#4624), the one-dialog create (#4202), Rename that keeps values (#4427), a field group made from the field picker (#4469), the template gallery (#4450) and the outline's focused container (#4391)"
+    },
+    "page.dashboard.field-group.builder._slug_": {
+      "from": 118876,
+      "to": 147052,
+      "measuredAt": "cbac578b21",
+      "reason": "Schema Builder features since the last pin: settings as pending changes (#4423), templates that make what they need (#4624), the one-dialog create (#4202), Rename that keeps values (#4427), a field group made from the field picker (#4469), the template gallery (#4450) and the outline's focused container (#4391)"
+    },
+    "page.dashboard.collections.builder.index": {
+      "from": 86640,
+      "to": 103890,
+      "measuredAt": "cbac578b21",
+      "reason": "The new-entity dialog's one-dialog create (#4202) and its template gallery (#4450), opened from the Schema Builder's list"
+    },
+    "page.dashboard.email.index": {
+      "from": 26684,
+      "to": 29974,
+      "measuredAt": "cbac578b21",
+      "reason": "The Email hub's shared layout with the Activity tab (#4456), and the line saying what sends each email with guarded template deletion (#4463)"
+    },
+    "page.dashboard.email.activity": {
+      "from": null,
+      "to": 30550,
+      "measuredAt": "cbac578b21",
+      "reason": "A new route: the Email hub's Activity tab (#4456), its detail sheet (#4790, #4884)"
+    },
+    "AllPinsDialog": {
+      "from": null,
+      "to": 15763,
+      "measuredAt": "cbac578b21",
+      "reason": "A new lazy piece: every pin on the dashboard, in a dialog (#4599)"
+    }
   }
 }

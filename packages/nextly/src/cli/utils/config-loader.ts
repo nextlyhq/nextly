@@ -29,6 +29,7 @@ import {
   defineConfig,
   type SanitizedNextlyConfig,
 } from "../../collections/config/define-config";
+import { assertOpensIn } from "../../collections/config/opens-in";
 import type { NextlyServiceConfig } from "../../di/register";
 import { emailRetentionAfterTransform } from "../../domains/email/retention-config";
 import { judgeFieldGroupCyclesAtStart } from "../../domains/field-groups/field-group-cycles";
@@ -82,6 +83,7 @@ import {
 } from "../../plugins/schema/validate-relations";
 import { assertSettingsPermissionsOwned } from "../../plugins/settings-permission";
 import { assertFieldTypeSettings } from "../../plugins/validate-field-type-settings";
+import { withEditorPlaces } from "../../shared/lib/build-messages";
 import {
   CONFIG_FILE_NAMES,
   CONFIG_SEARCH_DIRS,
@@ -820,6 +822,13 @@ async function loadConfigInternal(
       publishWithheldScopeFields(new Map());
     }
 
+    // Where each collection opens its entries, and each Single, judged as the
+    // boot judges it (register.ts) whether or not a plugin is configured: a
+    // view named with no plugin to declare it is refused here too, so a
+    // command does not build or migrate an application whose start would
+    // refuse it.
+    assertOpensIn(config.collections, config.plugins ?? [], config.singles);
+
     // Field groups placed in a cycle are judged over code and the Builder's field groups whether
     // or not a plugin is configured, as the boot judges them, so a command does not pass what a
     // start refuses. Without plugins nothing above read the Builder's field groups.
@@ -862,6 +871,10 @@ async function loadConfigInternal(
       throw error;
     }
 
+    // A build failure carried as esbuild reports it would name its place a
+    // second way under `--verbose` (bytes from 0) below the editor's place
+    // the error shows, so it is carried with the editor's places instead.
+    const failure = withEditorPlaces(error) ?? error;
     throw new NextlyError({
       code: "INVALID_INPUT",
       publicMessage: "Failed to load Nextly configuration.",
@@ -870,9 +883,9 @@ async function loadConfigInternal(
       logContext: {
         configPath,
         reason: "load-error",
-        cause: describeError(error),
+        cause: describeError(failure),
       },
-      cause: asCause(error),
+      cause: asCause(failure),
     });
   }
 }

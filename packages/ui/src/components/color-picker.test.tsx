@@ -55,6 +55,20 @@ function Controlled({
   );
 }
 
+describe("its size", () => {
+  it("fills the popup it sits in, up to its own width, rather than a fixed 256px", () => {
+    const { container } = render(
+      <ColorPicker color="#1d2b6b" onColorChange={() => undefined} />
+    );
+    const root = container.firstElementChild;
+    const classes = root?.className.split(/\s+/) ?? [];
+    // A popup narrower than the picker no longer leaves it overflowing.
+    expect(classes).toContain("w-full");
+    expect(classes).toContain("max-w-64");
+    expect(classes).not.toContain("w-64");
+  });
+});
+
 describe("choosing a preset", () => {
   it("hands back the swatch's own value, not a colour", () => {
     const onSwatchSelect = vi.fn();
@@ -144,7 +158,7 @@ describe("the eyedropper", () => {
     render(<ColorPicker color="#000000" onColorChange={vi.fn()} />);
 
     expect(
-      screen.queryByRole("button", { name: "Pick a colour from the screen" })
+      screen.queryByRole("button", { name: "Pick from screen" })
     ).toBeNull();
   });
 
@@ -165,7 +179,7 @@ describe("the eyedropper", () => {
       const markup = renderToString(
         <ColorPicker color="#000000" onColorChange={vi.fn()} />
       );
-      expect(markup).not.toContain("Pick a colour from the screen");
+      expect(markup).not.toContain("Pick from screen");
       // The control: this render really did produce a picker, so the assertion
       // above is not passing on empty output.
       expect(markup).toContain("Saturation and brightness");
@@ -197,9 +211,7 @@ describe("the eyedropper", () => {
           }}
         />
       );
-      fireEvent.click(
-        screen.getByRole("button", { name: "Pick a colour from the screen" })
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Pick from screen" }));
       await new Promise(resolve => setTimeout(resolve, 10));
     } finally {
       process.off("unhandledRejection", capture);
@@ -225,9 +237,7 @@ describe("the eyedropper", () => {
     const onColorChange = vi.fn();
     try {
       render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
-      fireEvent.click(
-        screen.getByRole("button", { name: "Pick a colour from the screen" })
-      );
+      fireEvent.click(screen.getByRole("button", { name: "Pick from screen" }));
       await new Promise(resolve => setTimeout(resolve, 10));
     } finally {
       process.off("unhandledRejection", capture);
@@ -250,7 +260,7 @@ describe("the eyedropper", () => {
     try {
       render(<ColorPicker color="#000000" onColorChange={vi.fn()} />);
       expect(
-        screen.getByRole("button", { name: "Pick a colour from the screen" })
+        screen.getByRole("button", { name: "Pick from screen" })
       ).toBeTruthy();
     } finally {
       delete w.EyeDropper;
@@ -817,7 +827,7 @@ describe("a colour typed one character at a time", () => {
     fireEvent.change(field, { target: { value: "#123456" } });
 
     const eyedropper = screen.getByRole("button", {
-      name: "Pick a colour from the screen",
+      name: "Pick from screen",
     });
     eyedropper.dispatchEvent(
       new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
@@ -857,7 +867,7 @@ describe("a colour typed one character at a time", () => {
     fireEvent.change(field, { target: { value: "#123456" } });
 
     const eyedropper = screen.getByRole("button", {
-      name: "Pick a colour from the screen",
+      name: "Pick from screen",
     });
     eyedropper.dispatchEvent(
       new PointerEvent("pointerdown", { bubbles: true, cancelable: true })

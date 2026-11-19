@@ -70,27 +70,31 @@ const LIBRARY_WORDS: Readonly<
   >
 > = {
   patterns: {
-    name: "Patterns",
-    about: "Starting points an editor inserts, then changes freely",
-    create: "New pattern",
+    name: "Saved sections",
+    about:
+      "Ready-made parts of a page. Insert one, then change it freely. Changes stay on that page.",
+    create: "New saved section",
     icon: LayoutTemplate,
   },
   components: {
     name: "Components",
-    about: "Built once, placed on many pages; an edit updates them all",
+    about:
+      "Built once, used on many pages. Edit it once and every page updates.",
     create: "New component",
     icon: Component,
   },
   layouts: {
-    name: "Layouts",
-    about: "Page frames: header, footer and the content area",
-    create: "New layout",
+    name: "Header & footer",
+    about:
+      'The header and footer around your pages. A site can have more than one set, for example "Main" and "Landing".',
+    create: "New header & footer set",
     icon: PanelRight,
   },
   templates: {
-    name: "Templates",
-    about: "How a collection’s entries look as pages",
-    create: "New template",
+    name: "Collection templates",
+    about:
+      "The design every blog post (or other entry) uses. Edit it once for all entries.",
+    create: "New collection template",
     icon: LayoutDashboard,
   },
 };
@@ -292,8 +296,8 @@ function Uses({
           No collection or Single has a Page Builder field yet.
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Add a Blocks field to a collection or Single, in the Schema Builder or
-          in code, and it’s listed here.
+          Add one in the Schema Builder (choose Blocks) or in code, and it’s
+          listed here.
         </p>
       </Card>
     );

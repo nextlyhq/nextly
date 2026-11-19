@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { cpSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 
 import { defineConfig } from "tsdown";
@@ -11,6 +11,7 @@ import { defineConfig } from "tsdown";
  *   - src/admin/index.ts  → "./admin"  ("use client"; the blocks field's summary)
  *   - src/canvas/index.tsx → "./canvas" ("use client"; the site's canvas route page)
  *   - src/site/index.tsx   → "./site"   (server; `<SiteCode>` for the site's layout)
+ *   - src/site/page-code-boundary.tsx (client; imported by "./site", not exported)
  *
  * There was a `./render` entry, and a separate one for its error boundary — the
  * single client island inside an otherwise server-first renderer. Both are gone
@@ -45,6 +46,10 @@ export default defineConfig({
     // entry because it reads Next's draft mode, which the isomorphic root
     // entry must not import.
     "src/site/index.tsx",
+    // `<PageCodeBoundary>`, the one client component `./site` draws: its own
+    // entry so its `"use client"` heads its own file, which `./site` imports
+    // rather than bundling it into a server component's.
+    "src/site/page-code-boundary.tsx",
   ],
   format: ["esm"],
   // `.js` and `.d.ts`, the names the exports map already publishes.
@@ -61,9 +66,12 @@ export default defineConfig({
   target: "es2022",
   /*
    * Stylesheets stay as imports. They are copied into `dist/styles` below, not
-   * bundled, so the admin entry's `import "../styles/editor.css"` has to reach
-   * the host's bundler as written — which then loads the copied file, resolving
-   * its `@import` of the builder's sheet as an app's own import of it would.
+   * bundled, so `src/admin/editor-stylesheet.ts`'s `import
+   * "../styles/editor.css"` has to reach the host's bundler as an import —
+   * which then loads the copied file, resolving its `@import` of the builder's
+   * sheet as an app's own import of it would. The admin entry fetches that
+   * module on demand, so it is emitted as a chunk of its own wherever the
+   * build places it, and the build rewrites the relative path from there.
    */
   external: [/\.css$/],
   onSuccess() {
@@ -75,36 +83,10 @@ export default defineConfig({
       mkdirSync(dist, { recursive: true });
       cpSync(src, dist, { recursive: true, filter: isShippedStyle });
     }
-    dropStylesheetFromDeclarations(
-      join(process.cwd(), "dist/admin/index.d.ts")
-    );
   },
 });
 
 /** Whether a file under `src/styles` ships: a folder or a sheet, never a test. */
 function isShippedStyle(source: string): boolean {
   return !/\.test\.[cm]?[jt]sx?$/.test(source);
-}
-
-/** The admin entry's import of its stylesheet, as the declarations carry it. */
-const STYLESHEET_IMPORT_LINE = 'import "../styles/editor.css";';
-
-/**
- * Removes the stylesheet import from the admin entry's declarations, leaving
- * it in the JavaScript, which is where it loads the sheet.
- *
- * The declaration writer keeps every side-effect import of the source, and a
- * declaration importing a `.css` file names a module with no types behind it:
- * a consumer's resolution of the entry's types fails there (the
- * InternalResolutionError arethetypeswrong reports). A side-effect import
- * declares nothing, so the declarations lose no type by its removal.
- */
-function dropStylesheetFromDeclarations(file: string): void {
-  if (!existsSync(file)) return;
-  const text = readFileSync(file, "utf8");
-  const kept = text
-    .split("\n")
-    .filter(line => line.trim() !== STYLESHEET_IMPORT_LINE)
-    .join("\n");
-  if (kept !== text) writeFileSync(file, kept);
 }

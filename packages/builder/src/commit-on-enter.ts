@@ -12,7 +12,8 @@
 import type * as React from "react";
 
 /**
- * Whether this key event was the commit, having performed it.
+ * Whether this key event was the commit, having performed it. An Enter an
+ * input method is composing with is not one.
  *
  * Returns a boolean rather than swallowing the event, because callers have
  * their own keys to handle afterwards — a stepper reads the arrows, a rename
@@ -24,6 +25,11 @@ export function commitOnEnter(
   commit: () => void
 ): boolean {
   if (event.key !== "Enter") return false;
+  // The Enter that confirms an input method's candidate belongs to the IME:
+  // committing on it would write the characters still being composed. Safari
+  // reports that keydown by keyCode 229 rather than `isComposing`.
+  const native = event.nativeEvent;
+  if (native.isComposing || native.keyCode === 229) return false;
   event.preventDefault();
   commit();
   return true;

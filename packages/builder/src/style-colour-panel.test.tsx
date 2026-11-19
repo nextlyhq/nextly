@@ -23,6 +23,7 @@ import {
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -35,6 +36,15 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
 import { StyleInspectorPanel } from "./style-inspector-panel";
+
+/**
+ * Open a section of the panel unless it is open already: sections fold on
+ * their own, and one holding a value, or the first, starts open.
+ */
+function openSection(name: RegExp): void {
+  const header = screen.getByRole("button", { name });
+  if (header.getAttribute("aria-expanded") !== "true") fireEvent.click(header);
+}
 
 afterEach(() => {
   cleanup();
@@ -393,13 +403,25 @@ describe("a colour leaf draws a colour control", () => {
     ).toBe("");
   });
 
-  it("commits a typed colour on blur", () => {
+  it("writes a typed colour as it is typed, before blur", () => {
     const editor = mount(styles("#3b82f6"));
     const field = screen.getByRole("textbox", { name: "Colour" });
     fireEvent.change(field, { target: { value: "#ff0000" } });
-    expect(editor.applyAll).not.toHaveBeenCalled();
-    fireEvent.blur(field);
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    // The selected block's text colour, not merely some write of the value.
+    expect(editor.applyAll.mock.calls[0]?.[0]).toEqual([
+      expect.objectContaining({
+        kind: "update",
+        id: "a",
+        patch: expect.objectContaining({
+          styles: expect.objectContaining({
+            base: expect.objectContaining({
+              base: expect.objectContaining({ color: "#ff0000" }),
+            }),
+          }),
+        }),
+      }),
+    ]);
   });
 
   it("CLEARS rather than storing an empty colour", () => {
@@ -457,10 +479,33 @@ describe("a stored token reference", () => {
     expect(screen.getByText("color.primary")).toBeDefined();
   });
 
-  it("offers a clear that removes the reference", () => {
+  it("offers Unlink, which keeps the variable's colour as a plain one in one commit", () => {
     const editor = mount(styles({ $token: "color.ink" }));
-    fireEvent.click(screen.getByRole("button", { name: "Clear Colour" }));
+    // No Clear: removing the value is the row's Reset.
+    expect(screen.queryByRole("button", { name: "Clear Colour" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Colour" }));
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    const calls = JSON.stringify(editor.applyAll.mock.calls);
+    expect(calls).toContain('"#111111"');
+    expect(calls).not.toContain("$token");
+  });
+
+  it("draws the held variable in green, and says what it is in the trigger's tooltip", async () => {
+    mount(styles({ $token: "color.ink" }));
+    const trigger = swatch("Colour for Colour: Ink");
+    // Green is the stylesheet's, for this mark: see variable-choice-styles.test.
+    expect(trigger.hasAttribute("data-bound")).toBe(true);
+    expect(trigger.getAttribute("title")).toBeNull();
+    fireEvent.keyDown(document.body, { key: "Tab" });
+    act(() => trigger.focus());
+    expect((await screen.findAllByRole("tooltip"))[0]?.textContent).toBe(
+      "Colour variable Ink · #111111 · --site-color-ink"
+    );
+  });
+
+  it("offers no Unlink for a variable the site no longer has: there is no colour to keep", () => {
+    mount(styles({ $token: "color.missing" }));
+    expect(screen.queryByRole("button", { name: "Unlink Colour" })).toBeNull();
   });
 });
 
@@ -509,7 +554,7 @@ describe("the contrast readout", () => {
     // has to open Background rather than counting two readouts at once — which
     // is itself worth knowing: an author never sees both controls together.
     mount(styles("#000000", "#ffffff"));
-    fireEvent.click(screen.getByRole("button", { name: /^Background/ }));
+    openSection(/^Background/);
     expect(
       screen.getByRole("textbox", { name: "Background colour" })
     ).toHaveProperty("value", "#ffffff");
@@ -582,7 +627,7 @@ function movePicker(): void {
 }
 
 describe("a picker gesture is ONE editor operation", () => {
-  it("does not write while the picker is being moved, and writes once on close", async () => {
+  it("writes the gesture once on close when no frame came between its moves", async () => {
     // The UI picker fires `onColorChange` on every pointer event, so committing
     // each one turns a single drag into dozens of undo entries — and
     // `MAX_HISTORY` is 100, so one drag can evict unrelated earlier edits and
@@ -605,7 +650,9 @@ describe("a picker gesture is ONE editor operation", () => {
     movePicker();
     movePicker();
 
-    // Three moves, no writes.
+    // Three moves and no frame between them, so no write yet. A frame writes
+    // the latest move in the gesture's one run
+    // (`inspector-panel.live-typing.test`).
     expect(editor.applyAll).not.toHaveBeenCalled();
 
     // Closing ends the gesture and writes once.
@@ -624,17 +671,22 @@ describe("the contrast readout keeps up with the picker", () => {
     // an author is choosing, which is when a contrast readout is for. It also
     // put the swatch and the figure beside it on two different colours.
     mount(styles("#000000", "#ffffff"));
-    expect(screen.getAllByText(/Contrast 21\.0:1/).length).toBeGreaterThan(0);
+    // The text colour's own section: Background, open as well since it
+    // holds a value, says its own verdict on what is stored.
+    const field = screen.getByRole("textbox", { name: "Colour" });
+    const section = field.closest<HTMLElement>("[data-section]");
+    if (section === null) throw new Error("no section");
+    expect(
+      within(section).getAllByText(/Contrast 21\.0:1/).length
+    ).toBeGreaterThan(0);
 
     // Type a low-contrast colour without committing it.
-    fireEvent.change(screen.getByRole("textbox", { name: "Colour" }), {
-      target: { value: "#f0f0f0" },
-    });
+    fireEvent.change(field, { target: { value: "#f0f0f0" } });
 
     // The verdict follows immediately, and the old one is gone.
-    expect(screen.queryByText(/Contrast 21\.0:1/)).toBeNull();
+    expect(within(section).queryByText(/Contrast 21\.0:1/)).toBeNull();
     expect(
-      screen.getAllByText(/below AA for body text/).length
+      within(section).getAllByText(/below AA for body text/).length
     ).toBeGreaterThan(0);
   });
 });
@@ -810,7 +862,7 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
     expect(JSON.stringify(editor.applyAll.mock.calls[0])).toContain("$token");
   });
 
-  it("does not let one overwrite a CLEAR either", async () => {
+  it("does not let one overwrite an UNLINK either", async () => {
     const editor = mount(styles({ $token: "color.ink" }));
     openPicker();
     fireEvent.click(screen.getByRole("button", { name: "Custom colour" }));
@@ -827,10 +879,13 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
     // it rather than per keystroke.
     fireEvent.blur(hex);
 
-    fireEvent.click(screen.getByRole("button", { name: "Clear Colour" }));
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Colour" }));
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
     cleanup();
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(editor.applyAll.mock.calls[0])).not.toContain(
+      "#ff0000"
+    );
   });
 });
 
@@ -871,10 +926,10 @@ describe("a superseded gesture stays superseded even when the choice is refused"
 });
 
 describe("clearing a token while the picker is open", () => {
-  it("records ONE operation, and it is the clear", async () => {
-    // The Clear button sits outside the popover, so pressing it is an outside
+  it("records ONE operation, and it is the unlink", async () => {
+    // Unlink sits outside the popover, so pressing it is an outside
     // interaction: Radix dismisses on a document `pointerdown`, which closes the
-    // picker and commits its gesture, and only then does the click clear. That
+    // picker and commits its gesture, and only then does the click unlink. That
     // is two history entries, and one undo returns an intermediate literal the
     // author never chose. The pointer-down supersede drops the gesture first.
     const editor = mount(styles({ $token: "color.ink" }));
@@ -893,21 +948,19 @@ describe("clearing a token while the picker is open", () => {
     // it rather than per keystroke.
     fireEvent.blur(hex);
 
-    // The real order: React's handler on the button, then the document
-    // dismissal Radix listens for, then the click.
     // The real interaction: a pointer press on the button dismisses the popover
     // — Radix listens for that on the document — and the click follows. One
     // intent, however many events it takes.
-    const clear = screen.getByRole("button", { name: "Clear Colour" });
-    fireEvent.pointerDown(clear);
-    fireEvent.click(clear);
+    const unlink = screen.getByRole("button", { name: "Unlink Colour" });
+    fireEvent.pointerDown(unlink);
+    fireEvent.click(unlink);
     await settle();
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    // A clear removes the entry rather than writing one.
-    expect(JSON.stringify(editor.applyAll.mock.calls[0])).not.toContain(
-      "#ff0000"
-    );
+    // The variable's colour, not the gesture's.
+    const written = JSON.stringify(editor.applyAll.mock.calls[0]);
+    expect(written).toContain('"#111111"');
+    expect(written).not.toContain("#ff0000");
   });
 });
 

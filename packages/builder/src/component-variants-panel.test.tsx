@@ -97,6 +97,61 @@ function section(): HTMLElement {
 }
 
 describe("a component's variants in its own view", () => {
+  it("draws no section where the host keeps them to the component's own view", () => {
+    // A header edited in place from a page: its canvas has no variant to
+    // preview, so its variants are edited in its own view alone.
+    mount(component({ variants: { a: { label: "Night", overrides: {} } } }), {
+      editedInOwnView: true,
+    });
+
+    expect(screen.queryByRole("region", { name: "Variants" })).toBeNull();
+    // Its exposed fields are still listed.
+    expect(screen.getByRole("region", { name: "Fields" })).toBeTruthy();
+  });
+
+  it("says where its variants are edited, with a button that opens that view", () => {
+    const opened: string[] = [];
+    mount(component({ variants: { a: { label: "Night", overrides: {} } } }), {
+      editedInOwnView: true,
+      onOpenOwnView: () => opened.push("own view"),
+    });
+
+    // Under its fields, where the section would be.
+    expect(
+      screen.getByText("Variants are edited in the component’s own view.")
+    ).toBeTruthy();
+    const open = screen.getByRole("button", { name: "Edit component" });
+    // A real button in the tab order, so a keyboard reaches it.
+    expect(open.tagName).toBe("BUTTON");
+    expect(open.hasAttribute("disabled")).toBe(false);
+    expect(open.getAttribute("tabindex")).not.toBe("-1");
+    fireEvent.click(open);
+    expect(opened).toEqual(["own view"]);
+  });
+
+  it("says where its variants are edited, without a button where the host cannot open it", () => {
+    mount(component({ variants: { a: { label: "Night", overrides: {} } } }), {
+      editedInOwnView: true,
+    });
+
+    expect(
+      screen.getByText("Variants are edited in the component’s own view.")
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit component" })).toBeNull();
+  });
+
+  it("says nothing of another view in the component's own view", () => {
+    mount(component({ variants: { a: { label: "Night", overrides: {} } } }), {
+      onOpenOwnView: () => undefined,
+    });
+
+    expect(section()).toBeTruthy();
+    expect(document.body.textContent).not.toContain(
+      "Variants are edited in the component’s own view."
+    );
+    expect(screen.queryByRole("button", { name: "Edit component" })).toBeNull();
+  });
+
   it("adds one with its name ready to type over, as one undo step", () => {
     const editor = mount(component());
     fireEvent.click(
@@ -405,5 +460,92 @@ describe("a component's variants in its own view", () => {
       })
     );
     expect(opened).toEqual(["a", undefined]);
+  });
+});
+
+describe("a variant of a component holding a Text", () => {
+  it("shows the Text's words, and sets plain words in their place", () => {
+    const editor = mount(
+      component({
+        nodes: [
+          {
+            id: "h1",
+            type: "core/text",
+            version: 2,
+            props: {
+              text: {
+                root: {
+                  type: "root",
+                  children: [
+                    {
+                      type: "paragraph",
+                      children: [
+                        { type: "text", text: "Hand ", format: 0 },
+                        { type: "text", text: "made", format: 1 },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+        variants: { a: { label: "Night", overrides: {} } },
+      })
+    );
+    fireEvent.click(
+      within(section()).getByRole("button", {
+        name: "Show the values of Night",
+      })
+    );
+    const value = within(section()).getByRole("textbox", { name: "Headline" });
+    expect(value).toHaveProperty("value", "Hand made");
+    fireEvent.change(value, { target: { value: "Machine made" } });
+    fireEvent.keyDown(value, { key: "Enter" });
+    expect(variantsOf(editor())?.a?.overrides).toEqual({
+      headline: "Machine made",
+    });
+  });
+});
+
+describe("a variant of a component holding a Text with lines", () => {
+  it("keeps the lines in its field", () => {
+    mount(
+      component({
+        nodes: [
+          {
+            id: "h1",
+            type: "core/text",
+            version: 2,
+            props: {
+              text: {
+                root: {
+                  type: "root",
+                  children: [
+                    {
+                      type: "paragraph",
+                      children: [
+                        { type: "text", text: "One", format: 0 },
+                        { type: "linebreak" },
+                        { type: "text", text: "Two", format: 0 },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+        variants: { a: { label: "Night", overrides: {} } },
+      })
+    );
+    fireEvent.click(
+      within(section()).getByRole("button", {
+        name: "Show the values of Night",
+      })
+    );
+    const value = within(section()).getByRole("textbox", { name: "Headline" });
+    expect(value.localName).toBe("textarea");
+    expect(value).toHaveProperty("value", "One\nTwo");
   });
 });

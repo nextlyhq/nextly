@@ -16,6 +16,7 @@
 import type { BlockDocument, BlockNode } from "./document";
 import { isPlainRecord } from "./plain-record";
 import { defineEntry } from "./safe-record";
+import { variantPrunes } from "./variant-prune";
 
 /** Upgrade a node's props from one schema version to the next. Must be pure. */
 export type MigrateFn = (
@@ -29,12 +30,190 @@ export type MigrateFn = (
  */
 export type MigrationMap = Record<number, MigrateFn>;
 
+/**
+ * Props a version step renames, keyed by the FROM version, each old name to
+ * its new one: `{ 1: { citeUrl: "href" } }`. Applied before that step's
+ * function, to the node's props and to its bindings alike, so a value bound
+ * to a renamed prop moves with the value stored in it: one rename, one
+ * place, and no binding left addressing a prop the block no longer has.
+ *
+ * @experimental
+ */
+export type MigrationRenames = Record<number, Readonly<Record<string, string>>>;
+
+/**
+ * Props a version step drops, keyed by the FROM version: `{ 1: ["content"] }`.
+ * Removed once that step's function has run (so it can still read them), from
+ * the node's props and its bindings alike, and any component exposure into
+ * one goes with it: an upgrade leaves no value, binding or setting addressing
+ * a prop the block no longer has.
+ *
+ * @experimental
+ */
+export type MigrationDrops = Record<number, readonly string[]>;
+
 /** What migration needs to know about one block type. */
 export interface BlockMigrationInfo {
   /** The block definition's current schema version. */
   version: number;
   /** Upgrade steps keyed by from-version; omitted when the block never changed. */
   migrate?: MigrationMap;
+  /** Props each step renames, keyed by from-version. @experimental */
+  renames?: MigrationRenames;
+  /** Props each step drops, keyed by from-version. @experimental */
+  drops?: MigrationDrops;
+}
+
+/**
+ * A block definition's migration info, the one reading every migration
+ * source takes, so a field added here reaches all of them.
+ */
+export function migrationInfoOf(definition: {
+  readonly version: number;
+  readonly migrate?: MigrationMap | undefined;
+  readonly renames?: MigrationRenames | undefined;
+  readonly drops?: MigrationDrops | undefined;
+}): BlockMigrationInfo {
+  return {
+    version: definition.version,
+    ...(definition.migrate === undefined
+      ? {}
+      : { migrate: definition.migrate }),
+    ...(definition.renames === undefined
+      ? {}
+      : { renames: definition.renames }),
+    ...(definition.drops === undefined ? {} : { drops: definition.drops }),
+  };
+}
+
+/** A record without the names a step drops; the same record when none is set. */
+function withoutDropped<V>(
+  record: Readonly<Record<string, V>>,
+  names: readonly string[] | undefined
+): Record<string, V> {
+  if (names === undefined || !names.some(name => Object.hasOwn(record, name))) {
+    return record;
+  }
+  const next = { ...record };
+  for (const name of names) delete next[name];
+  return next;
+}
+
+/**
+ * A record with each old key a step renames moved to its new name, where the
+ * old one is set and the new one is not (a value already at the new name is
+ * the newer, and stays). The same record when nothing moves.
+ */
+function withRenames<V>(
+  record: Readonly<Record<string, V>>,
+  names: Readonly<Record<string, string>> | undefined
+): Record<string, V> {
+  if (names === undefined) return record;
+  let next: Record<string, V> | undefined;
+  for (const [from, to] of Object.entries(names)) {
+    if (!Object.hasOwn(record, from) || Object.hasOwn(record, to)) continue;
+    next ??= { ...record };
+    defineEntry(next, to, next[from]);
+    delete next[from];
+  }
+  return next ?? record;
+}
+
+/**
+ * A node's bindings through the steps from `from` to `to`: each step's renames
+ * applied, then its drops. The same record when nothing moves.
+ */
+function bindingsThroughSteps(
+  bindings: BlockNode["bindings"],
+  steps: NodeRenames
+): BlockNode["bindings"] {
+  if (!isPlainRecord(bindings)) return bindings;
+  let current = bindings;
+  for (let v = steps.from; v < steps.to; v++) {
+    current = withoutDropped(
+      withRenames(current, steps.renames?.[v]),
+      steps.drops?.[v]
+    );
+  }
+  return current;
+}
+
+/**
+ * The renames and drops one node went through: its steps' names, from and to
+ * a version.
+ */
+interface NodeRenames {
+  renames: MigrationRenames | undefined;
+  drops: MigrationDrops | undefined;
+  from: number;
+  to: number;
+}
+
+/**
+ * A migrated node with its bindings as the steps left them: as stored when
+ * nothing moved, and with no `bindings` at all once every one was dropped.
+ */
+function withMovedBindings(
+  node: BlockNode,
+  stored: BlockNode["bindings"],
+  bindings: BlockNode["bindings"]
+): BlockNode {
+  if (bindings === stored) return node;
+  if (isPlainRecord(bindings) && Object.keys(bindings).length === 0) {
+    const { bindings: _none, ...rest } = node;
+    return rest;
+  }
+  return { ...node, bindings };
+}
+
+/** The mark an exposure into a dropped prop is replaced by, then filtered on. */
+const DROPPED: unique symbol = Symbol("dropped exposure");
+
+/**
+ * A component's exposures with each path into a renamed prop re-pointed at the
+ * prop's new name, and each into a dropped prop removed, for the node it was
+ * renamed or dropped on. A placement writes its override through the
+ * exposure's path, so a path left on the old name writes where the upgraded
+ * block no longer reads. Only the path's first segment is a prop name; the
+ * rest is inside its value and moves with it. The same list when nothing
+ * moves.
+ */
+function exposuresRenamed(
+  exposed: unknown,
+  moved: ReadonlyMap<string, NodeRenames>
+): unknown {
+  if (!Array.isArray(exposed) || moved.size === 0) return exposed;
+  let changed = false;
+  const next = exposed.map((exposure: unknown) => {
+    if (!isPlainRecord(exposure)) return exposure;
+    const { nodeId, propPath } = exposure;
+    if (typeof nodeId !== "string" || typeof propPath !== "string") {
+      return exposure;
+    }
+    const steps = moved.get(nodeId);
+    if (steps === undefined) return exposure;
+    const dot = propPath.indexOf(".");
+    let head = dot === -1 ? propPath : propPath.slice(0, dot);
+    for (let v = steps.from; v < steps.to; v++) {
+      const to = steps.renames?.[v]?.[head];
+      if (to !== undefined) head = to;
+      // An exposure into a prop the step drops goes with the prop. A
+      // visibility exposure drives the node, not the prop its path names, so
+      // it stays.
+      if (
+        exposure.type !== "visibility" &&
+        steps.drops?.[v]?.includes(head) === true
+      ) {
+        changed = true;
+        return DROPPED;
+      }
+    }
+    const path = dot === -1 ? head : head + propPath.slice(dot);
+    if (path === propPath) return exposure;
+    changed = true;
+    return { ...exposure, propPath: path };
+  });
+  return changed ? next.filter(each => each !== DROPPED) : exposed;
 }
 
 /**
@@ -153,7 +332,9 @@ export function migrateProps(
   props: Record<string, unknown>,
   fromVersion: number,
   toVersion: number,
-  map: MigrationMap | undefined
+  map: MigrationMap | undefined,
+  renames?: MigrationRenames,
+  drops?: MigrationDrops
 ): PropsMigrationResult {
   if (fromVersion >= toVersion) return { props };
   // Reject non-integer, negative, or absurdly wide spans before iterating: an
@@ -179,7 +360,7 @@ export function migrateProps(
     try {
       // Widen to unknown: a step's declared return type does not bind a
       // plain-JS caller, so its result is validated at runtime.
-      const next: unknown = step(current);
+      const next: unknown = step(withRenames(current, renames?.[v]));
       // A step must return a props object; anything else is a failed upgrade.
       if (typeof next !== "object" || next === null || Array.isArray(next)) {
         return {
@@ -190,7 +371,7 @@ export function migrateProps(
           },
         };
       }
-      current = next as Record<string, unknown>;
+      current = withoutDropped(next as Record<string, unknown>, drops?.[v]);
     } catch (error) {
       return {
         props: current,
@@ -258,27 +439,27 @@ export function nodeAtPointer(
     : undefined;
 }
 
+/** A document's exposures as stored, whatever its kind. @internal */
+export function exposedOf(doc: BlockDocument): unknown {
+  return (doc as { exposed?: unknown }).exposed;
+}
+
 /**
- * Upgrade every node in a document to its block's current schema version.
+ * One upgrade of every node, with the component exposures and variants that
+ * follow from it. `migrateDocument` (`migrate-document.ts`) is the whole
+ * upgrade: it settles the blocks following a setting this pass would drop,
+ * then runs it.
  *
- * - A type the source does not know (an unregistered/plugin block) is preserved
- *   untouched, including its version — nothing is lost.
- * - A node already at (or ahead of) the current version is left as is.
- * - A node behind the current version is chained forward. On success its props
- *   and version are updated; on failure it keeps its last-good props and is
- *   flagged `migrationFailed`, and the failure is collected for the caller.
- *
- * Immutable: returns a new document; the input is never modified. It recurses
- * over the node tree, whose depth is bounded by the document limits validation
- * enforces, so migration is meant to run on structurally-valid documents (pair
- * it with `validate` for untrusted input).
+ * @internal
  */
-export function migrateDocument(
+export function migrateDocumentOnce(
   doc: BlockDocument,
   source: MigrationSource
 ): MigrateResult {
   const failures: MigrationFailure[] = [];
   const rewritten: MigratedNode[] = [];
+  // The renames each node went through, by id, for a component's exposures.
+  const renamedOn = new Map<string, NodeRenames>();
 
   // Called from every branch that replaces a node's props, rather than derived
   // afterwards from what changed. A second pass comparing documents would be a
@@ -311,7 +492,9 @@ export function migrateDocument(
   const migrateNode = (node: BlockNode, path: string): BlockNode => {
     if (!isPlainRecord(node)) return node;
 
-    let next = node;
+    // A node, not the record the guard above narrowed it to: a migrated node
+    // may lose its `bindings` key, which only a `BlockNode` describes.
+    let next: BlockNode = node;
     const info = source.get(node.type);
     if (
       info !== undefined &&
@@ -324,8 +507,27 @@ export function migrateDocument(
         node.props,
         node.version,
         info.version,
-        info.migrate
+        info.migrate,
+        info.renames,
+        info.drops
       );
+      // A value bound to a renamed prop moves with it, and one bound to a
+      // dropped prop goes, through the steps run.
+      const reached = result.failure?.fromVersion ?? info.version;
+      const steps: NodeRenames = {
+        renames: info.renames,
+        drops: info.drops,
+        from: node.version,
+        to: reached,
+      };
+      if (
+        (info.renames !== undefined || info.drops !== undefined) &&
+        typeof node.id === "string"
+      ) {
+        renamedOn.set(node.id, steps);
+      }
+      const bindings = bindingsThroughSteps(node.bindings, steps);
+
       if (result.failure) {
         failures.push({
           path,
@@ -338,12 +540,16 @@ export function migrateDocument(
         // step that failed): the props are already in that version's shape, so
         // the version must match or a retry would re-run completed, possibly
         // non-idempotent steps. Flag the node so a renderer can placeholder it.
-        next = {
-          ...node,
-          props: result.props,
-          version: result.failure.fromVersion,
-          migrationFailed: true,
-        };
+        next = withMovedBindings(
+          {
+            ...node,
+            props: result.props,
+            version: result.failure.fromVersion,
+            migrationFailed: true,
+          },
+          node.bindings,
+          bindings
+        );
         // Reported when steps ran before the failing one, because the props are
         // then no longer the stored ones and a reader's conclusions about them
         // are stale. A failure at the FIRST step ran nothing, so the props are
@@ -356,7 +562,11 @@ export function migrateDocument(
           result.props
         );
       } else {
-        next = { ...node, props: result.props, version: info.version };
+        next = withMovedBindings(
+          { ...node, props: result.props, version: info.version },
+          node.bindings,
+          bindings
+        );
         if (next.migrationFailed) delete next.migrationFailed;
         recordRewrite(node, path, node.version, info.version, result.props);
       }
@@ -391,5 +601,79 @@ export function migrateDocument(
       )
     : doc.nodes;
 
-  return { doc: { ...doc, nodes }, failures, rewritten };
+  // A component's exposures name a node's prop by path: re-pointed where the
+  // node's prop was renamed, and removed where it was dropped, with their
+  // values in the variants. `exposed` is left out of a document that has none.
+  const held = exposedOf(doc);
+  const exposed = exposuresRenamed(held, renamedOn);
+  const heldVariants = (doc as { variants?: unknown }).variants;
+  const variants =
+    exposed === held
+      ? heldVariants
+      : variantsWithout(heldVariants, exposureIdsGone(held, exposed));
+  return {
+    doc: {
+      ...doc,
+      nodes,
+      ...(exposed === held ? {} : { exposed }),
+      ...(variants === heldVariants ? {} : { variants }),
+    },
+    failures,
+    rewritten,
+  };
+}
+
+/** The ids on a list of exposures, each once. */
+function exposureIds(exposed: unknown): Set<string> {
+  const ids = new Set<string>();
+  if (!Array.isArray(exposed)) return ids;
+  for (const exposure of exposed as unknown[]) {
+    if (isPlainRecord(exposure) && typeof exposure.id === "string") {
+      ids.add(exposure.id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * The exposure ids an upgrade removed: on a row it held and on no row left.
+ * Stored data can hold one id on two rows, and while one remains the field is
+ * live.
+ *
+ * @internal
+ */
+export function exposureIdsGone(
+  held: unknown,
+  left: unknown
+): ReadonlySet<string> {
+  const kept = exposureIds(left);
+  const gone = new Set<string>();
+  for (const id of exposureIds(held)) if (!kept.has(id)) gone.add(id);
+  return gone;
+}
+
+/**
+ * A component's variants without the values of the exposures an upgrade
+ * removed, as `variantPrunes` states it for every removal of a field. A
+ * variant left with no values is kept, as removing a field in the editor keeps
+ * it. The same record when nothing goes.
+ */
+function variantsWithout(
+  variants: unknown,
+  gone: ReadonlySet<string>
+): unknown {
+  const prunes = new Map(
+    variantPrunes(variants, gone).map(prune => [prune.variant, prune])
+  );
+  if (prunes.size === 0 || !isPlainRecord(variants)) return variants;
+  // Built through `fromEntries`, which defines each key as the record's own,
+  // so a stored key such as `__proto__` stays a variant, not a prototype.
+  return Object.fromEntries(
+    Object.entries(variants).map(([key, variant]) => {
+      const prune = prunes.get(key);
+      return prune === undefined || !isPlainRecord(variant)
+        ? [key, variant]
+        : [key, { ...variant, overrides: prune.overrides }];
+    })
+  );
 }

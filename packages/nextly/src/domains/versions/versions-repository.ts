@@ -19,6 +19,7 @@ import type {
 } from "../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../schemas/versions/types";
 
+import type { ChangedParts } from "./changed-parts";
 import type {
   VersionsDbApi,
   VersionsWhere,
@@ -72,6 +73,10 @@ const DELETE_CHUNK_SIZE = 500;
 // Every column except `snapshot`, so metadata reads (history lists) can project
 // away the potentially large JSON payload instead of transferring then dropping
 // it. Keep in sync with VersionRow when adding a metadata column.
+//
+// The parts a version changed (`changed_locales`, `shared_changed`) are left
+// out: a history list hands these rows out whole, and no read of the parts is
+// offered yet, so listing them here would publish them unasked.
 const VERSION_META_COLUMNS = [
   "id",
   "scopeKind",
@@ -221,6 +226,72 @@ function orderClause(
   ];
 }
 
+/**
+ * The parts a version changed, as their two columns store them. The language
+ * codes are pre-stringified, as `snapshot` is in `insertVersion` and for the
+ * same reason; absent parts store NULL in both, which reads as unknown.
+ */
+function storedParts(parts: ChangedParts | null | undefined): {
+  changedLocales: string | null;
+  sharedChanged: boolean | null;
+} {
+  return parts
+    ? {
+        changedLocales: JSON.stringify(parts.locales),
+        sharedChanged: parts.shared,
+      }
+    : { changedLocales: null, sharedChanged: null };
+}
+
+/**
+ * The parts a stored row names: the inverse of `storedParts`, read back as
+ * each dialect returns the two columns. The language codes come back as JSON
+ * text or as a parsed array, and the shared flag as a boolean or as 0/1
+ * (SQLite and MySQL). It is decoded here alone, so every reader of the parts
+ * sees one shape whatever the dialect.
+ *
+ * NULL in either column is a row recorded before versions named their parts,
+ * which reads as unknown (`null`), never as "changed nothing". So does a value
+ * in neither form: unknown keeps the row under the rule that predates the
+ * parts, where reading a part into it would be a guess.
+ */
+export function partsFromStorage(
+  changedLocales: unknown,
+  sharedChanged: unknown
+): ChangedParts | null {
+  const locales = storedLocales(changedLocales);
+  const shared =
+    sharedChanged === true || sharedChanged === 1
+      ? true
+      : sharedChanged === false || sharedChanged === 0
+        ? false
+        : null;
+  return locales === null || shared === null ? null : { locales, shared };
+}
+
+/** The language codes of `changed_locales`, or null when it holds none. */
+function storedLocales(value: unknown): string[] | null {
+  let decoded: unknown = value;
+  if (typeof value === "string") {
+    try {
+      decoded = JSON.parse(value);
+    } catch {
+      // Not JSON: not a list this column was written with.
+      return null;
+    }
+  }
+  return Array.isArray(decoded) &&
+    decoded.every((code): code is string => typeof code === "string")
+    ? [...decoded]
+    : null;
+}
+
+/** A durable row as `listDurableForPrune` reads it, before its parts decode. */
+type StoredPrunableVersion = Omit<PrunableVersion, "changedParts"> & {
+  changedLocales: unknown;
+  sharedChanged: unknown;
+};
+
 /** Identifies the document a version belongs to. */
 export interface VersionRef {
   scopeKind: VersionScopeKind;
@@ -241,6 +312,8 @@ export interface InsertVersionInput {
   sourceVersionNo?: number | null;
   /** The version each restored field came from; see `restored-from`. */
   fieldSources?: Readonly<Record<string, number>> | null;
+  /** The parts this version changed; see `changed-parts`. Null: unknown. */
+  changedParts?: ChangedParts | null;
   createdBy?: string | null;
 }
 
@@ -390,6 +463,7 @@ export class VersionsRepository {
         fieldSources: input.fieldSources
           ? JSON.stringify(input.fieldSources)
           : null,
+        ...storedParts(input.changedParts),
         createdBy: input.createdBy ?? null,
         createdAt: now,
         updatedAt: now,
@@ -555,6 +629,11 @@ export class VersionsRepository {
     locale: string | null;
     snapshot: unknown;
     createdBy?: string | null;
+    /**
+     * The parts this draft holds (`draftSlotParts`), recorded on its row.
+     * Absent leaves a rewritten row's as they were, and a new row's unknown.
+     */
+    parts?: ChangedParts;
   }): Promise<void> {
     const now = new Date();
     const serializedSnapshot = this.serializeSnapshot(input.snapshot);
@@ -579,6 +658,7 @@ export class VersionsRepository {
           // Advanced on every rewrite, so a recovery point's base can tell the
           // draft was written after it began.
           revision: existing[0].revision + 1,
+          ...(input.parts ? storedParts(input.parts) : {}),
         },
         where
       );
@@ -604,6 +684,7 @@ export class VersionsRepository {
       // holds the one-per-document-per-locale rule the read above cannot.
       draftKey: workingDraftKey(input.ref, input.locale ?? null),
       sourceVersionNo: null,
+      ...storedParts(input.parts),
       createdBy: input.createdBy ?? null,
       createdAt: now,
       updatedAt: now,
@@ -1134,16 +1215,17 @@ export class VersionsRepository {
 
   /**
    * Durable rows for one document, newest-first, projecting only what the
-   * retention rules need: the language, name and restore source decide what is
-   * always kept, and the snapshot is never read. Autosave rows are excluded
-   * because they never count toward the cap.
+   * retention rules need: the parts each version changed (or, for a version
+   * recorded before those, its language), its name and its restore source
+   * decide what is always kept, and the snapshot is never read. Autosave rows
+   * are excluded because they never count toward the cap.
    */
   async listDurableForPrune(
     ref: VersionRef,
     // A locking read, after a lost allocation race: see `getMaxVersionNo`.
     options: { latest?: boolean } = {}
   ): Promise<PrunableVersion[]> {
-    return this.db.select<PrunableVersion>(TABLE, {
+    const rows = await this.db.select<StoredPrunableVersion>(TABLE, {
       ...(options.latest ? { forUpdate: true } : {}),
       columns: [
         "id",
@@ -1153,6 +1235,8 @@ export class VersionsRepository {
         "label",
         "sourceVersionNo",
         "fieldSources",
+        "changedLocales",
+        "sharedChanged",
       ],
       where: {
         and: [
@@ -1169,6 +1253,12 @@ export class VersionsRepository {
         { column: "createdAt", direction: "desc" },
       ],
     });
+    // Each dialect hands the parts back in its own form; retention reads them
+    // decoded, as one shape.
+    return rows.map(({ changedLocales, sharedChanged, ...row }) => ({
+      ...row,
+      changedParts: partsFromStorage(changedLocales, sharedChanged),
+    }));
   }
 
   /** Where the ONE rolling autosave row for a document and author lives. */

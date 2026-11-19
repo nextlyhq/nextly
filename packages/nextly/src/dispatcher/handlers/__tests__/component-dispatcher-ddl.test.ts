@@ -56,6 +56,24 @@ vi.mock("../../../domains/schema/schema-version", async importOriginal => ({
   writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
 }));
 
+// The naming a new field group's table takes is read from the catalog (`field-group-storage-names`),
+// judged against real databases in `field-group-created-after-migration.integration.test.ts`. Here
+// the site is one on the legacy names, so the statements stay on the request.
+vi.mock(
+  "../../../domains/field-groups/services/field-group-storage-names",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../domains/field-groups/services/field-group-storage-names")
+      >();
+    return {
+      ...actual,
+      resolveFieldGroupStorageNames: async () =>
+        actual.storageNamesFor("legacy"),
+    };
+  }
+);
+
 vi.mock("../../helpers/di", () => ({
   getComponentRegistryFromDI: vi.fn(),
   getFieldGroupMetadataServiceFromDI: vi.fn(),

@@ -146,6 +146,27 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * schema push runs in, the app's password digester, plugins' startup reads, a
  * field rewrite across versions, a Single read's column plan); 1,390 holds
  * whether CI measures a few fewer.
+ * Both rose, to 103 and 1,460, when a week of features grew the graph that
+ * the registry, the Direct API, the content routes and the CLI's migrate
+ * commands reach: 101 and 1,432 measured, against 63 and 1,354 measured on
+ * the previous pin's code. One new edge had loaded the service registry into
+ * a file that never boots: a reload of the dynamic tables registers the
+ * configuration's own tables through the start's step, and imported it from
+ * `di/register`. The step now has a module of its own,
+ * `di/register-config-tables`, which took that reload's test from 1,619
+ * modules to 163. The rest is features' modules on chains the files already
+ * held (review workflows in the Direct API and REST, entry details and
+ * translation provenance in the collection and Single reads, field type
+ * changes in the schema pipeline, email delivery activity, migrate's data
+ * steps): no file newly loads the registry or the boot entry through it.
+ * Thirty-two files that sat under the heavy line crossed it, each gaining
+ * 39 to 123 modules, and the heavy files gained 32 to 155 (92 the median)
+ * on the chains they already held. Five new tests are heavy: a REST permission test and a
+ * boot refusal's load the route handler and the registry by design, and the
+ * CLI's error-code registry, a data step's and a public draft route's sit
+ * just over the line. A content route's preview warning test now drives the
+ * public route, which loads the boot entry where it serves a page. Both
+ * hold whether CI measures a few fewer.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -153,7 +174,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 65, tailMeanModules: 1_390 };
+export const BUDGET = { heavyFiles: 103, tailMeanModules: 1_460 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

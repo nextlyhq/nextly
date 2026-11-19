@@ -129,10 +129,15 @@ export { nextlyMediaUsageMysql as nextlyMediaUsage } from "../media-usage/mysql"
 // note above gives — this map is what the push creates.
 export { nextlyEmailBrandMysql as nextlyEmailBrand } from "../email-brand/mysql";
 
+// The external identities a person signed in with; in the bundle for the
+// reason the email brand above gives — this map is what the push creates.
+export { nextlyExternalIdentitiesMysql as nextlyExternalIdentities } from "../external-identities/mysql";
+
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsMysql as nextlyVersionViews } from "../version-views/mysql";
 export { nextlyReviewStatesMysql as nextlyReviewStates } from "../review-states/mysql";
+export { nextlyTranslationProvenanceMysql as nextlyTranslationProvenance } from "../translation-provenance/mysql";
 export { nextlyWorkflowSettingsMysql as nextlyWorkflowSettings } from "../workflow-settings/mysql";
 export { nextlyScheduleWindowsMysql as nextlyScheduleWindows } from "../schedule-windows/mysql";
 // The record of content events; in the bundle so freshPushSchema creates the

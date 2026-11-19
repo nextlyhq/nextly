@@ -89,6 +89,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { toHex } from "@nextlyhq/ui/color";
 
+import { colourOrder } from "./colour-groups";
 import { CSS_NUMBER } from "./style-numeric";
 import { lengthFamilyOf, type LengthFamily } from "./tokens-studio";
 
@@ -227,6 +228,25 @@ export function variablesFor(
 }
 
 /**
+ * The variables a picker lists, without the colours the site hides (its
+ * unused built-in colours, while it hides them), keeping the one the field
+ * holds, so a field never stops naming its own value.
+ */
+export function shownVariables(
+  offered: readonly SiteVariable[],
+  hidden: ReadonlySet<string>,
+  held: string | null
+): readonly SiteVariable[] {
+  if (hidden.size === 0) return offered;
+  return offered.filter(
+    variable =>
+      variable.kind !== "color" ||
+      variable.identity === held ||
+      !hidden.has(variable.identity)
+  );
+}
+
+/**
  * Whether the leaf accepts this variable's value, in the mode asked for, by
  * the engine's own rule for the leaf, the one a typed value goes through.
  *
@@ -330,7 +350,11 @@ export function foldedLeaf(
 /** Whether a variable belongs to the family this leaf's field offers. */
 function madeFor(token: SiteVariable, leaf: StyleLeaf): boolean {
   const family = fieldFamilyOf(leaf.cssProperty);
-  return family === undefined || lengthFamilyOf(token) === family;
+  const own = lengthFamilyOf(token);
+  // A line height that is a plain number is made for line height alone:
+  // offered on an opacity field, H1's line height says nothing true there.
+  if (own === "line-height" && token.kind === "number") return own === family;
+  return family === undefined || own === family;
 }
 
 /**
@@ -380,12 +404,35 @@ function offeredTokens(
   const hit = byMode.get(mode);
   if (hit !== undefined) return hit;
   const resolved = resolveSiteTokens(tokens);
-  const built = emittableTokens(resolved, mode).map(token =>
-    siteVariableOf(token, mode)
+  const built = inColourOrder(
+    emittableTokens(resolved, mode).map(token => siteVariableOf(token, mode)),
+    colourOrder(resolved)
   );
   byMode.set(mode, built);
   cache.set(tokens, byMode);
   return built;
+}
+
+/**
+ * The variables with their colours in the site's colour order, the one the
+ * Design panel lists them in; every other variable keeps its place.
+ */
+function inColourOrder(
+  variables: readonly SiteVariable[],
+  order: readonly string[]
+): SiteVariable[] {
+  const rank = new Map(order.map((identity, at) => [identity, at]));
+  const colours = variables
+    .filter(variable => variable.kind === "color")
+    .sort(
+      (a, b) =>
+        (rank.get(a.identity) ?? order.length) -
+        (rank.get(b.identity) ?? order.length)
+    );
+  let next = 0;
+  return variables.map(variable =>
+    variable.kind === "color" ? (colours[next++] ?? variable) : variable
+  );
 }
 
 /**
@@ -925,6 +972,30 @@ export function contrastObscuredIn(
   styles: NodeStyles | undefined
 ): string | undefined {
   return obscuringAnywhereIn(styles, OBSCURING_PROPERTIES);
+}
+
+/**
+ * What on one node stands over a pair, split by how far it reaches: `local`
+ * (a background image or gradient, a shadow) is painted behind the node's
+ * content and stops mattering under a child that paints an opaque
+ * background of its own; `subtree` (opacity, a filter, a blend) alters
+ * everything inside. Any state or width, as {@link contrastObscuredIn} reads.
+ */
+export function contrastObscuringIn(styles: NodeStyles | undefined): {
+  readonly local?: string;
+  readonly subtree?: string;
+} {
+  const subtree = obscuringAnywhereIn(styles, SUBTREE_OBSCURING_PROPERTIES);
+  const local = obscuringAnywhereIn(
+    styles,
+    OBSCURING_PROPERTIES.filter(
+      property => !SUBTREE_OBSCURING_PROPERTIES.includes(property)
+    )
+  );
+  return {
+    ...(local === undefined ? {} : { local }),
+    ...(subtree === undefined ? {} : { subtree }),
+  };
 }
 
 /**

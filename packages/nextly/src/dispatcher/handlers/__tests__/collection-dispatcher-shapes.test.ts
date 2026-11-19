@@ -979,6 +979,9 @@ function makeFakeRegistry(seed: {
 function makeFakeAdapter() {
   return {
     dialect: "postgresql" as const,
+    // The real adapter's dialect question, asked by the translation-move precondition a localized
+    // apply runs before it moves any column.
+    getCapabilities: () => ({ dialect: "postgresql" as const }),
     // The index names a change takes are looked up across the schema even for a table that does
     // not exist yet: nothing holds them here, in node-postgres's `{ rows }` shape.
     getDrizzle: vi.fn().mockReturnValue({
@@ -987,6 +990,9 @@ function makeFakeAdapter() {
     update: vi.fn().mockResolvedValue(undefined),
     // Asked before the apply, for the index names a change takes and for the companion.
     tableExists: vi.fn().mockResolvedValue(false),
+    // Asked after the registry write (`afterEnclosingCommit`): outside a transaction here, as
+    // the real adapter answers where no file's transaction encloses the write.
+    inTransaction: () => false,
   };
 }
 
@@ -1440,7 +1446,11 @@ describe("dispatchCollections, localized persistence failure", () => {
     });
     const adapter = {
       dialect: "postgresql" as const,
+      // Asked by the translation-move precondition, as on the real adapter.
+      getCapabilities: () => ({ dialect: "postgresql" as const }),
       tableExists: vi.fn().mockResolvedValue(true),
+      // Asked after the registry write (`afterEnclosingCommit`): outside a transaction here.
+      inTransaction: () => false,
       getDrizzle: vi.fn().mockReturnValue({
         all: vi.fn().mockResolvedValue([]),
         run: vi.fn().mockResolvedValue(undefined),

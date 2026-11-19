@@ -26,7 +26,6 @@
  * lockstep automatically.
  */
 
-import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   MIGRATE_STEP_COLUMN_NAMES,
@@ -41,8 +40,12 @@ import {
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { addressableFields } from "../../../shared/addressable-fields";
-import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
-import { toSnakeCase } from "../field-rules";
+import {
+  fieldProducesColumn,
+  relationHoldsReferenceList,
+  toSnakeCase,
+  usesJunctionTable,
+} from "../field-rules";
 import { getFieldType } from "../field-types/field-type-registry";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -172,6 +175,15 @@ export function columnsThatMayHoldNull(
 // The name-to-column rule lives in the browser-safe field rules, which the
 // Builder reaches too; re-exported so this module stays its home for callers.
 export { toSnakeCase } from "../field-rules";
+// Whether a relation holds a list, and whether it is junction-backed: rules the Builder asks too,
+// so they live in the browser-safe field rules, re-exported for this module's callers.
+// Whether a field becomes a column lives with the field rules the admin also reads; asked here as
+// the descriptor's own question, and re-exported for the modules that ask it of the descriptor.
+export {
+  fieldProducesColumn,
+  relationHoldsReferenceList,
+  usesJunctionTable,
+} from "../field-rules";
 
 /**
  * The fields whose columns sit on one row: those at the top of `fields`, and those inside a group
@@ -219,68 +231,6 @@ export function columnsDeclaredBy(
     columns.add(toSnakeCase(field.name));
   }
   return columns;
-}
-
-/**
- * Whether a field becomes a column of the table it is declared on.
- *
- * The single answer to that question: `classifyFieldKind` and `getColumnDescriptor` both defer to
- * it, so a rule that only applies to columns cannot disagree with the generator about which fields
- * have one.
- *
- * Dialect-free by construction — a component and a many-to-many relationship keep their values in
- * their own tables on every dialect. Structural rather than typed because config validation asks
- * this before the field has been parsed. Anything unrecognised counts as a column, matching the
- * text fallback below, so a field type whose plugin has not registered yet is still held to the
- * rules that columns carry rather than quietly escaping them.
- */
-export function fieldProducesColumn(field: {
-  type?: unknown;
-  options?: unknown;
-  /** The root-level `virtual` flag every field type accepts. */
-  virtual?: unknown;
-}): boolean {
-  if (typeof field.type !== "string") return true;
-  // A virtual field stores nothing: no column, no insert, no select. Both
-  // spellings of the flag are read by the one predicate the localization
-  // classifier also asks.
-  if (isVirtualField(field)) return false;
-  // Field-group and component values live in their own dedicated tables (fg_{slug} or
-  // comp_{slug}) and are stripped from the parent row on write, so the parent needs no column.
-  if (isFieldGroupFieldType(field.type)) return false;
-  // A many-to-many relationship stores its links in a dedicated junction table, not on the parent
-  // row. Every other relationship shape does get a column.
-  if (usesJunctionTable(field)) return false;
-  return true;
-}
-
-/**
- * Whether a field's values live in a junction table instead of a column on its own row.
- *
- * The DDL generator asks this to decide whether to emit a junction table, and `fieldProducesColumn`
- * asks it to decide there is no parent column — one rule, so the two cannot disagree about the same
- * field. They did disagree, and the disagreement was resolved toward the row: an `upload` carrying
- * `relationType: "manyToMany"` had no descriptor column while the generator emitted one.
- *
- * **Junction storage is a `relationship` feature only**, deliberately, because that is the only
- * shape the persistence layer implements. Both halves select junction-backed fields by type:
- * `collection-mutation-service` filters `f.type === "relationship" && relationType === "manyToMany"`
- * on every write, and `collection-relationship-service` builds its relation set from
- * `isRelationshipField`, which is `field.type === "relationship"`. Treating an upload as
- * junction-backed would give it a table that nothing writes to and nothing reads from, so an upload
- * keeps its column and the option is inert on it.
- */
-export function usesJunctionTable(field: {
-  type?: unknown;
-  options?: unknown;
-}): boolean {
-  if (field.type !== "relationship") return false;
-  const options: unknown = field.options;
-  const relationType =
-    typeof options === "object" && options !== null
-      ? (options as { relationType?: unknown }).relationType
-      : undefined;
-  return relationType === "manyToMany";
 }
 
 /**
@@ -380,8 +330,7 @@ export function componentRelationshipHoldsReferenceList(field: {
   hasMany?: unknown;
   options?: unknown;
 }): boolean {
-  const isRelation = field.type === "relationship" || field.type === "upload";
-  return (isRelation && Boolean(field.hasMany)) || usesJunctionTable(field);
+  return relationHoldsReferenceList(field);
 }
 
 /**
@@ -440,6 +389,38 @@ export function getComponentRowColumnDescriptor(
 }
 
 /**
+ * The field as a Single's table stores it: a relationship or upload naming one entry is not
+ * required of the COLUMN, whatever the field says.
+ *
+ * A Single's one entry is created on its first read, from its fields' defaults, and a reference has
+ * none: it starts empty. So its column accepts NULL, and `required` is enforced when the entry is
+ * saved, from the registry's fields, which this never replaces. Every other field keeps its
+ * `required`: each has an empty value of its own kind to start from (`getDefaultValue`).
+ */
+export function asSingleRowColumnField(
+  field: FieldDefinition,
+  builtBy: ColumnOrigin
+): FieldDefinition {
+  return field.required === true &&
+    classifyFieldKind(field, builtBy) === "fkSingle"
+    ? { ...field, required: false }
+    : field;
+}
+
+/** A Single's column for `field` (`asSingleRowColumnField`). */
+export function getSingleRowColumnDescriptor(
+  field: FieldDefinition,
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
+): ColumnDescriptor | null {
+  return getColumnDescriptor(
+    asSingleRowColumnField(field, builtBy),
+    dialect,
+    builtBy
+  );
+}
+
+/**
  * A column's kind and the sizes it states, each only where stated: what the
  * index, row and key rules weigh a column by, read the same way from a
  * field's descriptor, a system column's, or a seeded column.
@@ -480,9 +461,10 @@ export function getColumnDescriptor(
   // "skip" covers every column-less field type via fieldProducesColumn: a component
   // and a many-to-many, both of which keep their values in another table.
   const kind = classifyFieldKind(field, builtBy);
-  // FK columns are always created without NOT NULL in the DDL (both generateMigrationSQL
-  // and the Drizzle runtime builder). `required` is enforced at the application layer.
-  const nullable = kind === "fkSingle" ? true : field.required !== true;
+  // A relationship's column follows `required` like any other: the Builder's CREATE makes a
+  // required one NOT NULL, so a migration planned from here does too, and turning `required` on
+  // or off plans the change.
+  const nullable = field.required !== true;
 
   if (kind === "skip") return null;
 
@@ -1271,14 +1253,53 @@ export function junctionTableNameFor(
   ) => string = junctionTableNameBetween
 ): string {
   const options = junctionOptionsOf(field);
+  return junctionTableTo(
+    sourceTableName,
+    typeof options.target === "string" ? options.target : "",
+    field,
+    nameBetween
+  );
+}
+
+/**
+ * The junction table `sourceTable`'s many-to-many field keeps its links to
+ * `targetSlug` in: the author's own name when the field sets one, else the one
+ * derived from both tables. {@link junctionTableNameFor} with the target
+ * named by the caller, for a reader that resolves it from either spelling a
+ * field may carry.
+ */
+export function junctionTableTo(
+  sourceTable: string,
+  targetSlug: string,
+  field: JunctionField,
+  nameBetween: (
+    sourceTable: string,
+    targetTable: string,
+    fieldName: string
+  ) => string = junctionTableNameBetween
+): string {
+  const options = junctionOptionsOf(field);
   if (typeof options.junctionTable === "string" && options.junctionTable) {
     return options.junctionTable;
   }
-  return nameBetween(
-    sourceTableName,
-    `dc_${typeof options.target === "string" ? options.target : ""}`,
-    field.name ?? ""
-  );
+  return nameBetween(sourceTable, `dc_${targetSlug}`, field.name ?? "");
+}
+
+/**
+ * The two link columns of a junction from `sourceTable` to `targetSlug`: the
+ * source's table without its `dc_` prefix, and the target slug as written,
+ * each with `_id`. A Single's table (`single_<slug>`) carries no prefix, so its
+ * column is the whole table name. The junction's SQL is made with these
+ * columns and every read and write of its rows asks for them here.
+ */
+export function junctionLinkColumnsOf(
+  sourceTable: string,
+  targetSlug: string
+): { sourceColumn: string; targetColumn: string } {
+  return {
+    sourceColumn: `${sourceTable.replace("dc_", "")}_id`,
+    targetColumn: `${targetSlug}_id`,
+  };
 }
 
 /**

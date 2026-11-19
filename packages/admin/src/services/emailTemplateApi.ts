@@ -136,6 +136,16 @@ export interface EmailTemplateRecord {
    * link): it takes no copies, and any stored on it are not sent.
    */
   carriesSecret?: boolean;
+  /**
+   * What sends the template: what its owner declares, and settings that send
+   * it (such as a form's notification rules).
+   */
+  sentBy?: {
+    declared: string[];
+    referenced: string[];
+  };
+  /** False when a plugin could not be asked what sends the templates. */
+  referencesComplete?: boolean;
 }
 
 /**
@@ -160,7 +170,21 @@ export interface EmailTemplateVersion {
 export interface OwnerChange {
   /** Stable within one review. */
   id: string;
-  field: "subject" | "preheader" | "htmlContent" | "plainTextContent";
+  /**
+   * The field; "blocks" for a change to a written template's blocks; or
+   * "template" for an update offered as a whole.
+   */
+  field:
+    | "subject"
+    | "preheader"
+    | "htmlContent"
+    | "plainTextContent"
+    | "blocks"
+    | "template";
+  /** For a change to blocks: what the owner did to them. */
+  kind?: "insert" | "delete" | "change" | "move";
+  /** For a change to blocks: the blocks themselves. */
+  blocks?: { base: unknown[]; theirs: unknown[]; mine: unknown[] };
   /** The site edited the same lines. */
   conflict: boolean;
   /** The lines the change replaced in the version the copy started from. */
@@ -183,6 +207,12 @@ export interface EmailTemplateComparison {
   theirs: EmailTemplateVersion;
   mine: EmailTemplateVersion;
   changes: OwnerChange[];
+  /** For a template written in blocks: each side's blocks in plain words, or null where coded. */
+  inWords?: {
+    base: string[] | null;
+    theirs: string[] | null;
+    mine: string[] | null;
+  };
   /** Names the three versions; applying is refused once any of them moved. */
   review: string;
 }
@@ -190,6 +220,12 @@ export interface EmailTemplateComparison {
 /** What an applied review replaced, for Undo. */
 export interface OwnerUpdateUndo {
   version: EmailTemplateVersion;
+  /** A written template's blocks before the review; passed back as given. */
+  blocks?: unknown;
+  /** The digest the override was based on before the review. */
+  baseDigest?: string | null;
+  /** The base copy's blocks before the review; passed back as given. */
+  baseBlocks?: unknown;
   base: EmailTemplateVersion;
   applied: string;
   appliedBase: string;
@@ -256,20 +292,43 @@ export interface EmailTemplatePreviewResult {
 // API Functions
 // ============================================================
 
+/** What sends a template, read fresh for the delete guard. */
+export interface TemplateSenders {
+  declared: string[];
+  referenced: string[];
+  /** False when a plugin could not be asked. */
+  complete: boolean;
+}
+
 /**
  * List all email templates.
  *
- * Server emits `{ templates }` (the email dispatcher avoids respondList
- * because the underlying service is non-paginated). We project
- * `templates` to keep the bare-array public signature callers expect.
+ * Server emits `{ templates, referencesComplete }` (the email dispatcher avoids
+ * respondList because the underlying service is non-paginated). We project
+ * `templates` to keep the bare-array public signature callers expect, and carry
+ * `referencesComplete` on each record.
  */
 export async function listTemplates(): Promise<EmailTemplateRecord[]> {
-  const result = await fetcher<{ templates: RawEmailTemplateRecord[] }>(
-    "/email-templates",
+  const result = await fetcher<{
+    templates: RawEmailTemplateRecord[];
+    referencesComplete?: boolean;
+  }>("/email-templates", {}, true);
+  const complete = result.referencesComplete ?? true;
+  return (result.templates ?? []).map(r => ({
+    ...normalizeTemplate(r),
+    referencesComplete: complete,
+  }));
+}
+
+/**
+ * What sends an email template, read fresh (for the delete guard).
+ */
+export async function getTemplateSenders(id: string): Promise<TemplateSenders> {
+  return fetcher<TemplateSenders>(
+    `/email-templates/${encodeURIComponent(id)}/senders`,
     {},
     true
   );
-  return (result.templates ?? []).map(normalizeTemplate);
 }
 
 /**

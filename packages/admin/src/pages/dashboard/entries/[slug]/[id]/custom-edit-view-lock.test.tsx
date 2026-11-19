@@ -88,10 +88,22 @@ vi.mock("@admin/hooks/queries/useCollections", () => ({
     error: null,
   }),
 }));
-let entryQuery: Record<string, unknown> = {};
-vi.mock("@admin/hooks/queries/useEntry", () => ({
-  useEntry: () => entryQuery,
+// When the entry's reads start, and in which view: entry-read-start's own
+// concern; here, ready with the live view unless a case says otherwise.
+let readStart = { ready: true, draft: false };
+vi.mock("@admin/hooks/queries/entry-read-start", () => ({
+  useEntryReadStart: () => readStart,
 }));
+let entryQuery: Record<string, unknown> = {};
+/** What the page asked each entry read for. */
+const entryReads = vi.fn();
+vi.mock("@admin/hooks/queries/useEntry", () => ({
+  useEntry: (options: unknown) => {
+    entryReads(options);
+    return entryQuery;
+  },
+}));
+const storedReads = vi.fn();
 // The merge with the stored links is useStoredReferences.test.tsx's concern;
 // here the page is handed the entry as the populated read gives it, unless a
 // case sets `mergedEntry` to stand for a merge that differs from it.
@@ -99,7 +111,10 @@ let mergedEntry: Record<string, unknown> | undefined;
 /** When the entry was read and how to read it again, for a case that gains it. */
 let entryLatest: DocumentLatest | undefined;
 vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
-  useStoredEntry: () => ({ data: undefined, isLoading: false, error: null }),
+  useStoredEntry: (options: unknown) => {
+    storedReads(options);
+    return { data: undefined, isLoading: false, error: null };
+  },
   useWithStoredReferences: ({
     populated,
   }: {
@@ -124,7 +139,12 @@ vi.mock("@admin/hooks/useCanRequest", () => ({
   useAsksTranslationStatus: () => false,
 }));
 vi.mock("@admin/hooks/useLocalization", () => ({
-  useLocalization: () => ({ defaultLocale: undefined, enabled: false }),
+  // As the hook answers on a site without languages: no locales, always a list.
+  useLocalization: () => ({
+    defaultLocale: undefined,
+    enabled: false,
+    locales: [],
+  }),
 }));
 vi.mock("@admin/hooks/useEditorLocale", () => ({
   useEditorLocale: () => ({
@@ -159,6 +179,7 @@ function claimRequest(): Record<string, unknown> {
 beforeEach(() => {
   vi.clearAllMocks();
   updateAnswer = "allowed";
+  readStart = { ready: true, draft: false };
   useDocumentLock.mockReturnValue({
     state: { status: "held-by-me" },
     takeOver,
@@ -191,6 +212,34 @@ function withCustomView(body = "bespoke product editor") {
 afterEach(() => {
   clearRegistry();
   clearDocumentViews();
+});
+
+describe("the entry's reads", () => {
+  it("start when it is known whether they read the held draft, the stored read carried by the populated one", () => {
+    readStart = { ready: true, draft: true };
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    expect(entryReads.mock.calls[0]?.[0]).toMatchObject({
+      collectionSlug: "posts",
+      entryId: "42",
+      depth: 2,
+      draft: true,
+      enabled: true,
+      carriesStored: true,
+    });
+    expect(storedReads.mock.calls[0]?.[0]).toMatchObject({
+      collectionSlug: "posts",
+      entryId: "42",
+      draft: true,
+      enabled: true,
+    });
+  });
+
+  it("wait while that is not known", () => {
+    readStart = { ready: false, draft: false };
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    expect(entryReads.mock.calls[0]?.[0]).toMatchObject({ enabled: false });
+    expect(storedReads.mock.calls[0]?.[0]).toMatchObject({ enabled: false });
+  });
 });
 
 describe("a custom collection edit view", () => {

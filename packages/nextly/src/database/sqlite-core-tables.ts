@@ -5,6 +5,7 @@ import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
 import { EMAIL_QUEUE_TABLE } from "../schemas/email-queue/table-name";
 import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "../schemas/email-queue-recipients/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
+import { EXTERNAL_IDENTITIES_TABLE } from "../schemas/external-identities/table-name";
 import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { MEDIA_USAGE_TABLE } from "../schemas/media-usage/table-name";
@@ -412,7 +413,9 @@ export function generateSqliteCoreTableStatements(): string[] {
       "revision" INTEGER NOT NULL DEFAULT 0,
       "base_version_no" INTEGER,
       "base_draft_revision" INTEGER,
-      "field_sources" TEXT
+      "field_sources" TEXT,
+      "changed_locales" TEXT,
+      "shared_changed" INTEGER
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_versions_seq_uidx"
       ON "nextly_versions" ("scope_kind", "scope_slug", "entry_id", "version_no")`,
@@ -485,6 +488,31 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_review_states" ("scope_kind", "scope_slug", "stage")`,
     `CREATE INDEX IF NOT EXISTS "nextly_review_states_assignee_idx"
       ON "nextly_review_states" ("assignee_kind", "assignee_id")`,
+    // Where each translated value came from, per field and language. Columns
+    // match schemas/translation-provenance/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_translation_provenance" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "locale" TEXT NOT NULL,
+      "part_state" TEXT NOT NULL,
+      "field_path" TEXT NOT NULL,
+      "value_fingerprint" TEXT NOT NULL,
+      "origin" TEXT NOT NULL,
+      "engine" TEXT,
+      "actor_kind" TEXT,
+      "actor_id" TEXT,
+      "actor_principal_kind" TEXT,
+      "source_locale" TEXT,
+      "source_fingerprint" TEXT,
+      "origin_row_id" TEXT,
+      "written_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_translation_provenance_uidx"
+      ON "nextly_translation_provenance" ("scope_kind", "scope_slug", "entry_id", "locale", "part_state", "field_path")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_translation_provenance_field_idx"
+      ON "nextly_translation_provenance" ("scope_kind", "scope_slug", "entry_id", "field_path", "part_state")`,
     // What admins change for each workflow. Columns match schemas/workflow-settings/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_workflow_settings" (
       "id" TEXT PRIMARY KEY NOT NULL,
@@ -946,6 +974,13 @@ export function generateSqliteCoreTableStatements(): string[] {
       "principal_kind" TEXT,
       "principal_id" TEXT,
       "key_digest" TEXT,
+      "queued_id" TEXT,
+      "template_owner" TEXT,
+      "template_overridden" INTEGER,
+      "template_digest" TEXT,
+      "failure_kind" TEXT,
+      "failure_status" INTEGER,
+      "provider_origin" TEXT,
       "created_at" INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_created_idx"
@@ -962,6 +997,16 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "email_deliveries" ("principal_kind", "principal_id")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_key_idx"
       ON "email_deliveries" ("key_digest")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_queued_idx"
+      ON "email_deliveries" ("queued_id")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_provider_origin_idx"
+      ON "email_deliveries" ("provider_origin", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_provider_type_idx"
+      ON "email_deliveries" ("provider_type", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_template_idx"
+      ON "email_deliveries" ("template_slug", "status", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_template_created_idx"
+      ON "email_deliveries" ("template_slug", "created_at", "id")`,
     `CREATE TABLE IF NOT EXISTS "${EMAIL_SEND_CLAIMS_TABLE}" (
       "id" TEXT PRIMARY KEY,
       "scope" TEXT NOT NULL,
@@ -989,6 +1034,12 @@ export function generateSqliteCoreTableStatements(): string[] {
       "principal_kind" TEXT,
       "principal_id" TEXT,
       "failure" TEXT,
+      "template_slug" TEXT,
+      "message_kind" TEXT,
+      "recipient_kinds" TEXT,
+      "provider_type" TEXT,
+      "provider_id" TEXT,
+      "provider_origin" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
       "settled_at" INTEGER
@@ -997,6 +1048,14 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${EMAIL_QUEUE_TABLE}" ("state", "settled_at")`,
     `CREATE INDEX IF NOT EXISTS "email_queue_principal_idx"
       ON "${EMAIL_QUEUE_TABLE}" ("principal_kind", "principal_id")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_created_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("created_at", "id")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_template_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("template_slug", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_provider_type_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("provider_type", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_queue_provider_origin_idx"
+      ON "${EMAIL_QUEUE_TABLE}" ("provider_origin", "created_at")`,
     `CREATE TABLE IF NOT EXISTS "${EMAIL_QUEUE_RECIPIENTS_TABLE}" (
       "queued_id" TEXT NOT NULL,
       "recipient_hash" TEXT NOT NULL,
@@ -1005,6 +1064,24 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "email_queue_recipients_hash_idx"
       ON "${EMAIL_QUEUE_RECIPIENTS_TABLE}" ("recipient_hash")`,
+    // The external identities a person signed in with. Columns match
+    // schemas/external-identities/sqlite.ts; uniqueness holds by the
+    // key_digest column, the plain SHA-256 of the provider key, issuer and
+    // subject, computed by `externalIdentityKeyDigest`.
+    `CREATE TABLE IF NOT EXISTS "${EXTERNAL_IDENTITIES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "provider_key" TEXT NOT NULL,
+      "issuer" TEXT NOT NULL,
+      "subject" TEXT NOT NULL,
+      "key_digest" TEXT NOT NULL,
+      "address" TEXT,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "created_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_external_identities_key_uidx"
+      ON "${EXTERNAL_IDENTITIES_TABLE}" ("key_digest")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_external_identities_user_idx"
+      ON "${EXTERNAL_IDENTITIES_TABLE}" ("user_id")`,
   ];
 }
 

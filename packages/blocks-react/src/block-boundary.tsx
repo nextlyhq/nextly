@@ -1,48 +1,50 @@
 import {
   blockPartClassName,
   blockTypeClassName,
-  renderedDomId,
-  type BindingFieldShape,
-  type BindingRun,
+  renderedCssClassNames,
   type BlockNode,
-  type BoundValues,
   type ComponentUnresolvedReason,
   type ResolvedBlockNode,
-  type SpacingMode,
 } from "@nextlyhq/blocks-engine";
-import {
-  Fragment,
-  Suspense,
-  cloneElement,
-  isValidElement,
-  use,
-  type ReactNode,
-} from "react";
+import { Fragment, type ReactNode } from "react";
 
-import { fillItemBindings } from "./blocks/list-batch";
-import type { BlockHostPolicy, PageContext, PageIssue } from "./context";
 import {
-  editorMarkers,
-  EDITOR_NAMESPACE,
-  PROP_ATTRIBUTE,
-} from "./editor-markers";
-import { BlockPlaceholder, type EditorMarkers } from "./placeholder";
+  propMarker,
+  editorIdentityOf,
+  placeholderEditor,
+} from "./block-boundary-attributes";
+import {
+  type BoundaryBindings,
+  type BoundaryConditions,
+  drawnNodes,
+  itemRulesFor,
+  withItemBindings,
+  boundArgument,
+} from "./block-boundary-bindings";
+import {
+  asyncWaitingOf,
+  checkedOutput,
+  editorOutputSlot,
+  AsyncBlockOutput,
+  waitingAs,
+} from "./block-boundary-output";
+import type { BlockHostPolicy, PageContext } from "./context";
+import { BlockPlaceholder } from "./placeholder";
 // The SAME predicate the pipeline uses. Asking the question twice is how the
 // renderer came to hide a node the exported reader returns: the pipeline kept
 // a block carrying a stored `unresolvedComponent` key and this boundary drew a
 // placeholder over it, so one document had two readings.
 import { isUnresolvedInstance } from "./prepare-document";
-import {
-  createsNoHostElement,
-  describeThrown,
-  isThenable,
-  normalizeRenderable,
-} from "./renderable";
+import { describeThrown, isThenable } from "./renderable";
 import type { BlockResolver } from "./resolver";
-import { styleTextForInjection } from "./styles";
-import { conditionAllows, itemFields } from "./visibility";
-// Imported as well as re-exported below: this module both PUBLISHES the names,
-// which consumers outside the package address elements by, and uses them.
+
+export type {
+  BoundaryBindings,
+  BoundaryConditions,
+  ItemHiddenAs,
+  HidingItem,
+} from "./block-boundary-bindings";
+export { isAllowedAttribute } from "./block-boundary-attributes";
 
 /**
  * The wording for one reason, or nothing when the marker names none.
@@ -88,173 +90,6 @@ const DETAIL_BY_REASON: ReadonlyMap<string, string> = new Map(
 );
 
 /**
- * What the boundary needs to hand each block its bound values, and to fill a
- * list item's bindings while the list draws it.
- */
-export interface BoundaryBindings {
-  /** The render's binding pass, shared with the page's. */
-  readonly run: BindingRun;
-  /** What the page's pass filled, by node id. */
-  readonly bound: ReadonlyMap<string, BoundValues>;
-  /** Where a list item's binding and condition problems go, once each. */
-  readonly report: (issues: readonly PageIssue[]) => void;
-}
-
-/**
- * What a render decided about its conditioned blocks, threaded to every
- * boundary whether or not the page has bindings to fill: a page drawn with
- * list data and no bindings still decides its items' conditions, and still
- * serves the rules of the blocks they show.
- */
-export interface BoundaryConditions {
-  /**
-   * The blocks whose visibility conditions held for the page's entry, by id,
-   * as the route decided them once it read the entry. Carried here, beside
-   * the context rather than on it, as everything a render threads down is.
-   */
-  readonly held?: ReadonlySet<string>;
-  /** Where a list item's condition problems go, once each. */
-  readonly report?: (issues: readonly PageIssue[]) => void;
-  /**
-   * The rules of each block a list's item decides, with those of every block
-   * inside it, by the decided block's id, held out of the page's sheet: a
-   * list serves them beside the first instance it draws, so a block no item
-   * shows publishes none of them.
-   */
-  readonly itemRules?: ReadonlyMap<string, string>;
-  /** The decided blocks whose rules this render already served, by id. */
-  readonly itemRulesServed?: Set<string>;
-  /** What an editor draws in place of a block a list's item hides. */
-  readonly hiddenAs?: ItemHiddenAs;
-}
-
-/**
- * What an editor draws in place of a block a list's item hides: the node to
- * draw there, or nothing to draw nothing. Told the item, so what it draws can
- * say why that item hides the block.
- *
- * @experimental
- */
-export type ItemHiddenAs = (
-  node: BlockNode,
-  item: HidingItem
-) => BlockNode | undefined;
-
-/**
- * The list item that hides a block: its values, the collection its entries
- * come from (absent for a named query's row), and the fields its conditions
- * were judged by, as the public reads them (absent where none are known, so
- * they failed closed).
- *
- * @experimental
- */
-export interface HidingItem {
-  readonly values: Readonly<Record<string, unknown>>;
-  readonly collection: string | undefined;
-  readonly fields: readonly BindingFieldShape[] | undefined;
-}
-
-interface DrawnNode {
-  readonly node: BlockNode;
-  /** False for what an editor draws in place of a hidden block. */
-  readonly shown: boolean;
-}
-
-/**
- * The nodes a list draws, each as its conditions allow: shown, or, where an
- * item hides it and the render was told what to draw instead, that in its
- * place. Without that, a hidden block is simply left out.
- */
-function drawnNodes(
-  nodes: readonly BlockNode[],
-  context: PageContext,
-  conditions: BoundaryConditions | undefined
-): DrawnNode[] {
-  const decided = {
-    ...(conditions?.held === undefined ? {} : { held: conditions.held }),
-    ...(conditions?.report === undefined ? {} : { report: conditions.report }),
-  };
-  const { item } = context;
-  const hiddenAs = item === undefined ? undefined : conditions?.hiddenAs;
-  const hiding: HidingItem | undefined =
-    item === undefined
-      ? undefined
-      : {
-          values: item,
-          collection:
-            context.itemSource === "" ? undefined : context.itemSource,
-          // The very fields the item's conditions were just judged by, a
-          // named query's own row schema among them, so what is drawn in
-          // the block's place says what that judgement found.
-          fields: itemFields(context),
-        };
-  return nodes.flatMap((node): DrawnNode[] => {
-    if (conditionAllows(node, context, decided)) return [{ node, shown: true }];
-    const instead = hiding === undefined ? undefined : hiddenAs?.(node, hiding);
-    return instead === undefined ? [] : [{ node: instead, shown: false }];
-  });
-}
-
-/**
- * The rules of a block a list's item decides, once per render, beside the
- * first instance drawn. Inline, after the page's own sheet, so the cascade
- * reads them in the order a stored sheet would have held them.
- */
-function itemRulesFor(
-  id: string,
-  conditions: BoundaryConditions | undefined
-): ReactNode {
-  const rules = conditions?.itemRules?.get(id);
-  const served = conditions?.itemRulesServed;
-  if (rules === undefined || served === undefined || served.has(id)) {
-    return null;
-  }
-  served.add(id);
-  return (
-    <style
-      data-nx-item-rules={id}
-      dangerouslySetInnerHTML={{ __html: styleTextForInjection(rules) }}
-    />
-  );
-}
-
-/**
- * A node with its list item's bindings filled, and what every bound prop of
- * it holds.
- *
- * The page's bindings were filled before rendering began; an item's can only
- * be filled here, where the item being drawn is on the context. A node with no
- * item binding comes back as it is.
- */
-function withItemBindings(
-  node: ResolvedBlockNode,
-  context: PageContext,
-  bindings: BoundaryBindings | undefined
-): { node: ResolvedBlockNode; bound: BoundValues | undefined } {
-  if (bindings === undefined) return { node, bound: undefined };
-  const fromPage = bindings.bound.get(node.id);
-  // The one fill a list's read-ahead also asks, so it reads ahead for the
-  // props each entry draws with.
-  const filled = fillItemBindings(node, context, bindings.run);
-  if (filled.issues.length > 0) bindings.report(filled.issues);
-  if (filled.bound === undefined) return { node, bound: fromPage };
-  return {
-    node: { ...node, props: filled.props },
-    bound: { ...fromPage, ...filled.bound },
-  };
-}
-
-/**
- * The `bound` render argument, present only for a block with a bound prop, so
- * a block with none is called exactly as it was before bindings existed.
- */
-function boundArgument(bound: BoundValues | undefined): {
-  bound?: BoundValues;
-} {
-  return bound === undefined ? {} : { bound };
-}
-
-/**
  * Whether a definition declares any slot.
  *
  * Contained for the same reason the `rendersNothing` declaration is: `slots`
@@ -287,7 +122,12 @@ export interface BlockBoundaryProps {
   blocks: BlockResolver;
   /** Node id to generated class, from the compiled stylesheet. */
   classes: Record<string, string>;
-  /** Shown while an async block is still producing output. */
+  /**
+   * Shown while an async block is still producing output. Given, each async
+   * block waits in a boundary of its own and streams; absent, outside an
+   * editor surface, it waits in place so the page's HTML holds it (see
+   * `AsyncWaiting`).
+   */
   fallback?: ReactNode;
   /**
    * Site-operator decisions the block enforces.
@@ -296,11 +136,6 @@ export interface BlockBoundaryProps {
    * own object is never rewritten and no block can supply its own.
    */
   hostPolicy?: BlockHostPolicy;
-  /**
-   * The site's spacing model, for the few blocks whose markup differs by it.
-   * Threaded down the tree beside `hostPolicy`, for the same reason.
-   */
-  spacingMode?: SpacingMode;
   /**
    * Emit `data-nx-node="<node id>"` on each block's root element.
    *
@@ -314,6 +149,12 @@ export interface BlockBoundaryProps {
    * address an unstyled node and would resolve to the wrong one.
    */
   nodeAttribute?: boolean;
+  /**
+   * Keep each async block's output between draws, as `nodeAttribute` does,
+   * for an editor surface that addresses no node (see
+   * `PageRendererProps.keepAsyncOutputs`). Never on a published page.
+   */
+  keepAsyncOutputs?: boolean;
   /** The page's bindings, when the page has any to fill. */
   bindings?: BoundaryBindings;
   /** What the render decided about its conditioned blocks. */
@@ -327,6 +168,13 @@ export interface BlockBoundaryProps {
  * block-type class carries the shared defaults the compiler emits once per type
  * rather than copying into every node. A block given only its node class loses
  * every default its type defines.
+ *
+ * Then the author's own names (`cssClasses`), after every generated class, so
+ * a site's stylesheet can target the block. Carried in the class the block is
+ * handed rather than attached to its root afterwards, so every block, a
+ * plugin's included, wears them on the element it already puts its class on.
+ * Only the names a save accepts are drawn; a node without any draws exactly
+ * the two classes it did before.
  */
 function classNameFor(
   node: BlockNode,
@@ -334,7 +182,9 @@ function classNameFor(
 ): string {
   const nodeClass = classes[node.id];
   const typeClass = blockTypeClassName(node.type);
-  return nodeClass ? `${nodeClass} ${typeClass}` : typeClass;
+  const generated = nodeClass ? `${nodeClass} ${typeClass}` : typeClass;
+  const own = renderedCssClassNames(node.cssClasses);
+  return own.length === 0 ? generated : `${generated} ${own.join(" ")}`;
 }
 
 /**
@@ -350,87 +200,9 @@ function slotNodes(node: BlockNode, name: string): BlockNode[] {
   return Array.isArray(stored) ? stored : [];
 }
 
-/**
- * Inert global attributes an author may set on a block's root element.
- *
- * An ALLOWLIST, not a list of things to refuse. The engine's validator rejects
- * `on*` handlers and says in as many words that the render-safe list belongs to
- * the renderer — so this is the only place it exists, and a list of refusals
- * could never keep up. `srcDoc` injects a document, `href`/`formAction`/`action`
- * choose a destination, `src` and `poster` fetch, `style` and `class` restyle,
- * and the next attribute with reach ships in some future browser without anyone
- * here noticing.
- *
- * These four carry no behaviour: they name, describe or orient an element.
- * `id` arrives separately through the modelled `cssId` field.
- */
-const ALLOWED_ATTRIBUTE_NAMES = new Set(["id", "title", "lang", "dir"]);
-
-/**
- * A name HTML can carry, which is the XML `Name` production.
- *
- * Mirrors React's own attribute-name validation rather than a narrower rule of
- * this project's own: refusing a name React WOULD render is a false alarm on
- * correct input, and this predicate is what an editor asks before telling an
- * author their attribute is unusable. The unicode ranges are that production's,
- * so a non-ASCII `data-` name is accepted exactly where the DOM accepts it.
- */
-/** The first character of an XML `Name`. */
-const NAME_START =
-  "[:A-Za-z_\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD]";
-
-/**
- * Every LATER character, combining ranges first.
- *
- * Order matters only to a reader: with a base character immediately before a
- * combining range, the two read as one combined character rather than as two
- * alternatives, and a linter says so. Leading with the combining ranges keeps
- * the set identical and the intent unambiguous.
- */
-const NAME_CHAR =
-  "[\\u0300-\\u036F\\u203F-\\u2040\\u00B7\\-.0-9:A-Za-z_\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u02FF\\u0370-\\u037D\\u037F-\\u1FFF\\u200C-\\u200D\\u2070-\\u218F\\u2C00-\\u2FEF\\u3001-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFFD]";
-
-const ATTRIBUTE_NAME = new RegExp(`^${NAME_START}${NAME_CHAR}*$`, "u");
-
-/**
- * Whether an author-supplied attribute may reach the DOM.
- *
- * `data-*` and `aria-*` are open by prefix: both are namespaces defined to carry
- * author data and accessibility semantics, neither can name a destination or
- * execute anything, and closing them would defeat the feature the field exists
- * for. `role` is the ARIA sibling of `aria-*` and belongs with them.
- *
- * EXPORTED so an editor offering this field can ask it rather than restate it.
- * The list above already says the render-safe set lives here and only here; a
- * second copy in an editor would drift, and it would drift silently in the
- * worse direction — the editor accepting a name this loop then skips, so the
- * author sets an attribute, sees it saved, and never sees it on the page.
- */
-export function isAllowedAttribute(name: string): boolean {
-  // SYNTAX first, because the open prefixes below admit anything after them.
-  // `data-x foo` and `data-x"` start with `data-` and are not attribute names:
-  // React refuses them and renders nothing, so a check that stopped at the
-  // prefix let a value be stored that could never appear on a page.
-  if (!ATTRIBUTE_NAME.test(name)) return false;
-  const lower = name.toLowerCase();
-  if (lower === "role") return true;
-  if (lower.startsWith("data-") || lower.startsWith("aria-")) return true;
-  return ALLOWED_ATTRIBUTE_NAMES.has(lower);
-}
-
-/**
- * Applies the node's root-level HTML fields to what the block rendered.
- *
- * `cssId` and `attributes` belong to the NODE, not the block, and
- * `BlockRenderArgs` carries only `className` — so a block has no way to receive
- * them and they would be stored and silently dropped, breaking anchors, labels
- * and author data attributes.
- *
- * Applied by cloning because the block owns its root element: the format says a
- * block renders a single element and never wraps it, so its root IS the node's
- * root. Output that is not a single element has no root to carry them and is
- * returned untouched rather than guessed at.
- */
+// Re-exported: this module PUBLISHES the names, which consumers outside the
+// package address elements by. The modules that draw the marks import them
+// from `editor-markers`.
 export {
   EDITOR_NAMESPACE,
   ENTRY_CONTENT_DRAWN_ATTRIBUTE,
@@ -442,1060 +214,6 @@ export {
   PROP_ATTRIBUTE,
   SLOTS_ATTRIBUTE,
 } from "./editor-markers";
-
-/**
- * Builds the `markProp` a block spreads onto the element carrying a value.
- *
- * Returns nothing at all outside an editor, and nothing for a prop the block
- * has not declared `inline` — so the declaration and the marking have to agree
- * before an editor sees anything, and a block that marks an element it never
- * declared gets silence rather than an editable region nobody intended.
- */
-function propMarker(
-  definition: { props?: Record<string, { inline?: boolean } | undefined> },
-  enabled: boolean
-): ((name: string) => Record<string, string>) | undefined {
-  if (!enabled) return undefined;
-  return (name: string): Record<string, string> => {
-    if (definition.props?.[name]?.inline !== true) return {};
-    return { [PROP_ATTRIBUTE]: name };
-  };
-}
-
-/**
- * The editor's address for one node, read BEFORE any block code runs.
- *
- * A snapshot rather than the live node, and the reason is already argued in
- * this file for `rendersNothing`: the same mutable `node` object is handed to
- * `definition.render`, so anything read back afterwards is whatever the render
- * left behind. That argument was made about a block judging its own emptiness;
- * it applies with more force here, because these two values decide which node
- * an editor click selects, edits and deletes.
- *
- * The window is not only synchronous. A block may mutate `node` after an
- * `await`, and the awaited path re-enters the output check with the same
- * object — so the snapshot is taken once, at the boundary, and carried down
- * both paths rather than re-read at either end of them.
- */
-type EditorIdentity = EditorMarkers;
-
-/**
- * That snapshot, taken from a node before it is handed to a block.
- *
- * Total: a node carrying no provenance, or provenance that is not a string,
- * yields `undefined` rather than a value nothing can address.
- */
-function editorIdentityOf(
-  node: ResolvedBlockNode,
-  // Whether this render wants editor markers at all. Not a micro-optimisation:
-  // see the provenance read below.
-  nodeAttribute: boolean | undefined
-): EditorIdentity {
-  return {
-    nodeId: node.id,
-    // Read ONLY when an editor asked for markers. `instanceOf` is an unknown
-    // key on a stored node, and this component is public — a consumer can hand
-    // it a tree assembled in memory, where the property may be an accessor that
-    // throws. On a published render nothing wants provenance, so reading it
-    // buys nothing and costs the containment this module exists for: the
-    // boundary came down before it could draw a placeholder for the block.
-    //
-    // The snapshot still happens at the boundary's first line, so an editor
-    // render reads it before any plugin code can move it. What changed is
-    // whether it is read at all, not when.
-    instanceOf: nodeAttribute === true ? storedProvenance(node) : undefined,
-  };
-}
-
-/**
- * The node's provenance, read EXACTLY once.
- *
- * A snapshot that reads the property twice is not a snapshot. `instanceOf` is
- * an unknown key on a stored node and this component is public, so it can be an
- * accessor — and one that answers `"legit"` to the type test and `"forged"` to
- * the assignment defeats the whole guarantee, while one that throws only on the
- * second read escapes the containment the first read established.
- *
- * So the value is captured, and everything after that is a test on the captured
- * value rather than another visit to the object.
- */
-function storedProvenance(node: ResolvedBlockNode): string | undefined {
-  const captured: unknown = node.instanceOf;
-  return typeof captured === "string" ? captured : undefined;
-}
-
-/**
- * The markers a PLACEHOLDER carries, or none outside an editor.
- *
- * A placeholder is drawn instead of the block, so it never reaches
- * the marker assembly — this is the same decision made at the other end of
- * the same render, and it is deliberately the only other place that decides
- * it. Without it the one element an author can see and click, when a block
- * inside a component fails, carries no address at all.
- */
-function placeholderEditor(
-  nodeAttribute: boolean | undefined,
-  identity: EditorIdentity
-): EditorMarkers | undefined {
-  return nodeAttribute === true ? identity : undefined;
-}
-
-/**
- * Removals for the editor attributes this render OWNS, whatever case a block
- * spelled them in.
- *
- * Assigning `undefined` to the canonical lowercase name is not enough, and the
- * gap is invisible in the source. `cloneElement` merges by EXACT prop name, so
- * a root carrying `data-NX-instance` keeps it — while HTML attribute lookup is
- * ASCII case-insensitive, so an editor asking for `data-nx-instance` is handed
- * the block's forged value. The removal and the read disagree about what counts
- * as the same attribute.
- *
- * Scoped to the names `editorMarkers` produces rather than to the whole
- * namespace, and that boundary is the point. `PROP_ATTRIBUTE` is in the same
- * namespace and is a block's to set — the renderer HANDS it to blocks through
- * `markProp`, so clearing everything under the prefix deletes the inline-edit
- * marker the renderer itself asked for. Measured: it broke four inline-prop
- * tests.
- *
- * Derived from the bag being assigned rather than from a list written here, so
- * a marker added to the shared builder is covered without this being edited and
- * one that is deliberately a block's stays untouched.
- *
- * Only in editor mode. On a published page these are the block author's own
- * markup and none of this system's business.
- */
-function clearedBlockMarkers(
-  props: unknown,
-  nodeAttribute: boolean,
-  // The canonical names this render is about to assign, which is exactly the
-  // set the RENDERER owns.
-  owned: Record<string, string | undefined>
-): Record<string, undefined> {
-  const cleared: Record<string, undefined> = {};
-  if (!nodeAttribute || typeof props !== "object" || props === null) {
-    return cleared;
-  }
-
-  const ours = new Set(Object.keys(owned));
-  for (const name of Object.keys(props)) {
-    if (ours.has(name.toLowerCase())) cleared[name] = undefined;
-  }
-
-  return cleared;
-}
-
-/** What a stored node offers an element, once the envelope has been read. */
-interface StoredDecoration {
-  /** The modelled id field, when it is a string. */
-  cssId: string | undefined;
-  /** The author's attribute bag, when it is one. */
-  attributes: Record<string, unknown> | undefined;
-  /** Whether the node is marked never to be quoted in search snippets. */
-  nosnippet: boolean;
-  /** Whether the node contributes anything at all besides editor markers. */
-  any: boolean;
-}
-
-/**
- * Read what a stored node offers, defensively.
- *
- * Its own function because reading a persisted envelope is a different job from
- * assembling an element, and it is the job with all the shapes: a stored
- * `attributes` is whatever the database returned, so `null` reaches
- * `Object.keys` and throws — after the render try/catch and after
- * normalization, which means one bad persisted field would cost the whole page
- * rather than one block.
- *
- * `any` is derived here rather than recomputed by the caller, so "this node
- * decorates nothing" has one definition.
- */
-function storedDecoration(
-  node: Pick<BlockNode, "cssId" | "attributes" | "nosnippet">
-): StoredDecoration {
-  const cssId = typeof node.cssId === "string" ? node.cssId : undefined;
-  const attributes =
-    typeof node.attributes === "object" &&
-    node.attributes !== null &&
-    !Array.isArray(node.attributes)
-      ? node.attributes
-      : undefined;
-  const hasAttributes =
-    attributes !== undefined && Object.keys(attributes).length > 0;
-  // Only a stored `true` marks it: anything else a document holds is no mark.
-  const nosnippet = node.nosnippet === true;
-
-  return {
-    cssId,
-    attributes,
-    nosnippet,
-    any: cssId !== undefined || hasAttributes || nosnippet,
-  };
-}
-
-/**
- * The author-set attributes a node may put on its element, filtered.
- *
- * Its own function because it is its own JOB: deciding which stored values are
- * allowed out is a question about the DOCUMENT, while `withNodeAttributes`
- * assembles an element. Keeping them together is what made that function the
- * package's complexity hotspot — every branch here is a rule about one
- * attribute, and none of them is about assembling anything.
- *
- * Total, and it answers with a bag rather than mutating one, so a caller cannot
- * make an ordering mistake with the markers that are merged over it.
- */
-function authorSetAttributes(
-  attributes: Record<string, unknown> | undefined,
-  nodeAttribute: boolean
-): Record<string, string> {
-  const allowed: Record<string, string> = {};
-  if (attributes === undefined) return allowed;
-
-  for (const [name, value] of Object.entries(attributes)) {
-    if (!isAllowedAttribute(name)) continue;
-    // Lowercased before use. HTML attribute names are ASCII case-insensitive,
-    // but React treats `ID` and `id` as different props — so a case variant
-    // would survive the allowlist and then be rendered ALONGSIDE the modelled
-    // `cssId`, leaving two id attributes on one element.
-    const key = name.toLowerCase();
-    // The field is typed as strings and sanitized at write time, but a stored
-    // document can hold anything; a non-string would be handed to React as a
-    // prop value it never expected.
-    if (typeof value !== "string") continue;
-    /*
-     * The editor's own namespace is not the document's to write, and only
-     * while this render is FOR the editor: on a published page these are
-     * ordinary author data and none of this system's business.
-     *
-     * Filtered HERE rather than trusted to the panel that offers the field.
-     * A document can arrive from an import or a script, and the marker it
-     * would overwrite decides which block a click selects and which
-     * property inline editing commits into.
-     */
-    if (nodeAttribute && key.startsWith(EDITOR_NAMESPACE)) continue;
-    /*
-     * `id` is deliberately NOT assigned here. Which of a node's two spellings
-     * reaches the page is one question, and the engine's `renderedDomId` is
-     * the one answer to it — six other surfaces already derive from it, and
-     * this renderer is the thing that answer models. Assigning the bag's `id`
-     * in this loop and correcting it afterwards would restate the rule, which
-     * is how the rule and the page come to disagree.
-     */
-    if (key === "id") continue;
-    allowed[key] = value;
-  }
-
-  return allowed;
-}
-
-function withNodeAttributes(
-  output: ReactNode,
-  node: ResolvedBlockNode,
-  nodeAttribute = false,
-  // Whether the block's definition declares at least one slot, decided once by
-  // the caller and carried down rather than re-read from the definition here.
-  declaresSlots = false,
-  // The editor address, snapshotted before the block ran. Defaulted from the
-  // node for the callers that never hand a node to plugin code, so those keep
-  // reading the value they always did.
-  identity: EditorIdentity = editorIdentityOf(node, nodeAttribute)
-): ReactNode {
-  const decoration = storedDecoration(node);
-  // The node-id attribute is applied UNCONDITIONALLY when asked for, which is
-  // why it is checked before this early return rather than added to the
-  // allowlist below. That return fires for any node carrying no `cssId` and no
-  // `attributes` — which is nearly every node on a real page — so an editor
-  // address joined to the allowlist would land on almost nothing while a
-  // fixture that happened to set either field passed.
-  if (!decoration.any && !nodeAttribute) return output;
-  if (!isValidElement(output)) return output;
-  // Only a host element has a DOM root to carry them. `nodeRootReason` has
-  // already refused the combination that would land here otherwise, so this is
-  // the invariant restated rather than a second policy.
-  if (typeof output.type !== "string") return output;
-
-  // Values may be `undefined`, which is how an editor marker is REMOVED from
-  // an element a block built: React omits an attribute whose value is
-  // undefined, and `cloneElement` merges this bag over the block's own props.
-  const extra: Record<string, string | undefined> = {};
-  // Computed once and used twice: to say which names a block may not keep, and
-  // then to assign the trusted values. Deriving the removals from the same bag
-  // is what stops the two disagreeing about which attributes the renderer owns.
-  const markers = nodeAttribute
-    ? editorMarkers({
-        nodeId: identity.nodeId,
-        instanceOf: identity.instanceOf,
-        declaresSlots,
-      })
-    : {};
-
-  Object.assign(
-    extra,
-    authorSetAttributes(decoration.attributes, nodeAttribute),
-    // Removals FIRST, so the canonical assignments below land over them.
-    clearedBlockMarkers(output.props, nodeAttribute, markers)
-  );
-  /*
-   * The single id this node emits, ASKED rather than restated.
-   *
-   * The rule already carries everything this loop used to do by hand: the
-   * modelled field wins over an attribute of the same name, only a STRING
-   * `cssId` shadows, the bag is read case-insensitively with the last variant
-   * winning, and an empty result is no id at all.
-   *
-   * That last clause changes what an empty id does, in two ways.
-   *
-   * A node with `cssId: ""` used to emit a literal `id=""`, because this loop
-   * tested `!== undefined` and the empty string passes. It no longer does, and
-   * nothing reachable is lost: the DOM Standard unsets an element's ID when the
-   * attribute is set to the empty string, so `getElementById("")` never matched
-   * it, no IDREF could name it, and `#` is not a valid selector. The HTML
-   * Standard separately requires an id to hold at least one character, so what
-   * shipped was invalid markup that addressed nothing. The empty `cssId` still
-   * SHADOWS the bag, which is the part authors can observe, and the inspector
-   * still offers to remove it.
-   *
-   * And a node contributing no id now leaves a BLOCK-OWNED root id alone, so
-   * the two ways of contributing none — the field absent, and the field present
-   * but empty — agree. Only the empty one moved: an absent `cssId` always left
-   * a block's own id in place. Assigning the empty string overwrote it and left
-   * the element reachable by nothing, which was collateral of the assignment
-   * rather than a rule anything stated, and it is the harmful direction — an
-   * empty `cssId` arrives by import and never from the editor, and a block
-   * whose root id is the target of its own `aria-labelledby` or `htmlFor` lost
-   * that wiring to a value its author never typed.
-   *
-   * What this rule decides is which of the NODE's two spellings reaches the
-   * page, never whether the block may keep an id of its own.
-   */
-  // "Never quote this": a boolean attribute, so its value is empty. Google
-  // ignores any value a boolean attribute is given.
-  if (decoration.nosnippet) extra["data-nosnippet"] = "";
-  const renderedId = renderedDomId(node);
-  if (renderedId !== undefined) extra.id = renderedId;
-  // LAST, so every marker wins over a value the document or the block tried to
-  // set for the same key.
-  Object.assign(extra, markers);
-
-  return Object.keys(extra).length > 0 ? cloneElement(output, extra) : output;
-}
-
-/**
- * Whether this value is one this renderer can see draws nothing.
- *
- * Answers ONLY for output this renderer owns, and that limit is the design
- * rather than an omission. `normalizeRenderable` materialises an iterable a
- * block returns into a fresh array, so what arrives here is the very object
- * React will render and no author code runs to produce it.
- *
- * The set of primitives is exact rather than a nullish check: `false` is what
- * the ordinary conditional form `enabled && <div />` yields when disabled, and
- * an empty string is what a cleared text value becomes. `0` is deliberately
- * absent — React renders it as the character zero, which is real output with no
- * element to carry the node's fields.
- *
- * An array is walked BY INDEX, which is how React reads one. Following an
- * array's own `Symbol.iterator` would answer a question React never asks, and a
- * custom one can disagree with the indexed contents.
- *
- * Anything reached through an element the block built is NOT judged here. Its
- * children, its props and any iterator inside it belong to the author and are
- * read again by React after this returns, so nothing read from them can be
- * relied on. A block that draws nothing from such a root declares it instead.
- */
-function rendersNothing(output: unknown, budget = { left: 10_000 }): boolean {
-  // A LIST this renderer owns. `normalizeRenderable` materialises an iterable a
-  // block returns into a fresh array, so this walks the very object React will
-  // render and no author code runs to produce it.
-  //
-  // Arrays only, and only owned ones. The array's own `Symbol.iterator` is not
-  // used — React renders an array by its indexed contents, and following a
-  // custom iterator would answer a question React never asks.
-  if (Array.isArray(output)) {
-    for (let index = 0; index < output.length; index += 1) {
-      // Refusing when the budget runs out answers "it draws", which is the safe
-      // direction: it keeps the node's fields refused rather than silently
-      // accepting output nobody counted.
-      if (budget.left-- <= 0) return false;
-      if (!rendersNothing(output[index], budget)) return false;
-    }
-    return true;
-  }
-  return (
-    output === null ||
-    output === undefined ||
-    typeof output === "boolean" ||
-    output === ""
-  );
-}
-
-/**
- * Why a node's root-level fields cannot reach the element the block returned.
- *
- * `cssId` and `attributes` are DOM props and only a host element has a DOM root
- * to put them on. A block whose root is a fragment, `StrictMode`, `Suspense` or
- * `Activity` renders no element of its own, so React drops the props — without
- * throwing, and in production without saying anything. What is lost is an
- * anchor target, a `label for=`, an `#id` selector: navigation and styling that
- * silently stop working, on a page that otherwise looks correct.
- *
- * So the combination is refused rather than half-applied. It is only reachable
- * when the document actually asked for those fields, so an ordinary block
- * returning a fragment is untouched.
- */
-function nodeRootReason(
-  output: ReactNode,
-  node: BlockNode,
-  /**
-   * Whether the block DECLARED that these props draw nothing.
-   *
-   * The sound channel, and now the only one that covers a wrapper. It is
-   * computed from the node's props — data this renderer already holds — rather
-   * than by inspecting a structure the block handed back and still controls.
-   * That distinction is the whole point: an inspected structure is re-read by
-   * React afterwards, and every accessor, proxy trap and custom iterator in it
-   * can answer differently the second time.
-   */
-  declaresNothing: boolean,
-  /**
-   * How the output was classified, read ONCE by the caller.
-   *
-   * Passed in rather than read again here. The warning above asks the same
-   * question of the same value, and a second reading is a second chance for an
-   * author-controlled accessor to answer differently — which for this policy
-   * means throwing on a path with no guard over it, taking the page instead of
-   * producing the placeholder this function exists to produce.
-   */
-  shape: RootShape
-): string | null {
-  const hasCssId = typeof node.cssId === "string";
-  const attributes = node.attributes;
-  // Counted by what would actually be WRITTEN, not by what is stored. The
-  // render path drops names outside the allowlist and non-string values, so a
-  // node whose only attributes are `style` or an `onClick` loses nothing by
-  // having no DOM root — refusing it would placeholder a working block over
-  // fields that were never going to appear.
-  const hasAttributes =
-    typeof attributes === "object" &&
-    attributes !== null &&
-    !Array.isArray(attributes) &&
-    Object.entries(attributes).some(
-      ([name, value]) => isAllowedAttribute(name) && typeof value === "string"
-    );
-  // The "never quote this" mark, read as the element's attributes are
-  // assembled, so the guard and the render agree on whether there is one.
-  const marked = storedDecoration(node).nosnippet;
-  if (!hasCssId && !hasAttributes && !marked) return null;
-  // Rendering NOTHING is a decision, not a failure, and the two must not share
-  // an answer. `core/image` with no usable source returns null on purpose —
-  // an `<img>` with no `src` re-requests the current page in some browsers —
-  // and an author who set an anchor on it has lost the anchor either way. The
-  // difference is that a placeholder ALSO reports a working block as broken,
-  // and in production that is an invisible marker nobody ever sees.
-  //
-  // So a block may legitimately render nothing. That is a contract for every
-  // block, including ones written outside this package, rather than a special
-  // case for the two here that need it today.
-  //
-  // Every value React draws as nothing counts, not just the nullish pair.
-  // `render: () => enabled && <div />` yields `false` when disabled and is the
-  // ordinary way to write a conditional block; `""` reaches the same place from
-  // a cleared text value. Verified against React 19: `null`, `undefined`,
-  // `false`, `true` and `""` all render empty, while `0` renders "0" and is
-  // therefore real output with a root.
-  // Two ways to be exempt, and neither reads anything the block can change
-  // between now and React's own read.
-  //
-  // The block SAYS so, from its props. Or the output is a value this renderer
-  // OWNS: a primitive React draws as nothing, or an array the normalizer
-  // materialised, walked by index exactly as React walks it.
-  //
-  // Deliberately NOT by opening what the block returned. A wrapper's children, a
-  // provider's `value`, an element's `key` and `ref`, an iterable's iterator —
-  // every one of them is author-controllable, and React reads them AGAIN after
-  // this returns. An exemption granted on a reading React need not repeat is one
-  // the author can invalidate afterwards, so it is not granted at all. A block
-  // that legitimately draws nothing from a wrapper root says so through
-  // `rendersNothing`, which is computed from props and cannot vary.
-  if (declaresNothing || rendersNothing(output)) return null;
-  const noRoot = noHostRootReason(shape);
-  if (noRoot === null) return null;
-  const named = hasCssId
-    ? "`cssId`"
-    : hasAttributes
-      ? "attributes"
-      : "the `nosnippet` mark";
-  // A primitive or a list, on the other hand, is real output with no single
-  // element to carry the fields, so it loses them anyway — silently, and with
-  // the same broken anchors as a wrapper root. The format says a block renders
-  // a single element for these to target.
-  return `a node carrying ${named} whose block ${noRoot}, so there is no DOM root to put them on`;
-}
-
-/**
- * Why this output gives the node no single host element, or `null` when it does.
- *
- * The SHAPE question alone, separated from what the document asked for, because
- * two readers need it and they must not answer it apart: the placeholder above
- * decides whether root fields can land, and the warning below tells a block
- * author their block does not conform at all. A second copy would let the two
- * disagree about the same output.
- *
- * Asked of what the boundary RECEIVED, never of what a definition predicts.
- * A prediction is a second model of a thing this function already knows
- * first-hand, and the two drift; the artifact is the only witness.
- */
-function noHostRootReason(shape: RootShape): string | null {
-  switch (shape) {
-    case "host":
-      return null;
-    case "none":
-      return "returned no element";
-    case "builtin":
-    case "component":
-      return "returned a wrapper rather than an element";
-  }
-}
-
-/**
- * What KIND of root a block's output gives the node.
- *
- * The classification itself, held ONCE, because two policies read it and must
- * not classify apart. The placeholder above decides whether root fields can
- * land; the warning below decides whether to tell an author their block is
- * broken. Those are different questions with opposite safe directions — each
- * says which, beside itself — but they are the same READING, and a second copy
- * of the reading is where recognising another wrapper kind updates one answer
- * and leaves the other behind.
- *
- * Asked of what the boundary RECEIVED, never of what a definition predicts. A
- * prediction is a second model of something this already knows first-hand, and
- * the two drift; the artifact is the only witness.
- */
-type RootShape = "host" | "component" | "builtin" | "none";
-
-function rootShapeOf(output: ReactNode): RootShape {
-  if (!isValidElement(output)) return "none";
-  // A string type is a host element, and the only shape that HAS a root.
-  if (typeof output.type === "string") return "host";
-  /*
-   * React's own wrappers — a fragment, a suspense boundary, a context provider
-   * or consumer — create no element of their own, so none of them is a root the
-   * generated class can be attached to. Whether the block forwarded that class
-   * to a child is a separate question, and not one this classification answers.
-   *
-   * ASKED rather than restated. `renderable.ts` already separates those from
-   * `memo`, `forwardRef` and `lazy`, which wrap a component that may well
-   * render a host element and forward the class to it; a second reading of the
-   * same tags here is where the two would come to disagree.
-   */
-  if (createsNoHostElement(output.type)) return "builtin";
-  /*
-   * Everything else is a COMPONENT, which cannot be called broken: it may
-   * render a host element and forward `className`, and only calling it would
-   * say. That is deliberate under-reporting, and the cheaper error for a
-   * diagnostic — a warning that is sometimes false is one people learn to
-   * scroll past.
-   */
-  return "component";
-}
-
-/**
- * {@link rootShapeOf} with a floor under it, called ONCE per block root.
- *
- * The classification touches `output.type` and the tag on the type object, both
- * author-controlled, and both readable more than once with different answers: a
- * getter that counts, a proxy that flips. Reproduced against React 19 with a
- * context-tagged type whose `$$typeof` accessor throws on its seventh read —
- * the read the placeholder path made, which had no guard, so the throw left
- * this package entirely and the stream never settled. Not "the page shows an
- * error": nothing resolved at all.
- *
- * So the reading happens here, once, and both policies are handed the result.
- * `unreadable` is a real answer rather than an exception, and the caller turns
- * it into the placeholder every other unusable output already gets — the same
- * direction `isRenderableElementType` takes for a type React would refuse:
- * refusing something valid shows up as a placeholder, accepting something
- * invalid takes the page.
- */
-function readRootShape(output: ReactNode): RootShape | "unreadable" {
-  try {
-    return rootShapeOf(output);
-  } catch {
-    return "unreadable";
-  }
-}
-
-/**
- * Why this output is DEFINITELY not the single element the contract asks for,
- * or `null` when it might be.
- *
- * Deliberately NARROWER than {@link noHostRootReason}, and the difference is
- * the point rather than a duplication of it. That one asks whether the renderer
- * may attach root fields, and answers no for a component root because it cannot
- * know the component forwards them — conservative in the direction of refusing,
- * which is right when an anchor is at stake.
- *
- * This one asks whether to tell an author their block is broken, where the safe
- * direction is the opposite. A component that renders one host element and
- * forwards `className` is a legitimate shape whose compiled styles DO apply, so
- * warning about it would be false, and a diagnostic that is sometimes false is
- * one people learn to scroll past. Only shapes with no root element of their
- * own are named: no element, or a wrapper.
- *
- * Naming a shape is not a claim that its styles are lost. A wrapper root can
- * still forward the class to a child, and the warning above says so — what it
- * reports is the shape, which is outside the contract whatever the block did
- * with the class.
- */
-function brokenRootReason(shape: RootShape): string | null {
-  switch (shape) {
-    // A COMPONENT is not broken: one that renders a host element and forwards
-    // `className` gets its compiled styles applied. The placeholder still
-    // refuses to attach root fields to it, not being able to know that — which
-    // is the one place these two policies part company.
-    case "host":
-    case "component":
-      return null;
-    case "none":
-      return "returned no element";
-    case "builtin":
-      return "returned a wrapper rather than an element";
-  }
-}
-
-/**
- * Tells a BLOCK AUTHOR, in development, that their block does not conform.
- *
- * `BlockRenderArgs.className` states the contract every block is handed: "The
- * generated class the block MUST place on its own root element. Blocks render a
- * single element and never wrap it, so styles target that element." A block
- * returning a Fragment, a list or a primitive gives that class no root element
- * to sit on — it is already outside the contract, and nothing said so.
- *
- * NOT "its styles never apply", which is the stronger claim and is false for
- * one real shape: a wrapper whose child takes the class renders it into the
- * DOM, and the compiled CSS then matches normally. What that block loses is the
- * node's ROOT FIELDS, which are attached here and have nowhere to go — so the
- * warning is right and the diagnosis has to be the narrower one.
- *
- * The only signal today arrives through the placeholder above, which fires when
- * a DOCUMENT asks for `cssId` or an attribute. That blames the wrong party at
- * the wrong time: a page author sets an anchor and watches the block vanish,
- * having done nothing wrong, while the block author never hears about it. This
- * fires on the first render instead, whether or not anyone asked for anything.
- *
- * NOT deduplicated by type. A module-scoped set would either couple one test's
- * warning to another's or need a reset API exported for tests to call, and this
- * fires only for a block that is already broken — which in development is one
- * or two instances on screen, not a page full. If that stops being true,
- * deduplicating is a change with its own reset rather than hidden state added
- * to this one.
- *
- * A warning is not an EXEMPTION, which is why reading the output here is safe
- * where granting one from it would not be: nothing about the render changes,
- * so a reading React need not repeat can at worst produce a wrong message.
- */
-function warnNoHostRoot(
-  output: ReactNode,
-  node: BlockNode,
-  declaresNothing: boolean,
-  /** How the output was classified, read once by the caller. */
-  shape: RootShape
-): void {
-  /*
-   * Speaks only where the environment is POSITIVELY identified as one a
-   * developer is watching. Read at render rather than module scope, so a
-   * consumer's bundler can inline it per build and a test can exercise several
-   * environments in one process.
-   *
-   * Everything else stays silent, which is the opposite of how the placeholder
-   * reads the same signal and deliberately so: a placeholder is a visible box
-   * on a block that is already broken, while this is an undeduplicated line on
-   * every render of every affected block. Unable to tell, a diagnostic says
-   * nothing.
-   *
-   * Being unable to tell has more than one shape, which is what a check for
-   * `process === undefined` missed. This renderer runs anywhere React does: an
-   * Edge or Worker runtime need not define `process`, a standalone SSR host can
-   * expose a partial shim with no `NODE_ENV`, and a deployment may name its
-   * environment something this does not recognise. Asking which environments
-   * may speak covers all of them at once; asking which must stay quiet is a
-   * list, and a list falls behind toward noise in production.
-   *
-   * The cost is a bare harness that sets no `NODE_ENV` hearing nothing. For an
-   * advisory diagnostic that is the cheaper error: a miss costs the report,
-   * while a false one in production teaches everyone to filter the message.
-   */
-  try {
-    /*
-     * Read INSIDE the guard, because reading it is itself author-exposed. A
-     * standalone SSR host supplies its own `process`, and `env` can be a
-     * throwing getter or a proxy — so `process.env?.NODE_ENV` raises before a
-     * `try` placed after it ever begins. The synchronous call to
-     * `checkedOutput` sits PAST the try that contains `render`, as the comment
-     * at that call site says, so a raise here does not become a placeholder: it
-     * takes the page. An advisory diagnostic aborting the render is the exact
-     * thing this function promises not to do.
-     *
-     * Failing to read it lands in the catch below and says nothing, which is
-     * the same answer the checks below give any environment that cannot be
-     * positively identified. Unable to tell, a diagnostic stays quiet.
-     */
-    const environment =
-      typeof process === "undefined" ? undefined : process.env?.NODE_ENV;
-    if (environment !== "development" && environment !== "test") return;
-    // Rendering nothing is a DECISION, not a violation — the same exemption the
-    // placeholder grants, asked the same way.
-    if (declaresNothing || rendersNothing(output)) return;
-    const broken = brokenRootReason(shape);
-    if (broken === null) return;
-    /*
-     * Says what is CERTAIN and nothing more. The class is handed to the block
-     * rather than attached here, so a wrapper root that forwards it to a child
-     * — `({ className }) => <><div className={className} /></>` — does get its
-     * compiled styles, on a page whose DOM carries the class. Telling that
-     * author their styles do not apply sends them hunting a failure that is not
-     * there, and a diagnostic people find wrong once is one they stop reading.
-     *
-     * What IS certain either way: the shape is outside the contract, the node
-     * has no root element of its own, and its root fields therefore have
-     * nowhere to go. The style consequence is stated as the condition it
-     * actually is.
-     */
-    console.warn(
-      `[nextly] Block "${node.type}" ${broken}. Blocks render a single element and never wrap it: with no root element of its own, this block's styles apply only where the block itself placed the class, and setting an id or an attribute on the node will replace it with a placeholder.`
-    );
-  } catch {
-    /*
-     * A DIAGNOSTIC must never be the thing that fails the page, and this call
-     * sits past the try block that contains `render`.
-     *
-     * It no longer covers the CLASSIFICATION, which was the exposure it was
-     * written for: that is read once by {@link readRootShape}, under its own
-     * floor, and arrives here as a value. What it covers now is the environment
-     * read above, `rendersNothing` over an array this renderer materialised,
-     * and the `console` call itself.
-     */
-  }
-}
-
-/**
- * Validates a block's output and substitutes a placeholder when it is unusable.
- *
- * A promise found inside the output gets a boundary here. React 19 renders a
- * promise child by suspending on it, and without one the suspension travels up
- * to whatever boundary sits above the whole page — so a single async child
- * inside an otherwise ordinary block would hold back everything around it.
- */
-function checkedOutput(
-  value: unknown,
-  node: BlockNode,
-  fallback: ReactNode,
-  // The node's root-level fields belong to the block's OWN root element. This
-  // function is re-entered for each awaited child, and applying them again
-  // there would put the node's id and attributes on a nested element while the
-  // block's root, being a list, received none of them.
-  isBlockRoot: boolean,
-  /** What the block declared about these props, decided once by the caller. */
-  declaresNothing: boolean,
-  /** Whether the block's definition declares at least one slot, decided once by the caller. */
-  declaresSlots: boolean,
-  /** Whether the editor asked for a per-node DOM address. */
-  nodeAttribute = false,
-  /**
-   * The editor address, snapshotted before the block rendered.
-   *
-   * Carried rather than re-derived here, because this function runs AFTER the
-   * block — and, on the awaited path, after an `await` inside it.
-   */
-  identity: EditorIdentity = editorIdentityOf(node, nodeAttribute)
-): ReactNode {
-  const result = normalizeRenderable(value, {
-    // A promise the block returned inside a list is awaited under the same
-    // containment its own render gets, so a rejection becomes this block's
-    // placeholder instead of an error React raises after the boundary has
-    // already returned. Each gets its own boundary, so one slow child does not
-    // hold back the siblings beside it.
-    wrapOwnedThenable: (pending, index) => (
-      <Suspense key={`nx-async-${index}`} fallback={fallback}>
-        <AsyncBlockOutput
-          pending={pending}
-          node={node}
-          fallback={fallback}
-          isBlockRoot={false}
-          declaresNothing={declaresNothing}
-          declaresSlots={declaresSlots}
-          identity={identity}
-          nodeAttribute={nodeAttribute}
-        />
-      </Suspense>
-    ),
-  });
-
-  if (!result.ok) {
-    return (
-      <BlockPlaceholder
-        reason="invalid-output"
-        type={node.type}
-        id={node.id}
-        editor={placeholderEditor(nodeAttribute, identity)}
-        detail={`Expected a React node, received ${result.reason}`}
-      />
-    );
-  }
-
-  // Warned INDEPENDENTLY of whether the document asked for root fields: the
-  // block is non-conforming either way, and waiting for someone to set an
-  // anchor is what made a page author look responsible for it.
-  /*
-   * Classified ONCE, and both policies below read that value rather than the
-   * output. They ask the same question of the same author-controlled object,
-   * and asking twice is asking something that can answer differently — which
-   * for the placeholder path meant an accessor throwing where nothing guarded
-   * it. One reading, two policies.
-   */
-  const shape = isBlockRoot ? readRootShape(result.node) : null;
-  if (shape === "unreadable") {
-    /*
-     * Refused rather than passed on. React reads the same accessors after this
-     * returns, so output that cannot be classified here is output whose next
-     * read is React's, past this boundary and past any containment — which is
-     * exactly the failure `normalizeRenderable` exists to prevent.
-     */
-    return (
-      <BlockPlaceholder
-        reason="invalid-output"
-        type={node.type}
-        id={node.id}
-        editor={placeholderEditor(nodeAttribute, identity)}
-        detail="Expected a React node, received output whose own element type could not be read"
-      />
-    );
-  }
-  if (shape !== null) warnNoHostRoot(result.node, node, declaresNothing, shape);
-  const rootReason =
-    shape !== null
-      ? nodeRootReason(result.node, node, declaresNothing, shape)
-      : null;
-  if (rootReason !== null) {
-    return (
-      <BlockPlaceholder
-        reason="invalid-output"
-        type={node.type}
-        id={node.id}
-        editor={placeholderEditor(nodeAttribute, identity)}
-        detail={rootReason}
-      />
-    );
-  }
-
-  // Only promises inside borrowed JSX children reach here unwrapped, since
-  // nothing can be substituted into an element that already exists. React
-  // suspends on them, so they still need a boundary above.
-  const withAttributes = isBlockRoot
-    ? withNodeAttributes(
-        result.node,
-        node,
-        nodeAttribute,
-        declaresSlots,
-        identity
-      )
-    : result.node;
-  if (!result.hasUnwrappedThenable) return withAttributes;
-  return <Suspense fallback={fallback}>{withAttributes}</Suspense>;
-}
-
-/** An async block's output once settled, either way, so reading it never throws a rejection. */
-type SettledOutput =
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly error: unknown };
-
-/**
- * One settled reading per promise, whichever render asks for it.
- *
- * React reads a promise with `use` and, while it is pending, renders again
- * once it settles; a promise made afresh by that render is a new one, so the
- * block would wait for ever. Keyed by the promise itself, so the same output
- * always answers with the same reading.
- */
-const SETTLED = new WeakMap<object, Promise<SettledOutput>>();
-
-function settledOf(pending: PromiseLike<unknown>): Promise<SettledOutput> {
-  const known = SETTLED.get(pending);
-  if (known !== undefined) return known;
-  const settled = Promise.resolve(pending).then(
-    (value): SettledOutput => ({ ok: true, value }),
-    (error: unknown): SettledOutput => ({ ok: false, error })
-  );
-  SETTLED.set(pending, settled);
-  return settled;
-}
-
-/**
- * The outputs of async blocks the EDITOR has drawn, per page context, so
- * drawing the page again does not run each one again.
- *
- * The editor renders in the browser, and renders the page again for a
- * selection or a panel opening. Run again, an async block makes a new promise,
- * and its boundary shows the fallback until that settles: an image or a
- * button blinks out. Kept by everything the output is made from: the block,
- * its class, the node as stored and the site's spacing model, so a change to
- * any of them runs the block again, and by the bound values beside the node's
- * props, which the output reads too. Per context, because the output also
- * reads the context (the entry, the language, a loop's item), and a block
- * under another context is another output.
- *
- * Never on a published page: a page served to visitors is rendered per
- * request, and an output kept across requests would serve one request's data
- * to the next.
- */
-const EDITOR_OUTPUTS = new WeakMap<
-  PageContext,
-  Map<string, PromiseLike<unknown>>
->();
-
-/** How many outputs a context keeps, the oldest dropped first. */
-const EDITOR_OUTPUTS_KEPT = 256;
-
-/** What an editor output is kept by, or `undefined` where it cannot be told. */
-function editorOutputKey(
-  name: string,
-  className: string,
-  node: BlockNode,
-  bound: BoundValues | undefined,
-  spacingMode: SpacingMode | undefined
-): string | undefined {
-  try {
-    // The spacing model too: a render argument a block's markup may read, so
-    // an output drawn under one model is not the block as it stands under
-    // the other.
-    return JSON.stringify([
-      name,
-      className,
-      node,
-      bound ?? null,
-      spacingMode ?? null,
-    ]);
-  } catch {
-    // A node a stringify cannot write (a cycle, a bigint) is drawn afresh.
-    return undefined;
-  }
-}
-
-function keepEditorOutput(
-  context: PageContext,
-  key: string,
-  output: PromiseLike<unknown>
-): void {
-  let kept = EDITOR_OUTPUTS.get(context);
-  if (kept === undefined) {
-    kept = new Map();
-    EDITOR_OUTPUTS.set(context, kept);
-  }
-  kept.set(key, output);
-  if (kept.size > EDITOR_OUTPUTS_KEPT) {
-    const oldest = kept.keys().next();
-    if (oldest.done !== true) kept.delete(oldest.value);
-  }
-}
-
-/** Where a block's output comes from on this render, and where it is kept. */
-interface EditorOutputSlot {
-  /** The output kept for this block as it stands, or the one `run` makes. */
-  readonly output: (run: () => unknown) => unknown;
-  /** Keep an async output just made, for the next time the page is drawn. */
-  readonly keep: (output: PromiseLike<unknown>) => void;
-}
-
-/** A published render's slot: every output is made afresh and none is kept. */
-const UNKEPT: EditorOutputSlot = {
-  output: run => run(),
-  keep: () => undefined,
-};
-
-/**
- * A block's output slot: on an editor render, the output kept for it as it
- * stands; on a published one, or where the block cannot be keyed, none. See
- * `EDITOR_OUTPUTS`.
- */
-function editorOutputSlot(
-  editorRender: boolean,
-  context: PageContext,
-  name: string,
-  className: string,
-  node: BlockNode,
-  bound: BoundValues | undefined,
-  spacingMode: SpacingMode | undefined
-): EditorOutputSlot {
-  if (!editorRender) return UNKEPT;
-  const key = editorOutputKey(name, className, node, bound, spacingMode);
-  if (key === undefined) return UNKEPT;
-  const kept = EDITOR_OUTPUTS.get(context)?.get(key);
-  return {
-    output: run => kept ?? run(),
-    keep: output => {
-      if (kept === undefined) keepEditorOutput(context, key, output);
-    },
-  };
-}
-
-/**
- * Reads an async block's output with the same containment the sync path has.
- *
- * A component of its own, so only blocks that are actually asynchronous wait,
- * and a page of forty ordinary sections is not forty streaming chunks. Read
- * with `use` rather than by being an `async` component: the published page
- * renders on the server, where either works, but the editor renders the same
- * tree in the browser, where React refuses an async component.
- */
-function AsyncBlockOutput({
-  pending,
-  node,
-  fallback,
-  isBlockRoot,
-  declaresNothing,
-  declaresSlots,
-  nodeAttribute,
-  identity,
-}: {
-  pending: PromiseLike<unknown>;
-  node: BlockNode;
-  fallback: ReactNode;
-  isBlockRoot: boolean;
-  /** Carried from the caller, which asked the definition once before rendering. */
-  declaresNothing: boolean;
-  /** Carried from the caller, which asked the definition once before rendering. */
-  declaresSlots: boolean;
-  /** Whether the editor asked for a per-node DOM address. */
-  nodeAttribute?: boolean;
-  /** The editor address, snapshotted before the block rendered. */
-  identity: EditorIdentity;
-}): ReactNode {
-  const settled = use(settledOf(pending));
-  if (settled.ok) {
-    return checkedOutput(
-      settled.value,
-      node,
-      fallback,
-      isBlockRoot,
-      declaresNothing,
-      declaresSlots,
-      nodeAttribute,
-      identity
-    );
-  }
-  return (
-    <BlockPlaceholder
-      reason="render-error"
-      type={node.type}
-      id={node.id}
-      editor={placeholderEditor(nodeAttribute, identity)}
-      detail={describeThrown(settled.error)}
-    />
-  );
-}
 
 /**
  * Renders one node, and contains everything that node can do wrong.
@@ -1527,8 +245,8 @@ export function BlockBoundary({
   classes,
   fallback,
   hostPolicy,
-  spacingMode,
   nodeAttribute,
+  keepAsyncOutputs,
   bindings,
   conditions,
 }: BlockBoundaryProps): ReactNode {
@@ -1640,16 +358,21 @@ export function BlockBoundary({
 
   const marker = propMarker(definition, nodeAttribute === true);
 
-  // An editor render reuses the output it already has for this block as it
-  // stands: see `EDITOR_OUTPUTS`.
+  // An editor surface: one drawn with node addresses, or keeping its async
+  // outputs between draws. It reuses the output it already has for this
+  // block as it stands (see `EDITOR_OUTPUTS`), and an async block on it waits
+  // in a boundary of its own (see `AsyncWaiting`).
+  const editorSurface = nodeAttribute === true || keepAsyncOutputs === true;
+  const waiting = asyncWaitingOf(fallback, editorSurface);
   const editorSlot = editorOutputSlot(
+    editorSurface,
     nodeAttribute === true,
+    hostPolicy,
     context,
     definition.name,
     className,
     node,
-    bound,
-    spacingMode
+    bound
   );
 
   let output: unknown;
@@ -1677,7 +400,6 @@ export function BlockBoundary({
         // The renderer's, not the context's. A block may replace the context its
         // slot children see; it can neither drop nor forge this.
         ...(hostPolicy === undefined ? {} : { hostPolicy }),
-        ...(spacingMode === undefined ? {} : { spacingMode }),
         // The renderer's too, for the same reason: what a bound prop holds comes
         // from the pass that filled it, never from a context a block built.
         ...boundArgument(bound),
@@ -1698,8 +420,8 @@ export function BlockBoundary({
             classes={classes}
             fallback={fallback}
             {...(hostPolicy === undefined ? {} : { hostPolicy })}
-            {...(spacingMode === undefined ? {} : { spacingMode })}
             {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+            {...(keepAsyncOutputs === true ? { keepAsyncOutputs } : {})}
             bindings={bindings}
             {...(conditions === undefined ? {} : { conditions })}
           />
@@ -1726,7 +448,7 @@ export function BlockBoundary({
     return checkedOutput(
       output,
       node,
-      fallback,
+      waiting,
       true,
       declaresNothing,
       declaresSlots,
@@ -1737,19 +459,18 @@ export function BlockBoundary({
 
   editorSlot.keep(output);
 
-  return (
-    <Suspense fallback={fallback}>
-      <AsyncBlockOutput
-        pending={output}
-        node={node}
-        fallback={fallback}
-        isBlockRoot
-        declaresNothing={declaresNothing}
-        declaresSlots={declaresSlots}
-        nodeAttribute={nodeAttribute}
-        identity={identity}
-      />
-    </Suspense>
+  return waitingAs(
+    waiting,
+    <AsyncBlockOutput
+      pending={output}
+      node={node}
+      waiting={waiting}
+      isBlockRoot
+      declaresNothing={declaresNothing}
+      declaresSlots={declaresSlots}
+      nodeAttribute={nodeAttribute}
+      identity={identity}
+    />
   );
 }
 
@@ -1760,11 +481,6 @@ export interface BlockListProps {
   classes: Record<string, string>;
   fallback?: ReactNode;
   hostPolicy?: BlockHostPolicy;
-  /**
-   * The site's spacing model, for the few blocks whose markup differs by it.
-   * Threaded down the tree beside `hostPolicy`, for the same reason.
-   */
-  spacingMode?: SpacingMode;
   /**
    * Emit `data-nx-node="<node id>"` on each block's root element.
    *
@@ -1778,6 +494,12 @@ export interface BlockListProps {
    * address an unstyled node and would resolve to the wrong one.
    */
   nodeAttribute?: boolean;
+  /**
+   * Keep each async block's output between draws, as `nodeAttribute` does,
+   * for an editor surface that addresses no node (see
+   * `PageRendererProps.keepAsyncOutputs`). Never on a published page.
+   */
+  keepAsyncOutputs?: boolean;
   /** The page's bindings, when the page has any to fill. */
   bindings?: BoundaryBindings;
   /** What the render decided about its conditioned blocks. */
@@ -1798,8 +520,8 @@ export function BlockList({
   classes,
   fallback,
   hostPolicy,
-  spacingMode,
   nodeAttribute,
+  keepAsyncOutputs,
   bindings,
   conditions,
 }: BlockListProps): ReactNode {
@@ -1815,8 +537,8 @@ export function BlockList({
         classes={classes}
         fallback={fallback}
         {...(hostPolicy === undefined ? {} : { hostPolicy })}
-        {...(spacingMode === undefined ? {} : { spacingMode })}
         {...(nodeAttribute === undefined ? {} : { nodeAttribute })}
+        {...(keepAsyncOutputs === true ? { keepAsyncOutputs } : {})}
         {...(bindings === undefined ? {} : { bindings })}
         {...(conditions === undefined ? {} : { conditions })}
       />

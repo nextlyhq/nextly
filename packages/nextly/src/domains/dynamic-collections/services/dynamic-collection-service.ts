@@ -8,7 +8,10 @@ import { randomBytes } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
+import {
+  assertOptionValuesDistinct,
+  assertTopLevelFieldsNamed,
+} from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
@@ -273,6 +276,25 @@ function orderLocalizedMigration(
   )
     .filter(sql => sql && sql.trim())
     .join("\n--> statement-breakpoint\n");
+}
+
+/**
+ * Each built-in field (`RESERVED_FIELD_NAMES`: `title`, `slug` and the rest) the stored row holds,
+ * as `fields` hands it back or, where they leave it out, as stored. A built-in is never defined by
+ * a save, so one a create is sent is dropped; but a row can hold one, a `title` a code-first config
+ * declared and `nextly db:sync --demote` stored (translated, as a text field on a translated
+ * collection is), and an update dropping it, whether it was handed back or left out, would read as
+ * that field leaving, renamed into another or dropped with its translations. Derived from the row,
+ * so every road that updates a collection keeps it: the dispatcher, the root-exported
+ * `CollectionService` and a plugin's `ctx.services.collections`.
+ */
+function builtInsHeldByRow(
+  fields: readonly FieldDefinition[],
+  stored: readonly FieldDefinition[] | null
+): FieldDefinition[] {
+  return (stored ?? [])
+    .filter(field => RESERVED_FIELD_NAMES.includes(field.name.toLowerCase()))
+    .map(held => fields.find(field => field.name === held.name) ?? held);
 }
 
 export class DynamicCollectionService extends BaseService {
@@ -756,38 +778,6 @@ export class DynamicCollectionService extends BaseService {
    * would not.
    */
   /**
-   * Refuse a junction move whose destination name the database already holds.
-   *
-   * @throws NextlyError (validation, `JUNCTION_TABLE_IN_USE`) naming the table
-   */
-  private async refuseJunctionMovesOntoLiveTables(
-    tableName: string,
-    oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
-  ): Promise<void> {
-    for (const move of this.schemaService.junctionMoves(
-      tableName,
-      oldFields,
-      newFields
-    )) {
-      if (!(await this.adapter.tableExists(move.to.table))) continue;
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "fields",
-            code: "JUNCTION_TABLE_IN_USE",
-            message:
-              `Junction table "${move.from.table}" cannot move to ` +
-              `"${move.to.table}": a table of that name already exists in the ` +
-              `database. Choose another name, or drop that table first.`,
-          },
-        ],
-        logContext: { from: move.from.table, to: move.to.table },
-      });
-    }
-  }
-
-  /**
    * The fields a save defines itself, validated: the reserved fields dropped,
    * every name checked by the column it becomes, and no two many-to-many fields
    * sharing one junction table — asked through the schema service's own naming,
@@ -817,6 +807,8 @@ export class DynamicCollectionService extends BaseService {
     // Judged under the names as sent, so a refusal names what the caller wrote; reserved names are
     // dropped first because they are never stored, so they make no pair with anything.
     assertNoNewSiblingClashes({ kind: "collection", slug }, declared, stored);
+    // Nor two options sharing one value, which the stored value could not tell apart.
+    assertOptionValuesDistinct(declared);
     const userDefinedFields = namesKeptFromStored(declared, stored ?? []);
     // And again as they will be stored: a field sent under a spelling of a stored one keeps the
     // stored name, so two fields apart as sent (`metatitle`, `meta_title`) can arrive at one.
@@ -829,7 +821,8 @@ export class DynamicCollectionService extends BaseService {
     this.validationService.validateJunctionOwnership(userDefinedFields, field =>
       this.schemaService.junctionTableNameFor(tableName, field)
     );
-    return userDefinedFields;
+    // A built-in the stored row already holds, handed back as it is, stays (`builtInsHeldByRow`).
+    return [...builtInsHeldByRow(fields, stored), ...userDefinedFields];
   }
 
   private manifestEntityFor(
@@ -1565,8 +1558,12 @@ export class DynamicCollectionService extends BaseService {
         collection.fields || []
       );
 
+      // The stored side as the new one is judged: a stored built-in the save kept is on both sides,
+      // so it reads as unchanged rather than added.
       const oldUserFields = (collection.fields || []).filter(
-        (f: FieldDefinition) => !RESERVED_FIELD_NAMES.includes(f.name)
+        (f: FieldDefinition) =>
+          !RESERVED_FIELD_NAMES.includes(f.name) ||
+          userDefinedFields.some(kept => kept.name === f.name)
       );
 
       // A many-to-many added to a renamed collection would get a junction its reads can't find.
@@ -1583,10 +1580,11 @@ export class DynamicCollectionService extends BaseService {
       // migration is invisible to it, and the rename would meet that table at
       // apply time — in production, where a migration can no longer be
       // refused and the registry has already recorded the new name.
-      await this.refuseJunctionMovesOntoLiveTables(
+      await this.schemaService.refuseJunctionMovesOntoLiveTables(
         collection.tableName,
         oldUserFields,
-        userDefinedFields
+        userDefinedFields,
+        table => this.adapter.tableExists(table)
       );
       // A field renamed onto a column that is already there is refused before anything here is
       // written: the archive write just below is the first.
@@ -1676,6 +1674,10 @@ export class DynamicCollectionService extends BaseService {
             rename: this.schemaService.detectFieldRename(mainBefore, mainAfter),
             addedColumnBackfill: field =>
               this.schemaService.addedColumnBackfill(field),
+            // Unique as the live table holds it, not as the previous definition says.
+            liveUniqueColumns: new Set(
+              (await liveTable()).uniqueColumns.keys()
+            ),
             // Counts the rows a field made required would break, naming the collection.
             requiredColumns: {
               db: this.adapter.getDrizzle(),

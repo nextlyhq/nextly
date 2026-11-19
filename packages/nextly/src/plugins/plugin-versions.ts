@@ -84,7 +84,7 @@ type AutosaveInput = Parameters<VersionsService["autosave"]>[0];
 /** The history writes, each checked when the plugin says who it acts for. */
 export interface PluginVersionWrites {
   /**
-   * @experimental Name a version, or clear its name with `null`. Made as a
+   * Name a version, or clear its name with `null`. Made as a
    * person, the person needs to read and update the document, and is the one
    * who named it: `by` left out records them, and a `by` naming anyone else is
    * refused.
@@ -97,7 +97,7 @@ export interface PluginVersionWrites {
     opts?: ServiceOpts
   ): Promise<VersionRow>;
   /**
-   * @experimental Discard a document's working draft in one locale. Made as a
+   * Discard a document's working draft in one locale. Made as a
    * person, the person needs to read and update the document. `version` is
    * the version the draft was read at (`_rev`) and the overwrite choice
    * (`_overwrite`): a discard is judged as a save of the change is, so one
@@ -110,7 +110,7 @@ export interface PluginVersionWrites {
     version?: Readonly<Record<string, unknown>>
   ): Promise<number>;
   /**
-   * @experimental Record an author's recovery point. Made as a person, the
+   * Record an author's recovery point. Made as a person, the
    * person needs to read and update the document, its autosave must be on, and
    * the point is theirs: `createdBy` left out files it under them, and one
    * naming anyone else is refused. Stored, whoever the call is made as,
@@ -121,7 +121,7 @@ export interface PluginVersionWrites {
     opts?: ServiceOpts
   ): Promise<AutosaveWriteResult>;
   /**
-   * @experimental Restore a version into the document's working draft: the
+   * Restore a version into the document's working draft: the
    * fields `options.fields` names, or every field the version holds, go into
    * the drafts of the parts the version holds, and nothing published changes.
    * Refused where the collection or Single keeps no drafts. Made as a person,
@@ -140,7 +140,7 @@ export interface PluginVersionWrites {
     opts?: ServiceOpts
   ): Promise<RestoreVersionResult>;
   /**
-   * @experimental Version pins on the plugin's own transaction: register a
+   * Version pins on the plugin's own transaction: register a
    * holder, then pin, release and list its slots in `ctx.db.transaction` or
    * `ctx.services.collections.withTransaction`.
    */
@@ -502,7 +502,7 @@ export function pluginVersionWrites(
         // rather than failing after the label and its history event are in.
         const shown = await service().get(ref, versionNo);
         await redactSnapshotForUser(
-          shown.snapshot,
+          shown,
           ref.scopeKind,
           ref.scopeSlug,
           writer.user,
@@ -555,7 +555,9 @@ export function pluginVersionWrites(
           versionNo,
         });
         // The same restore REST's route runs once its gates have passed; a
-        // trusted call runs it with no person to judge.
+        // trusted call runs it with no person to judge. A trusted call made
+        // for a named person is still theirs: their actor, never their gates.
+        const named = resolved.user?.id;
         return restoreVersion({
           scopeKind: ref.scopeKind,
           slug: ref.scopeSlug,
@@ -569,7 +571,11 @@ export function pluginVersionWrites(
                   ? { authenticatedScope: writer.authenticatedScope }
                   : {}),
               }
-            : {}),
+            : named === undefined
+              ? {}
+              : { actor: { type: "user" as const, id: String(named) } }),
+          // What the plugin hands its hooks, for the update the restore makes.
+          ...hookInputsOf(resolved),
           ...(options?.fields ? { fields: options.fields } : {}),
           ...(options?.version ? { version: options.version } : {}),
         });

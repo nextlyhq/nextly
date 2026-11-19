@@ -1,0 +1,203 @@
+name: Builder speed
+
+# How long the page builder makes an author wait, measured in a browser on the
+# playground's production build with the processor slowed 4x, and held to the
+# budgets in e2e/builder-speed/budgets.mjs. A miss fails the run, naming the
+# measure, its result and its budget; today's misses are listed in
+# e2e/builder-speed/expected-failures.mjs and do not, until a fix makes one
+# pass, which fails the run too so its line is removed.
+#
+# It also seeds the speed fixture on PostgreSQL and MySQL, so the pages every
+# measurement is taken on are known to seed on all three dialects (the
+# measurement itself seeds SQLite).
+#
+# Its own workflow, so its trigger stays as narrow as what it measures: the
+# four page-builder packages, the playground the fixture lives in, and the
+# check itself. The long checks (published pages through Lighthouse, a
+# 30-minute session) run nightly elsewhere, not on every pull request.
+#
+# The same production build is then read for the page builder's code on each
+# admin screen (scripts/page-builder-bundle-report.mjs): on the sign-in page
+# and the dashboard, its registration alone, within its budget, and no
+# editor on the dashboard with the parts it draws without a click.
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "packages/builder/**"
+      - "packages/blocks-react/**"
+      - "packages/blocks-engine/**"
+      - "packages/plugin-page-builder/**"
+      - "apps/playground/**"
+      - "e2e/builder-speed/**"
+      - "e2e/admin-speed/preload.mjs"
+      - "e2e/package.json"
+      - "packages/admin/scripts/bundle-report.mjs"
+      - "packages/admin/scripts/check-consumer-bundle.mjs"
+      - "scripts/page-builder-bundle-report.mjs"
+      - ".github/workflows/builder-speed.yml"
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "packages/builder/**"
+      - "packages/blocks-react/**"
+      - "packages/blocks-engine/**"
+      - "packages/plugin-page-builder/**"
+      - "apps/playground/**"
+      - "e2e/builder-speed/**"
+      - "e2e/admin-speed/preload.mjs"
+      - "e2e/package.json"
+      - "packages/admin/scripts/bundle-report.mjs"
+      - "packages/admin/scripts/check-consumer-bundle.mjs"
+      - "scripts/page-builder-bundle-report.mjs"
+      - ".github/workflows/builder-speed.yml"
+  workflow_dispatch:
+    inputs:
+      rate:
+        description: "Processor slowdown (1 measures without slowing)"
+        default: "4"
+      samples:
+        description: "Samples per timing"
+        default: "10"
+
+permissions:
+  contents: read
+
+# A pull request's newer push supersedes its last run; every other run keeps a
+# group of its own commit.
+concurrency:
+  group: builder-speed-${{ github.event_name == 'pull_request' && github.ref || format('{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  measure:
+    name: Builder speed
+    runs-on: ubuntu-latest
+    # One production build, two seeds, then about twenty minutes of slowed
+    # browsing while the builder is slow; it shortens as the fixes land.
+    timeout-minutes: 75
+    env:
+      TURBO_CACHE_DIR: .turbo
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: builder_speed
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --tmpfs /var/lib/postgresql/data
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: nextly
+          MYSQL_DATABASE: builder_speed
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pnextly"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --tmpfs /var/lib/mysql
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Restore pnpm store
+        uses: ./.github/actions/pnpm-store
+
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-builder-speed-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-builder-speed-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Chromium and its system libraries
+        uses: ./.github/actions/chromium
+
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+
+      # The playground's seed, its plugins, then the fixture, as the measured
+      # run seeds SQLite; each dialect's database is the service's own.
+      - name: Seed the speed fixture on PostgreSQL
+        run: |
+          pnpm --filter playground exec tsx scripts/seed.ts
+          pnpm --filter playground exec nextly plugins install --all
+          pnpm --filter playground exec tsx scripts/seed-speed-fixture.ts
+        env:
+          DB_DIALECT: postgresql
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/builder_speed
+          NEXTLY_E2E_STYLE_FIXTURE: "1"
+
+      - name: Seed the speed fixture on MySQL
+        run: |
+          pnpm --filter playground exec tsx scripts/seed.ts
+          pnpm --filter playground exec nextly plugins install --all
+          pnpm --filter playground exec tsx scripts/seed-speed-fixture.ts
+        env:
+          DB_DIALECT: mysql
+          DATABASE_URL: mysql://root:nextly@127.0.0.1:3306/builder_speed
+          NEXTLY_E2E_STYLE_FIXTURE: "1"
+
+      - name: Measure, and compare with the budgets
+        run: >-
+          node e2e/builder-speed/measure.mjs --build
+          --rate "${RATE}" --samples "${SAMPLES}"
+          --json e2e/.playwright/builder-speed/results.json
+        env:
+          RATE: ${{ inputs.rate || '4' }}
+          SAMPLES: ${{ inputs.samples || '10' }}
+          # Browser source maps, which name the modules each chunk holds for
+          # the page builder's bundle report below.
+          NEXTLY_BROWSER_SOURCE_MAPS: "1"
+
+      # Run even when a timing missed its budget: the build is good, and the
+      # two say different things.
+      - name: Page builder code per admin screen, against its budgets
+        if: ${{ !cancelled() }}
+        run: >-
+          node scripts/page-builder-bundle-report.mjs
+          --next apps/playground/.next-builder-speed
+          --json e2e/.playwright/builder-speed/page-builder-bundle.json
+
+      # Saved under the key restored above, so the next run of this job builds
+      # only what changed. Saved even when a budget failed: the build is good.
+      - name: Save Turbo cache
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-builder-speed-${{ github.sha }}
+
+      - name: Upload the results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: builder-speed-results
+          path: e2e/.playwright/builder-speed
+          retention-days: 14

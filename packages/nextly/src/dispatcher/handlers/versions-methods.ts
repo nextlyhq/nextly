@@ -30,6 +30,7 @@ import {
   parseComparisonQuery,
   hydrateVersionSnapshot,
   readableFieldSources,
+  readableHistoryLocales,
   readingPersonId,
   redactSnapshotForUser,
   resolveVersionsPolicy,
@@ -64,7 +65,11 @@ import {
 import type { TakenLiveValues } from "../../domains/versions/shared-publish-base";
 import { markVersionSeen } from "../../domains/versions/version-views";
 import { VersionsRepository } from "../../domains/versions/versions-repository";
-import type { VersionRow } from "../../domains/versions/versions-repository";
+import type {
+  VersionMeta,
+  VersionRow,
+} from "../../domains/versions/versions-repository";
+import type { VersionListOptions } from "../../domains/versions/versions-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
@@ -162,62 +167,50 @@ export async function listVersionsForDocument(
 ): Promise<{ items: VersionMetaWithAuthor[]; meta: PaginationMeta }> {
   // Validate before the gate so malformed pagination fails fast, and validate
   // here rather than per dispatcher so every caller of this core is covered.
-  if (args.limit !== undefined) assertPositiveInteger(args.limit, "limit");
-  if (args.cursor !== undefined) assertPositiveInteger(args.cursor, "cursor");
+  assertVersionPaging(args);
 
-  await assertVersionDocumentReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    args.authenticatedScope
-  );
-  // The languages this caller may read the history in: the one asked for, or
-  // every one they may read.
-  const languages = await historyListLanguages(
+  // Asked in the language the listing names, or in each its history holds,
+  // and answering the ones the caller may read.
+  const readable = await assertVersionDocumentReadable(
     args.scopeKind,
     args.slug,
     args.entryId,
     args.user,
     args.authenticatedScope,
-    args.locale
+    {},
+    args.locale === undefined ? [] : [args.locale]
   );
+  // The languages this caller may read the history in: the one asked for, or
+  // every one they may read.
+  const languages = historyListLanguages(args.locale, readable);
 
-  const limit = Math.min(args.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-  const versions = getService("versionsService");
-  // Ask for one extra row: its presence is what proves another page exists.
-  // Inferring from a full page would claim a next page whenever the history
-  // length is an exact multiple of the page size.
-  const window = await versions.list(
-    {
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+  const page = await pageOfVersions(ref, {
+    ...(args.limit !== undefined ? { limit: args.limit } : {}),
+    ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+    // An empty `?locale=` reaches the dispatcher as "" (the route parser keeps
+    // it); `historyListLanguages` treats that as absent, so both list surfaces
+    // list every readable locale rather than matching a non-existent
+    // empty-string locale and returning nothing.
+    languages,
+  });
+  const window = page.items;
+  const hasNext = page.meta.hasNext;
+  const limit = page.meta.limit;
+  // Each row names only the restored fields this reader may read.
+  const items = await readableFieldSources(window, {
+    ref: {
       scopeKind: args.scopeKind,
       scopeSlug: args.slug,
       entryId: args.entryId,
     },
-    {
-      limit: limit + 1,
-      ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
-      // An empty `?locale=` reaches the dispatcher as "" (the route parser keeps
-      // it); `historyListLanguages` treats that as absent, so both list surfaces
-      // list every readable locale rather than matching a non-existent
-      // empty-string locale and returning nothing.
-      ...languages,
-    }
-  );
-  const hasNext = window.length > limit;
-  // Each row names only the restored fields this reader may read.
-  const items = await readableFieldSources(
-    hasNext ? window.slice(0, limit) : window,
-    {
-      ref: {
-        scopeKind: args.scopeKind,
-        scopeSlug: args.slug,
-        entryId: args.entryId,
-      },
-      user: args.user,
-      authenticatedScope: args.authenticatedScope,
-    }
-  );
+    user: args.user,
+    authenticatedScope: args.authenticatedScope,
+  });
 
   // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
   // so the meta describes the returned window.
@@ -246,6 +239,62 @@ export async function listVersionsForDocument(
 }
 
 /**
+ * Reject a page size or cursor that is not a positive integer: every history
+ * page, a trusted one included, is held to this before it reads anything.
+ */
+export function assertVersionPaging(paging: {
+  limit?: number;
+  cursor?: number;
+}): void {
+  if (paging.limit !== undefined) assertPositiveInteger(paging.limit, "limit");
+  if (paging.cursor !== undefined) {
+    assertPositiveInteger(paging.cursor, "cursor");
+  }
+}
+
+/**
+ * One page of a document's versions, newest first, without snapshots: the
+ * page size (REST's default, never past its ceiling), the extra row that
+ * proves another page exists, and the window's meta. Every list of history,
+ * a trusted one included, pages through this, so they cannot page apart.
+ * The caller has validated the paging (`assertVersionPaging`) and decided
+ * which languages to read.
+ */
+export async function pageOfVersions(
+  ref: { scopeKind: VersionScopeKind; scopeSlug: string; entryId: string },
+  paging: {
+    limit?: number;
+    cursor?: number;
+    languages: Pick<VersionListOptions, "locale" | "locales">;
+  }
+): Promise<{ items: VersionMeta[]; meta: PaginationMeta }> {
+  const limit = Math.min(paging.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+  // Ask for one extra row: its presence is what proves another page exists.
+  // Inferring from a full page would claim a next page whenever the history
+  // length is an exact multiple of the page size.
+  const window = await getService("versionsService").list(ref, {
+    limit: limit + 1,
+    ...(paging.cursor !== undefined ? { cursor: paging.cursor } : {}),
+    ...paging.languages,
+  });
+  const hasNext = window.length > limit;
+  const items = hasNext ? window.slice(0, limit) : window;
+  // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
+  // so the meta describes the returned window.
+  return {
+    items,
+    meta: {
+      total: items.length,
+      page: 1,
+      limit,
+      totalPages: 1,
+      hasNext,
+      hasPrev: paging.cursor !== undefined,
+    },
+  };
+}
+
+/**
  * A history page as the dispatcher answers it: paging read from the params,
  * and private to the caller, since the page marks where they last looked.
  * Both entity kinds answer through this, so they cannot drift apart.
@@ -269,8 +318,6 @@ export async function respondVersionPage(
  * A document's events as the dispatcher answers them: the read's query from
  * the params, the caller the route resolved, and private to that caller, as a
  * history page is. Collections and Singles answer through this.
- *
- * @experimental
  */
 export async function respondSubjectEvents(
   subject: Exclude<ContentEventSubject, { kind: "release" }>,
@@ -337,7 +384,7 @@ export async function getVersionForDocument(
   // What the read rules withheld is named beside the snapshot, so a reader is
   // told a value is held back rather than shown a version that lacks it.
   const withheld = await redactSnapshotForUser(
-    row.snapshot,
+    row,
     args.scopeKind,
     args.slug,
     args.user,
@@ -377,7 +424,16 @@ export async function getVersionForDocument(
  * none) is the version's own, never the request's. Idempotent within a visit.
  */
 export async function markVersionSeenForDocument(
-  args: VersionMethodArgs & { versionNo: number }
+  args: VersionMethodArgs & {
+    versionNo: number;
+    /**
+     * A trusted server call: the server showed the version under its own
+     * bypass, so the person's read rules are not asked. The person, the
+     * document and the version must still exist, as the mark's own locks and
+     * lookup establish.
+     */
+    trusted?: boolean;
+  }
 ): Promise<{ versionNo: number; locale: string | null }> {
   if (!Number.isInteger(args.versionNo) || args.versionNo < 1) {
     throw NextlyError.validation({
@@ -401,13 +457,18 @@ export async function markVersionSeenForDocument(
     });
   }
 
-  await assertVersionDocumentReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    args.authenticatedScope
-  );
+  // A checked call is judged by the document's read gate, which asks the read
+  // rule as the person; a trusted one is not, since the server, not the
+  // person's own rules, decided what was shown.
+  if (args.trusted !== true) {
+    await assertVersionDocumentReadable(
+      args.scopeKind,
+      args.slug,
+      args.entryId,
+      args.user,
+      args.authenticatedScope
+    );
+  }
 
   const ref = {
     scopeKind: args.scopeKind,
@@ -418,10 +479,13 @@ export async function markVersionSeenForDocument(
     NextlyError.notFound({
       logContext: { reason, ...ref, versionNo: args.versionNo },
     });
-  // The version's language is asked about before anything is written. A
-  // version's language never changes, so the mark below records the part
-  // judged here.
-  if ((await assertVersionLanguageReadable(args, args.versionNo)) === undefined)
+  // The version's language is asked about before anything is written, on a
+  // checked call. A version's language never changes, so the mark below
+  // records the part judged here; a missing version is refused below too.
+  if (
+    args.trusted !== true &&
+    (await assertVersionLanguageReadable(args, args.versionNo)) === undefined
+  )
     throw notFound("mark-seen-version-missing");
   // One transaction holding the locks the sweeps of markers take: the
   // person's account row (account deletion), then the entity's registry row
@@ -474,7 +538,7 @@ export async function getVersionDiffForDocument(
   args: VersionMethodArgs & {
     from?: number;
     to?: number;
-    /** @experimental A registered comparison baseline's name. */
+    /** A registered comparison baseline's name. */
     baseline?: string;
     modifiedOnly?: boolean;
   }
@@ -671,6 +735,19 @@ export async function setVersionLabelForDocument(
     entryId: args.entryId,
   };
 
+  // The restored fields the answer names, judged before anything is written:
+  // a rename does not change them, and a judgment that fails then refuses the
+  // call with nothing changed, rather than failing after the name and its
+  // history event are in.
+  const [judged] = await readableFieldSources(
+    [await versions.get(ref, args.versionNo)],
+    {
+      ref,
+      user: args.user,
+      authenticatedScope: readAuthenticatedScope(),
+    }
+  );
+
   // Nothing was asked for, so nothing is written. The version is still read
   // back, so the response shape is the same either way and a caller cannot
   // tell a no-op from a rename by its status. A name given is recorded in the
@@ -686,13 +763,8 @@ export async function setVersionLabelForDocument(
   // version, not to read its content, and returning it here would bypass the
   // redaction the version-detail endpoint applies.
   const { snapshot: _snapshot, ...meta } = row;
-
   // It names only the restored fields the caller may read, as a list does.
-  const [readable] = await readableFieldSources([meta], {
-    ref,
-    user: args.user,
-    authenticatedScope: readAuthenticatedScope(),
-  });
+  const readable = { ...meta, fieldSources: judged.fieldSources };
   // The same shape a history list returns, author included. Without this the
   // renamed row comes back carrying only an author id, and an admin that
   // renders the response directly would show the version losing its author the
@@ -723,6 +795,8 @@ export async function restoreVersionForDocument(
     params: Params;
     /** The HTTP request behind the restore, when one produced it. */
     request?: Request;
+    /** What the caller hands the update's hooks as `ctx.context`. */
+    context?: Record<string, unknown>;
     /** `_rev` and `_overwrite` from the request: see `restoreVersion`. */
     version?: Readonly<Record<string, unknown>>;
     /** The fields to restore; every field the version holds when absent. */
@@ -746,18 +820,27 @@ export async function restoreVersionForDocument(
     });
   }
 
+  // The request and hook context the restore carries, handed to the read
+  // gates as the caller's own read of the document hands them, so a read hook
+  // that gates on either judges the caller asking.
+  const hookInputs = {
+    ...(args.request ? { request: args.request } : {}),
+    ...(args.context ? { context: args.context } : {}),
+  };
   await assertVersionDocumentReadable(
     args.scopeKind,
     args.slug,
     args.entryId,
     args.user,
-    readAuthenticatedScope()
+    readAuthenticatedScope(),
+    hookInputs
   );
   // A restore reads the version's snapshot back into its own language, so
   // the caller must be able to read that language before anything is written.
   await assertVersionLanguageReadable(
     { ...args, authenticatedScope: readAuthenticatedScope() },
-    args.versionNo
+    args.versionNo,
+    hookInputs
   );
 
   return restoreVersion({
@@ -773,6 +856,7 @@ export async function restoreVersionForDocument(
     // scope, not the owner's RBAC.
     authenticatedScope: readAuthenticatedScope(),
     request: args.request,
+    ...(args.context ? { context: args.context } : {}),
     // Judged as the update the restore makes is.
     version: args.version,
     ...(args.fields ? { fields: args.fields } : {}),
@@ -947,6 +1031,8 @@ export async function discardWorkingDraftForDocument(
     locale?: string | null;
     /** `_rev` and `_overwrite`: a discard is judged as a save of the change. */
     version?: Readonly<Record<string, unknown>>;
+    /** Discard the shared part's pending change alone (`?part=shared`). @experimental */
+    shared?: boolean;
   }
 ): Promise<unknown> {
   const authenticatedScope = await assertDocumentWriteAllowed(
@@ -960,6 +1046,7 @@ export async function discardWorkingDraftForDocument(
     entryId: args.entryId,
     user: args.user,
     locale: args.locale ?? null,
+    ...(args.shared === true ? { shared: true } : {}),
     authenticatedScope,
     actor: readAuthenticatedActor(),
     version: args.version,
@@ -1074,6 +1161,26 @@ export async function getAutosaveForDocument(
   // Null rather than a 404: having no recovery point is the ordinary state, not
   // a missing resource, and the editor asks on every open.
   if (!row) return null;
+  // A point saved in a language the caller may not read the document in is
+  // answered as none, as a refusal would tell them it exists. The document
+  // gate above admitted them in some language, not in this one.
+  if (
+    row.locale !== null &&
+    row.locale !== "" &&
+    !(
+      await readableHistoryLocales(
+        args.scopeKind,
+        args.slug,
+        args.entryId,
+        args.user,
+        authenticatedScope,
+        {},
+        [row.locale]
+      )
+    ).has(row.locale)
+  ) {
+    return null;
+  }
 
   // Same redaction a version read applies. Document-level access is not the
   // whole question: a field's `access.read` rule can deny this caller today
@@ -1082,7 +1189,7 @@ export async function getAutosaveForDocument(
   // The scope decoded above, the one the document gate judged: a direct
   // dispatch carries a key's scope in its params only.
   await redactSnapshotForUser(
-    row.snapshot,
+    row,
     args.scopeKind,
     args.slug,
     args.user,

@@ -8,17 +8,15 @@
 // of pinning it to the empty string. The override is recomputed from the values
 // rather than recorded — there is no flag to keep in step, and editing the slug
 // back to the derived form resumes tracking too, which is what someone
-// correcting a typo expects.
-// Slug case is per-kind: singles use kebab (the entry-form slug validator is
-// kebab-only); collections and components keep snake to match their backend
-// validators. This is the one place the shared modal needs a per-kind branch
-// because the slug-case decision is genuinely kind-specific.
+// correcting a typo expects. The slug's case is per kind (kebab for Singles,
+// snake for the others), decided with the rest of the derivation in
+// `lib/builder/entity-names`, which the new-entity dialog shares.
 import { Input, Label, Textarea } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import { textLength } from "nextly/config";
+import { type JSX, useId } from "react";
 
 import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
-import { toKebabName, toSnakeName } from "@admin/lib/builder";
-import { pluralizeName } from "@admin/lib/builder/pluralize-helper";
+import { namesFollowingName } from "@admin/lib/builder/entity-names";
 import {
   hasStartingFieldChoice,
   startingFieldChoices,
@@ -39,6 +37,12 @@ type Props = {
   /** False once the entity exists: its slug addresses rows that already
    *  live under it, so no save can move it. */
   slugEditable?: boolean;
+  /**
+   * What the address is for, said under it and read with it: why a saved one
+   * is fixed, or what the check says of an unsaved one; a refusal is drawn as
+   * an error.
+   */
+  slugNote?: { text: string; refused: boolean };
 };
 
 export function BasicsTab({
@@ -47,11 +51,9 @@ export function BasicsTab({
   values,
   onChange,
   slugEditable = true,
+  slugNote,
 }: Props): JSX.Element {
-  // Singles' entry-form slug field validates as kebab-case only, so the
-  // auto-derived default in the create popup must also be kebab. Collections
-  // and components keep snake_case to match their respective backend rules.
-  const toSlug = kind === "single" ? toKebabName : toSnakeName;
+  const noteId = useId();
   const set = <K extends keyof BuilderSettingsValues>(
     key: K,
     value: BuilderSettingsValues[K]
@@ -67,7 +69,24 @@ export function BasicsTab({
         value={values.slug}
         onChange={next => set("slug", next)}
         readOnly={!slugEditable}
+        describedBy={slugNote ? noteId : undefined}
       />
+      {slugNote && (
+        <p
+          id={noteId}
+          // A live region: an unsaved address's check answers after typing
+          // stops, so its answer is announced when it arrives.
+          role="status"
+          aria-live="polite"
+          className={
+            slugNote.refused
+              ? "text-xs text-danger-text"
+              : "text-xs text-muted-foreground"
+          }
+        >
+          {slugNote.text}
+        </p>
+      )}
     </div>
   );
 
@@ -78,33 +97,40 @@ export function BasicsTab({
     </div>
   );
 
-  // Auto-derive slug AND plural from the singular name until the field holds
-  // a value of its own. "Of its own" is the literal test below and is worth
-  // reading rather than paraphrasing: `!values.slug || values.slug ===
-  // previousAutoSlug`. Two states count as still-automatic — EMPTY, and equal
-  // to what the OLD singular name would have derived — so clearing the field
-  // resumes tracking rather than pinning it to the empty string, which is what
-  // someone who deletes a slug to start over expects.
-  //
-  // Nothing records the override; it is recomputed from the values on every
-  // keystroke. So any route to a differing non-empty value ends tracking
-  // identically, typed or programmatic, and editing back to the derived form
-  // resumes it.
+  // The slug and plural follow the singular name until each holds a value of
+  // its own; empty, or equal to what the old name derived, still follows. The
+  // derivation is shared with the new-entity dialog (`namesFollowingName`), so
+  // the two derive alike.
+  // A fixed address does not follow: once saved, renaming the entity keeps
+  // its address, as nothing that refers to it moves.
   const setSingular = (singular: string) => {
-    const previousAutoSlug = toSlug(values.singularName);
-    const isStillAutoSlug = !values.slug || values.slug === previousAutoSlug;
-    const previousAutoPlural = pluralizeName(values.singularName);
-    const isStillAutoPlural =
-      !values.pluralName || values.pluralName === previousAutoPlural;
+    const follows = namesFollowingName(kind, values, singular);
     onChange({
       ...values,
-      singularName: singular,
-      slug: isStillAutoSlug ? toSlug(singular) : values.slug,
-      pluralName: isStillAutoPlural
-        ? pluralizeName(singular)
-        : values.pluralName,
+      ...follows,
+      ...(slugEditable ? {} : { slug: values.slug }),
     });
   };
+
+  // Built once for both layout branches below, like the slug and icon. Marked
+  // required: every kind's settings save refuses an empty name ("Name is
+  // required" in each builder page's schema). The plural is optional here —
+  // a blank one falls back to the derived form — and the slug cannot change
+  // once saved, so the name is the only field this tab requires.
+  const singularField = fields.includes("singularName") && (
+    <div className="space-y-1">
+      <Label htmlFor="singularName">
+        Singular name
+        <RequiredMark />
+      </Label>
+      <Input
+        id="singularName"
+        required
+        value={values.singularName}
+        onChange={e => setSingular(e.target.value)}
+      />
+    </div>
+  );
 
   const hasPlural = fields.includes("pluralName");
 
@@ -121,16 +147,7 @@ export function BasicsTab({
           fields.includes("slug") ||
           fields.includes("icon")) && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {fields.includes("singularName") && (
-              <div className="space-y-1">
-                <Label htmlFor="singularName">Singular name</Label>
-                <Input
-                  id="singularName"
-                  value={values.singularName}
-                  onChange={e => setSingular(e.target.value)}
-                />
-              </div>
-            )}
+            {singularField}
             {slugField}
             {iconField}
           </div>
@@ -142,16 +159,7 @@ export function BasicsTab({
           // 50/50 row per feedback Section 1. Collapses to stacked on
           // mobile.
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {fields.includes("singularName") && (
-              <div className="space-y-1">
-                <Label htmlFor="singularName">Singular name</Label>
-                <Input
-                  id="singularName"
-                  value={values.singularName}
-                  onChange={e => setSingular(e.target.value)}
-                />
-              </div>
-            )}
+            {singularField}
 
             {fields.includes("pluralName") && (
               <div className="space-y-1">
@@ -176,15 +184,11 @@ export function BasicsTab({
       )}
 
       {fields.includes("description") && (
-        <div className="space-y-1">
-          <Label htmlFor="description">Description</Label>
-          <Textarea
-            id="description"
-            value={values.description ?? ""}
-            onChange={e => set("description", e.target.value)}
-            rows={2}
-          />
-        </div>
+        <DescriptionField
+          id="description"
+          value={values.description ?? ""}
+          onChange={next => set("description", next)}
+        />
       )}
 
       {fields.includes("startingField") && (
@@ -269,5 +273,106 @@ function StartingFieldChoice({
         })}
       </div>
     </fieldset>
+  );
+}
+
+/**
+ * The asterisk after the label of a field the dialog will not go on without.
+ *
+ * Drawn the way the entry form draws it (`FieldWrapper`), so a required field
+ * looks the same in the builder as in the content it shapes. Hidden from
+ * assistive technology: the input's own `required` says it there, and a
+ * spoken "star" after the name would only repeat it less clearly. Shared with
+ * the new-entity dialog.
+ */
+export function RequiredMark(): JSX.Element {
+  return (
+    <span className="text-danger-text ml-1" aria-hidden="true">
+      *
+    </span>
+  );
+}
+
+/**
+ * How long a collection's, Single's or field group's description may be when
+ * it is written in the builder: 255, the limit the admin's other descriptions
+ * keep (roles and permissions). A description is a sentence or two under the
+ * entity's name on its entries page, not a place for documentation.
+ *
+ * 🔴 Judged by the builder's dialogs only. The API and the column take any
+ * length, so a description set in code, or saved before this limit, still
+ * loads and still shows — the dialogs say it is over and hold the save until
+ * it is shortened, rather than cutting it.
+ */
+export const DESCRIPTION_MAX_LENGTH = 255;
+
+/**
+ * Whether a description is longer than the builder accepts, counted as a
+ * person counts it (`textLength`, in code points) so an emoji or a letter
+ * outside the BMP is one character, not the two UTF-16 units
+ * `String.length` would say.
+ */
+export function descriptionTooLong(description: string | undefined): boolean {
+  return textLength(description ?? "") > DESCRIPTION_MAX_LENGTH;
+}
+
+/**
+ * The description box of this tab and of the new-entity dialog, with how much
+ * of the limit it uses said beneath it.
+ *
+ * Not capped with `maxLength`: a browser cuts pasted text at the cap without a
+ * word, and a description longer than the limit that was saved before it, or
+ * set in code, would sit there with nothing saying why it cannot grow. The
+ * count is shown instead, and past the limit the field says so and the dialog
+ * holds its save (`descriptionTooLong`).
+ */
+export function DescriptionField({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (next: string) => void;
+}): JSX.Element {
+  const over = textLength(value) > DESCRIPTION_MAX_LENGTH;
+  const countId = `${id}-count`;
+  const errorId = `${id}-error`;
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={id}>Description</Label>
+      <Textarea
+        id={id}
+        rows={2}
+        value={value}
+        aria-invalid={over}
+        aria-describedby={over ? `${errorId} ${countId}` : countId}
+        onChange={e => onChange(e.target.value)}
+      />
+      <div className="flex items-start justify-between gap-2 text-xs">
+        {/* In the error text colour the form messages use, which reads at
+            4.5:1 in both schemes. An alert, as the panel's bound problem is,
+            so crossing the limit is announced as the message appears rather
+            than only when the box is read again — and never per keystroke,
+            for the message mounts only on that crossing. */}
+        {over ? (
+          <p id={errorId} role="alert" className="text-danger-text">
+            Keep the description to {DESCRIPTION_MAX_LENGTH} characters or
+            fewer.
+          </p>
+        ) : (
+          <span />
+        )}
+        <p
+          id={countId}
+          className={cn(
+            "shrink-0 tabular-nums",
+            over ? "text-danger-text" : "text-muted-foreground"
+          )}
+        >
+          {textLength(value)}/{DESCRIPTION_MAX_LENGTH}
+        </p>
+      </div>
+    </div>
   );
 }

@@ -2,7 +2,7 @@
  * `manage-<resource>` on media, settings, email providers and email templates
  * is retired in favour of the plain read, create, update and delete there.
  *
- * `nextly upgrade` converts each role an earlier release left holding one:
+ * `nextly migrate` converts each role an earlier release left holding one:
  * the role gets the four plain permissions on that resource and loses the
  * `manage` one, once; a second run finds nothing. Every path that writes a
  * role's permissions stores a `manage` one of the four as the plain four, so
@@ -24,7 +24,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { runUpgrade, type UpgradeAdapter } from "../../../cli/commands/upgrade";
+import { runMigrateDataSteps } from "../../../cli/commands/__tests__/helpers/run-migrate-data-steps";
 import { getDialectTables } from "../../../database/index";
 import { getService } from "../../../di";
 import { container } from "../../../di/container";
@@ -126,16 +126,9 @@ describe.each(getConfiguredTestDialects())(
 
     const lines: string[] = [];
     const upgrade = () =>
-      runUpgrade(
-        { confirmBackedUp: true },
-        {
-          adapter: t.adapter as unknown as UpgradeAdapter,
-          logger: {
-            info: (msg: string) => lines.push(msg),
-            warn: (msg: string) => lines.push(msg),
-          },
-        }
-      );
+      runMigrateDataSteps(t.adapter, {
+        log: (msg: string) => lines.push(msg),
+      });
 
     /** What a start's seeding warns, as a boot runs it. */
     async function startupWarnings(): Promise<string[]> {
@@ -531,13 +524,15 @@ describe.each(getConfiguredTestDialects())(
       it("is named once at each start, with the command that converts it", async () => {
         const warned = (await startupWarnings()).join("\n");
         expect(warned.split("planted-manager").length - 1).toBe(1);
-        expect(warned).toContain("nextly upgrade");
+        // Both commands that convert it: the deploy's, and development's.
+        expect(warned).toContain("`nextly migrate`");
+        expect(warned).toContain("`nextly db:sync`");
         // Said as it is: until converted, the role has no access from it.
         expect(warned).toContain("no longer gives any access");
         expect(warned).not.toContain("planted-jobs");
       });
 
-      it("is converted by nextly upgrade once: the plain four, no retired manage, background jobs as they were", async () => {
+      it("is converted by nextly migrate's data steps once: the plain four, no retired manage, background jobs as they were", async () => {
         // As the command runs it: no Nextly started in its process, so the
         // service container holds no adapter, only the one the command opened.
         const versionBefore = await sharedRoleVersion();
@@ -560,8 +555,8 @@ describe.each(getConfiguredTestDialects())(
 
       it("is not converted again, and no longer named at a start", async () => {
         lines.length = 0;
-        await upgrade();
-        expect(lines.join("\n")).toContain("Already upgraded. Nothing to do.");
+        // Nothing left of the kind: no step runs.
+        expect(await upgrade()).toEqual([]);
         expect((await startupWarnings()).join("\n")).not.toContain(
           "planted-manager"
         );
@@ -612,7 +607,7 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
-      it("has nextly upgrade say how many roles it could not convert, and what to do", async () => {
+      it("has nextly migrate say how many roles it could not convert, and what to do", async () => {
         const holders = (await retiredHolders()).length;
         expect(holders).toBeGreaterThan(0);
         lines.length = 0;
@@ -624,7 +619,9 @@ describe.each(getConfiguredTestDialects())(
             )
           )
         ).toHaveLength(1);
-        expect(lines.join("\n")).toContain("nextly upgrade");
+        // The remedy names no command: `nextly migrate` and `nextly db:sync`
+        // both take this step.
+        expect(lines.join("\n")).toContain("run it again");
       });
     });
   }

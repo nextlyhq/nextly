@@ -62,8 +62,8 @@ export interface BlocksFieldOptions {
   /**
    * Document kinds this field accepts. Omitted means `["page"]`: a field on a
    * collection or single holds that entry's own page content. The wider set
-   * exists for the builder's own document storage, where patterns, components,
-   * regions, and templates live alongside pages.
+   * exists for the builder's own document storage, where patterns, components
+   * and templates live alongside pages.
    */
   kinds?: DocumentKind[];
 }

@@ -7,7 +7,6 @@
  * entry's edit screen in a new tab.
  */
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -25,7 +24,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
-import { useEntryContentDrawing } from "./entry-content-canvas";
+import { useEntryContentDrawing } from "./canvas/entry-content-canvas";
 import { EntryFieldControl } from "./entry-field-control";
 import type { EditableProp } from "./inspector";
 import {
@@ -34,6 +33,7 @@ import {
   type PreviewedCollection,
   type PreviewedEntry,
 } from "./previewed-entry";
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
 
 beforeAll(() => {
   // The menu's primitives size and scroll their list, which jsdom lacks.
@@ -53,9 +53,8 @@ afterEach(() => {
 });
 
 /** The builder's sheet, which jsdom does not apply. */
-const CHROME = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "styles/builder-chrome.css"),
-  "utf8"
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 );
 
 const POSTS: PreviewedCollection = {

@@ -8,10 +8,23 @@
  * when differences remain, 3 when a conversion failed or was interrupted, and 1 when it could not
  * run. With `--json` it writes one document to standard output and nothing else there.
  *
+ * A change the configuration holds and no migration has applied is reported as pending, never
+ * converted: every column of an entity no migration has applied yet, or of one the configuration
+ * or a checked-out Builder manifest removes, and every column a table rename moves. A record of
+ * what was applied that cannot be read (a migration snapshot, or a registry row naming no table)
+ * is a run that could not run.
+ *
  * Without `--apply` it changes nothing: no table, row, registry entry or ledger row, and it never
  * takes the schema lock, only reads who holds it. With `--apply` it takes the schema lock, converts
  * each safe column and records each repair; a lock still held after the wait is a run that could
  * not run.
+ *
+ * A table another database session is using is waited for in short tries, retried after growing
+ * pauses up to a total, as every schema change waits (`--lock-timeout`, `--lock-timeout-total`, or
+ * `NEXTLY_LOCK_TIMEOUT` and `NEXTLY_LOCK_TIMEOUT_TOTAL`), one total per table per run. A table
+ * still in use when its tries end has its columns reported as unavailable, locked (exit 2), or
+ * interrupted where a conversion holds a recorded step (exit 3), and the run goes on with the
+ * other tables. Each try's notice goes to standard error.
  *
  * A lossy column converts only under the data-loss consent naming it (`--accept-data-loss=
  * table.column`, or `NEXTLY_ACCEPT_DATA_LOSS`), or, in a run that may ask, a yes at the terminal.
@@ -28,10 +41,15 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../../domains/schema/busy-table/bounds";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import type { ClearingQuestion } from "../../domains/schema/repair-columns/apply";
 import { describeKey } from "../../domains/schema/repair-columns/report";
 import type { RepairColumnsDocument } from "../../domains/schema/repair-columns/report-json";
+import type { TableWaits } from "../../domains/schema/repair-columns/table-wait";
 import { getCoreVersion } from "../../plugins/core-version";
 import { databaseEnvError, printCliError, toCliError } from "../errors";
 import { cliErrorDocsUrl } from "../errors/registry";
@@ -59,6 +77,10 @@ export interface RepairColumnsOptions {
    * when left out, so a caller that did not decide never reaches a question.
    */
   interactive?: boolean;
+  /** `--lock-timeout`, as the option parser hands it over: one try's bound, in seconds. */
+  lockTimeout?: string;
+  /** `--lock-timeout-total`: every try for one table together, in seconds. */
+  lockTimeoutTotal?: string;
 }
 
 /** The question a run that may ask puts before clearing a lossy column's values. */
@@ -119,6 +141,25 @@ async function report(
     flag: options.acceptDataLoss,
     warn: message => process.stderr.write(`${message}\n`),
   });
+  // So are the bounds of the wait for a busy table: a value outside its range changes nothing.
+  const bounds: BusyTableBounds = busyTableBounds({
+    flags: {
+      ...(options.lockTimeout === undefined
+        ? {}
+        : { lockTimeout: options.lockTimeout }),
+      ...(options.lockTimeoutTotal === undefined
+        ? {}
+        : { lockTimeoutTotal: options.lockTimeoutTotal }),
+    },
+    env: process.env,
+  });
+  // Each try's notice goes to standard error, which a `--json` run keeps clear of its document.
+  const tableWait = {
+    bounds,
+    notify: (line: string) => {
+      process.stderr.write(`${line}\n`);
+    },
+  };
   const cwd = options.cwd ?? context.cwd;
   const { config, projectRoot, deferredExtends } = await loadConfig({
     configPath: options.config,
@@ -163,7 +204,7 @@ async function report(
       extensionSchema === undefined
         ? undefined
         : { byTable: extensionSchema.columnOverrides };
-    const readEntities = () =>
+    const readEntities = (waits: TableWaits | undefined) =>
       readRepairEntities({
         ...(overrides !== undefined ? { overrides } : {}),
         adapter,
@@ -175,8 +216,14 @@ async function report(
         ...(deferredExtends !== undefined ? { deferredExtends } : {}),
         migrationsDir: resolve(cwd, config.db.migrationsDir),
         logger: { debug, info: debug, warn: debug, error: debug },
+        ...(waits === undefined ? {} : { waits }),
       });
-    const run = { adapter, dialect, nextlyVersion: getCoreVersion() };
+    const run = {
+      adapter,
+      dialect,
+      nextlyVersion: getCoreVersion(),
+      tableWait,
+    };
     return options.apply === true
       ? await applyRepairs({
           ...run,
@@ -189,7 +236,7 @@ async function report(
               }
             : {}),
         })
-      : await dryRunReport({ ...run, entities: await readEntities() });
+      : await dryRunReport({ ...run, entities: readEntities });
   } finally {
     await adapter.disconnect();
   }
@@ -229,6 +276,8 @@ export function repairColumnsAction(
       json?: boolean;
       apply?: boolean;
       acceptDataLoss?: AcceptDataLossOption;
+      lockTimeout?: string;
+      lockTimeoutTotal?: string;
     },
     cmd: Command
   ) => {
@@ -265,6 +314,12 @@ export function repairColumnsAction(
         apply: options.apply === true,
         acceptDataLoss: options.acceptDataLoss,
         interactive,
+        ...(options.lockTimeout === undefined
+          ? {}
+          : { lockTimeout: options.lockTimeout }),
+        ...(options.lockTimeoutTotal === undefined
+          ? {}
+          : { lockTimeoutTotal: options.lockTimeoutTotal }),
       },
       context
     );

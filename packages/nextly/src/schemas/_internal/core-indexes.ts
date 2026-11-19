@@ -157,6 +157,29 @@ export const MEDIA_USAGE_INDEXES = [
   { name: "nextly_media_usage_media_idx", columns: ["mediaId"] },
 ] as const satisfies readonly CoreIndex<string>[];
 
+export const TRANSLATION_PROVENANCE_INDEXES = [
+  // One row per field of a language of a document, live or drafted. It also
+  // serves reading or replacing a document's rows by its leading columns.
+  {
+    name: "nextly_translation_provenance_uidx",
+    columns: [
+      "scopeKind",
+      "scopeSlug",
+      "entryId",
+      "locale",
+      "partState",
+      "fieldPath",
+    ],
+    unique: true,
+  },
+  // The source language's row for one field of a document, which judges
+  // whether every other language's value made from it is out of date.
+  {
+    name: "nextly_translation_provenance_field_idx",
+    columns: ["scopeKind", "scopeSlug", "entryId", "fieldPath", "partState"],
+  },
+] as const satisfies readonly CoreIndex<string>[];
+
 export const DASHBOARD_PREFERENCES_INDEXES = [
   // One value per reader per key.
   {
@@ -164,6 +187,27 @@ export const DASHBOARD_PREFERENCES_INDEXES = [
     columns: ["userId", "key"],
     unique: true,
   },
+] as const satisfies readonly CoreIndex<string>[];
+
+export const EXTERNAL_IDENTITIES_INDEXES = [
+  // One identity per provider key, issuer and subject, enforced by the
+  // digest of the three rather than by the three themselves
+  // (`externalIdentityKeyDigest`): a digest has nothing a collation could
+  // fold — MySQL compares TEXT case-insensitively and even its `_bin`
+  // collations pad trailing spaces away — and one 64-character index fits
+  // every InnoDB page size, where an index over the columns would not. The
+  // digest is plain SHA-256, so it survives any secret rotation; with
+  // "no issuer" spelled "" once, one subject from two issuers of one key is
+  // two rows, and a second row for an issuerless key and subject is refused
+  // on every dialect alike.
+  {
+    name: "nextly_external_identities_key_uidx",
+    columns: ["keyDigest"],
+    unique: true,
+  },
+  // One user's identities: listed by their owner, and removed with the
+  // account.
+  { name: "nextly_external_identities_user_idx", columns: ["userId"] },
 ] as const satisfies readonly CoreIndex<string>[];
 
 export const NEXTLY_RELEASES_INDEXES = [

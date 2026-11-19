@@ -21,7 +21,7 @@ import {
   withRuleLanguage,
 } from "../auth/access/rule-language";
 import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
-import { container } from "../di";
+import { container, getService } from "../di";
 import { getAdapterFromDI } from "../dispatcher/helpers/di";
 import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
 import { COMPANION_UPDATED_AT_COLUMN } from "../domains/i18n/companion-columns";
@@ -34,15 +34,20 @@ import { appLocalization } from "../domains/i18n/configured-locales";
 import { isValidLocale } from "../domains/i18n/resolve-locale";
 import { resolveCompanionColumn } from "../domains/i18n/runtime/companion-readiness";
 import {
+  AUTHORIZATION_CONCURRENCY,
   authorizationGroups,
   countIsTrustworthy,
   byMostRecentlyUpdated,
   classifyForWorklist,
   hasTranslatableFields,
+  inBoundedBatches,
   notConsultedSources,
   planWorklistFanOut,
+  singleLanguageInState,
   translatedFilter,
   worklistTotal,
+  worklistHasNext,
+  worklistMaxPage,
   worklistTotalPages,
   worklistId,
   worklistTitle,
@@ -50,6 +55,7 @@ import {
   type LocalizedCollectionRef,
   type TranslationWorkRow,
 } from "../domains/i18n/services/translation-worklist-service";
+import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { CollectionsHandler } from "../services/collections-handler";
@@ -65,6 +71,14 @@ import { withErrorHandler } from "./with-error-handler";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
+
+/** The page asked for, at most the deepest one the worklist serves (`worklistMaxPage`). */
+function parsePage(raw: string | null, limit: number): number {
+  if (raw === null || raw === "") return 1;
+  const n = Math.trunc(Number(raw));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(n, worklistMaxPage(limit));
+}
 
 function parseState(raw: string | null): TranslationFilterState {
   // Defaulted rather than required: "what is missing" is the question the
@@ -352,6 +366,9 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   }
   const state = parseState(searchParams.get("state"));
   const limit = parseLimit(searchParams.get("limit"));
+  const page = parsePage(searchParams.get("page"), limit);
+  // Every collection's first `page × limit` rows: the page is cut from them once merged.
+  const depth = page * limit;
 
   await getCachedNextly();
   assertConfiguredLocale(locale);
@@ -405,11 +422,17 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
     state,
     readable
   );
-  const { queried, skippedCollections } = planWorklistFanOut(eligible);
+  // Every eligible collection, a bounded number at a time: no collection is left out.
+  const { queried, skippedCollections } = planWorklistFanOut(
+    eligible,
+    Number.POSITIVE_INFINITY
+  );
   const bySlug = new Map(eligible.map(c => [c.slug, c]));
 
-  const perCollection = await Promise.all(
-    queried.map(async coll => {
+  const perCollection = await inBoundedBatches(
+    queried,
+    AUTHORIZATION_CONCURRENCY,
+    async coll => {
       const result = await handler.listEntries({
         collectionName: coll.slug,
         // The caller's own context, ROLES INCLUDED. Read rules are evaluated
@@ -440,7 +463,7 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
         // list extractor pulls it off the top level before the clause is typed —
         // so the cast is at the ONE call site that knows that, not in the helper.
         where: translatedFilter(locale, state) as never,
-        limit,
+        limit: depth,
         sort: "-updatedAt",
         // Nothing here follows a relationship, and expanding them would turn
         // one list into a page of joins per row.
@@ -470,6 +493,7 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       const docs = (result.data.docs ?? []) as Record<string, unknown>[];
       const rows = docs.map(
         (doc): TranslationWorkRow => ({
+          kind: "collection",
           collection: coll.slug,
           collectionLabel: coll.label,
           id: worklistId(doc),
@@ -497,8 +521,12 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
         return { slug: coll.slug, rows: [] as TranslationWorkRow[], total: 0 };
       }
       return { slug: null, rows, total: result.data.totalDocs };
-    })
+    }
   );
+  // Each Single the caller may read, judged from its own translation overview.
+  const singles = await singleWork(locale, state, caller);
+  // The collections and the Singles that could not answer, one sorted list as each is.
+  const unanswerableSources = [...unanswerable, ...singles.unanswerable].sort();
 
   // Named here rather than only at the cap, because both are the same claim:
   // this answer did not cover that collection.
@@ -511,13 +539,16 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   const notConsulted = notConsultedSources(
     skippedCollections,
     unreadable,
-    staleCapability?.probeFailed ?? []
+    staleCapability?.probeFailed ?? [],
+    singles.failed
   );
 
   // Merged BEFORE the slice, which is the whole reason this fans out on the
   // server: ordered across collections rather than within each one.
-  const merged = perCollection.flatMap(r => r.rows).sort(byMostRecentlyUpdated);
-  const rows = merged.slice(0, limit);
+  const merged = [...perCollection.flatMap(r => r.rows), ...singles.rows].sort(
+    byMostRecentlyUpdated
+  );
+  const rows = merged.slice((page - 1) * limit, depth);
 
   // The canonical list envelope, with synthetic single-page meta — the same
   // shape `webhooks` uses for a list its service does not paginate.
@@ -525,14 +556,14 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   // `total` is each collection's OWN count of matching documents, summed, never
   // the number of rows this response happens to carry — see `worklistTotal`.
   const total = worklistTotal(
-    perCollection.map(r => r.total),
+    [...perCollection.map(r => r.total), singles.rows.length],
     merged.length
   );
   return respondList(
     rows,
     {
       total,
-      page: 1,
+      page,
       limit,
       // DERIVED from the total, never asserted as 1. Claiming a single page
       // beside a total larger than `limit` says the rows in hand are all of
@@ -540,23 +571,19 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // along. See `worklistTotalPages` for why this sits beside `hasNext:
       // false` rather than contradicting it.
       totalPages: worklistTotalPages(total, limit),
-      // FALSE, always. This endpoint takes no `page` and always returns the
-      // same first slice, so a consumer following `hasNext` would request a
-      // second page and receive the same rows forever. Incompleteness is a
-      // different fact from pagination and travels in `notConsulted`, which is
-      // why that field exists.
-      hasNext: false,
-      hasPrev: false,
+      // Real paging: a page past this one holds rows and can be asked for (`worklistHasNext`).
+      hasNext: worklistHasNext(page, limit, total),
+      hasPrev: page > 1,
       // Named, so the screen can say WHICH. Omitted entirely when the answer
       // covered everything, so the field's presence is itself the signal.
       ...(notConsulted.length === 0 ? {} : { notConsulted }),
       // Kept apart from `notConsulted` on the wire for the same reason the service keeps them
       // apart: this is the one with a remedy. A screen that merges them tells an operator to
       // look again when what they need to do is migrate.
-      ...(unanswerable.length === 0
+      ...(unanswerableSources.length === 0
         ? {}
         : {
-            unanswerable,
+            unanswerable: unanswerableSources,
             // 🔴 WHICH remedy, decided where the environment is known. `nextly migrate` applies
             // migration FILES, and a development database managed by the sync/HMR loop has no
             // migration history containing this column — so that advice can leave the notice
@@ -575,3 +602,110 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
     { headers: PRIVATE_NO_STORE_HEADERS }
   );
 });
+
+/**
+ * One language's outstanding work in Singles: each localized Single the caller may read, in the
+ * state asked, judged from its translation overview (`singleLanguageInState`). A Single with no
+ * document yet is skipped, never created by this read. Read as the caller, so the Single's own
+ * read gate decides; one that refuses is left out, and one whose read fails is named as not
+ * consulted.
+ */
+async function singleWork(
+  locale: string,
+  state: TranslationFilterState,
+  caller: ReadCaller
+): Promise<{
+  rows: TranslationWorkRow[];
+  failed: string[];
+  unanswerable: string[];
+}> {
+  const registry = getService("singleRegistryService");
+  const singleEntries = getService("singleEntryService");
+  const localized = (await registry.getAllSinglesForRead()).filter(
+    single =>
+      single.localized === true && hasTranslatableFields(single.fields ?? [])
+  );
+  const isDefault = configuredLocalization()?.defaultLocale === locale;
+  const failed: string[] = [];
+  const unanswerable: string[] = [];
+  const adapter = state === "stale" ? getAdapterFromDI() : undefined;
+  const found = await inBoundedBatches(
+    localized,
+    AUTHORIZATION_CONCURRENCY,
+    async (single): Promise<TranslationWorkRow | null> => {
+      // A lookup that fails is this Single's answer missing, not the worklist's: named as not
+      // consulted, as a Single whose read fails is, and the rest is still listed.
+      let id: string | null;
+      try {
+        id = await resolveSingleDocumentId(single.slug);
+      } catch {
+        failed.push(single.slug);
+        return null;
+      }
+      if (id === null) return null;
+      // Staleness compares when each language was written, which a translations table made before
+      // that column has no record of: such a Single is named as unanswerable, as a collection is
+      // (`resolveStalenessCapability`), rather than left out as if nothing in it were stale. A
+      // probe that fails is no schema fact: the Single is named as not consulted.
+      if (state === "stale") {
+        try {
+          const answers =
+            adapter !== undefined &&
+            (await resolveCompanionColumn(
+              adapter,
+              `${single.tableName}_locales`,
+              COMPANION_UPDATED_AT_COLUMN
+            ));
+          if (!answers) {
+            unanswerable.push(single.slug);
+            return null;
+          }
+        } catch {
+          failed.push(single.slug);
+          return null;
+        }
+      }
+      const result = await singleEntries.get(single.slug, {
+        user: caller.user,
+        ...(caller.authenticatedScope === undefined
+          ? {}
+          : { authenticatedScope: caller.authenticatedScope }),
+        overrideAccess: false,
+        routeAuthorized: false,
+        locale,
+        translationStatus: true,
+        depth: 0,
+        status: "all",
+      });
+      if (!result.success) {
+        if (result.statusCode !== 403 && result.statusCode !== 404) {
+          failed.push(single.slug);
+        }
+        return null;
+      }
+      const doc = (result.data ?? {}) as Record<string, unknown>;
+      const overview = doc._translations as
+        | Record<
+            string,
+            { translated?: boolean; status?: string; stale?: boolean }
+          >
+        | undefined;
+      if (!singleLanguageInState(overview?.[locale], state, isDefault)) {
+        return null;
+      }
+      return {
+        kind: "single",
+        collection: single.slug,
+        collectionLabel: single.label,
+        id,
+        title: single.label,
+        updatedAt: worklistUpdatedAt(doc.updatedAt ?? doc.updated_at),
+      };
+    }
+  );
+  return {
+    rows: found.filter((row): row is TranslationWorkRow => row !== null),
+    failed,
+    unanswerable,
+  };
+}

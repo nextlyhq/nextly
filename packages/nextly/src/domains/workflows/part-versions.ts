@@ -26,6 +26,7 @@ import type { FieldGroupDataService } from "../field-groups/services/field-group
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { appLocalization } from "../i18n/configured-locales";
 import { liveColumnNames } from "../schema/pipeline/diff/introspect-live";
+import type { SingleRegistryService } from "../singles/services/single-registry-service";
 import { documentVersionOn } from "../versions/document-revision";
 import {
   VersionsRepository,
@@ -48,31 +49,37 @@ export interface DocumentTable {
 }
 
 /**
- * The table a document lives in, from the collection registry. Read before a step's transaction
- * opens: the registry reads on the pool. A Single is refused: its steps are not offered yet.
+ * The table a document lives in, a collection's or a Single's, from its registry. Read before a
+ * step's transaction opens: the registry reads on the pool.
  */
-export async function documentTableOf(
+export function documentTableOf(
   document: ReviewDocument
 ): Promise<DocumentTable> {
-  if (document.scopeKind !== "collection") {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "document",
-          code: "WORKFLOW_SINGLES_NOT_SUPPORTED",
-          message: "Workflow steps on a Single are not available yet.",
-        },
-      ],
-    });
-  }
-  const registry = container.get<CollectionRegistryService>(
-    "collectionRegistryService"
-  );
-  const record = await registry.getCollectionBySlug(document.scopeSlug);
+  return documentTableOn(document);
+}
+
+/**
+ * The table a collection's or a Single's document lives in, from its registry, read on
+ * `executor` when given (a transaction's Drizzle handle), so a reader inside a transaction takes
+ * no second connection.
+ */
+export async function documentTableOn(
+  document: Pick<ReviewDocument, "scopeKind" | "scopeSlug">,
+  executor?: unknown
+): Promise<DocumentTable> {
+  const record =
+    document.scopeKind === "single"
+      ? await container
+          .get<SingleRegistryService>("singleRegistryService")
+          .getSingleBySlug(document.scopeSlug, executor)
+      : await container
+          .get<CollectionRegistryService>("collectionRegistryService")
+          .getCollectionBySlug(document.scopeSlug, executor);
   if (!record) {
     throw NextlyError.notFound({
       logContext: {
-        reason: "workflow-step-collection",
+        reason: "workflow-document-table",
+        kind: document.scopeKind,
         slug: document.scopeSlug,
       },
     });

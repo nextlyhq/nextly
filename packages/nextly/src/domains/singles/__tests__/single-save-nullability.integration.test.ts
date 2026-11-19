@@ -34,11 +34,15 @@ const PROFILE = {
   type: "relationship",
   options: { target: "people", relationType: "oneToOne", onDelete: "set null" },
 };
-/** The same field as a schema save sends it, in the manifest's shape. */
+/**
+ * The same field as a schema save sends it, in the manifest's shape: the editor reads the stored
+ * one-to-one with its target and Unique (`withEditorRelationshipShape`) and sends both back.
+ */
 const PROFILE_SAVED = {
   name: "profile",
   type: "relationship",
   relationTo: "people",
+  unique: true,
 };
 
 describeEachDialect(

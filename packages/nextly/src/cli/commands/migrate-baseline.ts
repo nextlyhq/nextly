@@ -23,7 +23,7 @@
  *
  * @module cli/commands/migrate-baseline
  */
-import { mkdir, readdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -38,13 +38,22 @@ import {
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../domains/i18n/migration/generate-up";
 import { RETAINED_SIZES_COLUMN } from "../../domains/media/retired-image-sizes-constants";
+import { ledgerFilename } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
-import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
+import {
+  SchemaEventsRepository,
+  type SchemaEventRow,
+} from "../../domains/schema/events/schema-events-repository";
 import { checksumOf } from "../../domains/schema/migrate/applied-checksums";
 import {
+  historyInLedger,
   EMPTY_SNAPSHOT,
+  historyRefusalLines,
+  openAttempts,
   planBaseline,
+  undoneAttemptRefusal,
+  type HistoryMigration,
 } from "../../domains/schema/migrate/baseline";
 import {
   readOldBuilderLedger,
@@ -71,9 +80,14 @@ import {
 } from "../../domains/schema/migrate-create/format-file";
 import {
   loadLatestSnapshot,
+  prepareSnapshot,
   snapshotPathOf,
-  writeSnapshot,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import {
+  prepareWhole,
+  publishHeld,
+  withMigrationWriterHold,
+} from "../../domains/schema/migrate-create/writer-hold";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type {
@@ -106,6 +120,7 @@ import { createContext, type CommandContext } from "../program";
 import type { CLIDatabaseAdapter } from "../utils/adapter";
 import { openMigrationCommand } from "../utils/command-prerequisites";
 import {
+  getSortedBaseNames,
   readMigrationFolder,
   type DeclaredNames,
 } from "../utils/migration-discovery";
@@ -147,43 +162,39 @@ async function listTableNames(adapter: CLIDatabaseAdapter): Promise<string[]> {
 }
 
 /**
- * The migration files already on disk, earliest first, old Schema Builder
- * files left out as every reader leaves them out: one is no history.
+ * The migrations already on disk, earliest first, each by the name the ledger
+ * records it under (`<name>.sql`), as the folder's one reading groups them
+ * (`readMigrationFolder`). A migration kept as dialect variants
+ * (`<name>.postgresql.sql`, `<name>.mysql.sql`) is one migration, and the same
+ * one its ledger rows name; old Schema Builder files are left out as every
+ * reader leaves them out: one is no history.
  *
- * A missing directory is a project that has never generated one, which is the
- * normal state for everything this command exists to adopt.
+ * A missing directory reads as empty: a project that has never generated one,
+ * which is the normal state for everything this command exists to adopt.
  */
 async function listMigrationFiles(
   migrationsDir: string,
   dialect: SupportedDialect,
   declared: DeclaredNames | undefined
 ): Promise<string[]> {
-  let entries: string[];
-  try {
-    entries = await readdir(migrationsDir);
-  } catch (err) {
-    if ((err as { code?: string }).code === "ENOENT") return [];
-    throw err;
-  }
-  const { oldBuilderFiles } = await readMigrationFolder(
+  const { groups } = await readMigrationFolder(
     migrationsDir,
     dialect,
     declared
   );
-  const ignored = new Set(oldBuilderFiles.map(f => f.file));
-  return entries.filter(f => f.endsWith(".sql") && !ignored.has(f)).sort();
+  return getSortedBaseNames(groups).map(ledgerFilename);
 }
 
 /**
- * A migration the ledger already records, when there is one.
+ * The ledger's attempt and outcome rows for the app's migrations, read once
+ * for both of the baseline's own questions: is an attempt unresolved, and
+ * which migrations are history (`openAttempts`, `historyInLedger`).
  *
  * A database managed by `db:sync` has never run `migrate`, so its ledger holds
  * no `file_apply` rows — and on the oldest such databases the table does not
- * exist at all, which is why a failure here reads as "no history" rather than
- * propagating. Anything that DOES have rows has a history, whatever the
- * migrations directory currently contains.
+ * exist at all, which reads as "no history" rather than failing.
  */
-async function firstAppliedMigration(
+async function readAppLedger(
   repo: SchemaEventsRepository,
   adapter: CLIDatabaseAdapter,
   folder: {
@@ -191,22 +202,43 @@ async function firstAppliedMigration(
     dialect: SupportedDialect;
     declared: DeclaredNames | undefined;
   }
-): Promise<string | undefined> {
-  if (!(await ledgerExists(adapter))) return undefined;
+): Promise<SchemaEventRow[]> {
+  if (!(await ledgerExists(adapter))) return [];
   // Past the existence check, a failure is a real one — permissions, a wrong
   // schema, a broken table. Swallowing it would read as "never migrated" and
   // write a second origin beside whatever history the ledger already holds.
-  const all = await repo.listFileApplies();
+  // A down section's attempts too, as every history check reads them.
+  const all = [
+    ...(await repo.listFileApplies()),
+    ...(await repo.listFailedRollbacks()),
+  ];
   // An old Schema Builder file's rows are no history (`readOldBuilderLedger`).
   const { ignoredRows } = await readOldBuilderLedger(folder, repo, all);
-  const rows = all.filter(
-    r => r.filename === null || !ignoredRows.has(r.filename)
-  );
-  const names = rows
-    .map(r => (r as { filename?: string | null }).filename)
-    .filter((n): n is string => typeof n === "string" && n.length > 0)
-    .sort();
-  return names[0];
+  return all.filter(r => r.filename === null || !ignoredRows.has(r.filename));
+}
+
+/**
+ * The app migrations the ledger counts as history (`historyInLedger`),
+ * once no attempt stands unresolved.
+ *
+ * Runs after the shared history checks (`assertAppHistoryHolds`), which
+ * refuse an attempt that may have stopped part-way and one at a file the
+ * folder lacks, saying the database may hold part of it. An unresolved
+ * attempt that reaches here ran inside a transaction the database undid, and
+ * a baseline still waits for it: it adopts the database as the start
+ * of a history whose every attempt is settled.
+ */
+async function ledgerHistory(
+  repo: SchemaEventsRepository,
+  adapter: CLIDatabaseAdapter,
+  folder: Parameters<typeof readAppLedger>[2]
+): Promise<string[]> {
+  const ledger = await readAppLedger(repo, adapter, folder);
+  const open = openAttempts(ledger);
+  if (open.length > 0) {
+    throw undoneAttemptRefusal("nextly migrate:baseline", open);
+  }
+  return historyInLedger(ledger);
 }
 
 /** Whether the migration ledger table is there at all. */
@@ -468,7 +500,7 @@ export interface ContributionMismatch {
 
 export type BaselineCoreResult =
   | { kind: "already-baselined"; snapshotName: string }
-  | { kind: "history-not-empty"; filename: string }
+  | { kind: "history-not-empty"; history: HistoryMigration[] }
   | { kind: "empty-database" }
   | { kind: "companion-mismatch"; mismatches: CompanionMismatch[] }
   | { kind: "contribution-mismatch"; mismatches: ContributionMismatch[] }
@@ -515,7 +547,7 @@ function notAdopting(
     return { kind: "already-baselined", snapshotName: plan.snapshotName };
   }
   if (plan.kind === "history-not-empty") {
-    return { kind: "history-not-empty", filename: plan.filename };
+    return { kind: "history-not-empty", history: plan.history };
   }
   return { kind: "empty-database" };
 }
@@ -723,6 +755,12 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   const { adapter, db, dialect, migrationsDir } = deps;
   const metaDir = resolve(migrationsDir, "meta");
   const repo = new SchemaEventsRepository(db, dialect);
+  // Before anything else is judged: an unresolved attempt refuses first.
+  const appliedMigrations = await ledgerHistory(repo, adapter, {
+    migrationsDir,
+    dialect,
+    declared: deps.declared,
+  });
   const latest = await loadLatestSnapshot(metaDir);
   const existingMigrations = await listMigrationFiles(
     migrationsDir,
@@ -789,12 +827,8 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
   let plan = planBaseline({
     live,
     latestSnapshotName: latest?.filename,
-    existingMigrationFile: existingMigrations[0],
-    appliedMigration: await firstAppliedMigration(repo, adapter, {
-      migrationsDir,
-      dialect,
-      declared: deps.declared,
-    }),
+    migrationFiles: existingMigrations,
+    appliedMigrations,
   });
   // Already-baselined or existing-history projects are settled before orphan
   // checks: a recorded snapshot already retains any withdrawn contribution so
@@ -936,6 +970,19 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
 export async function baselineCore(
   deps: BaselineCoreDeps
 ): Promise<BaselineCoreResult> {
+  // A dry run writes nothing, so it holds nothing.
+  if (deps.dryRun === true) return adopt(deps);
+  // A run holds the project's migration files throughout, as every writer of
+  // them does, so the newest snapshot it reads is still the newest when the
+  // baseline is written, whichever database another writer is on.
+  return withMigrationWriterHold(
+    { migrationsDir: deps.migrationsDir, command: "migrate:baseline" },
+    () => adopt(deps)
+  );
+}
+
+/** `baselineCore`, with the migration files held where the run writes. */
+async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
   const { adapter, db, dialect, migrationsDir, logger } = deps;
   const repo = new SchemaEventsRepository(db, dialect);
 
@@ -987,18 +1034,28 @@ export async function baselineCore(
       if (planned.kind !== "adopt") return planned;
       const { baseName, sqlContent, sqlPath } = planned;
 
-      await mkdir(migrationsDir, { recursive: true });
-      await writeFile(sqlPath, sqlContent, "utf-8");
-      const snapshotPath = await writeSnapshot(
-        planned.metaDir,
-        baseName,
-        planned.snapshot,
-        sqlContent,
-        // What the app contributed to other owners' tables, as every snapshot
-        // writer records it, so the next diff can tell the app's elements from
-        // the owner's own after this file becomes the latest snapshot.
-        planned.contributions
-      );
+      // Where `writeSnapshot` puts it, by the writer's own rule.
+      const snapshotPath = snapshotPathOf(planned.metaDir, baseName);
+      // As the folder's holder (`publishHeld`): both files written in full
+      // aside, the hold checked, then the snapshot put in place and the file
+      // after it, as `migrate:create` writes them. A run overtaken before
+      // that writes neither, and records nothing.
+      await publishHeld(migrationsDir, async () => {
+        await mkdir(migrationsDir, { recursive: true });
+        return [
+          await prepareSnapshot(
+            planned.metaDir,
+            baseName,
+            planned.snapshot,
+            sqlContent,
+            // What the app contributed to other owners' tables, as every snapshot
+            // writer records it, so the next diff can tell the app's elements from
+            // the owner's own after this file becomes the latest snapshot.
+            planned.contributions
+          ),
+          await prepareWhole(sqlPath, sqlContent),
+        ];
+      });
 
       // The ledger is bootstrapped out of band by `migrate`, which has never
       // run on a database managed by `db:sync` — so this command is the first
@@ -1021,18 +1078,32 @@ export async function baselineCore(
       // Recorded as applied without executing: the tables it describes are
       // already standing. Doing this in the same command is the point — the
       // file alone would be re-run against a database that already has them.
-      const eventId = await repo.recordStart({
+      //
+      // One write, already applied: nothing runs between an attempt and its
+      // outcome here, so recording the two apart would only open a window in
+      // which a stop leaves an attempt with no outcome, which every later
+      // command refuses on until an operator resolves it. The file's name is
+      // new, taken from this run's clock under the migrate lock, so no other
+      // applied row for it can exist.
+      //
+      // Started and ended at one instant, this run's clock (the one that
+      // named the file), since nothing runs between the two: an end stamped
+      // before the repository chose the start could read earlier than it.
+      // A name no row carries yet has no earlier event to start after, so the
+      // instant is the start the repository's own rule would choose.
+      const recordedAt = deps.now ?? new Date();
+      await repo.insertEvent({
         eventType: "file_apply",
+        status: "applied",
         source: "cli-migrate",
         filename: `${baseName}.sql`,
         // The checksum of the text written, as a run records it, so a later
         // edit to the baseline stops `nextly migrate` and reads as modified
         // in `migrate:status`.
         sha256: checksumOf(sqlContent),
-      });
-      await repo.markApplied(eventId, {
         statementsExecuted: 0,
-        uniqueFilename: `${baseName}.sql`,
+        startedAt: recordedAt,
+        endedAt: recordedAt,
       });
 
       logger.debug(`Baseline recorded as applied: ${baseName}.sql`);
@@ -1295,12 +1366,7 @@ function refusalLines(
   >
 ): string[] {
   if (result.kind === "history-not-empty") {
-    return [
-      `This project already has migrations (${result.filename}), but no starting point.`,
-      "Adopting now would put the baseline after them, and a fresh database would",
-      "replay them against tables it has not created yet. Move them aside, baseline,",
-      "then re-apply what they did as a new migration.",
-    ];
+    return historyRefusalLines(result.history);
   }
   if (result.kind === "contribution-mismatch") {
     return [

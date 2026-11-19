@@ -81,6 +81,27 @@ const nextConfig: NextConfig = {
   // Unset everywhere else, which leaves Next.js's own default.
   distDir: process.env.NEXT_DIST_DIR || ".next",
 
+  // Source maps for the browser's chunks, written only when a build is made
+  // for the admin bundle report (`NEXTLY_BROWSER_SOURCE_MAPS=1`): the report
+  // names the modules each chunk holds through them. Off otherwise, since
+  // they add to the build's time and size.
+  ...(process.env.NEXTLY_BROWSER_SOURCE_MAPS === "1"
+    ? { productionBrowserSourceMaps: true }
+    : {}),
+
+  // The test-fixture switch the config reads, passed to the browser bundle
+  // too: the fixtures' admin modules register their components only with it
+  // on, and the block fixture's must, since the editor offers every block it
+  // is handed, declared or not.
+  // Read as the config reads it, so anything but "1" is off. Fixed when the
+  // build runs, in the server code Next.js compiles as well as the browser's:
+  // a production build follows the switch as it was set then, so build and
+  // start it with the same value.
+  env: {
+    NEXTLY_E2E_STYLE_FIXTURE:
+      process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? "1" : "",
+  },
+
   // The browser suite's own server turns Next.js's development indicator off.
   // In development the indicator's button is injected into every document the
   // app serves, the canvas's frame included, so a keyboard walk through the

@@ -797,11 +797,13 @@ function parseCollectionEntryPublishAllRoute(
   // that difference twice is how a route and its twin start to disagree about
   // the shape they both match.
   const allLocales = ALL_LOCALES_ENTRY_ROUTES[additionalParams[0] ?? ""];
+  // The route ends at the action: a path that goes on past it names nothing here.
   if (
     id &&
     subresource === "entries" &&
     subId &&
     allLocales &&
+    additionalParams.length === 1 &&
     httpMethod === "POST"
   ) {
     routeParams.collectionName = id;
@@ -852,8 +854,6 @@ function parseCollectionEntryPublishAllRoute(
  * `GET /singles/{slug}/events`: a document's events, nested under it like its
  * version history so the document's `read-{slug}` permission guards them with
  * no separate authorization branch.
- *
- * @experimental
  */
 function parseDocumentEventRoutes(
   resource: string,
@@ -1521,6 +1521,28 @@ function parseSingleRoutes(
     };
   }
 
+  // POST /api/singles/[slug]/publish and /unpublish → publish or unpublish the
+  // parts of the Single the body chooses (@experimental). Admitted as an
+  // update, as a collection entry's are: the service asks each chosen part's
+  // own publish or unpublish rule. Nothing past the action names this route.
+  if (
+    id &&
+    (subresource === "publish" || subresource === "unpublish") &&
+    !subId &&
+    httpMethod === "POST"
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "update",
+      method:
+        subresource === "publish"
+          ? "publishSingleParts"
+          : "unpublishSingleParts",
+      routeParams,
+    };
+  }
+
   // GET /api/singles/[slug]/schema → get Single schema/metadata
   if (id && subresource === "schema" && httpMethod === "GET") {
     routeParams.slug = id;
@@ -1925,6 +1947,8 @@ const EMAIL_TEMPLATE_OWNERSHIP_ROUTES: Record<
   // and the step that reads it as Liquid from now on.
   engine: { httpMethod: "GET", method: "templateEngine" },
   "read-as-liquid": { httpMethod: "PATCH", method: "readAsLiquid" },
+  // What sends it: its owner's word and the settings that use it.
+  senders: { httpMethod: "GET", method: "templateSenders" },
 };
 
 /** A route's operation (which picks nothing: the HTTP method picks the permission) and service method. */
@@ -2001,6 +2025,7 @@ function emailTemplateSubresourceRoute(
  * - POST /api/email-templates/[id]/preview → preview with sample data
  * - GET /api/email-templates/[id]/send-test → where a test would go, and which provider delivers it
  * - PATCH /api/email-templates/[id]/send-test → send a test, of the saved template or of a draft, to the signed-in user
+ * - GET /api/email-templates/[id]/senders → what sends it, before it is deleted
  * - GET /api/email-templates/[id]/engine → whether it is kept on its first engine, and why
  * - PATCH /api/email-templates/[id]/read-as-liquid → read a kept template as Liquid from now on
  * - PATCH /api/email-templates/[id]/override → override an owned template
@@ -2053,6 +2078,64 @@ function parseEmailTemplateRoutes(
   if (!route) return null;
   routeParams.templateId = id;
   return parsed(route);
+}
+
+// ============================================================================
+// Email Delivery Routes Parser
+// ============================================================================
+
+/** `/api/email-deliveries/<read>`, each a GET, by its URL token. */
+const EMAIL_DELIVERY_READS: Record<string, string> = {
+  queued: "listQueuedEmails",
+  activity: "listActivity",
+  "last-sent": "lastSentByTemplate",
+  overdue: "overdueQueuedEmails",
+};
+
+/**
+ * Parse the Email hub's Activity routes. Each is a read, answered by the
+ * direct-dispatch `email` service, whose handler asks
+ * `read-email-deliveries`:
+ * - GET /api/email-deliveries → delivery records, newest first, filtered
+ * - GET /api/email-deliveries/queued → queued emails, newest first, filtered
+ * - GET /api/email-deliveries/activity → queued emails and the deliveries of
+ *   sends not queued, merged under one cursor and one set of filters
+ * - GET /api/email-deliveries/last-sent → when each template was last sent
+ * - GET /api/email-deliveries/overdue → whether queued email is overdue
+ * - GET /api/email-deliveries/[id] → one delivery's detail and timeline
+ * - GET /api/email-deliveries/queued/[id] → one queued email's detail
+ */
+function parseEmailDeliveryRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // Every route here is a read, and none has a segment past its id.
+  if (httpMethod !== "GET" || subId !== undefined) return null;
+  const read = (operation: OperationType, method: string): ParsedRoute => ({
+    service: "email",
+    operation,
+    method,
+    routeParams,
+  });
+  if (id === undefined) return read("list", "listDeliveries");
+  // GET /api/email-deliveries/queued/[id] → one queued email's detail
+  if (id === "queued" && subresource) {
+    routeParams.queuedId = subresource;
+    return read("single", "findQueuedEmail");
+  }
+  if (subresource) return null;
+  const named = EMAIL_DELIVERY_READS[id];
+  if (named) {
+    const list = named === "listQueuedEmails" || named === "listActivity";
+    return read(list ? "list" : "single", named);
+  }
+  // GET /api/email-deliveries/[id] → one delivery's detail. After the named
+  // reads, which are routes rather than ids.
+  routeParams.deliveryId = id;
+  return read("single", "findDelivery");
 }
 
 // ============================================================================
@@ -2533,6 +2616,105 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     method: "getReleaseReadiness",
   },
 ];
+
+/**
+ * The workflow routes, by path and verb (@experimental). Documents are named in the query or the
+ * body, as an entry of a collection or a Single, so one route serves both.
+ */
+const WORKFLOW_ROUTES: readonly {
+  path: readonly [string, string | null];
+  verb: string;
+  operation: OperationType;
+  method: string;
+}[] = [
+  {
+    path: ["review-state", null],
+    verb: "GET",
+    operation: "single",
+    method: "getReviewState",
+  },
+  {
+    path: ["waiting", null],
+    verb: "GET",
+    operation: "list",
+    method: "listWaiting",
+  },
+  {
+    path: ["steps", null],
+    verb: "POST",
+    operation: "update",
+    method: "takeStep",
+  },
+  {
+    path: ["steps", "bulk"],
+    verb: "POST",
+    operation: "update",
+    method: "stepMany",
+  },
+  {
+    path: ["assignments", null],
+    verb: "POST",
+    operation: "update",
+    method: "assign",
+  },
+  {
+    path: ["assignments", "bulk"],
+    verb: "POST",
+    operation: "update",
+    method: "assignMany",
+  },
+];
+
+/**
+ * A workflow route, or null; a longer path than the table's names none. Beside the table:
+ * `/workflows` lists the registered workflows, and `/workflows/:slug/settings` reads or changes
+ * one's settings, the slug put in `routeParams`. The table's fixed paths are matched first, so a
+ * workflow cannot shadow one by its slug.
+ */
+function parseWorkflowRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): Omit<ParsedRoute, "routeParams"> | null {
+  if (subId !== undefined) return null;
+  if (id === undefined) {
+    return httpMethod === "GET"
+      ? { service: "workflows", operation: "list", method: "listWorkflows" }
+      : null;
+  }
+  const route = WORKFLOW_ROUTES.find(
+    candidate =>
+      candidate.path[0] === id &&
+      candidate.path[1] === (subresource ?? null) &&
+      candidate.verb === httpMethod
+  );
+  if (route) {
+    return {
+      service: "workflows",
+      operation: route.operation,
+      method: route.method,
+    };
+  }
+  if (subresource !== "settings") return null;
+  const settings: Record<string, Omit<ParsedRoute, "routeParams">> = {
+    GET: {
+      service: "workflows",
+      operation: "single",
+      method: "getWorkflowSettings",
+    },
+    PATCH: {
+      service: "workflows",
+      operation: "update",
+      method: "updateWorkflowSettings",
+    },
+  };
+  const parsed = settings[httpMethod];
+  if (!parsed) return null;
+  routeParams.slug = id;
+  return parsed;
+}
 
 /**
  * `/api/releases` — the content-release surface.
@@ -3340,6 +3522,18 @@ export function parseRestRoute(
     if (result) return result;
   }
 
+  // Handle the Email hub's Activity reads
+  if (resource === "email-deliveries") {
+    const result = parseEmailDeliveryRoutes(
+      id,
+      subresource,
+      subId,
+      httpMethod,
+      routeParams
+    );
+    if (result) return result;
+  }
+
   // Handle User Fields endpoints (custom user field definitions)
   if (resource === "user-fields") {
     const result = parseUserFieldRoutes(
@@ -3378,6 +3572,18 @@ export function parseRestRoute(
   if (resource === "api-keys") {
     const result = parseApiKeyRoutes(id, subresource, httpMethod, routeParams);
     if (result) return result;
+  }
+
+  // Review state, steps, assignments and settings under a workflow (@experimental).
+  if (resource === "workflows") {
+    const result = parseWorkflowRoutes(
+      id,
+      subresource,
+      subId,
+      httpMethod,
+      routeParams
+    );
+    if (result) return { ...result, routeParams };
   }
 
   // Handle content releases

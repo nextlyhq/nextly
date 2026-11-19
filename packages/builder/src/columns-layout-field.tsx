@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * A Columns row's layout: tiles that set its columns at the edited device,
- * where it stacks, and whether it stacks reversed.
+ * A Columns row's layout, in its Content tab: tiles that set how many
+ * columns it holds and how wide, where it stacks, and whether it stacks
+ * reversed.
  *
  * Every choice is one step of the history, its Style values and any empty
  * columns it adds or removes together. What each writes is in
@@ -11,17 +12,19 @@
  * @module columns-layout-field
  */
 import {
+  BASE_BREAKPOINT,
   findNode,
-  type BreakpointId,
   type BreakpointSet,
-  type StyleState,
 } from "@nextlyhq/blocks-engine";
+import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import { Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
 import {
   COLUMNS_LAYOUTS,
+  COLUMNS_ROW,
   defaultTemplate,
+  layoutHoldsValue,
   layoutOf,
   planLayout,
   planStack,
@@ -33,82 +36,97 @@ import {
   type StackOn,
 } from "./columns-layout";
 import type { EditorState } from "./editor-state";
+import { HeldByLock } from "./held-by-lock";
+import type { PanelSection } from "./panel-section";
 import { arrowTo, SegmentChoices } from "./segment-choices";
+import { SettingSlot } from "./settings-filter";
+import { appliedAtReader, selectedSubject } from "./style-panel-reading";
 import { readStyleValue } from "./style-values";
 
+/** Where a row stacks, each choice saying every device it applies on. */
 const STACK_LABELS: Readonly<Record<StackOn, string>> = {
-  tablet: "Tablet",
-  mobile: "Mobile",
   never: "Never",
+  tablet: "Tablet and mobile",
+  mobile: "Mobile",
 };
 
-/** A tile's glyph: its tracks as bars, Auto's with a dashed track that wraps. */
-function Glyph({ layout }: { layout: ColumnsLayout }): React.JSX.Element {
+/**
+ * A tile's picture: its columns as bars, at their widths. Exported for the
+ * first-add picker, which offers the same tiles.
+ */
+export function ColumnsLayoutGlyph({
+  layout,
+}: {
+  layout: ColumnsLayout;
+}): React.JSX.Element {
   return (
     <span className="nx-columns-layout__glyph" aria-hidden="true">
       {layout.tracks.map((width, index) => (
         <i key={index} style={{ flexGrow: width }} />
       ))}
-      {layout.key === "auto" ? (
-        <i className="nx-columns-layout__wraps" />
-      ) : null}
     </span>
   );
 }
 
 /** What the row's widths are, said under the tiles. */
-function hintFor(current: string): string {
-  if (current === "custom") return "A layout of its own, written as CSS below.";
-  if (current === "auto") return "Equal columns that wrap when narrow.";
-  return "Columns at these widths on this device.";
+function hintFor(current: string, set: boolean): string {
+  if (current === "custom") return "A layout of its own, set in Style.";
+  if (current === "none") return "Pick how many columns, and how wide.";
+  return set
+    ? "Columns at these widths."
+    : "Equal columns that wrap when narrow.";
+}
+
+/** How many columns the row holds now. */
+function countOf(row: Row): number {
+  return row.slots?.children?.length ?? 0;
 }
 
 /** Why the pointed tile is held, if one is. */
 function heldReason(
   row: Parameters<typeof planLayout>[0],
   pointed: string | undefined,
-  at: Parameters<typeof planLayout>[2],
-  inherited: string | undefined
+  at: Parameters<typeof planLayout>[2]
 ): string | undefined {
   if (pointed === undefined) return undefined;
-  const plan = planLayout(row, pointed, at, inherited);
+  const plan = planLayout(row, pointed, at);
   return plan.ok ? undefined : plan.reason;
 }
 
 type Row = NonNullable<ReturnType<typeof findNode>>;
 
+/**
+ * Where every choice here writes: the row's own base values, whatever device,
+ * state or shared style the Style tab is editing, since how many columns a
+ * row holds is its structure. Stacking still names the devices it applies on.
+ * The first-add picker writes there too.
+ */
+export const ROW_OWN: {
+  readonly state: "base";
+  readonly breakpoint: typeof BASE_BREAKPOINT;
+} = { state: "base", breakpoint: BASE_BREAKPOINT };
+
 /** The width tiles: one tab stop, arrows choosing, a held tile saying why. */
 function WidthTiles({
   row,
-  at,
-  inherited,
+  current,
   labelId,
   hintId,
   onPoint,
   editor,
+  held: locked,
 }: {
   row: Row;
-  at: { state: StyleState; breakpoint: BreakpointId };
-  inherited: string | undefined;
+  current: string;
   labelId: string;
   hintId: string;
   onPoint: (key: string | undefined) => void;
   editor: EditorState;
+  /** Whether the row's design is locked, so a choice writes nothing. */
+  held: boolean;
 }): React.JSX.Element {
-  const stored = readStyleValue(row.styles, {
-    ...at,
-    property: "gridTemplateColumns",
-    path: [],
-  });
-  // What the canvas draws here: set here, or reaching it from a wider device.
-  const current = layoutOf(stored ?? inherited, defaultTemplate(row));
   const plans = COLUMNS_LAYOUTS.map(layout =>
-    planLayout(
-      row,
-      layout.key,
-      at,
-      stored === undefined ? inherited : undefined
-    )
+    planLayout(row, layout.key, ROW_OWN)
   );
   const allowed = plans.map(plan => plan.ok);
   const stop = Math.max(
@@ -117,8 +135,12 @@ function WidthTiles({
   );
   const choose = (index: number) => {
     const plan = plans[index];
-    if (plan?.ok === true && plan.ops.length > 0)
-      editor.applyAll([...plan.ops]);
+    if (locked || plan?.ok !== true) return;
+    // The chosen tile again writes no template, only the columns it still
+    // needs: a row reading "3 equal" with a column deleted gets it back.
+    const ops =
+      COLUMNS_LAYOUTS[index]?.key === current ? plan.columnOps : plan.ops;
+    if (ops.length > 0) editor.applyAll([...ops]);
   };
   return (
     <div
@@ -137,16 +159,6 @@ function WidthTiles({
             aria-checked={layout.key === current}
             aria-label={layout.label}
             tabIndex={index === stop ? 0 : -1}
-            title={
-              layout.key === "auto"
-                ? "Equal columns that wrap when narrow"
-                : undefined
-            }
-            {...(layout.key === current &&
-            stored === undefined &&
-            inherited !== undefined
-              ? { "data-inherited": "" }
-              : {})}
             // Held, not disabled: still reachable, so its reason can be read;
             // the hint under the tiles says it, as its description.
             {...(held
@@ -160,7 +172,7 @@ function WidthTiles({
             onKeyDown={event => arrowTo(event, index, allowed, choose)}
             onClick={() => choose(index)}
           >
-            <Glyph layout={layout} />
+            <ColumnsLayoutGlyph layout={layout} />
             <span>{layout.label}</span>
           </button>
         );
@@ -172,20 +184,22 @@ function WidthTiles({
 export function ColumnsLayoutControl({
   editor,
   nodeId,
-  state,
-  breakpoint,
   breakpoints,
-  inherited: reaching,
   applied,
+  heldBy,
 }: {
   editor: EditorState;
   nodeId: string;
-  state: StyleState;
-  breakpoint: BreakpointId;
   breakpoints: BreakpointSet | undefined;
-  /** The template reaching the row from elsewhere, as the cascade answers it. */
-  inherited?: string | undefined;
-  /** What the cascade applies to the row at a tier, for a stack from elsewhere. */
+  /**
+   * The id of the lock's reason while the row's design is locked: every
+   * control is then held, described by it, and writes nothing.
+   */
+  heldBy?: string | undefined;
+  /**
+   * What the cascade applies to the row at a tier, for a stack or a template
+   * reaching it from elsewhere.
+   */
   applied?: AppliedAt | undefined;
 }): React.JSX.Element | null {
   const labelId = React.useId();
@@ -195,71 +209,149 @@ export function ColumnsLayoutControl({
   const [pointed, setPointed] = React.useState<string | undefined>(undefined);
   const row = findNode(editor.document.nodes, nodeId);
   if (row === undefined) return null;
-  const at = { state, breakpoint };
   const stored = readStyleValue(row.styles, {
-    ...at,
+    ...ROW_OWN,
     property: "gridTemplateColumns",
     path: [],
   });
-  // Only while nothing is set here: a value set here is the one in force.
-  const inherited = stored === undefined ? reaching : undefined;
-  const current = layoutOf(stored ?? inherited, defaultTemplate(row));
+  // While the row stores none, the template a shared style gives it is the
+  // one the canvas draws, so a tile chosen over it still writes its own.
+  const reaching =
+    stored === undefined
+      ? applied?.(BASE_BREAKPOINT, "grid-template-columns")
+      : undefined;
+  const inherited =
+    reaching?.own === false && reaching.value !== defaultTemplate(row)
+      ? reaching.value
+      : undefined;
+  const current = layoutOf(
+    stored ?? inherited,
+    defaultTemplate(row),
+    countOf(row)
+  );
   const tiers = stackTiers(breakpoints);
   const reached = reachedStacks(tiers, applied);
-  const stack = stackOf(row, tiers, state, reached);
-  const options = (["tablet", "mobile", "never"] as const).filter(
+  const stack = stackOf(row, tiers, ROW_OWN.state, reached);
+  const options = (["never", "tablet", "mobile"] as const).filter(
     on => on === "never" || tiers[on] !== undefined
   );
   const restack = (on: StackOn, reversed: boolean) => {
-    const op = planStack(row, on, reversed, { tiers, state, reached });
+    if (heldBy !== undefined) return;
+    const op = planStack(row, on, reversed, {
+      tiers,
+      state: ROW_OWN.state,
+      reached,
+    });
     if (op !== null) editor.apply(op);
   };
   return (
-    <div className="nx-columns-layout" data-control="columns-layout">
-      <div className="nx-inspector__field nx-columns-layout__layout">
-        <span className="nx-inspector__field-name" id={labelId}>
-          Widths
-        </span>
-        <WidthTiles
-          row={row}
-          at={at}
-          inherited={inherited}
-          labelId={labelId}
-          hintId={hintId}
-          onPoint={setPointed}
-          editor={editor}
-        />
+    <HeldByLock reasonId={heldBy}>
+      <div className="nx-columns-layout" data-control="columns-layout">
+        <SettingSlot ids={["columnsLayout"]}>
+          <div className="nx-inspector__field nx-columns-layout__layout">
+            <span className="nx-inspector__field-name" id={labelId}>
+              Layout
+            </span>
+            <WidthTiles
+              row={row}
+              current={current}
+              labelId={labelId}
+              hintId={hintId}
+              onPoint={setPointed}
+              editor={editor}
+              held={heldBy !== undefined}
+            />
+          </div>
+          <p id={hintId} className="nx-inspector__note" aria-live="polite">
+            {heldReason(row, pointed, ROW_OWN) ??
+              hintFor(current, (stored ?? inherited) !== undefined)}
+          </p>
+        </SettingSlot>
+        {options.length > 1 ? (
+          <>
+            <SettingSlot ids={["stackOn"]}>
+              <div className="nx-inspector__field">
+                <span className="nx-inspector__field-name" id={stackId}>
+                  Stack on
+                </span>
+                <SegmentChoices
+                  options={options}
+                  on={stack.on}
+                  labels={STACK_LABELS}
+                  labelId={stackId}
+                  onChoose={on => restack(on, stack.reversed)}
+                />
+              </div>
+            </SettingSlot>
+            <SettingSlot ids={["reverseStacked"]}>
+              <div className="nx-inspector__field">
+                <span className="nx-inspector__field-name">
+                  Reverse when stacked
+                </span>
+                <Switch
+                  aria-label="Reverse when stacked"
+                  checked={stack.reversed}
+                  disabled={stack.on === "never"}
+                  onCheckedChange={reversed => restack(stack.on, reversed)}
+                />
+              </div>
+            </SettingSlot>
+          </>
+        ) : null}
       </div>
-      <p id={hintId} className="nx-inspector__note" aria-live="polite">
-        {heldReason(row, pointed, at, inherited) ?? hintFor(current)}
-      </p>
-      {options.length > 1 ? (
-        <>
-          <div className="nx-inspector__field">
-            <span className="nx-inspector__field-name" id={stackId}>
-              Stack on
-            </span>
-            <SegmentChoices
-              options={options}
-              on={stack.on}
-              labels={STACK_LABELS}
-              labelId={stackId}
-              onChoose={on => restack(on, stack.reversed)}
-            />
-          </div>
-          <div className="nx-inspector__field">
-            <span className="nx-inspector__field-name">
-              Reverse when stacked
-            </span>
-            <Switch
-              aria-label="Reverse when stacked"
-              checked={stack.reversed}
-              disabled={stack.on === "never"}
-              onCheckedChange={reversed => restack(stack.on, reversed)}
-            />
-          </div>
-        </>
-      ) : null}
-    </div>
+    </HeldByLock>
   );
+}
+
+/** What the Content tab knows of the page around a Columns row. */
+export interface ColumnsSectionContext {
+  readonly editor: EditorState;
+  readonly nodeId: string;
+  /** The block's type, which decides whether it has the section at all. */
+  readonly blockName: string;
+  /** The section's name, as the inspection names it. */
+  readonly label: string;
+  readonly breakpoints: BreakpointSet | undefined;
+  /** The canvas's cascade, for a stack reaching the row from a shared style. */
+  readonly cascade: PageStyleCascade | undefined;
+  /** The tag the canvas draws the row as, which the cascade's subject names. */
+  readonly renderedTag: string | undefined;
+  /** The id of the lock's reason while the row's design is locked. */
+  readonly heldBy?: string | undefined;
+}
+
+/**
+ * A Columns row's Content section, Layout and Stack on, or `undefined` for
+ * any other block. Its dot shows while the row stores a template or a stack.
+ * A stack reaching the row is read from the cascade's base state, the state
+ * every choice here writes.
+ */
+export function columnsContentSection(
+  context: ColumnsSectionContext
+): PanelSection | undefined {
+  const { editor, nodeId, blockName, breakpoints } = context;
+  if (blockName !== COLUMNS_ROW) return undefined;
+  const row = findNode(editor.document.nodes, nodeId);
+  if (row === undefined) return undefined;
+  const applied = appliedAtReader({
+    cascade: context.cascade,
+    subject: selectedSubject(editor, context.cascade, context.renderedTag),
+    state: ROW_OWN.state,
+    breakpoints,
+    nodeId,
+  });
+  return {
+    key: context.label,
+    label: context.label,
+    holdsValue: layoutHoldsValue(row, stackTiers(breakpoints)),
+    body: (
+      <ColumnsLayoutControl
+        editor={editor}
+        nodeId={nodeId}
+        breakpoints={breakpoints}
+        applied={applied}
+        heldBy={context.heldBy}
+      />
+    ),
+  };
 }

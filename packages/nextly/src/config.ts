@@ -267,6 +267,15 @@ export {
   builderColumnIsUnique,
   siblingNameClash,
   type SiblingClashKind,
+  // The column a field's name becomes (@experimental): the Builder matches a rename it made to the
+  // columns the save's preview pairs by it, rather than by a copy of the spelling.
+  toSnakeCase as fieldColumnName,
+  // Whether a field becomes a column of its table, and whether a relationship keeps its links in a
+  // junction table instead (@experimental): the Builder holds a name to a column's length only
+  // where the field makes one, as the save's field-name rule does, rather than by a copy of the
+  // rule that could come to disagree with it.
+  fieldProducesColumn,
+  usesJunctionTable,
 } from "./domains/schema/field-rules";
 // The mount travels with the path builder, so a client that resolves a route
 // names the same union the server declared it with.
@@ -574,3 +583,16 @@ export {
   apiKeyPermissionSlugsFor,
   type ApiKeyOperation,
 } from "./domains/auth/api-key-policy";
+
+// The Schema Builder's field-name rule, for the same reason the upload formats
+// are here: the admin checks a name in the BROWSER as it is typed, and a copy of
+// the rule kept there agrees with the save until one of them changes. The save
+// refuses a name through this function, so the panel accepts exactly what the
+// save takes. Its module reaches no database code.
+export {
+  fieldNameProblem,
+  type FieldNamePlace,
+  type FieldNameProblem,
+  type FieldNameProblemKind,
+  type FieldNameSurface,
+} from "./domains/dynamic-collections/field-name-rule";

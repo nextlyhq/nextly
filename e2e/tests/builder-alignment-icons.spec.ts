@@ -44,7 +44,11 @@ async function createPage(request: APIRequestContext): Promise<string> {
             styles: {
               base: {
                 base: {
-                  display: "flex",
+                  // An inline flex container: Arrange reads it as Custom, so
+                  // the Layout section draws the CSS rows themselves, each
+                  // flex property as its group of icons. A plain "flex" is
+                  // drawn by Arrange's Stack, Row and Align instead.
+                  display: "inline-flex",
                   padding: {
                     blockStart: pad,
                     blockEnd: pad,
@@ -156,6 +160,8 @@ function groupOf(page: Page, property: string): Locator {
 }
 
 async function clickEach(page: Page, property: string): Promise<string> {
+  // Drawn before counted: a count taken while the section draws reads none.
+  await expect(groupOf(page, property)).toBeVisible();
   const radios = groupOf(page, property).getByRole("radio");
   const count = await radios.count();
   expect(count, `${property} has icons`).toBeGreaterThan(1);
@@ -204,7 +210,7 @@ test.describe("alignment and direction icons", () => {
 
   test("set a heading's text alignment, as stored", async ({ page }) => {
     const pageId = await createPage(page.request);
-    await openStyle(page, pageId, HEADING, "Typography");
+    await openStyle(page, pageId, HEADING, "Text(\\s?has changes)?$");
 
     const align = page.getByRole("radiogroup", { name: "Text align" });
     await align.getByRole("radio", { name: "Center" }).click();

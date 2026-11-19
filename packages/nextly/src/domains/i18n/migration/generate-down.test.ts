@@ -235,4 +235,46 @@ describe("buildLocalizationDownStatements — the restored column's width", () =
       "ADD COLUMN `code` VARCHAR(32)"
     );
   });
+
+  // A column carrying a wider type than the field's own (`carriedDefinition`) is restored with it,
+  // so the values copied back from the companion fit.
+  it("restores the type a column carries over the field's narrower one", () => {
+    const carried: CompanionMigrationSpec = {
+      ...spec,
+      dialect: "postgresql",
+      columns: [
+        {
+          name: "price",
+          kind: "decimal",
+          precision: 10,
+          scale: 2,
+          carried: { type: "numeric(12,2)" },
+        },
+      ],
+    };
+    const [add] = buildLocalizationDownStatements(carried);
+    expect(add).toContain(`ADD COLUMN "price" numeric(12,2)`);
+    expect(add).not.toMatch(/NUMERIC\(10, ?2\)/);
+  });
+  // A migration file turning translation off puts the column back as the main table's snapshot
+  // records it (`restoredAs`), the table the runner checks the next main file against, over the
+  // wider type and over what the column carries.
+  it("restores the column the main table's snapshot records, type and default", () => {
+    const recorded: CompanionMigrationSpec = {
+      ...spec,
+      dialect: "mysql",
+      columns: [
+        {
+          name: "body",
+          kind: "longText",
+          carried: { type: "mediumtext", default: "'carried'" },
+          restoredAs: { type: "text", default: "'recorded'" },
+        },
+      ],
+    };
+    const [add] = buildLocalizationDownStatements(recorded);
+    expect(add).toBe(
+      "ALTER TABLE `dc_pages` ADD COLUMN `body` text DEFAULT 'recorded'"
+    );
+  });
 });

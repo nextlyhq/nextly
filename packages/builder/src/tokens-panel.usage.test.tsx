@@ -37,6 +37,29 @@ import type {
   VariableUsesPage,
 } from "./variable-usage";
 
+/**
+ * An element's accessible name, as a screen reader hears it: from its content
+ * where it has no label of its own. Read through the role query, which
+ * computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
+/** What a row draws: its text without the words only a screen reader hears. */
+function drawnText(element: Element): string {
+  const drawn = element.cloneNode(true) as Element;
+  for (const hidden of drawn.querySelectorAll(".nx-sr-only")) hidden.remove();
+  return drawn.textContent ?? "";
+}
+
 afterEach(cleanup);
 
 beforeAll(() => {
@@ -227,8 +250,8 @@ const USES: readonly VariableUse[] = [
   },
 ];
 
-describe("the count at the end of each row", () => {
-  it("is the places, said in words to a screen reader and in the row's tooltip", async () => {
+describe("how widely each row's variable is used", () => {
+  it("is the places, said in words to a screen reader and in the row's tooltip, never drawn on the row", async () => {
     const usage = host({
       reaches: () => ({
         "color.brand": reach(12, ["c-card", "c-hero"]),
@@ -244,30 +267,17 @@ describe("the count at the end of each row", () => {
     const brand = await screen.findByRole("button", {
       name: /^Brand.*\. Used in 14 places$/,
     });
-    const count = brand.querySelector(".nx-vars__count");
-    expect(count?.textContent).toBe("14");
-    expect(count?.hasAttribute("data-zero")).toBe(false);
-    // Said by the row's tooltip, where keyboard users meet it too, not by a
-    // title on the hidden count.
-    expect(count?.hasAttribute("title")).toBe(false);
+    // Nothing on the row itself: the tooltip says it.
+    expect(drawnText(brand)).not.toContain("14");
     await act(async () => {
       brand.focus();
     });
     expect((await screen.findByRole("tooltip")).textContent).toContain(
       "Used in 14 places"
     );
-
-    const text = row(/^Text.*\. Not used anywhere$/);
-    const zero = text.querySelector(".nx-vars__count");
-    expect(zero?.textContent).toBe("0");
-    expect(zero?.hasAttribute("data-zero")).toBe(true);
-
+    expect(row(/^Text.*\. Not used$/)).toBeDefined();
     expect(row(/^Body.*\. Used in 1 place$/)).toBeDefined();
-
-    const space = row(/Some pages aren't counted yet\.$/);
-    const floor = space.querySelector(".nx-vars__count");
-    expect(floor?.textContent).toBe("2+");
-    expect(floor?.hasAttribute("data-floor")).toBe(true);
+    expect(row(/Some pages aren't counted yet\.$/)).toBeDefined();
   });
 
   it("asks for each row's variable, and for a type size its line height too", async () => {
@@ -294,21 +304,47 @@ describe("the count at the end of each row", () => {
     });
     render(<Hosted usage={usage} />);
     // 1 for the size, 3 for the line height: neither alone.
-    const body = await screen.findByRole("button", {
-      name: /^Body.*\. Used in 4 places$/,
-    });
-    expect(body.querySelector(".nx-vars__count")?.textContent).toBe("4");
+    expect(
+      await screen.findByRole("button", { name: /^Body.*\. Used in 4 places$/ })
+    ).toBeDefined();
   });
 
-  it("shows nothing for a row not read yet, and no counts without the host's reads", async () => {
+  it("counts a page using a type size and its line height once, where the host counts them together", async () => {
+    const base = host({
+      reaches: () => ({
+        "font-size.body": reach(1),
+        "line-height.body": reach(2, ["c-card"]),
+      }),
+    });
+    const asked: (readonly string[])[] = [];
+    const usage: VariablesAccess = {
+      ...base,
+      usageTogether: async groups => {
+        asked.push(...groups);
+        // The one page naming the size names the line height too.
+        return groups.map(() => ({
+          documents: 2,
+          byKind: { pages: 2, components: 0, patterns: 0, layouts: 0 },
+          complete: true,
+        }));
+      },
+    };
+    render(<Hosted usage={usage} />);
+    // 2 documents between them and the shared style, not 1 + 2 + 1.
+    expect(
+      await screen.findByRole("button", { name: /^Body.*\. Used in 3 places$/ })
+    ).toBeDefined();
+    expect(asked).toContainEqual(["font-size.body", "line-height.body"]);
+  });
+
+  it("says nothing for a row not read yet, and nothing without the host's reads", async () => {
     const usage = host({ reaches: () => ({ "color.brand": reach(3) }) });
     const { unmount } = render(<Hosted usage={usage} />);
     await screen.findByRole("button", { name: /^Brand.*Used in 3 places$/ });
-    expect(row(/^Text/).querySelector(".nx-vars__count")).toBeNull();
+    expect(nameOf(row(/^Text/))).not.toMatch(/used|counted/i);
     unmount();
     render(<Hosted />);
-    expect(document.querySelector(".nx-vars__count")).toBeNull();
-    expect(row(/^Brand/).hasAttribute("data-counted")).toBe(false);
+    expect(nameOf(row(/^Brand/))).not.toMatch(/used|counted/i);
   });
 });
 
@@ -352,7 +388,7 @@ describe("removing a variable nothing uses", () => {
     const onChange = vi.fn();
     const usage = host({ reaches: () => ({ "color.text": reach(0) }) });
     render(<Hosted usage={usage} onChange={onChange} />);
-    const editor = await openEditor(/^Text.*Not used anywhere$/);
+    const editor = await openEditor(/^Text.*Not used$/);
     expect(within(editor).getByText("Not used anywhere")).toBeDefined();
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(
@@ -378,11 +414,9 @@ describe("removing a variable in use", () => {
     expect(within(editor).getByText("Used in 14 places")).toBeDefined();
     // The row stays drawn as chosen while its editor is open, though its
     // tooltip marks `data-state` as well.
-    expect(
-      document
-        .querySelector(".nx-vars__row[data-open]")
-        ?.getAttribute("aria-label")
-    ).toMatch(/^Brand/);
+    expect(nameOf(document.querySelector(".nx-vars__row[data-open]"))).toMatch(
+      /^Brand/
+    );
     const remove = within(editor).getByRole("button", { name: "Remove" });
     // Not disabled: pressing it is how the author learns why.
     expect(remove.hasAttribute("disabled")).toBe(false);
@@ -544,66 +578,41 @@ describe("removing a variable in use", () => {
 });
 
 describe("removing a variable not counted yet", () => {
-  it("says it may still be in use, and Count now counts, reads again, then confirms", async () => {
-    let counted = false;
+  it("takes the removal at once, and leaves the save to count and decide", async () => {
+    // The save counts the pages before it decides and refuses a use it
+    // finds, so the editor never refuses for want of a count: one press
+    // opens the confirm, with nothing read again and no count started.
+    const onChange = vi.fn();
     const usage = host({
-      reaches: () => ({ "color.text": reach(0, [], counted) }),
+      reaches: () => ({ "color.text": reach(0, [], false) }),
       mayCount: true,
-      count: async () => {
-        counted = true;
-        return { kind: "counted", whole: true, counting: false };
-      },
+      count: async () => ({ kind: "counted", whole: true, counting: false }),
     });
-    render(<Hosted usage={usage} />);
-    const editor = await openEditor(/^Text.*No uses counted yet/);
-    expect(within(editor).getByText("Counting where it's used…")).toBeDefined();
-    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
-    const heading = await within(editor).findByRole("heading", {
-      name: "Text can't be removed yet.",
-    });
-    await waitFor(() => expect(document.activeElement).toBe(heading));
-    expect(
-      within(editor).getByText(
-        "Some pages haven’t been counted, so it may still be in use."
-      )
-    ).toBeDefined();
-    expect(within(editor).getByText(/usually a few seconds/)).toBeDefined();
+    render(<Hosted usage={usage} onChange={onChange} />);
+    const editor = await openEditor(/^Text.*Not counted yet$/);
+    // Nothing is counting, so the line does not say it is.
+    expect(within(editor).getByText("Not counted yet")).toBeDefined();
+    expect(within(editor).queryByText(/Counting where/)).toBeNull();
     const readsBefore = usage.asked.length;
-
-    fireEvent.click(within(editor).getByRole("button", { name: "Count now" }));
-    // Counted, read again, and now unused: the confirm the author asked for.
-    await within(editor).findByText(/Any block using it loses that style/);
-    expect(usage.counted.count).toBe(1);
-    expect(usage.asked.length).toBeGreaterThan(readsBefore);
+    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
+    expect(
+      within(editor).getByText(/Any block using it loses that style/)
+    ).toBeDefined();
     expect(
       within(editor).queryByRole("heading", { name: /can't be removed/ })
     ).toBeNull();
-  });
-
-  it("points at the site's background jobs where it cannot count now", async () => {
-    const usage = host({
-      reaches: () => ({ "color.text": reach(0, [], false) }),
-    });
-    render(<Hosted usage={usage} />);
-    const editor = await openEditor(/^Text.*No uses counted yet/);
-    fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
-    // Answered once Remove has read the counts again.
-    expect(
-      await within(editor).findByText(
-        /Pages are counted by the site's background jobs/
-      )
-    ).toBeDefined();
-    expect(
-      within(editor).getByRole("link", { name: "How background jobs run" })
-    ).toBeDefined();
-    expect(
-      within(editor).queryByRole("button", { name: "Count now" })
-    ).toBeNull();
+    expect(usage.asked.length).toBe(readsBefore);
+    expect(usage.counted.count).toBe(0);
+    fireEvent.click(
+      within(editor).getByRole("button", { name: "Remove Text" })
+    );
+    const saved = onChange.mock.calls.at(-1)?.[0] as SiteTokenSet;
+    expect(saved.tokens.map(token => token.name)).not.toContain("color.text");
   });
 });
 
 describe("a variable the site's code supplies", () => {
-  it("keeps Reset alone, with no usage line", async () => {
+  it("keeps Reset alone, and still says where a built-in is used", async () => {
     const supplied: SiteTokenSet = {
       tokens: [
         { name: "color.brand", kind: "color", values: { light: "#000000" } },
@@ -614,7 +623,9 @@ describe("a variable the site's code supplies", () => {
     const editor = await openEditor(/^Brand.*Used in 4 places$/);
     expect(within(editor).getByRole("button", { name: "Reset" })).toBeDefined();
     expect(within(editor).queryByRole("button", { name: "Remove" })).toBeNull();
-    expect(within(editor).queryByText("Used in 4 places")).toBeNull();
+    expect(
+      within(editor).getByRole("group", { name: "Where it's used" }).textContent
+    ).toContain("Used in 4 places");
   });
 });
 
@@ -695,7 +706,7 @@ describe("removing a type size", () => {
       }),
     });
     render(<Hosted usage={usage} />);
-    const editor = await openEditor(/^Body.*Not used anywhere$/);
+    const editor = await openEditor(/^Body.*Not used$/);
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     expect(
       within(editor).getByText(/Any block using it loses that style/)
@@ -899,7 +910,7 @@ describe("a removal the save refuses", () => {
       ],
     });
     render(<Refusing usage={usage} />);
-    let editor = await openEditor(/^Text.*Not used anywhere$/);
+    let editor = await openEditor(/^Text.*Not used$/);
     fireEvent.click(within(editor).getByRole("button", { name: "Remove" }));
     // Taken before the press: the refused save reads again within it.
     const readsBefore = usage.asked.length;

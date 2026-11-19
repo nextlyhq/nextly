@@ -122,6 +122,32 @@ export interface SelectInputProps<
  * />
  * ```
  */
+/**
+ * Whether a single choice (a select or a radio group) offers to be cleared.
+ *
+ * Unless the field says it may not: the builder's Clearable switch is drawn ON
+ * for a field that has never set it (`isClearable !== false`), and the form
+ * once read the same unset value as OFF, so an optional choice the builder
+ * called clearable could not be emptied once picked. Never for a required
+ * field, though, whatever it says — "none" is not an answer it accepts, and
+ * clearing it would only trade the value for a required error.
+ */
+export function choiceIsClearable(field: {
+  required?: boolean;
+  validation?: { required?: boolean };
+  // Any admin options: a radio's declare no `isClearable`, and still say
+  // nothing against clearing.
+  admin?: object;
+}): boolean {
+  const required =
+    field.required === true || field.validation?.required === true;
+  const turnedOff =
+    field.admin !== undefined &&
+    "isClearable" in field.admin &&
+    field.admin.isClearable === false;
+  return !required && !turnedOff;
+}
+
 export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
   name,
   field,
@@ -166,9 +192,20 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
   // trigger, not on it: drawn over the trigger it crowded the chevron into
   // "⌄×", and it could not be reached from the keyboard. The form value, not
   // radix's open state, decides whether it shows.
-  const isClearable = field.admin?.isClearable === true;
   const showClear =
-    isClearable && !disabled && !readOnly && value !== "" && value != null;
+    choiceIsClearable(field) &&
+    !disabled &&
+    !readOnly &&
+    value !== "" &&
+    value != null;
+
+  // The button is named after its field ("Clear Group by"), so a screen
+  // reader says what it clears and a form with several clearable selects has
+  // one distinct button for each; an unlabelled field keeps the plain name.
+  const clearName =
+    typeof field.label === "string" && field.label.trim() !== ""
+      ? `Clear ${field.label}`
+      : "Clear selection";
 
   const handleClear = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -212,7 +249,7 @@ export function SelectInput<TFieldValues extends FieldValues = FieldValues>({
           type="button"
           onClick={handleClear}
           className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label="Clear selection"
+          aria-label={clearName}
         >
           <X className="h-3.5 w-3.5" />
         </button>

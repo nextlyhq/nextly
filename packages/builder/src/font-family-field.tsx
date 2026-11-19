@@ -16,6 +16,10 @@
  * Every choice is drawn in itself. A value stored before, or written by the
  * API, that is none of these is shown as it is and can be cleared.
  *
+ * A font variable chosen shows in green, as every value from a variable does,
+ * with what it is in its tooltip and "Unlink" beside it, which keeps its
+ * family as a plain one.
+ *
  * @module font-family-field
  */
 import {
@@ -33,9 +37,17 @@ import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
+import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { ChoiceList } from "./choice-list";
 import { familyStack, siteFamilies } from "./font-library";
 import { InheritedValue } from "./inherited-value";
+import { variableFor, type SiteVariable } from "./style-colour";
+import {
+  focusAfterUnlink,
+  UnlinkButton,
+  VariableTipped,
+  variableTip,
+} from "./variable-choice";
 
 export interface FontFamilyFieldProps {
   /** The control's id, so its label can point at it. */
@@ -55,6 +67,12 @@ export interface FontFamilyFieldProps {
   fromCode: readonly FontFaceDef[];
   /** Store a choice, or `null` to clear the property. */
   onCommit: (value: StyleValue | null) => void;
+  /**
+   * Draws the family the keyboard or the pointer is on in the open list,
+   * before anything is stored; `null` once the list closes, said before a
+   * pick's commit. Absent, nothing is drawn until a family is picked.
+   */
+  onPreview?: (value: StyleValue | null) => void;
   /** Open Design's fonts, where fonts are added. Absent, no link shows. */
   onManageFonts?: () => void;
 }
@@ -250,6 +268,7 @@ export function FontFamilyField({
   faces,
   fromCode,
   onCommit,
+  onPreview,
   onManageFonts,
 }: FontFamilyFieldProps): React.JSX.Element {
   const choices = React.useMemo(
@@ -258,41 +277,44 @@ export function FontFamilyField({
   );
   const current = currentChoice(stored, choices);
   const unknown = stored !== undefined && current === undefined;
-  const [open, setOpen] = React.useState(false);
+  const { open, setOpen, close, activeProps, manage } = useFontList(
+    onPreview,
+    onManageFonts
+  );
+  // The trigger, which stays when Unlink makes the family plain: focus
+  // returns to it from the Unlink that goes.
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
   const inheritedFamily = useInheritedFamily(choices);
-  const shownValue = unknown
-    ? `${storedText(stored)} · not on this site`
-    : (current?.label ?? inheritedFamily ?? "Default");
+  const shownValue = shownFamily(unknown, stored, current, inheritedFamily);
+  const held = useHeldFont(stored, tokens);
 
   return (
-    <div className="nx-font-pick" data-unknown={unknown ? "" : undefined}>
+    <div
+      className="nx-font-pick"
+      data-unknown={unknown ? "" : undefined}
+      data-bound={held === undefined ? undefined : ""}
+    >
       <Popover open={open} onOpenChange={setOpen} modal={false}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            id={id}
-            className="nx-font-pick__trigger"
-            aria-haspopup="listbox"
-            aria-expanded={open}
-            aria-label={`Font, ${shownValue}`}
-            aria-describedby={labelledBy}
-          >
-            <span
-              className="nx-font-pick__value"
-              data-placeholder={
-                current === undefined && !unknown ? "" : undefined
-              }
-              style={
-                current?.drawn === undefined
-                  ? undefined
-                  : { fontFamily: current.drawn }
-              }
-            >
-              {shownValue}
-            </span>
-            <ChevronDown aria-hidden="true" size={14} />
-          </button>
-        </PopoverTrigger>
+        {/* What a held font variable is, in the trigger's tooltip. */}
+        <VariableTipped
+          tip={
+            held === undefined
+              ? undefined
+              : variableTip(held, shownValue, tokens)
+          }
+        >
+          <PopoverTrigger asChild>
+            <FontTrigger
+              ref={triggerRef}
+              id={id}
+              labelledBy={labelledBy}
+              open={open}
+              shownValue={shownValue}
+              placeholder={current === undefined && !unknown}
+              drawn={current?.drawn}
+            />
+          </PopoverTrigger>
+        </VariableTipped>
         {/* Aligned to the control's right edge: the list may be wider than
             the control, and the inspector sits at the window's right edge. */}
         <PopoverContent
@@ -305,22 +327,151 @@ export function FontFamilyField({
             choices={choices}
             current={current}
             onPick={choice => {
-              setOpen(false);
+              close();
               onCommit(choice.value);
             }}
-            onManageFonts={
-              onManageFonts === undefined
-                ? undefined
-                : () => {
-                    setOpen(false);
-                    onManageFonts();
-                  }
-            }
+            {...activeProps}
+            onManageFonts={manage}
           />
         </PopoverContent>
       </Popover>
+      {held === undefined ? null : (
+        <UnlinkButton
+          label="Font"
+          // The family the variable gives in the mode the canvas shows, kept
+          // as a plain one in one commit.
+          onUnlink={() => {
+            onCommit(held.value);
+            focusAfterUnlink(() => triggerRef.current);
+          }}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * Whether the list is open, and the preview of what it is on: the family the
+ * author moves to is drawn, and the list closing, by a pick or not, ends the
+ * drawing, before a pick's commit.
+ */
+function useFontList(
+  onPreview: ((value: StyleValue | null) => void) | undefined,
+  onManageFonts: (() => void) | undefined
+): {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  close: () => void;
+  activeProps: { onActive?: (choice: FontChoice) => void };
+  /** "Manage fonts…", which closes the list first; absent without a way. */
+  manage: (() => void) | undefined;
+} {
+  const [open, show] = React.useState(false);
+  const setOpen = (next: boolean): void => {
+    show(next);
+    // Closed without a pick: what is stored is drawn again.
+    if (!next) onPreview?.(null);
+  };
+  const close = (): void => setOpen(false);
+  return {
+    open,
+    setOpen,
+    close,
+    activeProps:
+      onPreview === undefined
+        ? {}
+        : { onActive: choice => onPreview(choice.value) },
+    manage:
+      onManageFonts === undefined
+        ? undefined
+        : () => {
+            close();
+            onManageFonts();
+          },
+  };
+}
+
+/**
+ * What the trigger says: the choice in force, a stored value the list does
+ * not hold as it is, or the family reaching the field from elsewhere.
+ */
+function shownFamily(
+  unknown: boolean,
+  stored: StyleValue | undefined,
+  current: FontChoice | undefined,
+  inheritedFamily: string | undefined
+): string {
+  if (unknown && stored !== undefined) {
+    return `${storedText(stored)} · not on this site`;
+  }
+  return current?.label ?? inheritedFamily ?? "Default";
+}
+
+/** Ids that describe an element, joined, or `undefined` for none. */
+function describedBy(
+  ...ids: readonly (string | undefined)[]
+): string | undefined {
+  const joined = ids.filter(Boolean).join(" ");
+  return joined === "" ? undefined : joined;
+}
+
+/**
+ * What opens the list: the choice in force, drawn in itself, or the inherited
+ * family greyed as a placeholder. Handed the popover's trigger props.
+ */
+function FontTrigger({
+  id,
+  labelledBy,
+  open,
+  shownValue,
+  placeholder,
+  drawn,
+  ...trigger
+}: React.ComponentProps<"button"> & {
+  labelledBy: string | undefined;
+  open: boolean;
+  shownValue: string;
+  placeholder: boolean;
+  drawn: string | undefined;
+}): React.JSX.Element {
+  return (
+    <button
+      {...trigger}
+      type="button"
+      id={id}
+      className="nx-font-pick__trigger"
+      aria-haspopup="listbox"
+      aria-expanded={open}
+      aria-label={`Font, ${shownValue}`}
+      // The label's words, and the tooltip's while it shows: the tooltip
+      // hands its id in through the trigger props, and the label's alone
+      // would replace it.
+      aria-describedby={describedBy(trigger["aria-describedby"], labelledBy)}
+    >
+      <span
+        className="nx-font-pick__value"
+        data-placeholder={placeholder ? "" : undefined}
+        style={drawn === undefined ? undefined : { fontFamily: drawn }}
+      >
+        {shownValue}
+      </span>
+      <ChevronDown aria-hidden="true" size={14} />
+    </button>
+  );
+}
+
+/**
+ * The font variable a field holds, as the canvas shows it, or `undefined` for
+ * a family, none, or a variable the site no longer has.
+ */
+function useHeldFont(
+  stored: StyleValue | undefined,
+  tokens: SiteTokenSet | undefined
+): SiteVariable | undefined {
+  const mode = useCanvasTokenMode();
+  return isTokenRef(stored)
+    ? variableFor(stored.$token, tokens, mode)
+    : undefined;
 }
 
 /**
@@ -331,11 +482,14 @@ function FontList({
   choices,
   current,
   onPick,
+  onActive,
   onManageFonts,
 }: {
   choices: readonly FontChoice[];
   current: FontChoice | undefined;
   onPick: (choice: FontChoice) => void;
+  /** The author moved onto `choice`, by key or pointer. */
+  onActive?: (choice: FontChoice) => void;
   onManageFonts: (() => void) | undefined;
 }): React.JSX.Element {
   return (
@@ -344,6 +498,7 @@ function FontList({
         choices={choices}
         currentKey={current?.key}
         onPick={onPick}
+        {...(onActive === undefined ? {} : { onActive })}
         label="Fonts"
         searchLabel="Search fonts"
         noMatch="No fonts match this search."
@@ -360,7 +515,7 @@ function FontList({
             className="nx-vars__link"
             onClick={onManageFonts}
           >
-            Add or manage fonts…
+            Manage fonts…
           </button>
         </div>
       )}

@@ -77,7 +77,7 @@ const panels = vi.hoisted(() => ({
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({ useCan: () => true }));
 
-vi.mock("../site-style-client", () => {
+vi.mock("../site-style-client", async () => {
   const save = async (section: string, value: unknown, options?: object) => {
     saves.calls.push({ section, value, options });
     return saves.answer();
@@ -94,8 +94,10 @@ vi.mock("../site-style-client", () => {
     cancel: () => {},
   });
   return {
+    // Outside an editor: no history, and nothing drawn over the read.
+    SiteStyleHistoryContext: (await import("react")).createContext(null),
+    SiteStylePreviewContext: (await import("react")).createContext(new Map()),
     useSaveSiteStyle: () => ({ save, reserve, reread }),
-    useSaveSpacingMode: () => ({ save: async () => ({ saved: true }) }),
     useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
     useFontCatalogueClient: () => ({
       load: async () => ({ families: [], previewBase: "", fetchedAt: "" }),
@@ -110,7 +112,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
     panels.tokens = props;
     return null;
   },
-  FontsPanel: (props: NonNullable<typeof panels.fonts>) => {
+  // The Fonts screen the plugin draws, with the writers it hands the list.
+  FontsScreen: (props: NonNullable<typeof panels.fonts>) => {
     panels.fonts = props;
     return null;
   },
@@ -120,10 +123,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePluginClientConfig: () => undefined,
+  // The author the catalogue keeps the choice to show previews for.
+  useCurrentUserId: () => "u1",
 }));
 
-const { FontsPanelWithUpload, TokensStudio, VariablesTab, useClassSurface } =
-  await import("./site-style-studios");
+const { TokensStudio, VariablesTab, useClassSurface } = await import(
+  "./site-style-studios"
+);
+const { SiteFontsScreen } = await import("./site-style-fonts");
 
 const brand = {
   name: "color.brand",
@@ -289,7 +296,7 @@ describe("the Fonts tab's saves", () => {
 
   it("removes a family from the faces it read, and builds the next save on the stored merge", async () => {
     render(
-      <FontsPanelWithUpload
+      <SiteFontsScreen
         {...({} as FontsPanelProps)}
         storedFaces={[lora, inter]}
         storedPending={false}
@@ -499,7 +506,7 @@ describe("a save stored over someone else's change", () => {
       src: [{ url: "/api/media/m4/raw", format: "woff2" as const }],
     };
     render(
-      <FontsPanelWithUpload
+      <SiteFontsScreen
         {...({} as FontsPanelProps)}
         storedFaces={[lora, inter]}
         storedPending={false}
@@ -541,5 +548,213 @@ describe("a save stored over someone else's change", () => {
       await panels.fonts?.onRemoveFamily({ key: "inter", family: "Inter" });
     });
     expect(saves.calls[1]?.options?.base).toEqual([lora, inter]);
+  });
+});
+
+describe("a block style action's whole-list write", () => {
+  const text = {
+    id: "look:core/button:text",
+    slug: "button-text",
+    label: "Text",
+    orderIndex: 0,
+    blockType: "core/button",
+    styles: {},
+  } as NamedClass;
+  const ghost = {
+    id: "ghost",
+    slug: "button-ghost",
+    label: "Ghost",
+    orderIndex: 1,
+    blockType: "core/button",
+    styles: {},
+  } as NamedClass;
+
+  it("stores what differs from the site's code, as one place in the history", async () => {
+    // The code supplies Text; hiding it stores only the override.
+    const read = { classes: [text] as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, { classes: [text] })
+    );
+    let refused: string | undefined = "not answered";
+    await act(async () => {
+      refused = await result.current.edit(existing => ({
+        classes: existing.map(entry => ({ ...entry, hidden: true as const })),
+      }));
+    });
+    expect(refused).toBeUndefined();
+    expect(saves.calls).toHaveLength(1);
+    expect(saves.calls[0]?.section).toBe("classes");
+    expect(saves.calls[0]?.value).toEqual([{ ...text, hidden: true }]);
+    // Composed against the list it read: nothing stored before.
+    expect(saves.calls[0]?.options?.base).toEqual([]);
+  });
+
+  it("composes against the write queued before it, never the list both started from", async () => {
+    const read = { classes: [ghost] as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, undefined)
+    );
+    await act(async () => {
+      await Promise.all([
+        result.current.edit(existing => ({
+          classes: existing.map(entry => ({ ...entry, label: "Soft" })),
+        })),
+        result.current.edit(existing => ({
+          classes: [...existing, { ...ghost, id: "copy", slug: "button-copy" }],
+        })),
+      ]);
+    });
+    expect(saves.calls.map(call => call.value)).toEqual([
+      [{ ...ghost, label: "Soft" }],
+      [
+        { ...ghost, label: "Soft" },
+        { ...ghost, id: "copy", slug: "button-copy" },
+      ],
+    ]);
+  });
+
+  it("answers a plan's refusal without storing, and a refused save in its words", async () => {
+    const read = { classes: [ghost] as NamedClass[] };
+    const { result } = renderHook(() =>
+      useClassSurface(read, false, null, undefined)
+    );
+    let planned: string | undefined;
+    await act(async () => {
+      planned = await result.current.edit(() => ({ reason: "Taken." }));
+    });
+    expect(planned).toBe("Taken.");
+    expect(saves.calls).toHaveLength(0);
+
+    saves.answer = () => ({
+      saved: false,
+      issues: {
+        classes:
+          'classes[0] is a built-in block style, "Text", so it can\'t be renamed.',
+      },
+    });
+    let stored: string | undefined;
+    await act(async () => {
+      stored = await result.current.edit(existing => ({
+        classes: [...existing],
+      }));
+    });
+    expect(stored).toBe(
+      'classes[0] is a built-in block style, "Text", so it can\'t be renamed.'
+    );
+  });
+});
+
+/**
+ * A change that sets one device's size at rest (or, with `undefined`, clears
+ * it, as Reset does), and whose inverse sets back the size it replaced.
+ */
+function setSize(device: string, size: unknown): SharedStyleChange {
+  type Styles = { base?: Record<string, Record<string, unknown>> };
+  return Object.assign(
+    (styles: Styles) => {
+      const atRest = styles.base ?? {};
+      const { fontSize: _was, ...rest } = atRest[device] ?? {};
+      const values = size === undefined ? rest : { ...rest, fontSize: size };
+      return {
+        kind: "write" as const,
+        styles: { ...styles, base: { ...atRest, [device]: values } },
+      };
+    },
+    {
+      invert: (before: Styles) =>
+        setSize(device, before.base?.[device]?.fontSize),
+    }
+  ) as unknown as SharedStyleChange;
+}
+
+describe("a text style's size edited by hand", () => {
+  const SIZES = { small: 16, large: 32 };
+  const MADE = "clamp(1rem, 0.6087rem + 1.7391vw, 2rem)";
+  const TYPED = "clamp(1rem, 2vw, 3rem)";
+  /** A text style whose Desktop and Mobile sizes were made with "Fluid…". */
+  const lead = {
+    id: "t-lead",
+    slug: "lead",
+    orderIndex: 0,
+    role: "text",
+    styles: { base: { base: { fontSize: MADE }, mobile: { fontSize: MADE } } },
+    fluidSizes: { base: SIZES, mobile: SIZES },
+  };
+  const surface = () =>
+    renderHook(() =>
+      useClassSurface(
+        { classes: [lead] as unknown as NamedClass[] },
+        false,
+        null,
+        undefined
+      )
+    ).result;
+  const savedLead = (): Record<string, unknown> | undefined =>
+    (saves.calls.at(-1)?.value as Record<string, unknown>[] | undefined)?.find(
+      entry => entry.id === "t-lead"
+    );
+
+  it("drops that device's fluid sizes in the same write, keeping the typed size", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", TYPED));
+    });
+    expect(saves.calls).toHaveLength(1);
+    expect(savedLead()).toMatchObject({
+      styles: { base: { base: { fontSize: TYPED } } },
+      fluidSizes: { mobile: SIZES },
+    });
+    expect(savedLead()?.fluidSizes).not.toHaveProperty("base");
+  });
+
+  it("drops them on a Reset too, and the field once none is left", async () => {
+    const result = surface();
+    const one = { ...lead, fluidSizes: { base: SIZES } };
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", undefined));
+    });
+    expect(savedLead()?.fluidSizes).toEqual({ mobile: SIZES });
+    const single = renderHook(() =>
+      useClassSurface(
+        { classes: [one] as unknown as NamedClass[] },
+        false,
+        null,
+        undefined
+      )
+    ).result;
+    await act(async () => {
+      await single.current.writeStyles("t-lead", setSize("base", "20px"));
+    });
+    expect(savedLead()).not.toHaveProperty("fluidSizes");
+  });
+
+  it("keeps them where the edit leaves the size as it was", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setColor("blue"));
+    });
+    expect(savedLead()?.fluidSizes).toEqual({ base: SIZES, mobile: SIZES });
+  });
+
+  it("puts the sizes back with the size on Undo, and drops them again on Redo", async () => {
+    const result = surface();
+    await act(async () => {
+      await result.current.writeStyles("t-lead", setSize("base", TYPED));
+    });
+    const held = [savedLead()];
+    const undone = saves.inverse?.undo(held) as {
+      kind: string;
+      value: Record<string, unknown>[];
+    };
+    expect(undone.kind).toBe("write");
+    expect(undone.value[0]).toMatchObject({
+      styles: { base: { base: { fontSize: MADE } } },
+      fluidSizes: { base: SIZES, mobile: SIZES },
+    });
+    const redone = saves.inverse?.redo(undone.value) as {
+      kind: string;
+      value: Record<string, unknown>[];
+    };
+    expect(redone.value[0]?.fluidSizes).toEqual({ mobile: SIZES });
   });
 });

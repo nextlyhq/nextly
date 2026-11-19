@@ -7,9 +7,15 @@
 import type { DragStartEvent, useSensors } from "@dnd-kit/core";
 import type { Dispatch, SetStateAction } from "react";
 
+import type {
+  BuilderFieldsStep,
+  BuilderSnapshot,
+} from "@admin/hooks/useFieldBuilder";
 import type { FieldBuilderValidationResult } from "@admin/lib/builder/field-validators";
 import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 import type { FieldConfig } from "@admin/types/ui/collection";
+
+import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 
 // ============================================================
 // Field Width Options
@@ -384,6 +390,25 @@ export interface BuilderField extends FieldConfig {
    */
   relationTo?: string | string[];
   /**
+   * A relationship's stored `options` object, kept whole and written back by the save: the
+   * collection it links to (`target`, which a relationship stored the earlier way names instead of
+   * `relationTo`) and how its links are stored (`relationType`, `"manyToMany"` for one kept in a
+   * table of its own). A save that dropped them would make a many-to-many a single link and lose
+   * the table holding its links.
+   */
+  storedRelationOptions?: Readonly<Record<string, unknown>>;
+  /**
+   * Whether a relationship was stored with Allow multiple on (`hasMany: true`). A stored
+   * many-to-many becomes a single link only when the person turns that control off
+   * (`relationshipOptionsToSave`), never because it was stored off.
+   */
+  storedHasMany?: true;
+  /**
+   * Whether a relationship was stored with Unique on (`unique: true`). A stored one-to-one stops
+   * being one only when the person turns that control off (`relationshipOptionsToSave`).
+   */
+  storedUnique?: true;
+  /**
    * Maximum depth for populating related documents
    */
   maxDepth?: number;
@@ -477,13 +502,28 @@ export interface BuilderFieldsApi {
   handleFieldUpdate: (updatedField: BuilderField) => void;
   handleNestedFieldAdd: (parentFieldId: string, newField: BuilderField) => void;
   validateFields: (userFields: BuilderField[]) => FieldBuilderValidationResult;
-  resetFields: (fields: BuilderField[]) => void;
-  clearHistory: (saved?: BuilderField[], step?: number) => void;
+  // The fields and the entity's settings share one history: see
+  // `useFieldBuilder`'s `BuilderSnapshot`.
+  settings: BuilderSnapshot["settings"];
+  setSettings: (next: BuilderSettingsValues) => void;
+  snapshot: BuilderSnapshot;
+  rewriteSnapshots: (
+    change: (snapshot: BuilderSnapshot) => BuilderSnapshot
+  ) => void;
+  resetFields: (
+    fields: BuilderField[],
+    settings?: BuilderSnapshot["settings"]
+  ) => void;
+  clearHistory: (
+    saved?: BuilderSnapshot,
+    step?: number,
+    before?: BuilderSnapshot
+  ) => void;
   historyStep: number;
   canUndo: boolean;
   canRedo: boolean;
-  undo: () => { from: BuilderField[]; to: BuilderField[] } | null;
-  redo: () => { from: BuilderField[]; to: BuilderField[] } | null;
+  undo: () => BuilderFieldsStep | null;
+  redo: () => BuilderFieldsStep | null;
 }
 
 /**

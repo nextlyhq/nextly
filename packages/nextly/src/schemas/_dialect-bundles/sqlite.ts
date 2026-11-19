@@ -129,10 +129,15 @@ export { nextlyMediaUsageSqlite as nextlyMediaUsage } from "../media-usage/sqlit
 // note above gives — this map is what the push creates.
 export { nextlyEmailBrandSqlite as nextlyEmailBrand } from "../email-brand/sqlite";
 
+// The external identities a person signed in with; in the bundle for the
+// reason the email brand above gives — this map is what the push creates.
+export { nextlyExternalIdentitiesSqlite as nextlyExternalIdentities } from "../external-identities/sqlite";
+
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsSqlite as nextlyVersionViews } from "../version-views/sqlite";
 export { nextlyReviewStatesSqlite as nextlyReviewStates } from "../review-states/sqlite";
+export { nextlyTranslationProvenanceSqlite as nextlyTranslationProvenance } from "../translation-provenance/sqlite";
 export { nextlyWorkflowSettingsSqlite as nextlyWorkflowSettings } from "../workflow-settings/sqlite";
 export { nextlyScheduleWindowsSqlite as nextlyScheduleWindows } from "../schedule-windows/sqlite";
 // The record of content events; in the bundle so freshPushSchema creates the

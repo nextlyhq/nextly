@@ -32,6 +32,7 @@ import {
   designIsWritable,
   designReadOnlyReason,
   blockIsReadOnly,
+  writablePropsOf,
 } from "./inspector";
 
 const base = {
@@ -368,6 +369,10 @@ describe("a block inside an area locked to its content", () => {
     expect(designLockOf(page, "t", { composed })).toBeDefined();
     expect(propIsWritable(page, "t", "align", { composed })).toBe(false);
     expect(propIsWritable(page, "t", "text", { composed })).toBe(true);
+    // Read once for the block, each prop answers as it does asked alone.
+    const writable = writablePropsOf(page, "t", { composed });
+    expect([writable("align"), writable("text")]).toEqual([false, true]);
+    expect(writablePropsOf(page, "t")("align")).toBe(true);
     expect(
       inspectSelection(page, "t", { composed })?.props.map(prop => [
         prop.name,
@@ -651,6 +656,7 @@ describe("lockStatusOf and designIsWritable", () => {
     });
     expect(blockIsReadOnly(doc, "a")).toBe(true);
     expect(propIsWritable(doc, "a", "text")).toBe(false);
+    expect(writablePropsOf(doc, "a")("text")).toBe(false);
     expect(designReadOnlyReason(doc, "a")).toBe(
       "Locked by Hero: this block is inside it, so it can't be moved, deleted or edited. Unlock Hero to change it."
     );
@@ -873,5 +879,61 @@ describe("which choices a block's inspector offers", () => {
       "b"
     )?.props.find(prop => prop.name === "type");
     expect(type?.offered).toBe(false);
+  });
+});
+
+describe("a prop that applies only to some values of another", () => {
+  /** A list-like block: its kind, bulleted by default, and where it starts. */
+  function withList(
+    props: Record<string, unknown>,
+    defaultProps: Record<string, unknown> = { kind: "unordered" }
+  ) {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/list",
+          editor: { label: "List" },
+          props: {
+            kind: { type: "select", options: ["unordered", "ordered"] },
+            start: { type: "number", onlyWhen: { kind: ["ordered"] } },
+          },
+          defaultProps,
+        },
+      ] as never,
+      { source: "inspector-test" }
+    );
+    return documentOf([
+      { id: "l", type: "acme/list", version: 1, props } as BlockNode,
+    ]);
+  }
+  const offeredStart = (document: BlockDocument) =>
+    inspectSelection(document, "l")?.props.find(prop => prop.name === "start")
+      ?.offered;
+
+  it("is offered while the other holds one of its values", () => {
+    expect(offeredStart(withList({ kind: "ordered" }))).toBe(true);
+  });
+
+  it("is left out while the other holds another value", () => {
+    expect(offeredStart(withList({ kind: "unordered" }))).toBe(false);
+  });
+
+  it("reads the block's default while nothing is stored", () => {
+    // Numbered by default, so a list storing no kind offers its start: an
+    // inspector reading only what is stored would leave it out.
+    expect(offeredStart(withList({}, { kind: "ordered" }))).toBe(true);
+    // Bulleted by default, so it offers no number to start at.
+    expect(offeredStart(withList({}))).toBe(false);
+  });
+
+  it("is left out, its value kept, on a list stored with a start", () => {
+    const document = withList({ kind: "unordered", start: 4 });
+    const start = inspectSelection(document, "l")?.props.find(
+      prop => prop.name === "start"
+    );
+    expect(start?.offered).toBe(false);
+    expect(start?.value).toBe(4);
   });
 });

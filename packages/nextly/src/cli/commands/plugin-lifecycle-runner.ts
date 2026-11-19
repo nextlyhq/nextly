@@ -46,6 +46,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { getCoreVersion } from "../../plugins/core-version";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
+import { busyTableNotices } from "../busy-table-options";
 import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { plannedOrRefused } from "../dry-run-refusal";
 import type { CommandContext } from "../program";
@@ -104,9 +105,13 @@ type BusyTableWait = Omit<BusyTableRun, "appliedBefore">;
 /**
  * The busy-table wait from the command's flags over the environment over the defaults. Throws
  * `INVALID_INPUT` for a value outside its range, so it is asked before anything is read or
- * changed. Each try's notice goes to standard error, as `nextly migrate` prints it.
+ * changed. Each try's notice goes to standard error, as `nextly migrate` prints it, kept back
+ * under `--quiet`.
  */
-function busyTableWaitOf(options: RunnerOptions): BusyTableWait {
+function busyTableWaitOf(
+  options: RunnerOptions,
+  logger: CommandContext["logger"]
+): BusyTableWait {
   return {
     bounds: busyTableBounds({
       flags: {
@@ -115,7 +120,7 @@ function busyTableWaitOf(options: RunnerOptions): BusyTableWait {
       },
       env: process.env,
     }),
-    notify: line => process.stderr.write(`${line}\n`),
+    notify: busyTableNotices(logger),
   };
 }
 
@@ -528,6 +533,8 @@ async function connect(
         warn: m => context.logger.warn(m),
         info: m => context.logger.info(m),
       },
+      // The command's own bounds, for a busy SQLite database met while the lock is taken.
+      busyBounds: busyTable.bounds,
     });
     if (!outcome.ran) {
       throw new NextlyError({
@@ -1131,7 +1138,7 @@ export async function runPluginInstall(
 ): Promise<void> {
   // The busy-table bounds are checked first, so a value outside its range is refused before
   // anything is read or changed, a dry run's included.
-  const busyTable = busyTableWaitOf(options);
+  const busyTable = busyTableWaitOf(options, context.logger);
   if (options.dryRun === true) {
     return reportPluginDryRun(options, context, busyTable, deps =>
       previewPluginInstall(name, deps)
@@ -1152,7 +1159,7 @@ export async function runPluginInstallAll(
   context: CommandContext
 ): Promise<void> {
   // Checked first, as for one plugin's install.
-  const busyTable = busyTableWaitOf(options);
+  const busyTable = busyTableWaitOf(options, context.logger);
   if (options.dryRun === true) {
     return reportPluginDryRun(
       options,
@@ -1176,7 +1183,7 @@ export async function runPluginUninstall(
   context: CommandContext
 ): Promise<void> {
   // Checked first, as for an install.
-  const busyTable = busyTableWaitOf(options);
+  const busyTable = busyTableWaitOf(options, context.logger);
   if (options.dryRun === true) {
     return reportPluginDryRun(options, context, busyTable, deps =>
       previewPluginUninstall(

@@ -41,6 +41,7 @@ import { createAdapter } from "../../../database/factory";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import {
   readRegistryRecord,
+  storeRegistryRecord,
   type RegistryRecord,
 } from "../../../domains/schema/migrate/registry-record";
 import {
@@ -161,6 +162,31 @@ function permissionsOnly(actions: readonly string[]): unknown {
     permissions: actions.map(action => ({ action, resource: "fr-reports" })),
     db: { migrationsDir: "./migrations" },
   });
+}
+
+/** The app's config with its collection and app permissions: `actions` of their own resource. */
+function withPermissions(actions: readonly string[]): unknown {
+  return defineConfig({
+    collections: [
+      defineCollection({
+        slug: SLUG,
+        fields: [text({ name: "title" }), text({ name: "summary" })],
+      }),
+    ],
+    permissions: actions.map(action => ({ action, resource: "fr-reports" })),
+    db: { migrationsDir: "./migrations" },
+  });
+}
+
+/** Rewrites `base`'s snapshot as a release between the two wrote it: the settings, no permissions. */
+function withoutRecordedPermissions(dir: string, base: string): void {
+  const path = join(dir, "migrations", "meta", `${base}.snapshot.json`);
+  const snapshot = JSON.parse(readFileSync(path, "utf-8")) as Record<
+    string,
+    unknown
+  >;
+  delete snapshot.permissions;
+  writeFileSync(path, JSON.stringify(snapshot, null, 2));
 }
 
 /** The bookkeeping a run leaves, as two databases can be compared by it. */
@@ -330,11 +356,18 @@ describe.each(getConfiguredTestDialects())(
       writeFileSync(path, JSON.stringify(snapshot, null, 2));
     }
 
-    /** `nextly migrate`; returns the error it failed with, if it did, and what it said. */
+    /**
+     * `nextly migrate`; returns the error it failed with, if it did, what it
+     * said, and a refusal's lines (its `why`), where the error carries them.
+     */
     async function migrateRun(
       cfg: unknown,
       stopAt?: string
-    ): Promise<{ failure: string | undefined; said: string[] }> {
+    ): Promise<{
+      failure: string | undefined;
+      why?: string;
+      said: string[];
+    }> {
       loaded.config = cfg;
       tick();
       const { context, said } = command(stopAt);
@@ -345,7 +378,12 @@ describe.each(getConfiguredTestDialects())(
         const failure = NextlyError.is(error)
           ? error.publicMessage
           : String((error as Error).message);
-        return { failure, said };
+        const { why } = error as { why?: unknown };
+        return {
+          failure,
+          ...(typeof why === "string" ? { why } : {}),
+          said,
+        };
       }
     }
 
@@ -624,7 +662,7 @@ describe.each(getConfiguredTestDialects())(
         // The release that set the preset grants, recorded in the same commit.
         expect(after.presetRelease).toBe(true);
         expect(said).toContain(
-          "First run on this release: 0 registry rows written from the configuration (0 declared, the rest already matched), and kept with the database's registry record as its baseline. From now on the registry rows come from the migrations."
+          "First run on this release: the site's current settings and permissions are now recorded in the database (0 registry rows written from the configuration, 0 declared, the rest already matched), but in no migration yet. The next `nextly migrate:create` writes the migration that captures them."
         );
       }, 180_000);
 
@@ -684,12 +722,14 @@ describe.each(getConfiguredTestDialects())(
           );
         });
         expect(said).toContain(
-          "First run on this release: 1 registry row written from the configuration (1 declared, the rest already matched), and kept with the database's registry record as its baseline. From now on the registry rows come from the migrations."
+          "First run on this release: the site's current settings and permissions are now recorded in the database (1 registry row written from the configuration, 1 declared, the rest already matched), but in no migration yet. The next `nextly migrate:create` writes the migration that captures them."
         );
 
         // With the record, a configuration that differs changes no row until
-        // a migration records it.
-        await migrate(config(["extra"]));
+        // a migration records it: the run is refused, naming the change.
+        const ahead = await migrateRun(config(["extra"]));
+        expect(ahead.failure, ahead.said.join("\n")).toBeDefined();
+        expect(ahead.why).toMatch(/^\+ add_column dc_fr_posts\.extra \(/m);
         await on(url, async adapter => {
           expect(await rowFields(adapter)).toEqual([
             "slug",
@@ -709,6 +749,152 @@ describe.each(getConfiguredTestDialects())(
           // The record is written once.
           expect((await recordOf(adapter))?.point).toBe(earlier);
         });
+      }, 240_000);
+    });
+
+    describe("a change no migration records, on a site whose newest snapshot predates settings and permissions", () => {
+      /** The app's config with the collection described, a settings-only change. */
+      const described = defineConfig({
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            description: "Articles",
+            fields: [text({ name: "title" }), text({ name: "summary" })],
+          }),
+        ],
+        db: { migrationsDir: "./migrations" },
+      });
+
+      it("is named after a development start has rewritten the registry row from the changed configuration", async () => {
+        const url = await scratch();
+        use(url);
+        asEarlierRelease(await migrateCreate("one", config()));
+        // The first run: the record, with the rows as the configuration then declared them.
+        await migrate(config());
+        // What a development start over the edited configuration leaves: the
+        // live row already says what the configuration now declares.
+        await on(url, adapter =>
+          adapter.executeQuery(
+            `UPDATE ${q}dynamic_collections${q} SET ${q}description${q} = 'Articles' WHERE ${q}slug${q} = '${SLUG}'`
+          )
+        );
+
+        const run = await migrateRun(described);
+
+        expect(run.failure, run.said.join("\n")).toBeDefined();
+        expect(run.why).toMatch(new RegExp(`^~ settings .*${SLUG}`, "m"));
+        // The unchanged configuration is still up to date against the record.
+        await on(url, adapter =>
+          adapter.executeQuery(
+            `UPDATE ${q}dynamic_collections${q} SET ${q}description${q} = NULL WHERE ${q}slug${q} = '${SLUG}'`
+          )
+        );
+        await migrate(config());
+      }, 240_000);
+
+      it("names an app permission removed after a development start has orphaned its row", async () => {
+        const url = await scratch();
+        use(url);
+        // The first run: the record keeps each owned permission with its owner.
+        await migrate(permissionsOnly(["export"]));
+        await on(url, async adapter => {
+          expect(await live(adapter, "export-fr-reports")).toBe(true);
+          // What a development start without the permission leaves.
+          await adapter.executeQuery(
+            `UPDATE ${q}permissions${q} SET ${q}orphaned_at${q} = ${q}created_at${q} WHERE ${q}slug${q} = 'export-fr-reports'`
+          );
+        });
+
+        const run = await migrateRun(permissionsOnly([]));
+
+        expect(run.failure, run.said.join("\n")).toBeDefined();
+        expect(run.why).toMatch(/^~ permissions .*export-fr-reports/m);
+      }, 240_000);
+
+      it("keeps in the record only the owned permissions that are not orphaned", async () => {
+        const url = await scratch();
+        use(url);
+        await migrate(permissionsOnly(["export", "archive"]));
+        // An earlier build's database: `archive` orphaned, and no record.
+        await on(url, async adapter => {
+          await adapter.executeQuery(
+            `UPDATE ${q}permissions${q} SET ${q}orphaned_at${q} = ${q}created_at${q} WHERE ${q}slug${q} = 'archive-fr-reports'`
+          );
+          await deleteRecord(adapter);
+        });
+
+        await migrate(permissionsOnly(["export"]));
+
+        await on(url, async adapter => {
+          const baseline = (await recordOf(adapter))?.baseline;
+          expect(baseline?.ownedPermissions?.map(p => p.slug)).toEqual([
+            "export-fr-reports",
+          ]);
+          expect(baseline?.permissions).not.toContain("archive-fr-reports");
+        });
+      }, 240_000);
+
+      it("names a permission removed where the newest snapshot records settings and no permissions", async () => {
+        const url = await scratch();
+        use(url);
+        const base = await migrateCreate("one", withPermissions(["export"]));
+        withoutRecordedPermissions(dir, base);
+        // A database an earlier release migrated, then its first run here:
+        // the point carries the settings, so the record keeps no rows, and
+        // the owned permissions all the same.
+        await migrate(withPermissions(["export"]));
+        await on(url, deleteRecord);
+        await migrate(withPermissions(["export"]));
+        await on(url, async adapter => {
+          expect((await recordOf(adapter))?.baseline).toBeUndefined();
+          await adapter.executeQuery(
+            `UPDATE ${q}permissions${q} SET ${q}orphaned_at${q} = ${q}created_at${q} WHERE ${q}slug${q} = 'export-fr-reports'`
+          );
+        });
+
+        const run = await migrateRun(withPermissions([]));
+
+        expect(run.failure, run.said.join("\n")).toBeDefined();
+        expect(run.why).toMatch(/^~ permissions .*export-fr-reports/m);
+      }, 240_000);
+
+      it("over a record written before owners were kept: names a permission added, and not one removed", async () => {
+        const url = await scratch();
+        use(url);
+        await migrate(permissionsOnly(["export"]));
+        /** Stores the record as an earlier build wrote it: slugs alone, `without` left out. */
+        const asEarlierRecord = (without: string | undefined) =>
+          on(url, async adapter => {
+            const record = await recordOf(adapter);
+            const { ownedPermissions: _owners, ...baseline } =
+              record!.baseline!;
+            await deleteRecord(adapter);
+            await storeRegistryRecord(adapter.getDrizzle(), dialect, {
+              point: record!.point,
+              baseline: {
+                ...baseline,
+                permissions: baseline.permissions.filter(
+                  slug => slug !== without
+                ),
+              },
+            });
+          });
+
+        // Added: live already, as a development start left it, and in no record.
+        await asEarlierRecord("export-fr-reports");
+        const added = await migrateRun(permissionsOnly(["export"]));
+        expect(added.failure, added.said.join("\n")).toBeDefined();
+        expect(added.why).toMatch(/^~ permissions .*export-fr-reports/m);
+
+        // Removed: the record holds the slug with no owner, so it cannot be
+        // told from one of Nextly's own, and nothing is named.
+        await asEarlierRecord(undefined);
+        await on(url, adapter =>
+          adapter.executeQuery(
+            `UPDATE ${q}permissions${q} SET ${q}orphaned_at${q} = ${q}created_at${q} WHERE ${q}slug${q} = 'export-fr-reports'`
+          )
+        );
+        await migrate(permissionsOnly([]));
       }, 240_000);
     });
 
@@ -762,6 +948,29 @@ describe.each(getConfiguredTestDialects())(
         });
       }, 240_000);
 
+      it("runs again unchanged, naming nothing, where that migration records settings and no permissions", async () => {
+        const url = await scratch();
+        use(url);
+        withoutRecordedPermissions(
+          dir,
+          await migrateCreate("one", withPermissions(["export"]))
+        );
+        // The record is taken before the migration applies and before this
+        // run adds the app's permissions, so it holds none of them.
+        await migrate(withPermissions(["export"]));
+
+        const again = await migrateRun(withPermissions(["export"]));
+
+        expect(again.failure, again.said.join("\n")).toBeUndefined();
+        // And the first run did add the permission the second was judged on.
+        await on(url, async adapter => {
+          const live = await adapter.executeQuery<{ slug: string }>(
+            `SELECT ${q}slug${q} FROM ${q}permissions${q} WHERE ${q}slug${q} = 'export-fr-reports' AND ${q}orphaned_at${q} IS NULL`
+          );
+          expect(live).toHaveLength(1);
+        });
+      }, 240_000);
+
       it("takes a new site's record at the point before any app migration, with no row", async () => {
         const url = await scratch();
         use(url);
@@ -797,10 +1006,20 @@ describe.each(getConfiguredTestDialects())(
           await addUndeclaredGrant(adapter);
         });
 
-        await migrate(config(["extra"]));
+        // A configuration ahead of that snapshot is refused before the first
+        // run's bookkeeping, naming the change, with nothing written.
+        const ahead = await migrateRun(config(["extra"]));
+        expect(ahead.failure, ahead.said.join("\n")).toBeDefined();
+        expect(ahead.why).toMatch(/^\+ add_column dc_fr_posts\.extra \(/m);
+        await on(url, async adapter => {
+          expect(await recordOf(adapter)).toBeUndefined();
+          expect(await rowFields(adapter)).toEqual(["title"]);
+        });
+
+        await migrate(config());
 
         await on(url, async adapter => {
-          // From the snapshot, not the configuration, which has `extra`.
+          // From the snapshot, which an earlier start's row was behind.
           expect(await rowFields(adapter)).toEqual([
             "slug",
             "title",
@@ -808,7 +1027,15 @@ describe.each(getConfiguredTestDialects())(
           ]);
           expect(await live(adapter, "sync-fr-gone")).toBe(true);
           expect(await grantsOf(adapter, "admin")).toContain("sync-fr-gone");
-          expect(await recordOf(adapter)).toEqual({ point: first });
+          // No baseline: the point's snapshot says what the rows were. The
+          // owned permissions live then are kept all the same: here the one
+          // a plugin no build declares had left.
+          const record = await recordOf(adapter);
+          expect(record?.point).toBe(first);
+          expect(record?.baseline).toBeUndefined();
+          expect(record?.ownedPermissions?.map(p => p.slug)).toEqual([
+            "sync-fr-gone",
+          ]);
         });
       }, 180_000);
     });

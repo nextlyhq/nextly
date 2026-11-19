@@ -20,7 +20,9 @@
  * @module component-variants-panel
  */
 import {
+  isRichTextValue,
   isUnsetOverride,
+  oneParagraphLines,
   variantOptions,
   type ComponentDocument,
   type ExposedProperty,
@@ -37,6 +39,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  Textarea,
   Label,
   Select,
   SelectContent,
@@ -90,18 +93,57 @@ export const ComponentVariantsContext: React.Context<
 > = React.createContext<ComponentVariantsHost | undefined>(undefined);
 
 /**
- * The variants section of a component's own view, under its exposed fields.
+ * The variants section of a component's own view, under its exposed fields;
+ * where the host keeps them to that view (`editedInOwnView`), one line saying
+ * so instead, with the way there when the host offers one.
  *
  * @experimental Settles when the component editor ships.
  */
-export function ComponentVariantsSection({
-  editor,
-  component,
-}: {
+export function ComponentVariantsSection(props: {
   editor: EditorState;
   component: ComponentDocument;
 }): React.JSX.Element {
   const host = React.useContext(ComponentVariantsContext);
+  if (host?.editedInOwnView === true) {
+    return <VariantsInOwnView onOpen={host.onOpenOwnView} />;
+  }
+  return <VariantsSection {...props} host={host} />;
+}
+
+/**
+ * Where a header or footer edited in place keeps its variants: said, so the
+ * section's absence is not read as a component without any, and opened with
+ * the same words the instance inspector uses for that view.
+ */
+function VariantsInOwnView({
+  onOpen,
+}: {
+  onOpen: (() => void) | undefined;
+}): React.JSX.Element {
+  return (
+    <div className="nx-inspector__note-row">
+      <p className="nx-inspector__note">
+        Variants are edited in the component’s own view.
+      </p>
+      {onOpen === undefined ? null : (
+        <Button type="button" size="sm" variant="ghost" onClick={onOpen}>
+          Edit component
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/** The section itself, given its host. */
+function VariantsSection({
+  editor,
+  component,
+  host,
+}: {
+  editor: EditorState;
+  component: ComponentDocument;
+  host: ComponentVariantsHost | undefined;
+}): React.JSX.Element {
   const taken = useSeenKeys(component);
   const context: VariantEditContext = { editor, component, taken };
   const options = variantOptions(component);
@@ -491,7 +533,15 @@ function VariantValueControl({
       return (
         <TextValue
           id={id}
-          value={typeof value === "string" ? value : ""}
+          // A Text's one paragraph, the component's own value, shows its
+          // words; a variant sets plain words in its place.
+          value={
+            typeof value === "string"
+              ? value
+              : isRichTextValue(value)
+                ? oneParagraphLines(value)
+                : ""
+          }
           onCommit={onCommit}
         />
       );
@@ -594,6 +644,18 @@ function TextValue({
   const send = () => {
     if (draft !== value) onCommit(draft);
   };
+  // Words holding lines (a Text's) are edited in a field that keeps them.
+  if (value.includes("\n")) {
+    return (
+      <Textarea
+        id={id}
+        rows={3}
+        value={draft}
+        onChange={event => setDraft(event.target.value)}
+        onBlur={send}
+      />
+    );
+  }
   return (
     <Input
       id={id}

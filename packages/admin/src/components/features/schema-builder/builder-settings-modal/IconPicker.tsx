@@ -101,9 +101,18 @@ const iconMap = Icons as unknown as Record<string, LucideIcon>;
 export interface IconPickerProps {
   value?: string;
   onChange: (iconName: string) => void;
+  /**
+   * The trigger's accessible name, where its label alone would not say what it
+   * picks (beside a name field, "Icon: Package" rather than "Package").
+   */
+  accessibleName?: string;
 }
 
-export function IconPicker({ value, onChange }: IconPickerProps): JSX.Element {
+export function IconPicker({
+  value,
+  onChange,
+  accessibleName,
+}: IconPickerProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -130,12 +139,19 @@ export function IconPicker({ value, onChange }: IconPickerProps): JSX.Element {
   );
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    // Modal: the picker opens inside the create and settings dialogs, whose
+    // scroll lock refuses a wheel or touch scroll anywhere outside the dialog's
+    // own content — and the popover is portalled outside it, so the icon list
+    // would only move by dragging its scrollbar. A modal popover takes a lock
+    // of its own, and only the newest lock judges, so the list scrolls while
+    // the page behind stays still. It also keeps focus within the picker.
+    <Popover open={open} onOpenChange={setOpen} modal>
       <PopoverTrigger asChild>
         <Button
           type="button"
           variant="outline"
           className="w-full h-10 justify-start gap-2 border-input font-normal"
+          aria-label={accessibleName}
         >
           <SelectedIconComponent className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm">

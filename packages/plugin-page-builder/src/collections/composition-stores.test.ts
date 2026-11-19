@@ -79,9 +79,9 @@ describe("the composition stores reach a running site", () => {
     // and into `requiredPermission` would look identical on an installation
     // that renamed nothing, and would send readers to a list that does not
     // exist on one that did. Core resolves both; asserted there.
-    expect(entry("Patterns")?.collection).toBe(PATTERNS_SLUG);
+    expect(entry("Saved sections")?.collection).toBe(PATTERNS_SLUG);
     expect(entry("Components")?.collection).toBe(COMPONENTS_SLUG);
-    expect(entry("Layouts")?.collection).toBe(LAYOUTS_SLUG);
+    expect(entry("Header & footer")?.collection).toBe(LAYOUTS_SLUG);
 
     // The control, and the reason the three above are not simply "every entry
     // names a collection": Pages deliberately names none, so it keeps the
@@ -355,7 +355,9 @@ describe("exactly one navigation source claims Pages", () => {
       COMPONENTS_SLUG,
       LAYOUTS_SLUG,
       TEMPLATES_SLUG,
-      // The bindings report, a page rather than a collection.
+      // The bindings report and the Fonts page, pages rather than
+      // collections.
+      undefined,
       undefined,
     ]);
   });

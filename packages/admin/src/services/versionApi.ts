@@ -456,4 +456,29 @@ export const versionApi = {
       `${basePath(scope)}/diff?${search.toString()}`
     );
   },
+
+  /**
+   * A version compared with a baseline the server resolves by name: what is
+   * published, the current draft, or the version this person last looked at.
+   * Without `to`, the server picks the version to compare. The answer names
+   * the baseline it used, and the version retention left in place of one it
+   * removed.
+   *
+   * `locale` is the part of the document to compare when `to` is absent: the
+   * server pairs within that language, and without it takes the part with no
+   * language, so a French address would be answered about another part. A
+   * named version carries its own part, which the server takes instead.
+   */
+  diffFromBaseline: (
+    scope: VersionScope,
+    baseline: string,
+    opts: { to?: number; locale?: string } = {}
+  ): Promise<VersionDiff> => {
+    const search = new URLSearchParams({ baseline });
+    if (opts.to !== undefined) search.set("to", String(opts.to));
+    if (opts.locale !== undefined) search.set("locale", opts.locale);
+    return protectedApi.get<VersionDiff>(
+      `${basePath(scope)}/diff?${search.toString()}`
+    );
+  },
 };

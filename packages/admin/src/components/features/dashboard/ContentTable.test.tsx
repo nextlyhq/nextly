@@ -11,7 +11,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import type { CoreListWidgetData } from "nextly/core-widget-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { cleanup, render, screen, within } from "@admin/__tests__/utils";
 import { inFrame } from "@admin/components/features/widgets/__tests__/in-frame";
 import {
   CardHeightContext,
@@ -19,6 +19,61 @@ import {
 } from "@admin/components/features/widgets/frame/tier";
 
 import { ContentTable, type ContentTableProps } from "./ContentTable";
+
+// What the admin's one "open this document" rule reads for a Single's row:
+// every Single's fields, the published views, and whether the reader may
+// update it. One Single's main field is a page layout; the others are not
+// known here, so they open as their forms.
+vi.mock("@admin/hooks/queries/useSingles", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  useEverySingle: () => ({
+    data: [
+      {
+        slug: "landing",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "layout", type: "blocks" },
+        ],
+      },
+    ],
+  }),
+}));
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => {
+  const original = await importOriginal<{
+    useBranding: () => Record<string, unknown>;
+  }>();
+  return {
+    ...original,
+    useBranding: () => ({
+      ...original.useBranding(),
+      plugins: [
+        {
+          name: "@acme/builder",
+          documentViews: [
+            {
+              fieldType: "blocks",
+              path: "builder",
+              component: "@acme/builder#View",
+              opensFirst: "mainField",
+            },
+          ],
+        },
+      ],
+    }),
+  };
+});
+vi.mock("@admin/hooks/useCurrentUserPermissions", async importOriginal => {
+  const original = await importOriginal<{
+    useCurrentUserPermissions: () => Record<string, unknown>;
+  }>();
+  return {
+    ...original,
+    useCurrentUserPermissions: () => ({
+      ...original.useCurrentUserPermissions(),
+      canAccessCollection: () => true,
+    }),
+  };
+});
 
 /** One row of the card's data, as JSON carries it. */
 type Row = CoreListWidgetData["items"][number];
@@ -198,6 +253,34 @@ describe("the Content table", () => {
     expect(
       within(row).queryByRole("link", { name: /^New entry/ })
     ).not.toBeInTheDocument();
+  });
+
+  it("opens a Single whose main field is a page layout where the sidebar does, by the admin's one rule", () => {
+    draw([{ ...HOME, slug: "landing", label: "Landing" }]);
+    const row = rowOf("Landing");
+    const builder = "/admin/singles/landing/builder?field=layout";
+    expect(within(row).getByRole("link", { name: "Landing" })).toHaveAttribute(
+      "href",
+      builder
+    );
+    expect(
+      within(row).getByRole("link", { name: "Edit Landing" })
+    ).toHaveAttribute("href", builder);
+  });
+
+  it("names one draft in the singular, in the table and stacked", () => {
+    draw([collectionRow("posts", { draft: 1 })]);
+    expect(
+      within(rowOf("Posts")).getByRole("link", { name: "1 draft in Posts" })
+    ).toHaveAttribute("href", "/admin/collections/posts?status=draft");
+    cleanup();
+
+    draw([collectionRow("posts", { draft: 1 })], { tier: "small" });
+    const details = within(rowOf("Posts")).getByTestId("content-row-details");
+    expect(details).toHaveTextContent(/^9 entries · 1 draft · \S/);
+    expect(
+      within(details).getByRole("link", { name: "1 draft in Posts" })
+    ).toBeInTheDocument();
   });
 
   it("shows — for drafts in a collection without the Draft / Published lifecycle", () => {

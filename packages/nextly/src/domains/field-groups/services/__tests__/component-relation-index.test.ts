@@ -111,6 +111,15 @@ const SHAPES: Record<
     field: { type: "relationship", relationTo: "users" },
     expected: everywhere([IDX]),
   },
+  // A field group's column is unique only by its own Unique mark: a one-to-one stored by its
+  // cardinality, its target on `options`, gets no `uq_`, and the creator writes no index for it.
+  "a one-to-one stored by its cardinality": {
+    field: {
+      type: "relationship",
+      options: { relationType: "oneToOne", target: "users" },
+    },
+    expected: everywhere([]),
+  },
   "an upload of one file": {
     field: { type: "upload", relationTo: "media" },
     expected: everywhere([IDX]),
@@ -248,4 +257,68 @@ describe("the key an indexed text column is indexed by", () => {
       ]);
     }
   );
+});
+
+// "Unique" on a relation holding a list would mean no two instances hold the identical list, and a
+// unique btree over a long list refuses the save on PostgreSQL. So the creator refuses it on every
+// dialect, naming the field, before any statement; a relation to one entry keeps its `uq_`.
+describe("a unique relation holding a list", () => {
+  const lists: [string, Record<string, unknown>][] = [
+    [
+      "a hasMany relationship",
+      { type: "relationship", relationTo: "users", hasMany: true },
+    ],
+    [
+      "a hasMany upload",
+      { type: "upload", relationTo: "media", hasMany: true },
+    ],
+    [
+      "a list to several collections",
+      { type: "relationship", relationTo: ["a", "b"], hasMany: true },
+    ],
+    [
+      "a many-to-many",
+      {
+        type: "relationship",
+        relationTo: "users",
+        options: { relationType: "manyToMany" },
+      },
+    ],
+  ];
+
+  for (const dialect of DIALECTS) {
+    it.each(lists)(`refuses %s marked unique (${dialect})`, (_label, shape) => {
+      const create = () =>
+        new FieldGroupSchemaService(dialect).generateMigrationSQL(TABLE, [
+          { name: COLUMN, ...shape, unique: true },
+        ] as unknown as FieldConfig[]);
+      expect(create).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                path: `fields.${COLUMN}`,
+                code: "UNIQUE_NOT_ON_LIST",
+              }),
+            ],
+          },
+        })
+      );
+    });
+
+    it(`keeps a relation to one entry unique (${dialect})`, () => {
+      const sql = new FieldGroupSchemaService(dialect).generateMigrationSQL(
+        TABLE,
+        [
+          {
+            name: COLUMN,
+            type: "relationship",
+            relationTo: "users",
+            unique: true,
+          },
+        ] as unknown as FieldConfig[]
+      );
+      expect(sql).toContain(UQ);
+    });
+  }
 });

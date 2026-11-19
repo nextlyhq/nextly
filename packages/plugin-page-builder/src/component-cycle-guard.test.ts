@@ -16,12 +16,17 @@ import {
   MAX_ENVELOPE_ENTRIES,
   type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type PluginFieldWrite,
+  type PluginStoredValue,
+} from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   componentCycleRefusal,
   MOST_COMPOSED_NODES,
+  storedComponentSource,
   type ComponentSource,
 } from "./component-cycle-guard";
 
@@ -1726,7 +1731,10 @@ describe("saving a component that would reference itself", () => {
         string,
         { label: string; overrides: Record<string, unknown> }
       > = {};
-      for (let i = 0; i < 82; i += 1) {
+      // Each variant composes the definition once and walks it once more for
+      // blocks following its setting, so this many leaves the allowance almost
+      // gone by the last.
+      for (let i = 0; i < 40; i += 1) {
         many[`v${String(i)}`] = { label: "V", overrides: {} };
       }
       many.loop = { label: "Loop", overrides: { swap: "a" } };
@@ -1849,5 +1857,84 @@ describe("saving a component that would reference itself", () => {
       .map(a => a.id)
       .sort();
     expect(ids).toEqual(["b", "cc", "shared"]);
+  });
+});
+
+describe("the stored component source", () => {
+  /** A write whose several-entry read answers from `stored`, counting calls. */
+  function writeOver(stored: Record<string, unknown>, fails = false) {
+    const readStoredOf = vi.fn<PluginFieldWrite["readStoredOf"]>(
+      async target => {
+        if (fails) throw new Error("the store could not be read");
+        const found = new Map<string, PluginStoredValue>();
+        for (const id of target.ids) {
+          if (Object.hasOwn(stored, id)) {
+            found.set(id, { kind: "value", value: stored[id] });
+          }
+        }
+        return found;
+      }
+    );
+    const write: PluginFieldWrite = {
+      kind: "collection",
+      slug: "pages",
+      inTransaction: false,
+      readStored: vi.fn(),
+      readStoredOf,
+    };
+    return { write, readStoredOf };
+  }
+
+  const store = { collection: "components", field: "content" };
+
+  it("reads what one turn asks for, in each form, in one read of them all", async () => {
+    const { write, readStoredOf } = writeOver({ a: "A", b: "B" });
+    const source = storedComponentSource(write, store);
+
+    const answers = await Promise.all([
+      source("a", false),
+      source("b", false),
+      source("missing", false),
+      source("a", false),
+      source("a", true),
+    ]);
+
+    expect(answers).toEqual([
+      { kind: "document", document: "A" },
+      { kind: "document", document: "B" },
+      { kind: "absent" },
+      { kind: "document", document: "A" },
+      { kind: "document", document: "A" },
+    ]);
+    expect(readStoredOf).toHaveBeenCalledTimes(2);
+    expect(readStoredOf).toHaveBeenCalledWith({
+      ...store,
+      ids: ["a", "b", "missing"],
+      form: "published",
+    });
+    expect(readStoredOf).toHaveBeenCalledWith({
+      ...store,
+      ids: ["a"],
+      form: "draft",
+    });
+  });
+
+  it("answers every component of a read that fails as unreadable, never as absent", async () => {
+    const { write } = writeOver({ a: "A" }, true);
+    const source = storedComponentSource(write, store);
+
+    expect(await Promise.all([source("a", false), source("b", false)])).toEqual(
+      [{ kind: "unreadable" }, { kind: "unreadable" }]
+    );
+  });
+
+  it("reads a later turn's asks in a read of their own", async () => {
+    const { write, readStoredOf } = writeOver({ a: "A", b: "B" });
+    const source = storedComponentSource(write, store);
+
+    await source("a", false);
+    await source("b", false);
+
+    expect(readStoredOf).toHaveBeenCalledTimes(2);
   });
 });

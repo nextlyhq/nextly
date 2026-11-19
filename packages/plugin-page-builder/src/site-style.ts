@@ -34,6 +34,9 @@
  * @module @nextlyhq/plugin-page-builder/site-style
  */
 import {
+  DEFAULT_FLUID_RANGE,
+  isLook,
+  resolveTokenPrefix,
   sameJsonValue,
   sameSiteToken,
   tokenIdentity,
@@ -43,10 +46,13 @@ import type {
   FontFaceDef,
   NamedClass,
   SiteSheetInput,
+  SiteTextMap,
+  SiteTextRole,
   SiteToken,
   SiteTokenSet,
-  SpacingMode,
 } from "@nextlyhq/blocks-engine";
+
+import type { SiteCssPrefixRead } from "./library-contract";
 
 /**
  * One tier of site style: what a host's config states, or what the stored
@@ -67,12 +73,20 @@ export interface SiteStyleData {
   classes?: readonly NamedClass[];
   /** The site's breakpoints, on both axes. */
   breakpoints?: BreakpointSet;
-  /**
-   * The site's spacing model: blocks spaced by their own margins (`classic`)
-   * or by the gap of the container holding them (`gaps`). Absent means the
-   * engine's default, `gaps`.
-   */
-  spacingMode?: SpacingMode;
+}
+
+/**
+ * What the server log says when a host still passes `siteStyle.spacingMode`,
+ * or nothing when it does not. The option was removed: blocks are always
+ * spaced by the gap of the container holding them. It is no longer in the
+ * option's type, so only an untyped host reaches this, and it still starts:
+ * the value is ignored rather than refused, since refusing would take a site
+ * down over a setting that no longer does anything.
+ */
+export function removedSiteStyleOption(siteStyle: unknown): string | undefined {
+  if (typeof siteStyle !== "object" || siteStyle === null) return undefined;
+  if (!Object.hasOwn(siteStyle, "spacingMode")) return undefined;
+  return "[page-builder] `siteStyle.spacingMode` was removed and is ignored: blocks are always spaced by the gap of the container holding them. Remove it from the pageBuilder() options.";
 }
 
 /**
@@ -113,12 +127,54 @@ export function resolveSiteStyle(
   return siteStyleOf({
     tokens: mergeTokens(defaults?.tokens, stored?.tokens),
     fonts: mergeByKey(defaults?.fonts, stored?.fonts, faceIdentity),
-    classes: mergeByKey(defaults?.classes, stored?.classes, c => c.id),
+    classes: mergeByKey(
+      defaults?.classes,
+      withBuiltInNames(defaults?.classes, stored?.classes),
+      c => c.id
+    ),
     breakpoints: hasBreakpoints(stored?.breakpoints)
       ? stored?.breakpoints
       : defaults?.breakpoints,
-    // One site-wide choice, so the stored one wins when there is one.
-    spacingMode: stored?.spacingMode ?? defaults?.spacingMode,
+  });
+}
+
+/**
+ * What names a built-in block style, which the code states and a site may
+ * not change: its name, slug, block type and whether it is the block's own
+ * style. A stored override keeps only what the site changed, so it may
+ * leave any of these out.
+ */
+export const BUILT_IN_NAME_FIELDS = [
+  "label",
+  "slug",
+  "blockType",
+  "isDefault",
+] as const;
+
+/**
+ * The stored classes with each override of a built-in block style given
+ * the code's name fields where it leaves them out, so it merges as the
+ * built-in it overrides (the image's own style stays its own, named as the
+ * code names it) rather than replacing it with a nameless shared class.
+ */
+export function withBuiltInNames(
+  defaults: readonly NamedClass[] | undefined,
+  stored: readonly NamedClass[] | undefined
+): readonly NamedClass[] | undefined {
+  if (stored === undefined || defaults === undefined) return stored;
+  const code = new Map(
+    defaults.filter(isLook).map(entry => [entry.id, entry] as const)
+  );
+  return stored.map(entry => {
+    const base = code.get(entry.id);
+    if (base === undefined) return entry;
+    const filled: Record<string, unknown> = { ...entry };
+    for (const field of BUILT_IN_NAME_FIELDS) {
+      if (filled[field] === undefined && base[field] !== undefined) {
+        filled[field] = base[field];
+      }
+    }
+    return filled as unknown as NamedClass;
   });
 }
 
@@ -147,24 +203,37 @@ export function classOverrideOf(
 }
 
 /**
+ * The fields of a class compared as they are. The block type a look is bound
+ * to: the same styles on another type is another look. `isDefault`: a block's
+ * own look edits its type's base, and the same entry without the mark is a
+ * look blocks wear instead. The block style marks: an override that only
+ * moves the default ★ or hides a built-in style is a difference worth storing.
+ */
+const SAME_CLASS_FIELDS = [
+  "id",
+  "slug",
+  "label",
+  "locked",
+  "orderIndex",
+  "blockType",
+  "isDefault",
+  "starred",
+  "hidden",
+] as const satisfies readonly (keyof NamedClass)[];
+
+/**
  * Whether two classes are the same class, to the byte: every key an entry
  * stores, so an override that only names a supplied class, or only locks it,
  * is a difference worth storing.
  */
 function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
   return (
-    a.id === b.id &&
-    a.slug === b.slug &&
-    a.label === b.label &&
-    a.locked === b.locked &&
-    a.orderIndex === b.orderIndex &&
-    // The block type a look is bound to: the same styles on another type is
-    // another look.
-    a.blockType === b.blockType &&
-    // A block's own look edits its type's base; the same entry without the
-    // mark is a look blocks wear instead.
-    a.isDefault === b.isDefault &&
-    sameJsonValue(a.styles, b.styles)
+    SAME_CLASS_FIELDS.every(field => a[field] === b[field]) &&
+    sameJsonValue(a.styles, b.styles) &&
+    // The sizes a text style's fluid size was made from: an override that
+    // only records them is what lets a configured style follow the range.
+    // Compared as JSON records, so a key order a database chose is no change.
+    sameJsonValue(a.fluidSizes, b.fluidSizes)
   );
 }
 
@@ -199,6 +268,7 @@ export function tokenOverrideOf(
     const base = supplied.get(tokenIdentity(token));
     return base === undefined || !sameSiteToken(base, token);
   });
+  const rows = storedSiteText(defaults?.siteText, edited.siteText);
   return {
     tokens,
     ...(edited.prefix === undefined || edited.prefix === defaults?.prefix
@@ -207,7 +277,78 @@ export function tokenOverrideOf(
     ...(edited.darkMode === undefined || edited.darkMode === defaults?.darkMode
       ? {}
       : { darkMode: edited.darkMode }),
+    ...storedFluidRange(defaults, edited, tokens, rows.siteText),
+    // The colour order, once the site has one of its own.
+    ...(edited.order === undefined ||
+    sameJsonValue(edited.order, defaults?.order)
+      ? {}
+      : { order: edited.order }),
+    ...storedBuiltInColoursShown(defaults, edited),
+    ...rows,
   };
+}
+
+/**
+ * Whether the built-in colours are shown, as the stored tier holds it: only
+ * where it differs from the code's, so a site that never hides them, or
+ * hides them as its code does, stores nothing. Unset reads as shown.
+ */
+function storedBuiltInColoursShown(
+  defaults: SiteTokenSet | undefined,
+  edited: SiteTokenSet
+): Pick<SiteTokenSet, "builtInColoursShown"> {
+  const shown = edited.builtInColoursShown ?? true;
+  return shown === (defaults?.builtInColoursShown ?? true)
+    ? {}
+    : { builtInColoursShown: shown };
+}
+
+/**
+ * The rows of the site's text the stored tier holds: each row that differs
+ * from the code's, an empty row included (it leaves that text to the site's
+ * own CSS). A row the edit holds as the code states it is left to the code,
+ * so the code can still change it.
+ */
+function storedSiteText(
+  defaults: SiteTextMap | undefined,
+  edited: SiteTextMap | undefined
+): Pick<SiteTokenSet, "siteText"> {
+  if (edited === undefined) return {};
+  const rows = Object.fromEntries(
+    Object.entries(edited).filter(
+      ([role, row]) =>
+        defaults === undefined ||
+        !Object.hasOwn(defaults, role) ||
+        !sameJsonValue(row, defaults[role as SiteTextRole])
+    )
+  );
+  return Object.keys(rows).length === 0 ? {} : { siteText: rows };
+}
+
+/**
+ * The fluid range the stored tier holds: where it differs from the code's,
+ * and wherever the tier holds a size made with Fluid…, so the stored sizes
+ * say what they were made across. A merge of two authors' saves writes
+ * those sizes again from the stored tier alone.
+ */
+function storedFluidRange(
+  defaults: SiteTokenSet | undefined,
+  edited: SiteTokenSet,
+  stored: readonly SiteToken[],
+  /** The Site text rows the tier stores, whose fluid sizes need it too. */
+  rows: SiteTextMap | undefined
+): Pick<SiteTokenSet, "fluidRange"> {
+  const range =
+    edited.fluidRange ?? defaults?.fluidRange ?? DEFAULT_FLUID_RANGE;
+  const fluidRow = Object.values(rows ?? {}).some(
+    row => row?.fluid !== undefined
+  );
+  if (fluidRow || stored.some(token => token.fluid !== undefined))
+    return { fluidRange: range };
+  return edited.fluidRange === undefined ||
+    sameJsonValue(edited.fluidRange, defaults?.fluidRange)
+    ? {}
+    : { fluidRange: edited.fluidRange };
 }
 
 /**
@@ -296,9 +437,6 @@ export function siteStyleOf(sections: SiteStyleData): SiteStyleData {
     ...(sections.breakpoints === undefined
       ? {}
       : { breakpoints: sections.breakpoints }),
-    ...(sections.spacingMode === undefined
-      ? {}
-      : { spacingMode: sections.spacingMode }),
   };
 }
 
@@ -340,7 +478,29 @@ function mergeByKey<T>(
   return [...byKey.values()];
 }
 
-/** Token sets merged by token identity; `prefix`/`darkMode` from the override. */
+/** The set's site-wide settings, each the stored tier's over the code's. */
+const SITE_WIDE_SETTINGS = [
+  "prefix",
+  "darkMode",
+  "fluidRange",
+  "order",
+  "builtInColoursShown",
+] as const satisfies readonly (keyof SiteTokenSet)[];
+
+/** Each site-wide setting the stored tier or the code sets, the stored first. */
+function siteWideSettings(
+  defaults: SiteTokenSet | undefined,
+  stored: SiteTokenSet | undefined
+): Pick<SiteTokenSet, (typeof SITE_WIDE_SETTINGS)[number]> {
+  const settings: Partial<SiteTokenSet> = {};
+  for (const key of SITE_WIDE_SETTINGS) {
+    const value = stored?.[key] ?? defaults?.[key];
+    if (value !== undefined) Object.assign(settings, { [key]: value });
+  }
+  return settings;
+}
+
+/** Token sets merged by token identity; the site-wide settings from the override. */
 function mergeTokens(
   defaults: SiteTokenSet | undefined,
   stored: SiteTokenSet | undefined
@@ -362,13 +522,25 @@ function mergeTokens(
     stored?.tokens,
     tokenIdentity
   );
-  const prefix = stored?.prefix ?? defaults?.prefix;
-  const darkMode = stored?.darkMode ?? defaults?.darkMode;
   return {
     tokens: tokens === undefined ? [] : [...tokens],
-    ...(prefix === undefined ? {} : { prefix }),
-    ...(darkMode === undefined ? {} : { darkMode }),
+    ...siteWideSettings(defaults, stored),
+    ...mergedSiteText(defaults?.siteText, stored?.siteText),
   };
+}
+
+/**
+ * The site's text across the two tiers: row by row, a stored row in place of
+ * the code's. Per row rather than whole, so a site setting its Body keeps the
+ * headings its code states; per row rather than per value, so a heading
+ * pointed at another type size never keeps the code's line height beside it.
+ */
+function mergedSiteText(
+  defaults: SiteTextMap | undefined,
+  stored: SiteTextMap | undefined
+): Pick<SiteTokenSet, "siteText"> {
+  if (defaults === undefined && stored === undefined) return {};
+  return { siteText: { ...defaults, ...stored } };
 }
 
 /**
@@ -395,16 +567,57 @@ export function siteBreakpoints(style?: SiteStyleData): BreakpointSet {
  * block defaults: a wrong preview is trusted, an unstyled one is questioned.
  * `blockBases` is never part of site style — a block type's default look
  * belongs to the block's definition, not to a site's stored edits.
+ *
+ * The same style answers the same sheet object. The canvas, the Layout's
+ * header and footer around it and the entry page's small preview each keep
+ * what they drew while their inputs keep their identity, and the renderer
+ * keeps the compiled site sheet the same way; a new sheet object per render
+ * made every one of them draw and compile again for a selection or a
+ * keystroke. A style is read as a value: a new style is a new object.
  */
 export function siteSheet(style?: SiteStyleData): SiteSheetInput {
+  if (style === undefined) return NO_STYLE_SHEET;
+  const kept = SHEETS.get(style);
+  if (kept !== undefined) return kept;
+  const sheet = sheetOf(style);
+  SHEETS.set(style, sheet);
+  return sheet;
+}
+
+/** The sheets answered, per style, weakly: a sheet goes with its style. */
+const SHEETS = new WeakMap<SiteStyleData, SiteSheetInput>();
+
+/** {@link siteSheet}'s answer, made. */
+function sheetOf(style?: SiteStyleData): SiteSheetInput {
   return {
     ...(style?.tokens === undefined ? {} : { tokens: style.tokens }),
     ...(style?.fonts === undefined ? {} : { fonts: style.fonts }),
     ...(style?.classes === undefined ? {} : { classes: style.classes }),
     breakpoints: siteBreakpoints(style),
-    // Carried to the renderer, which compiles the page under it.
-    ...(style?.spacingMode === undefined
-      ? {}
-      : { spacingMode: style.spacingMode }),
+  };
+}
+
+/** The sheet for no style: breakpoints alone, the empty set. */
+const NO_STYLE_SHEET: SiteSheetInput = sheetOf();
+
+/**
+ * The site's CSS variable prefix, and which tier sets it: the one the pages
+ * are written under now, the one the site's code sets and the one saved in
+ * Settings. `current` is read off the merged style rather than restated, so
+ * it is the prefix the compiler writes under whichever tier wins (the saved
+ * one replaces the code's) and whatever the engine refuses.
+ */
+export function siteCssPrefix(
+  defaults: SiteStyleData | undefined,
+  stored: SiteStyleData | undefined
+): SiteCssPrefixRead {
+  const code = defaults?.tokens?.prefix;
+  const saved = stored?.tokens?.prefix;
+  return {
+    current: resolveTokenPrefix(
+      resolveSiteStyle(defaults, stored).tokens?.prefix
+    ).prefix,
+    ...(code === undefined ? {} : { code }),
+    ...(saved === undefined ? {} : { stored: saved }),
   };
 }

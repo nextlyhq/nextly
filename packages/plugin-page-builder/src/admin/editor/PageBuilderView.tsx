@@ -7,19 +7,24 @@
  *
  * The admin holds everything around it — the document, its form, its lock, the
  * recovery offer, the leave guard and saving — so this binds the editor to the
- * field through the form's own `control` and draws nothing else. Leaving goes
- * through the view's `exit`, back to the document's edit form, which keeps the
- * same form mounted.
+ * field through the form's own `control` and draws nothing else. "Open as
+ * form" goes through the view's `exit`, back to the document's edit form,
+ * which keeps the same form mounted. The exit arrow does too, except on a
+ * document that opens in the builder, where it goes back to where it was
+ * opened from: a collection's list, or the Content screen for a Single.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/PageBuilderView
  */
 import {
+  navigateTo,
   useDocumentIdentity,
+  useDocumentOpensIn,
   type DocumentViewProps,
 } from "@nextlyhq/plugin-sdk/admin";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useController } from "react-hook-form";
 
+import { BUILDER_VIEW_PATH } from "../../builder-view";
 import { acceptedKinds } from "../../fields/blocks-options";
 import { PageLayoutPicker } from "../page-layout";
 import { PageBuilderCard } from "../PageBuilderCard";
@@ -28,6 +33,7 @@ import { useRestingPageRender } from "../use-resting-page-render";
 import { BlocksEditor } from "./BlocksEditor";
 import { openAtFromSearch } from "./builder-address";
 import { rememberBuilderReturn } from "./builder-return";
+import { BuilderStartup } from "./builder-startup";
 import { rowGuardedWrite } from "./row-commit";
 import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 
@@ -36,6 +42,8 @@ type BoundProps = Pick<
   "control" | "exit" | "fieldLocation" | "fieldPathIn"
 > & {
   field: NonNullable<DocumentViewProps["field"]>;
+  /** Where the exit arrow goes instead of the form; see `useBackToList`. */
+  back?: { label: string; go: () => void } | undefined;
   /** The field's path in the document form, which is what binds to it. */
   name: string;
   /** The field's address, which names a repeater's row by its saved id. */
@@ -46,6 +54,7 @@ type BoundProps = Pick<
 function BoundEditor({
   control,
   exit,
+  back,
   field: declaration,
   name,
   address,
@@ -76,25 +85,30 @@ function BoundEditor({
       : openAtFromSearch(window.location.search)
   );
   return (
-    <BlocksEditor
-      // No key from the value: the editor seeds its own history from the value
-      // it opened with, and keying it by whether that value exists remounted it
-      // on its own first commit into an empty field, losing its history. A
-      // value replaced from outside — a restore — arrives with a fresh mount
-      // of the whole view, which the admin gives it.
-      initialValue={field.value}
-      // What an empty document has to be for this field, read from its own
-      // declaration: a component store seeded as a page is refused on save.
-      kinds={acceptedKinds(declaration)}
-      onCommit={commit}
-      onClose={exit}
-      name={name}
-      control={control}
-      openAt={openAt}
-      address={address}
-      location={fieldLocation}
-      pathIn={fieldPathIn}
-    />
+    <>
+      {/* First, so the reads the editor asks as it mounts find it sent. */}
+      <BuilderStartup />
+      <BlocksEditor
+        // No key from the value: the editor seeds its own history from the value
+        // it opened with, and keying it by whether that value exists remounted it
+        // on its own first commit into an empty field, losing its history. A
+        // value replaced from outside — a restore — arrives with a fresh mount
+        // of the whole view, which the admin gives it.
+        initialValue={field.value}
+        // What an empty document has to be for this field, read from its own
+        // declaration: a component store seeded as a page is refused on save.
+        kinds={acceptedKinds(declaration)}
+        onCommit={commit}
+        onClose={exit}
+        back={back}
+        name={name}
+        control={control}
+        openAt={openAt}
+        address={address}
+        location={fieldLocation}
+        pathIn={fieldPathIn}
+      />
+    </>
   );
 }
 
@@ -174,6 +188,7 @@ export function PageBuilderView({
   // when the rows are reordered and the form path does not.
   const address = fieldAddress ?? name;
   const leave = useLeaveToField(exit, address);
+  const back = useBackToList();
   const surface = useSettledSurface(readOnly);
   if (
     field === undefined ||
@@ -204,6 +219,7 @@ export function PageBuilderView({
       key={address}
       control={control}
       exit={leave}
+      back={back}
       field={field}
       name={name}
       address={address}
@@ -227,4 +243,29 @@ function useLeaveToField(
     if (address !== undefined) rememberBuilderReturn(identity, address);
     exit();
   }, [identity, address, exit]);
+}
+
+/**
+ * The exit arrow's way out on a document that opens in the builder: where it
+ * was opened from, as the admin names it, so an entry goes back to its list
+ * ("Back to Pages") and a Single to the Content screen ("Back to content"). A
+ * click on such a document lands here, so the form would be a screen the
+ * author never opened; the place the click started is. Moving there leaves
+ * the document, so the admin asks first about unsaved work, as any leave
+ * does. Elsewhere, nothing: the arrow is "Exit editor" and goes back to the
+ * form.
+ */
+function useBackToList(): { label: string; go: () => void } | undefined {
+  const opens = useDocumentOpensIn();
+  const list = opens?.opensIn === BUILDER_VIEW_PATH ? opens.list : undefined;
+  return useMemo(
+    () =>
+      list === undefined
+        ? undefined
+        : {
+            label: `Back to ${list.label}`,
+            go: () => navigateTo(list.address),
+          },
+    [list]
+  );
 }

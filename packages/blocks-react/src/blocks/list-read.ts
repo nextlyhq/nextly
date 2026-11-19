@@ -419,8 +419,12 @@ function sortFallback(fields: readonly string[]): ListDiagnostic {
   };
 }
 
-/** The reads one list makes, bound to its data source, language and budget. */
-interface ListReads {
+/**
+ * The reads one list makes, bound to its data source, language and budget.
+ *
+ * @experimental
+ */
+export interface ListReads {
   readonly find: (
     query: BlocksQuery
   ) => Promise<readonly Record<string, unknown>[]>;
@@ -936,6 +940,12 @@ export function listPagesOf(props: unknown, matching: number): number {
  * 1, where the list is split into pages. Never throws: a read that fails
  * comes back as `failed` with what failed, and the list draws its empty
  * state.
+ *
+ * Published from `./blocks` so an editor can read a list's entries exactly
+ * as the list block draws them, through the same provider, rather than build
+ * a second query for the same rows.
+ *
+ * @experimental
  */
 export async function readList(
   props: unknown,

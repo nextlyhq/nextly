@@ -20,6 +20,7 @@ import {
   DOCUMENT_KINDS,
   LIST_ISSUE_CODES,
   type BlockDocument,
+  type BlockRegistryReader,
   type BreakpointSet,
   type IssueCode,
 } from "@nextlyhq/blocks-engine";
@@ -38,6 +39,7 @@ import {
   type OpenRemovalReader,
 } from "../breakpoint-removal/lock-acceptance";
 import { formsChangedBy } from "../component-cycle-guard";
+import { pageCodeOf } from "../site-code/page-code";
 import { siteBreakpoints } from "../site-style";
 
 import { storedFormsFor } from "./added-undefined-ids";
@@ -53,6 +55,7 @@ import { blocksOptionsOf, DEFAULT_ACCEPTED_KINDS } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
 import { newBreakpointIssues } from "./breakpoint-reference-judgement";
 import { newClassReferenceIssues } from "./class-reference-judgement";
+import { customCssHeldBy, customCssIssues } from "./custom-css-judgement";
 import { newEntryContentIssues } from "./entry-content-judgement";
 import {
   judgesLayersLocks,
@@ -61,6 +64,11 @@ import {
 } from "./layers-lock-judgement";
 import { newConditionIssues, newListQueryIssues } from "./list-query-judgement";
 import { readStoredForms } from "./lock-baselines";
+import {
+  changedFormsBaseline,
+  pageCodeIssues,
+  type PageCodeJudgeDeps,
+} from "./page-code-judgement";
 import { newTokenReferenceIssues } from "./token-reference-judgement";
 
 /** The engine's issue for a child of a contentOnly slot changed besides content. */
@@ -127,6 +135,23 @@ export function onceAsked<T>(
   return () => (answer ??= read());
 }
 
+/**
+ * The site's block registry the field was built with. A field built without
+ * one (a host using the field type on its own) refuses to judge a document
+ * rather than judging it against no blocks: an empty registry silently
+ * refuses nothing.
+ */
+function siteBlocksOf(
+  blocks: BlockRegistryReader | undefined
+): BlockRegistryReader {
+  if (blocks === undefined) {
+    throw new Error(
+      "[page-builder] the site's block registry is not installed"
+    );
+  }
+  return blocks;
+}
+
 function policyOf(field: PluginFieldInstance): BlocksFieldOptions {
   // Delegated rather than repeated. The admin editor asks the same question of
   // the same declaration, and a field validated under one reading and edited
@@ -146,7 +171,8 @@ function judgedByRules(
   value: unknown,
   args: PluginFieldValidateArgs,
   breakpoints: BreakpointSet | undefined,
-  composition: (() => CompositionSetup | undefined) | undefined
+  composition: (() => CompositionSetup | undefined) | undefined,
+  blocks: BlockRegistryReader | undefined
 ): PluginFieldValidationResult | Promise<PluginFieldValidationResult> {
   const judge = (stored?: readonly BlockDocument[]) =>
     validateBlocksValue(
@@ -154,6 +180,7 @@ function judgedByRules(
       args.path,
       typeof args.field.label === "string" ? args.field.label : args.path,
       policyOf(args.field),
+      siteBlocksOf(blocks),
       // The set this factory was built with; the empty set otherwise,
       // which the engine treats permissively (a breakpoint reference warns).
       breakpoints ?? siteBreakpoints(),
@@ -262,9 +289,23 @@ export function blocksFieldType(
    * how a component's hosts are found. A getter, because the plugin knows its
    * store only once it is installed; absent, only the document's own rules run.
    */
-  composition?: () => CompositionSetup | undefined
+  composition?: () => CompositionSetup | undefined,
+  /**
+   * The site's block registry, whose nesting rules, locks and bindings a
+   * document is judged by. Absent, a document's validation throws rather than
+   * judging it against no blocks.
+   */
+  blocks?: BlockRegistryReader,
+  /**
+   * What a page's own code is judged with: the site code's declared policy
+   * and the site's origin. Handed in when the field type is built rather
+   * than read from the setup, so a dev server's config reload, which builds
+   * the field type again from a definition whose `init` never runs, keeps
+   * judging it. Absent, a change to page code is refused.
+   */
+  pageCode?: PageCodeJudgeDeps
 ): PluginFieldType {
-  return {
+  return withPageCodeJudged(composition, pageCode, {
     type: BLOCKS_TYPE,
     storage: "json",
     component: BLOCKS_FIELD_COMPONENT,
@@ -293,7 +334,7 @@ export function blocksFieldType(
       const emptied = value === null || value === undefined || value === "";
       const verdict = emptied
         ? true
-        : judgedByRules(value, args, breakpoints, composition);
+        : judgedByRules(value, args, breakpoints, composition, blocks);
       const label =
         typeof args.field.label === "string" ? args.field.label : args.path;
       // The classes a write adds, and the breakpoints it brings styles or
@@ -322,6 +363,7 @@ export function blocksFieldType(
             : await newBindingIssues(value, args, label, {
                 shapesOf: bindingShapes,
                 storedForms,
+                blocks: siteBlocksOf(blocks),
                 ...(templates === undefined ? {} : { templates }),
                 ...(maxNodes === undefined ? {} : { maxNodes }),
                 // A list's item bindings, against its query's rows.
@@ -411,7 +453,10 @@ export function blocksFieldType(
           args,
           label,
           composition?.()?.onLayersLockUnjudged,
-          composition?.()?.openBreakpointRemoval
+          composition?.()?.openBreakpointRemoval,
+          // The site's blocks, so a block stored at an older version is
+          // judged upgraded, as the editor saves it.
+          blocks?.migrationSource()
         ).then(locks =>
           classes().then(found =>
             withLockIssues(
@@ -537,7 +582,7 @@ export function blocksFieldType(
         return `z.object({ formatVersion: z.literal(${DOCUMENT_FORMAT_VERSION}), kind: ${kindSchema}, nodes: z.array(z.unknown()) }).passthrough()`;
       },
     },
-  };
+  });
 }
 
 /**
@@ -548,3 +593,61 @@ export function blocksFieldType(
  * breakpoint-aware instance instead.
  */
 export const BLOCKS_FIELD_TYPE: PluginFieldType = blocksFieldType();
+
+/** Whether a blocks value holds custom CSS, its own or any block's. */
+function holdsCustomCss(value: unknown): boolean {
+  const held = customCssHeldBy(value);
+  return held.document !== null || held.blocks.length > 0;
+}
+
+/**
+ * The field type with a page's own code and the value's custom CSS judged
+ * too, on any write that changes either, whatever the document's own rules
+ * answered, so one round fixes all: who may change them, what can't be
+ * stored, and what the site's declared policy would block unacknowledged
+ * (`page-code-judgement`, `custom-css-judgement`).
+ */
+function withPageCodeJudged(
+  composition: (() => CompositionSetup | undefined) | undefined,
+  pageCode: PageCodeJudgeDeps | undefined,
+  type: PluginFieldType
+): PluginFieldType {
+  const judged = type.validate;
+  if (judged === undefined) return type;
+  return {
+    ...type,
+    // Run on every write, whatever else is set up: with no write behind the
+    // value, code and CSS are refused as from nobody.
+    validate: (value, args) => {
+      const answered = judged(value, args);
+      // No write, and neither code nor CSS: nothing of either to judge.
+      if (
+        args.write === undefined &&
+        pageCodeOf(value) === null &&
+        !holdsCustomCss(value)
+      ) {
+        return answered;
+      }
+      const label =
+        typeof args.field.label === "string" ? args.field.label : args.path;
+      // One read of the stored forms the write changes, for both.
+      const stored = onceAsked(changedFormsBaseline(args));
+      return Promise.resolve(answered).then(async verdict => {
+        const code = await pageCodeIssues(value, args, label, pageCode, stored);
+        const css = await customCssIssues(
+          value,
+          args,
+          label,
+          stored,
+          // Where saved sections and components are kept, once the setup
+          // is installed.
+          {
+            patterns: composition?.()?.patterns,
+            components: composition?.()?.store,
+          }
+        );
+        return withLockIssues(verdict, [...code, ...css], args.path);
+      });
+    },
+  };
+}

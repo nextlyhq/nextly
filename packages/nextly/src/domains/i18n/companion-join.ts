@@ -21,10 +21,18 @@ import {
   lockedForRead,
   type ReadingAdapter,
 } from "../../shared/lib/read-transaction-scope";
+import { RELEASE_PUBLISHED_STATUS } from "../releases/release-scope";
 import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 import { draftsKeptByPart } from "../versions/part-drafts";
 
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
+import {
+  documentLanguageKey,
+  fieldProvenanceOf,
+  languageOutOfDateSql,
+  type FieldProvenance,
+  type ProvenanceScope,
+} from "./provenance/field-status";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
 import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
 import type { TranslationFilterState } from "./translation-filter-states";
@@ -44,6 +52,25 @@ export interface LocalizedFieldRef {
   name: string;
   /** Physical companion column — snake_case (e.g. `meta_title`). Used for SQL/lookup. */
   column: string;
+  /**
+   * The field is unique. A unique value identifies one document in one
+   * language, so it is read in the requested language alone and never filled
+   * from a fallback language: filled, a read would show a value its own
+   * language's lookup can never find.
+   */
+  unique?: boolean;
+  /**
+   * The column does not store text: a number, a boolean, a date, a decimal or
+   * JSON. Such a value is never an empty string, and comparing the column with
+   * one fails the query on PostgreSQL and is coerced on MySQL (where `0` or
+   * `false` would read as blank), so it is non-blank when not null.
+   */
+  nonText?: boolean;
+  /**
+   * The field's storage is JSON (a structure, a JSON value, a list kept as one), which some
+   * databases hand back as text: only such a field's text is read back to the value it encodes.
+   */
+  json?: boolean;
 }
 
 /** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */
@@ -60,12 +87,27 @@ export function resolveLocalizedValue(
   perLocale: Record<string, unknown>,
   chain: string[]
 ): unknown {
+  return resolveLocalizedSource(perLocale, chain).value;
+}
+
+/**
+ * {@link resolveLocalizedValue}, with the language the value came from: the
+ * first language of `chain` holding a non-blank value, or `null` where none
+ * does. The one walk both answer from.
+ */
+export function resolveLocalizedSource(
+  perLocale: Record<string, unknown>,
+  chain: readonly string[]
+): { value: unknown; locale: string | null } {
   for (const code of chain) {
     const value = perLocale[code];
-    if (!isBlank(value)) return value;
+    if (!isBlank(value)) return { value, locale: code };
   }
-  return null;
+  return { value: null, locale: null };
 }
+
+/** The key a read's per-field source languages are attached under (`sources`). */
+export const SOURCE_LOCALES_KEY = "_sources";
 
 /** A minimal Drizzle-select surface so this helper stays adapter/dialect agnostic. */
 interface SelectableDb {
@@ -106,6 +148,20 @@ export interface PopulateCompanionArgs {
    * would silently treat every row in the other states as non-matching.
    */
   statusValues?: readonly string[];
+  /**
+   * The documents a due release has made public that this read admits (the
+   * release decisions' `reveal`). A release publishes each language's row as
+   * it stands, so a revealed document's rows are read whatever their status,
+   * as the release will publish them. Left out, a document the read admits
+   * shows no translated value until the release is applied.
+   */
+  revealed?: ReadonlySet<unknown>;
+  /**
+   * Also attach, on each row, the language each translatable value came from
+   * (`_sources`, {@link SOURCE_LOCALES_KEY}): `null` for a value no language
+   * holds.
+   */
+  sources?: boolean;
   /**
    * Also take each translation row's version counter, for a read whose version comes out of this
    * statement rather than one of its own: the translation table's runtime model does not declare
@@ -199,10 +255,12 @@ export async function populateCompanionFieldsByLanguage(
     fillCompanionFields({
       localizedFields,
       statusValues: args.statusValues,
+      revealed: args.revealed,
       idKey: args.idKey,
       rows: language.rows,
       localeChain: language.localeChain,
       companionRows,
+      sources: args.sources,
     });
   }
   return companionRows;
@@ -446,23 +504,35 @@ export function fillCompanionFields(args: {
   localizedFields: LocalizedFieldRef[];
   localeChain: string[];
   statusValues?: readonly string[];
+  /** See `revealed` on {@link PopulateCompanionArgs}. */
+  revealed?: ReadonlySet<unknown>;
   idKey?: string;
+  /** Also attach each value's source language (`PopulateCompanionArgs.sources`). */
+  sources?: boolean;
 }): void {
   const idKey = args.idKey ?? "id";
   const byParent = indexCompanionRowsByParent(
     args.companionRows,
-    args.statusValues
+    args.statusValues,
+    args.revealed
   );
 
+  // A unique field is read in the requested language alone (`LocalizedFieldRef.unique`).
+  const ownLanguage = args.localeChain.slice(0, 1);
   for (const row of args.rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
+    const found: Record<string, string | null> = {};
     for (const field of args.localizedFields) {
+      const chain = field.unique === true ? ownLanguage : args.localeChain;
       const perLocaleValue: Record<string, unknown> = {};
-      for (const code of args.localeChain) {
+      for (const code of chain) {
         perLocaleValue[code] = perLocaleRows[code]?.[field.column];
       }
-      row[field.name] = resolveLocalizedValue(perLocaleValue, args.localeChain);
+      const picked = resolveLocalizedSource(perLocaleValue, chain);
+      row[field.name] = picked.value;
+      if (args.sources) found[field.name] = picked.locale;
     }
+    if (args.sources) row[SOURCE_LOCALES_KEY] = found;
   }
 }
 
@@ -632,6 +702,8 @@ export interface PopulateCompanionAllArgs {
    * draft translation. Undefined = no filter (admin / no per-locale status).
    */
   statusValues?: readonly string[];
+  /** See `revealed` on {@link PopulateCompanionArgs}. */
+  revealed?: ReadonlySet<unknown>;
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
   /** See {@link CompanionReadBudget.maxParams}. */
@@ -669,7 +741,11 @@ export async function populateCompanionFieldsAllLocales(
   });
   if (companionRows === undefined) return;
 
-  const byParent = indexCompanionRowsByParent(companionRows, args.statusValues);
+  const byParent = indexCompanionRowsByParent(
+    companionRows,
+    args.statusValues,
+    args.revealed
+  );
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
@@ -681,6 +757,19 @@ export async function populateCompanionFieldsAllLocales(
       row[field.name] = keyed;
     }
   }
+}
+
+/**
+ * `column` in `states`: an equality for one, a set for several, and no row
+ * for none (an empty `IN ()` two dialects refuse).
+ */
+function statusIn(column: SQL, states: readonly string[]): SQL {
+  if (states.length === 0) return sql`1=0`;
+  if (states.length === 1) return sql`${column} = ${states[0]}`;
+  return sql`${column} IN (${sql.join(
+    states.map(state => sql`${state}`),
+    sql`, `
+  )})`;
 }
 
 /**
@@ -701,6 +790,11 @@ export function buildLocalizedOrderExpr(args: {
    * otherwise).
    */
   statusValues?: readonly string[];
+  /**
+   * The column does not store text (`LocalizedFieldRef.nonText`): never blank,
+   * and never compared with an empty string.
+   */
+  nonText?: boolean;
 }): SQL {
   const {
     companionTableName,
@@ -712,10 +806,10 @@ export function buildLocalizedOrderExpr(args: {
   const t = sql.identifier(companionTableName);
   const col = sql.identifier(columnName);
   const statusPredicate = statusMembership(t, statusValues);
-  const perLocale = localeChain.map(
-    code =>
-      sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate}), '')`
-  );
+  const perLocale = localeChain.map(code => {
+    const value = sql`(SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate})`;
+    return args.nonText === true ? value : sql`NULLIF(${value}, '')`;
+  });
   // One language, as a read with fallback off asks: its value alone. SQLite
   // refuses COALESCE with a single argument.
   if (perLocale.length === 1) return perLocale[0];
@@ -784,6 +878,12 @@ export function buildTranslationStatusCondition(args: {
   mainIdColumn: unknown;
   /** Localized companion columns (snake_case) for the non-blank test. */
   localizedColumns: string[];
+  /**
+   * Those of `localizedColumns` that do not store text
+   * (`LocalizedFieldRef.nonText`): non-blank when not null, never compared
+   * with an empty string.
+   */
+  nonTextColumns?: readonly string[];
   /** Whether the companion carries `_status` (draft/published filters need it). */
   hasStatus: boolean;
   /**
@@ -796,6 +896,17 @@ export function buildTranslationStatusCondition(args: {
   hasUpdatedAt?: boolean;
   defaultLocale: string;
   filter: TranslationStatusFilter;
+  /**
+   * The collection or Single, where its values' provenance is recorded (the table is there):
+   * `stale` then judges a language by its recorded values where it has any.
+   */
+  provenance?: ProvenanceScope;
+  /**
+   * The states the `published` filter counts as published: the workflow's
+   * public states, as a public read resolved them. Absent, the one state
+   * named `published`.
+   */
+  publicStates?: readonly string[];
 }): SQL | undefined {
   const {
     companionTableName,
@@ -813,12 +924,15 @@ export function buildTranslationStatusCondition(args: {
   // below needs the SAME non-blank rule applied to an ALIASED copy of this table. Two spellings of
   // "this locale has content" would let one filter disagree with another about the same row, which
   // is the two-tab defect this function already carries a fix for.
+  const nonText = new Set(args.nonTextColumns ?? []);
   const nonBlankOn = (ref: CompanionTableRef): SQL =>
     localizedColumns.length > 0
       ? sql.join(
           localizedColumns.map(c => {
             const col = sql.identifier(c);
-            return sql`(${ref}.${col} IS NOT NULL AND ${ref}.${col} <> '')`;
+            return nonText.has(c)
+              ? sql`(${ref}.${col} IS NOT NULL)`
+              : sql`(${ref}.${col} IS NOT NULL AND ${ref}.${col} <> '')`;
           }),
           sql` OR `
         )
@@ -850,7 +964,7 @@ export function buildTranslationStatusCondition(args: {
       // with non-blank content (spec §8's blank=untranslated rule), so a
       // status with nothing written is untranslated with a status attached,
       // not a draft translation.
-      return sql`EXISTS (${rowFor(sql`${t}.${sql.identifier("_status")} = ${state} AND (${nonBlank})`)})`;
+      return sql`EXISTS (${rowFor(sql`${statusIn(sql`${t}.${sql.identifier("_status")}`, state === "published" && args.publicStates ? args.publicStates : [state])} AND (${nonBlank})`)})`;
     case "stale":
       // Translated, but the source moved afterwards.
       //
@@ -869,6 +983,7 @@ export function buildTranslationStatusCondition(args: {
         locale,
         defaultLocale,
         nonBlankOn,
+        provenance: args.provenance,
       });
     default:
       return undefined;
@@ -917,6 +1032,7 @@ function buildStaleCondition(args: {
   locale: string;
   defaultLocale: string;
   nonBlankOn: (ref: CompanionTableRef) => SQL;
+  provenance?: ProvenanceScope;
 }): SQL {
   const { table, mainIdColumn, locale, defaultLocale, nonBlankOn } = args;
   // Prefixed, because an alias shares a namespace with the caller's own tables and a bare `src`
@@ -931,13 +1047,39 @@ function buildStaleCondition(args: {
     WHERE ${tgt}.${parent} = ${mainIdColumn}
     AND ${tgt}.${localeCol} = ${locale}
     AND (${nonBlankOn(tgt)})
-    AND EXISTS (
-      SELECT 1 FROM ${table} ${src}
-      WHERE ${src}.${parent} = ${mainIdColumn}
-      AND ${src}.${localeCol} = ${defaultLocale}
-      AND ${sourceMovedAfterTarget(src, tgt)}
-    )
+    AND ${languageStale({
+      byStamp: sql`EXISTS (
+        SELECT 1 FROM ${table} ${src}
+        WHERE ${src}.${parent} = ${mainIdColumn}
+        AND ${src}.${localeCol} = ${defaultLocale}
+        AND ${sourceMovedAfterTarget(src, tgt)}
+      )`,
+      entryId: sql`${tgt}.${parent}`,
+      locale: sql`${locale}`,
+      provenance: args.provenance,
+    })}
   )`;
+}
+
+/**
+ * Whether a document's language is stale: by its recorded values where provenance is recorded
+ * (`languageOutOfDateSql`), else by `byStamp` alone. ONE composition, used by the filter arm
+ * and by {@link readStaleLocales}, so the worklist and the overview cannot disagree.
+ */
+function languageStale(args: {
+  byStamp: SQL;
+  entryId: SQL;
+  locale: SQL;
+  provenance: ProvenanceScope | undefined;
+}): SQL {
+  return args.provenance
+    ? languageOutOfDateSql({
+        scope: args.provenance,
+        entryId: args.entryId,
+        locale: args.locale,
+        byStamp: args.byStamp,
+      })
+    : args.byStamp;
 }
 
 /** A table alias as `sql.identifier` produces it — derived, so it cannot drift from that call. */
@@ -1012,8 +1154,20 @@ export interface LocaleTranslationMeta {
    * what does not apply — and here the distinction carries weight, because "not stale" and "no
    * timestamps to compare" are different answers and only one of them is a claim about the
    * content. A row written before `_updated_at` existed is unknown, never up to date.
+   *
+   * Where the language's values have a recorded origin, it is decided by them instead
+   * (`languageOutOfDateSql`): stale exactly when one of its fields is out of date (`fields`),
+   * whatever the stamps say.
    */
   stale?: boolean;
+  /**
+   * Where each of this language's values came from, by field name, and whether its source changed
+   * since (`outOfDate`). Absent where nothing is recorded for the language: values written before
+   * origins were recorded, or a site whose table is not there yet.
+   *
+   * @experimental Until per-field provenance is complete.
+   */
+  fields?: Record<string, FieldProvenance>;
 }
 
 export interface TranslationStatusArgs {
@@ -1038,6 +1192,13 @@ export interface TranslationStatusArgs {
    * is known — never that everything is current.
    */
   staleness?: { companionTableName: string; dialect: SupportedDialect };
+  /**
+   * The collection or Single the rows are of, where its values' provenance is recorded (the table
+   * is there): each language is then judged by its recorded values where it has any
+   * (`languageOutOfDateSql`), and each one's fields are reported. Omitted, every language is
+   * judged by its stamp alone.
+   */
+  provenance?: ProvenanceScope & { dialect: SupportedDialect };
   idKey?: string;
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
@@ -1058,6 +1219,12 @@ export interface TranslationStatusArgs {
    * draft-only translation as present. Undefined = report every row (admin / no per-locale status).
    */
   statusValues?: readonly string[];
+  /**
+   * The documents a due release reveals to this read (`PopulateCompanionArgs.revealed`): public
+   * in every language before the release's own rows are written, as the read already admits
+   * them, so each of their languages is reported as the release will publish it.
+   */
+  revealed?: ReadonlySet<unknown>;
 }
 
 /**
@@ -1126,7 +1293,8 @@ async function readStaleLocales(
   dialect: SupportedDialect,
   ids: (string | number)[],
   locales: string[],
-  defaultLocale: string
+  defaultLocale: string,
+  provenance?: ProvenanceScope
 ): Promise<Set<string>> {
   const out = new Set<string>();
   if (ids.length === 0 || locales.length === 0) return out;
@@ -1148,12 +1316,17 @@ async function readStaleLocales(
         and(
           inArray(stamp.parent as never, ids),
           inArray(stamp.locale as never, locales),
-          sql`EXISTS (
-            SELECT 1 FROM ${target} ${source}
-            WHERE ${source}.${parent} = ${target}.${parent}
-            AND ${source}.${localeCol} = ${defaultLocale}
-            AND ${sourceMovedAfterTarget(source, target)}
-          )`
+          languageStale({
+            byStamp: sql`EXISTS (
+              SELECT 1 FROM ${target} ${source}
+              WHERE ${source}.${parent} = ${target}.${parent}
+              AND ${source}.${localeCol} = ${defaultLocale}
+              AND ${sourceMovedAfterTarget(source, target)}
+            )`,
+            entryId: sql`${target}.${parent}`,
+            locale: sql`${target}.${localeCol}`,
+            provenance,
+          })
         )
       );
   } catch (error) {
@@ -1222,12 +1395,23 @@ export async function populateTranslationStatus(
         args.staleness.dialect,
         ids,
         locales,
-        defaultLocale
+        defaultLocale,
+        args.provenance
       )
     : new Set<string>();
+  // Each language's fields' provenance, for the page in one read.
+  const fieldProvenance = args.provenance
+    ? await fieldProvenanceOf(
+        db,
+        args.provenance.dialect,
+        args.provenance,
+        ids.map(String)
+      )
+    : undefined;
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
+    const revealed = args.revealed?.has(row[idKey]) === true;
     const meta: Record<string, LocaleTranslationMeta> = {};
     for (const code of locales) {
       meta[code] = buildLocaleMeta({
@@ -1237,8 +1421,12 @@ export async function populateTranslationStatus(
         defaultLocale,
         hasStatus,
         statusValues: args.statusValues,
+        revealed,
         isStale: (locale: string) =>
           staleKeys.has(`${String(row[idKey])}::${locale}`),
+        fields: fieldProvenance?.get(
+          documentLanguageKey(String(row[idKey]), code)
+        ),
       });
     }
     markPendingChanges(
@@ -1284,13 +1472,16 @@ export async function populateTranslationStatus(
  */
 function indexCompanionRowsByParent(
   companionRows: readonly Record<string, unknown>[],
-  statusValues: readonly string[] | undefined
+  statusValues: readonly string[] | undefined,
+  /** Parents a due release reveals: their rows are taken whatever their status. */
+  revealed?: ReadonlySet<unknown>
 ): Map<unknown, Record<string, Record<string, unknown>>> {
   const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
   for (const cr of companionRows) {
     if (
       statusValues !== undefined &&
-      !statusValues.includes(cr._status as string)
+      !statusValues.includes(cr._status as string) &&
+      revealed?.has(cr._parent) !== true
     ) {
       continue;
     }
@@ -1354,6 +1545,11 @@ function buildLocaleMeta(args: {
   hasStatus: boolean;
   statusValues: readonly string[] | undefined;
   /**
+   * Whether a due release reveals the document: each language's row is then taken whatever its
+   * status, and reported in the status the release publishes it in.
+   */
+  revealed: boolean;
+  /**
    * Whether the database reported this locale as stale against the source.
    *
    * `false` covers both "the source has not moved" and "nothing is known", because the caller
@@ -1361,10 +1557,14 @@ function buildLocaleMeta(args: {
    * for, and the answer to both is the same — do not mark it.
    */
   isStale: (locale: string) => boolean;
+  /** The language's fields' provenance, where recorded. */
+  fields?: Record<string, FieldProvenance>;
 }): LocaleTranslationMeta {
   const { code, perLocaleRows, localizedFields, defaultLocale, hasStatus } =
     args;
-  const companionRow = rowInStatusScope(perLocaleRows[code], args.statusValues);
+  const companionRow = args.revealed
+    ? perLocaleRows[code]
+    : rowInStatusScope(perLocaleRows[code], args.statusValues);
 
   const hasContent =
     !!companionRow &&
@@ -1373,7 +1573,10 @@ function buildLocaleMeta(args: {
     translated: code === defaultLocale ? true : hasContent,
   };
 
-  const status = companionRow?._status;
+  const status =
+    args.revealed && companionRow
+      ? RELEASE_PUBLISHED_STATUS
+      : companionRow?._status;
   if (hasStatus && typeof status === "string") entry.status = status;
 
   // Only ever set to `true`. Left absent when the comparison cannot answer, so a consumer reading
@@ -1386,6 +1589,9 @@ function buildLocaleMeta(args: {
   // same-second writes would make every source locale report itself stale — so the state the
   // guard asserts is spelled out rather than inferred. No test separates the two mechanisms, and
   // none can while both hold.
+  // Only beside a row this read may see: a language's provenance tells what its values are, so a
+  // row a status-scoped read hides (a draft on a published read) hides its provenance too.
+  if (args.fields !== undefined && companionRow) entry.fields = args.fields;
   if (code !== defaultLocale && hasContent && args.isStale(code)) {
     entry.stale = true;
   }

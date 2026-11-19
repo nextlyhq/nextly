@@ -156,6 +156,30 @@ export interface ResolveSchemaArgs {
   deferredExtends?: readonly unknown[];
   /** Defaults to `DEFAULT_TABLE_NAME_RESOLVERS`. */
   resolvers?: TableNameResolvers;
+  /**
+   * The Builder manifest, where the caller has already read it: it is merged as it is and the
+   * file is not read again, so everything the caller takes from the manifest comes from one read.
+   */
+  manifest?: Awaited<ReturnType<typeof loadUiSchema>>;
+}
+
+/**
+ * The Builder manifest to merge: the one the caller already read, else the file's, or null where
+ * reading it reports the file absent.
+ */
+async function manifestOf(
+  args: ResolveSchemaArgs
+): Promise<Awaited<ReturnType<typeof loadUiSchema>> | null> {
+  if (args.manifest !== undefined) return args.manifest;
+  try {
+    return await loadUiSchema({
+      projectRoot: args.projectRoot,
+      uiSchemaFile: args.config.db.uiSchemaFile,
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code !== "ENOENT") throw error;
+    return null;
+  }
 }
 
 /**
@@ -192,15 +216,7 @@ export async function resolveDeclaredSchema(
     ),
   ];
 
-  let manifest: Awaited<ReturnType<typeof loadUiSchema>> | null = null;
-  try {
-    manifest = await loadUiSchema({
-      projectRoot: args.projectRoot,
-      uiSchemaFile: args.config.db.uiSchemaFile,
-    });
-  } catch (error) {
-    if ((error as { code?: string }).code !== "ENOENT") throw error;
-  }
+  const manifest = await manifestOf(args);
 
   let builder: DeclaredEntity[] = [];
   let builderJunctions: string[] = [];

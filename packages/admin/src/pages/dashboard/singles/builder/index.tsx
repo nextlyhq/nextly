@@ -3,136 +3,90 @@
 /**
  * Single Builder — Create Page
  *
- * Mirrors the Collection create flow: opens BuilderSettingsModal directly,
- * on Continue creates the Single with its system fields plus the starting
- * field its "How is this edited?" answer names, and navigates to [slug].tsx
- * for field editing. Same modal-host pattern preserves
- * backwards-compat with every "New single" link in the admin.
+ * Mirrors the Collection create flow: opens the new-entity dialog directly,
+ * and Create makes the Single a pending change, waiting in this tab's unsaved
+ * entities with the starting field the dialog's answer names, then opens its
+ * editor on [slug].tsx, whose first save creates it. Same modal-host pattern
+ * preserves backwards-compat with every "New single" link in the admin.
  */
 
 import { useEffect, useState } from "react";
 
-import {
-  BuilderSettingsModal,
-  type BuilderSettingsValues,
-} from "@admin/components/features/schema-builder";
+import type { BuilderSettingsValues } from "@admin/components/features/schema-builder";
+import { NewEntityDialog } from "@admin/components/features/schema-builder/new-entity/NewEntityDialog";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { useCreateSingle } from "@admin/hooks/queries";
-import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { toKebabName } from "@admin/lib/builder";
-import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { startingFields } from "@admin/lib/builder/starting-field";
+import {
+  addUnsavedEntities,
+  type UnsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
 import { navigateTo } from "@admin/lib/navigation";
-import { schemaFileApi } from "@admin/services/schemaFileApi";
+import type { FieldDefinition } from "@admin/types/collection";
 
 import { SINGLE_BUILDER_CONFIG } from "./builder-config";
 
 export default function SingleBuilderPage(): React.ReactElement | null {
   const [open, setOpen] = useState(true);
-  const { mutate: createSingle, isPending } = useCreateSingle();
 
   // Why: a closed modal on a page that does nothing else is a dead end —
   // route back to the listing as soon as the user dismisses.
   useEffect(() => {
-    if (!open && !isPending) {
+    if (!open) {
       navigateTo(ROUTES.BUILDER_SINGLES);
     }
-  }, [open, isPending]);
+  }, [open]);
 
-  const handleSubmit = (values: BuilderSettingsValues) => {
+  const handleSubmit = (
+    values: BuilderSettingsValues,
+    templateFields: FieldDefinition[],
+    needed: Omit<UnsavedEntity, "token">[]
+  ) => {
     const singular = values.singularName.trim();
     // Why: registry slug is kebab-case (web URL convention + matches the
     // entry-form slug validator). Table name is derived downstream by
     // generateTableName, which converts hyphens to underscores.
     const slug = values.slug?.trim() || toKebabName(singular);
-    // The field the "How is this edited?" answer starts the Single with (the
-    // Page Builder's blocks field, say), or none for standard fields. Sent to
-    // the server and written to ui-schema.json alike, so the two agree.
-    const fields = startingFields(values.startingFieldType ?? null);
-
-    createSingle(
+    // Held with the entities the template needs and makes too, all or none,
+    // so it is never held without them.
+    const added = addUnsavedEntities([
+      ...needed,
       {
-        slug,
-        label: singular,
-        description: values.description,
-        admin: {
-          icon: values.icon,
-          // Advanced tab. Code-first config can still set admin.group /
-          // admin.order; we just don't surface them in the create modal.
-        },
-        // Status passes through; backend handles the column synthesis on
-        // first enable. Not yet on ApiSingle's typed shape on the create
-        // payload — cast through the Partial<ApiSingle>.
-        ...(values.status === true ? { status: true } : {}),
-        // i18n: persist the Internationalization flag at create. Fields are empty here, so the
-        // companion has no columns yet — it is provisioned when the first translatable field is
-        // added on the builder page (updateSingleSchema/applySchemaChanges reconcile).
-        ...(values.i18n === true ? { localized: true } : {}),
-        // Version history opt-in at create; the server resolves the boolean.
-        ...(values.versions === true ? { versions: true } : {}),
-        // Retention: only forwarded when set (else the server default 50
-        // applies); false = unlimited, a number = keep that many.
-        ...(values.versionsMaxPerDoc !== undefined
-          ? { versionsMaxPerDoc: values.versionsMaxPerDoc }
-          : {}),
-        // Cache revalidation is on by default, so only forward an explicit
-        // opt-out; omitting the key leaves the server default (on).
-        ...(values.revalidate === false ? { revalidate: false } : {}),
-        // Webhook recording is on by default, so only forward an explicit
-        // opt-out; omitting the key leaves the server default (on).
-        ...(values.webhooks === false ? { webhooks: false } : {}),
-        // System columns are added by the server; this carries only the
-        // starting field, and the user adds the rest on the next page.
-        fields,
+        kind: "single",
+        address: slug,
+        settings: { ...values, singularName: singular, slug },
+        // The field the dialog's answer starts the Single with (the Page
+        // Builder's blocks field, say), or none for standard fields; the save
+        // sends it to the server and to ui-schema.json alike.
+        fields: [
+          ...startingFields(values.startingFieldType ?? null),
+          // The template's fields after the starting one, as picked.
+          ...templateFields,
+        ],
       },
-      {
-        onSuccess: () => {
-          // Mirror the new single to ui-schema.json (best-effort;
-          // a file-write failure warns but never blocks navigation). Wrapped in
-          // a void IIFE so the mutation callback stays synchronous.
-          void (async () => {
-            try {
-              await schemaFileApi.writeSingle(
-                singleEntityFromSettings(
-                  slug,
-                  // The name the form collected, which is not yet on `values` at
-                  // create time.
-                  { ...values, singularName: singular },
-                  fields
-                )
-              );
-            } catch (err) {
-              const m = (err as { message?: string })?.message;
-              toast.warning(
-                `Single created, but ui-schema.json could not be updated${m ? `: ${m}` : ""}.`
-              );
-            }
-            toast.success("Single created");
-            navigateTo(buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug }));
-          })();
-        },
-        onError: err => {
-          // A refused address names its reason per field; the envelope's own message is only
-          // "Validation failed.", which says neither what was refused nor why.
-          toast.error(
-            apiErrorMessage(err, "Could not create Single. Please try again.")
-          );
-        },
-      }
-    );
+    ]);
+    // The dialog's checks count an unsaved entity's address as used, so this
+    // is reached only if another unsaved Single took it meanwhile.
+    if (!added) {
+      toast.error(
+        needed.length === 0
+          ? "A Single not saved yet already uses this address. Choose another."
+          : "An entity not saved yet already uses this address or one the template needs. Choose another."
+      );
+      return;
+    }
+    navigateTo(buildRoute(ROUTES.BUILDER_SINGLES_EDIT, { slug }));
   };
 
   return (
     <PageContainer>
-      <BuilderSettingsModal
+      <NewEntityDialog
         open={open}
-        mode="create"
         config={SINGLE_BUILDER_CONFIG}
-        initialValues={null}
         onCancel={() => setOpen(false)}
-        onSubmit={handleSubmit}
+        onCreate={handleSubmit}
       />
     </PageContainer>
   );

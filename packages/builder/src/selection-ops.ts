@@ -50,10 +50,10 @@ import { blockDeletion } from "./delete-block";
 import { blockDuplication } from "./duplicate-block";
 import { lockOp } from "./inspector";
 import { keyboardMovePosition } from "./keyboard-move";
-import { layerLabel } from "./layers";
 import { lockedBlockSentence } from "./lock-refusal";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";
 import type { BuilderOp } from "./op-vocabulary";
+import { layerLabel } from "./panels/layers/layers";
 import { normalizeSelection } from "./selection";
 
 /** A planned group, with what to say about it. */
@@ -101,14 +101,20 @@ export type SelectionPlan = SelectionEdit | SelectionRefusal | null;
  * need a different guard per verb. The `reason` field is what separates a
  * refusal, and only a refusal carries one.
  */
-export function isRefusal(
-  plan: SelectionEdit | SelectionMove | SelectionRefusal | null
+export function isRefusal<T extends object>(
+  plan: T | SelectionRefusal | null
 ): plan is SelectionRefusal {
   return plan !== null && "reason" in plan;
 }
 
-/** "Hero title", or "3 blocks" once there is more than one. */
-function subjectOf(document: BlockDocument, ids: readonly string[]): string {
+/**
+ * "Hero title", or "3 blocks" once there is more than one. Exported so every
+ * verb on a selection names it the same way, copying included.
+ */
+export function subjectOf(
+  document: BlockDocument,
+  ids: readonly string[]
+): string {
   if (ids.length !== 1) return `${ids.length} blocks`;
   const only = ids[0];
   const node = only === undefined ? undefined : findIn(document.nodes, only);

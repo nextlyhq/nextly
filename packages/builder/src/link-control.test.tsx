@@ -6,7 +6,7 @@
  * them.
  *
  * - The link is one combobox row; the target, rel and entry props get no row
- *   of their own, and Open in new tab and Link options appear only once a
+ *   of their own, and Open in a new tab and Link options appear only once a
  *   link is set.
  * - The keyboard chooses: arrows move, Enter takes the active row, and typed
  *   text that reads as an address puts "Use as a URL" first.
@@ -44,6 +44,7 @@ import type {
 } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";
+import { labelNotInName } from "./label-in-name.fixture";
 import { commitLinkChanges } from "./link-control";
 
 beforeAll(() => {
@@ -69,7 +70,7 @@ afterEach(() => {
 });
 
 const TARGET = {
-  label: "Open link in",
+  label: "Open in a new tab",
   optionLabels: { _self: "This tab", _blank: "New tab" },
   type: "select",
   options: ["_self", "_blank"],
@@ -126,6 +127,39 @@ function register(): void {
         example: { props: {} },
         editor: { label: "Box" },
         props: { link: { label: "Link", role: "content", type: "url" } },
+        render: () => null,
+      },
+      {
+        // As the core Card declares its link: a hint, the entry, the new tab
+        // in Content, and the link relationship in Advanced.
+        name: "acme/card",
+        version: 1,
+        description: "A card.",
+        example: { props: {} },
+        editor: { label: "Card" },
+        props: {
+          link: {
+            label: "Link",
+            role: "content",
+            type: "url",
+            section: "Link",
+            hint: "The whole card becomes the link",
+          },
+          entryCollection: {
+            label: "Linked collection",
+            role: "content",
+            type: "text",
+            section: "Link",
+          },
+          entryId: {
+            label: "Linked entry",
+            role: "content",
+            type: "text",
+            section: "Link",
+          },
+          target: { ...TARGET, section: "Link" },
+          rel: { label: "Link relationship", type: "text", group: "advanced" },
+        },
         render: () => null,
       },
     ] as never,
@@ -221,10 +255,16 @@ describe("the link group", () => {
   it("draws one link row, and the new-tab and rel rows only once a link is set", () => {
     mount("acme/heading", {}, { findLinkTargets: targetsService() });
     expect(trigger().textContent).toBe("Search or paste a URL");
-    expect(screen.queryByText("Open link in")).toBeNull();
+    // The words it draws are in its name, in order, so a speech-input user
+    // saying them reaches it.
+    expect(trigger().getAttribute("aria-label")).toBe(
+      "Link: search or paste a URL"
+    );
+    expect(labelNotInName(trigger())).toBeNull();
+    expect(screen.queryByText("Open in a new tab")).toBeNull();
     expect(screen.queryByText("Link relationship")).toBeNull();
     expect(
-      screen.queryByRole("switch", { name: "Open in new tab" })
+      screen.queryByRole("switch", { name: "Open in a new tab" })
     ).toBeNull();
     expect(screen.queryByRole("button", { name: /Link options/ })).toBeNull();
     // The heading's other props keep their rows.
@@ -238,7 +278,7 @@ describe("the link group", () => {
       { findLinkTargets: targetsService() }
     );
     expect(
-      screen.getByRole("switch", { name: "Open in new tab" })
+      screen.getByRole("switch", { name: "Open in a new tab" })
     ).toBeDefined();
     expect(screen.getByRole("button", { name: /Link options/ })).toBeDefined();
   });
@@ -406,7 +446,7 @@ describe("the link group", () => {
       { href: "#faq" },
       { findLinkTargets: targetsService() }
     );
-    fireEvent.click(screen.getByRole("switch", { name: "Open in new tab" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Open in a new tab" }));
     expect(written(on)).toEqual({ href: "#faq", target: "_blank" });
     cleanup();
     clearBlocks();
@@ -415,7 +455,7 @@ describe("the link group", () => {
       { href: "#faq", target: "_blank" },
       { findLinkTargets: targetsService() }
     );
-    fireEvent.click(screen.getByRole("switch", { name: "Open in new tab" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Open in a new tab" }));
     expect(written(off)).toEqual({ href: "#faq" });
   });
 
@@ -450,6 +490,29 @@ describe("the link group", () => {
     fireEvent.change(search(), { target: { value: "example.com" } });
     fireEvent.keyDown(search(), { key: "Enter" });
     expect(written(editor)).toEqual({ link: "https://example.com" });
+  });
+});
+
+describe("a link placed across tabs, as a card's", () => {
+  it("says the link's hint under it, as the link's description", () => {
+    mount("acme/card", {}, { findLinkTargets: targetsService() });
+    const hint = screen.getByText("The whole card becomes the link");
+    expect(trigger().getAttribute("aria-describedby")).toBe(hint.id);
+  });
+
+  it("draws the new tab in Content and the link relationship in Advanced", () => {
+    mount(
+      "acme/card",
+      { link: "https://example.com" },
+      { findLinkTargets: targetsService() }
+    );
+    expect(
+      screen.getByRole("switch", { name: "Open in a new tab" })
+    ).toBeDefined();
+    // Not inside Content's link control: its own field in Advanced › HTML.
+    expect(screen.queryByRole("button", { name: /Link options/ })).toBeNull();
+    const html = document.querySelector('[data-section="html"]');
+    expect(html?.textContent).toContain("Link relationship");
   });
 });
 
@@ -673,7 +736,7 @@ describe("what the group reads of the block", () => {
     mount("acme/heading", { href: "javascript:alert(1)" }, undefined);
     expect(trigger().textContent).toBe("Search or paste a URL");
     expect(
-      screen.queryByRole("switch", { name: "Open in new tab" })
+      screen.queryByRole("switch", { name: "Open in a new tab" })
     ).toBeNull();
   });
 
@@ -684,7 +747,7 @@ describe("what the group reads of the block", () => {
       target: "_blank",
     });
     expect(
-      screen.queryByRole("switch", { name: "Open in new tab" })
+      screen.queryByRole("switch", { name: "Open in a new tab" })
     ).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Remove link" }));
     expect(written(editor)).toEqual({ kiosk: true, target: "_blank" });
@@ -694,7 +757,7 @@ describe("what the group reads of the block", () => {
     mountExtra("acme/default-link-heading", {});
     expect(trigger().getAttribute("aria-label")).toBe("Link: /pricing. Change");
     expect(
-      screen.getByRole("switch", { name: "Open in new tab" })
+      screen.getByRole("switch", { name: "Open in a new tab" })
     ).toBeDefined();
     // Nothing is stored, so there is nothing for ✕ to remove: it would leave
     // the default applying and look like a click that did nothing.
@@ -710,7 +773,7 @@ describe("what the group reads of the block", () => {
     // Cleared, the target would fall back to the default and the switch
     // would come straight back on.
     const editor = mountExtra("acme/new-tab-heading", { href: "/x" });
-    fireEvent.click(screen.getByRole("switch", { name: "Open in new tab" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Open in a new tab" }));
     expect(written(editor)).toEqual({ href: "/x", target: "_self" });
   });
 
@@ -718,7 +781,7 @@ describe("what the group reads of the block", () => {
     mountExtra("acme/new-tab-heading", { href: "/x" });
     expect(
       screen
-        .getByRole("switch", { name: "Open in new tab" })
+        .getByRole("switch", { name: "Open in a new tab" })
         .getAttribute("aria-checked")
     ).toBe("true");
   });

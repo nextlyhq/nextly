@@ -12,6 +12,10 @@
  * stored on the node as `name` and shown in Layers and here; visitors never
  * see it. One rename is one entry in the history.
  *
+ * **A block inside another it belongs to** says so: a picture in a gallery
+ * reads "Picture 2 · in Team photos", with "← Back to the gallery" under it,
+ * which selects the gallery.
+ *
  * **Two kinds of lock, said apart.** The block's own Layers lock is an edit of
  * the page, so the menu offers Unlock to anyone editing it. A lock set by the
  * block this one sits in is the containing block's own rule, written in code,
@@ -31,9 +35,10 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
+import type { ToolbarActionId } from "./canvas/toolbar-actions";
 import { layersLockChangeable, type BlockLockStatus } from "./inspector";
 import type { SharedBlockVerbs } from "./keyboard-actions";
-import type { ToolbarActionId } from "./toolbar-actions";
+import { useAskedSharedVerbs } from "./selection-offer";
 
 /**
  * The block verbs the card's menu runs, handed in by the host: the SAME verbs
@@ -77,6 +82,29 @@ export interface BlockCardProps {
   readonly verbs?: CardVerbs | undefined;
   /** The id the lock reason takes, so held controls can point at it. */
   readonly reasonId?: string | undefined;
+  /**
+   * The block it belongs to, where it sits in one that names its children
+   * (a picture in a gallery): the title it reads by while it has no name of
+   * its own, the words after it, and the way back to the block it is in.
+   */
+  readonly placedIn?: PlacedIn | undefined;
+  /**
+   * The region of the page's layout the block is in, while that region is
+   * edited in place ("Site header"): the title then reads "Navigation · in
+   * Site header", so the author always sees which document they are editing.
+   */
+  readonly inRegion?: string | undefined;
+}
+
+/** A block named by where it sits, and the way back to what it sits in. */
+export interface PlacedIn {
+  /** Its title while unnamed: "Picture 2". */
+  readonly title: string;
+  /** What follows the title: "in Team photos". */
+  readonly within: string;
+  /** The button's words: "← Back to the gallery". */
+  readonly backLabel: string;
+  readonly onBack: () => void;
 }
 
 export function BlockCard({
@@ -90,9 +118,12 @@ export function BlockCard({
   lockHeld,
   verbs,
   reasonId,
+  placedIn,
+  // Where it is while a region is edited in place, which only the title reads.
+  ...where
 }: BlockCardProps): React.JSX.Element {
   const [renaming, setRenaming] = React.useState(false);
-  const title = name === "" ? type : name;
+  const reading = readingOf(name, type, placedIn, where.inRegion);
   return (
     <div className="nx-block-card" data-block-card="">
       <div className="nx-block-card__head">
@@ -111,24 +142,13 @@ export function BlockCard({
               }}
             />
           ) : (
-            <h2
-              className="nx-block-card__title"
-              // Cut short on screen like the description below, so the whole
-              // name is in its tooltip for a pointer.
-              title={wholeTitle(name, type)}
-              onDoubleClick={
+            <CardTitle
+              reading={reading}
+              type={type}
+              onRename={
                 onRename === undefined ? undefined : () => setRenaming(true)
               }
-            >
-              {name === "" ? (
-                type
-              ) : (
-                <>
-                  {name}
-                  <span className="nx-block-card__type"> · {type}</span>
-                </>
-              )}
-            </h2>
+            />
           )}
           {/* One line under the name. Cut short on screen, so the whole
               sentence stays in the element, where a screen reader reads it,
@@ -140,7 +160,7 @@ export function BlockCard({
           )}
         </div>
         <CardMenu
-          title={title}
+          title={reading.own === "" ? type : reading.own}
           locked={lock.layers}
           onRename={
             onRename === undefined ? undefined : () => setRenaming(true)
@@ -150,8 +170,81 @@ export function BlockCard({
           verbs={verbs}
         />
       </div>
+      {/* Under the head, so the title still says first what is selected. */}
+      {placedIn === undefined ? null : <BackButton placedIn={placedIn} />}
       <LockLines lock={lock} reasonId={reasonId} />
     </div>
+  );
+}
+
+/** What a card's title reads: the block's own words, and what follows. */
+interface TitleReading {
+  /** Its name, else where it sits ("Picture 2"), else empty. */
+  readonly own: string;
+  /** What follows it: its type, or where it sits ("in Team photos"). */
+  readonly after: string;
+}
+
+/**
+ * The block's own name, else where it sits, else nothing but its type. In a
+ * region edited in place, its name or its type, then the region it is in.
+ */
+function readingOf(
+  name: string,
+  type: string,
+  placedIn: PlacedIn | undefined,
+  inRegion: string | undefined
+): TitleReading {
+  if (placedIn === undefined && inRegion !== undefined) {
+    return { own: name === "" ? type : name, after: `in ${inRegion}` };
+  }
+  return {
+    own: name === "" ? (placedIn?.title ?? "") : name,
+    after: placedIn === undefined ? type : placedIn.within,
+  };
+}
+
+/** The title: its type alone, or its own words and what follows them. */
+function CardTitle({
+  reading,
+  type,
+  onRename,
+}: {
+  reading: TitleReading;
+  type: string;
+  onRename: (() => void) | undefined;
+}): React.JSX.Element {
+  const { own, after } = reading;
+  return (
+    <h2
+      className="nx-block-card__title"
+      // Cut short on screen like the description below, so the whole
+      // name is in its tooltip for a pointer.
+      title={wholeTitle(own, type, after)}
+      onDoubleClick={onRename}
+    >
+      {own === "" ? (
+        type
+      ) : (
+        <>
+          {own}
+          <span className="nx-block-card__type"> · {after}</span>
+        </>
+      )}
+    </h2>
+  );
+}
+
+/** The way back to the block this one sits in. */
+function BackButton({ placedIn }: { placedIn: PlacedIn }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className="nx-block-card__back"
+      onClick={placedIn.onBack}
+    >
+      {placedIn.backLabel}
+    </button>
   );
 }
 
@@ -276,7 +369,11 @@ function CardMenu({
   );
 }
 
-/** The shared block verbs in the card's menu, after a separator. */
+/**
+ * The shared block verbs in the card's menu, after a separator, as the locks
+ * answer them: drawn only while the menu is open, so the locks are asked when
+ * it opens.
+ */
 function VerbItems({
   offered,
   verbs,
@@ -284,11 +381,15 @@ function VerbItems({
   offered: CardVerbs["actions"];
   verbs: CardVerbs | undefined;
 }): React.JSX.Element | null {
-  if (offered.length === 0) return null;
+  const all = useAskedSharedVerbs(verbs);
+  if (offered.length === 0 || verbs === undefined) return null;
+  const asked = all.filter(action =>
+    offered.some(each => each.id === action.id)
+  );
   return (
     <>
       <DropdownMenuSeparator />
-      {offered.map(action => (
+      {asked.map(action => (
         <MenuItem
           key={action.id}
           label={action.label}
@@ -327,9 +428,9 @@ function MenuItem({
   );
 }
 
-/** The card's title as one line: the author's name and the type, or the type. */
-function wholeTitle(name: string, type: string): string {
-  return name === "" ? type : `${name} · ${type}`;
+/** The card's title as one line: its own words and what follows, or the type. */
+function wholeTitle(own: string, type: string, after: string): string {
+  return own === "" ? type : `${own} · ${after}`;
 }
 
 /**

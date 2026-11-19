@@ -8,7 +8,7 @@
  * file, left that table on no record: the next migration, a collection's
  * included, was then refused with "table 'comp_<slug>' present in DB".
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,8 +29,10 @@ import { superAdminSession } from "../../../collections/__tests__/helpers/collec
 import type { CollectionService } from "../../../collections/services/collection-service";
 import { FieldGroupMetadataService } from "../../../field-groups/services/field-group-metadata-service";
 import { SingleMetadataService } from "../../../singles/services/single-metadata-service";
+import { SingleRegistryService } from "../../../singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../../versions/builder-versions";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 
 // A companion reconcile made to fail, by the one test that needs it to: every
 // other test runs the real one.
@@ -546,7 +548,9 @@ describe.each(getConfiguredTestDialects())(
       expect(rows.length).toBeGreaterThan(0);
     });
 
-    it("keeps a Single update's files, recorded nowhere, when its companion fails to follow", async () => {
+    // A Single's settings save that carries no values runs its own file, so the table changes as
+    // the file says and the file is recorded applied before the companion follows.
+    it("keeps a Single update's file recorded applied, its status failed, when its companion fails to follow", async () => {
       const t = await boot();
       await dispatchSingles(
         "createSingle",
@@ -577,10 +581,219 @@ describe.each(getConfiguredTestDialects())(
         /_notice_update\.sql$/.test(f)
       );
       expect(update).toBeDefined();
+      expect(await appliedFiles(t)).toContain(update);
+    });
+
+    /**
+     * A Single's settings save that carries values (here, a column whose type changes, which the
+     * service judges against the stored values) keeps the service's own statements, which the
+     * writer runs inside its step: a failure after the table changed keeps the files, recorded
+     * applied nowhere.
+     */
+    async function changeColumnType(t: TestNextly) {
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+      return () =>
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "notice" },
+          {
+            fields: [
+              { name: "heading", type: "number" },
+              { name: "body", type: "text" },
+            ],
+          }
+        );
+    }
+    const updateFile = (t: TestNextly) =>
+      migrationFiles(t).find(f => /_notice_update\.sql$/.test(f));
+
+    it("keeps a value-carrying Single update's files, recorded nowhere, when its companion fails to follow", async () => {
+      const t = await boot({ translated: true });
+      const save = await changeColumnType(t);
+
+      companionFails.single = true;
+      const result = await bodyOf(await save());
+
+      expect(JSON.stringify(result)).toContain("failed");
+      const update = updateFile(t);
+      expect(update).toBeDefined();
       expect(await appliedFiles(t)).not.toContain(update);
     });
 
+    // A value-carrying Single update applies its change by its own statements (a push), so the
+    // drift a hand-added column makes is refused before they run, naming the column.
+    it("refuses a value-carrying Single update over a column the history does not record, naming it, and changes nothing", async () => {
+      const t = await boot();
+      const save = await changeColumnType(t);
+      await t.adapter.executeQuery(
+        `ALTER TABLE single_notice ADD COLUMN extra text`
+      );
+      const liveColumns = async () =>
+        (
+          await introspectLiveSnapshot(
+            t.adapter.getDrizzle(),
+            t.adapter.getCapabilities().dialect,
+            ["single_notice"]
+          )
+        ).tables
+          .find(table => table.name === "single_notice")
+          ?.columns.map(c => ({ name: c.name, type: c.type }));
+      const files = migrationFiles(t);
+      const applied = await appliedFiles(t);
+      const live = await liveColumns();
+
+      // The dispatcher answers a refusal as a response, or throws it: read as one text either way.
+      const refused = await save().then(
+        async answer =>
+          `${(answer as Response).status} ${await (answer as Response).text()}`,
+        (error: unknown) =>
+          `${String((error as { code?: unknown }).code)} ${String((error as { publicMessage?: unknown }).publicMessage)}`
+      );
+
+      expect(refused).toContain("NEXTLY_MIGRATION_DRIFT");
+      expect(refused).toContain("single_notice.extra present in DB");
+      expect(migrationFiles(t)).toEqual(files);
+      expect(await appliedFiles(t)).toEqual(applied);
+      expect(await liveColumns()).toEqual(live);
+    });
+
+    it("records a value-carrying Single update's files applied only once its row is written", async () => {
+      const t = await boot({ translated: true });
+      const save = await changeColumnType(t);
+      const rowWrite = vi
+        .spyOn(SingleRegistryService.prototype, "updateSingle")
+        .mockRejectedValueOnce(new Error("the row could not be written"));
+
+      await expect(save()).rejects.toBeDefined();
+      rowWrite.mockRestore();
+
+      const update = updateFile(t);
+      expect(update).toBeDefined();
+      expect(await appliedFiles(t)).not.toContain(update);
+    });
+
+    it("adopts a field group table no migration records through the push once, then runs its file", async () => {
+      const t = await boot();
+      const save = async (fields: unknown[]) =>
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "meta" },
+          {
+            fields,
+            confirmed: true,
+            schemaVersion: (
+              await t
+                .getService("fieldGroupRegistryService")
+                .getComponent("meta")
+            ).schemaVersion,
+          }
+        );
+      const exec = (sql: string) =>
+        (
+          t.adapter as unknown as {
+            executeQuery(sql: string): Promise<unknown[]>;
+          }
+        ).executeQuery(sql);
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const fields = [
+        { name: "note", type: "text" },
+        { name: "count", type: "number" },
+      ];
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "meta", label: "Meta", fields }
+      );
+      // As an earlier Nextly left it: the table, and no migration recording it.
+      rmSync(join(t.basePath, "database", "history"), {
+        recursive: true,
+        force: true,
+      });
+      await exec(
+        `DELETE FROM ${q("nextly_schema_events")} WHERE ${q("event_type")} = 'file_apply'`
+      );
+      expect(latestSnapshotTables(t)).not.toContain("comp_meta");
+
+      await save([...fields, { name: "byline", type: "text" }]);
+
+      // The save adopted the table: it is on record, every file applied.
+      expect(latestSnapshotTables(t)).toContain("comp_meta");
+      expect((await appliedFiles(t)).sort()).toEqual(migrationFiles(t).sort());
+
+      // A default given by hand, which no snapshot records: the next save runs its file, which
+      // finds the table differs from its record and is refused, where the push would restate it.
+      if (dialect === "sqlite") {
+        const [info] = (await exec(
+          `SELECT type FROM pragma_table_info('comp_meta') WHERE name = 'count'`
+        )) as { type: string }[];
+        await exec(`ALTER TABLE "comp_meta" DROP COLUMN "count"`);
+        await exec(
+          `ALTER TABLE "comp_meta" ADD COLUMN "count" ${info!.type} DEFAULT 5`
+        );
+      } else {
+        await exec(
+          `ALTER TABLE ${q("comp_meta")} ALTER COLUMN ${q("count")} SET DEFAULT 5`
+        );
+      }
+      await expect(
+        save([
+          ...fields,
+          { name: "byline", type: "text" },
+          { name: "extra", type: "text" },
+        ])
+      ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+    });
+
     it("keeps a field group change's files, recorded nowhere, when its companion fails after the push", async () => {
+      const t = await boot({ translated: true });
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+      const component = await t
+        .getService("fieldGroupRegistryService")
+        .getComponent("meta");
+
+      companionFails.component = true;
+      // A column whose type changes: the push judges the stored values against it, so the push
+      // applies it.
+      await expect(
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "meta" },
+          {
+            fields: [
+              { name: "note", type: "number" },
+              { name: "byline", type: "text" },
+            ],
+            confirmed: true,
+            schemaVersion: component.schemaVersion,
+          }
+        )
+      ).rejects.toBeDefined();
+
+      // The push changed the table: its file stays, for `nextly migrate` to
+      // name, and is recorded applied nowhere.
+      const update = migrationFiles(t).find(f => /_meta_update\.sql$/.test(f));
+      expect(update).toBeDefined();
+      expect(await appliedFiles(t)).not.toContain(update);
+    });
+
+    it("records a field group change's file applied, and fails, when its companion fails after the file ran", async () => {
       const t = await boot();
       await dispatchComponents(
         "createComponent",
@@ -596,6 +809,7 @@ describe.each(getConfiguredTestDialects())(
         .getComponent("meta");
 
       companionFails.component = true;
+      // A save that moves no values runs its own file, then the companion step.
       await expect(
         dispatchComponents(
           "applyComponentSchemaChanges",
@@ -611,11 +825,10 @@ describe.each(getConfiguredTestDialects())(
         )
       ).rejects.toBeDefined();
 
-      // The push changed the table: its file stays, for `nextly migrate` to
-      // name, and is recorded applied nowhere.
+      // The file ran whole, so it is recorded applied; the companion's failure is still reported.
       const update = migrationFiles(t).find(f => /_meta_update\.sql$/.test(f));
       expect(update).toBeDefined();
-      expect(await appliedFiles(t)).not.toContain(update);
+      expect(await appliedFiles(t)).toContain(update);
     });
 
     /** A translated Single whose heading leaves translation as Required. */
@@ -769,7 +982,9 @@ describe.each(getConfiguredTestDialects())(
       expect(await appliedFiles(t)).toContain(deleted);
     });
 
-    it("records a Single update's files applied only once its row is written", async () => {
+    // The file runs, and is recorded applied, before the row is written: a row that then fails is
+    // an internal error, and the file stays applied, the database standing as it says.
+    it("keeps a Single update's file recorded applied when its row cannot be written after it", async () => {
       const t = await boot();
       await dispatchSingles(
         "createSingle",
@@ -780,9 +995,9 @@ describe.each(getConfiguredTestDialects())(
           fields: [{ name: "heading", type: "text" }],
         }
       );
-      const registry = t.getService("singleRegistryService");
+      // The first registry write after the file is the settings save's own row.
       const rowWrite = vi
-        .spyOn(registry, "updateSingle")
+        .spyOn(SingleRegistryService.prototype, "updateSingle")
         .mockRejectedValueOnce(new Error("the row could not be written"));
 
       await expect(
@@ -796,19 +1011,17 @@ describe.each(getConfiguredTestDialects())(
             ],
           }
         )
-      ).rejects.toBeDefined();
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
       rowWrite.mockRestore();
 
-      // The table changed and the row did not: the file stays, recorded
-      // applied nowhere.
       const update = migrationFiles(t).find(f =>
         /_notice_update\.sql$/.test(f)
       );
       expect(update).toBeDefined();
-      expect(await appliedFiles(t)).not.toContain(update);
+      expect(await appliedFiles(t)).toContain(update);
     });
 
-    it("keeps a field group delete's files, recorded nowhere, when it stops after its first teardown", async () => {
+    it("keeps a field group delete's files, recorded nowhere, when it stops after its first teardown on MySQL, and withdraws them with the delete undone elsewhere", async () => {
       const t = await boot();
       await dispatchComponents(
         "createComponent",
@@ -826,8 +1039,20 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toBeDefined();
 
       const deleted = migrationFiles(t).find(f => /_meta_delete\.sql$/.test(f));
-      expect(deleted).toBeDefined();
-      expect(await appliedFiles(t)).not.toContain(deleted);
+      if (dialect === "mysql") {
+        // Each step commits on its own there, so a stop part way leaves the files for a retry or
+        // `nextly migrate` to finish, recorded applied nowhere.
+        expect(deleted).toBeDefined();
+        expect(await appliedFiles(t)).not.toContain(deleted);
+      } else {
+        // One transaction, undone whole: nothing the file describes ran, so it is withdrawn, and
+        // the field group is all still there.
+        expect(deleted).toBeUndefined();
+        expect(await t.adapter.tableExists("comp_meta")).toBe(true);
+        expect(
+          await t.getService("fieldGroupRegistryService").getComponent("meta")
+        ).toBeTruthy();
+      }
     });
 
     it("writes a renamed nested field group's moved rows into the field group's migration", async () => {

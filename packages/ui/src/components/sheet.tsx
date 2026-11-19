@@ -286,6 +286,94 @@ function SheetDragHandle({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
+/** What the keyboard can reach by Tab: enabled, not hidden, and in the tab order. */
+const TABBABLE =
+  'a[href], area[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex], [contenteditable="true"]';
+
+/**
+ * Whether an element is drawn: neither it nor a container it sits in is `display: none` or
+ * `visibility: hidden`. One that is not is no stop for the keyboard, and no edge of a sheet.
+ */
+function isRendered(element: HTMLElement): boolean {
+  for (
+    let node: HTMLElement | null = element;
+    node !== null;
+    node = node.parentElement
+  ) {
+    const style = getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+  }
+  return true;
+}
+
+function tabbablesIn(root: ParentNode): HTMLElement[] {
+  return Array.from(root.querySelectorAll<HTMLElement>(TABBABLE)).filter(
+    element =>
+      element.tabIndex >= 0 &&
+      !element.hidden &&
+      // `:disabled` also matches a control disabled by its `<fieldset disabled>`, which carries no
+      // `disabled` of its own for the selector above to see, and takes no focus.
+      !element.matches(":disabled") &&
+      // Radix's focus guards sit in the tab order at the page's edges, and are no control.
+      !element.hasAttribute("data-radix-focus-guard") &&
+      element.closest('[aria-hidden="true"], [inert]') === null &&
+      isRendered(element)
+  );
+}
+
+/**
+ * Tab at a non-modal sheet's edge, moved out of it as for any other part of the page.
+ *
+ * Radix's dialog keeps its focus scope looping even when it is not modal, so Tab from the
+ * sheet's last control would go round to its first, and Shift+Tab from its first to its last:
+ * a keyboard reader could not get from the sheet back to the page beside it. At those two edges
+ * this sends focus where the browser would: forward to the nearest control after the sheet in
+ * the document, back to the nearest before it. Anywhere else, Tab is left to the browser.
+ * Runs before the focus scope's own handler on the same element, which then finds focus already
+ * outside and does nothing.
+ */
+function leaveNonModalAtEdge(event: React.KeyboardEvent<HTMLElement>): void {
+  if (event.defaultPrevented) return;
+  if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) {
+    return;
+  }
+  const sheet = event.currentTarget;
+  const inside = tabbablesIn(sheet);
+  // The sheet itself holds focus as it opens. With controls inside, it is no edge: Tab goes in,
+  // to its first control, and Shift+Tab to its last, as the focus scope would take them.
+  if (document.activeElement === sheet && inside.length > 0) {
+    event.preventDefault();
+    (event.shiftKey ? inside[inside.length - 1] : inside[0])?.focus();
+    return;
+  }
+  const edge = event.shiftKey ? inside[0] : inside[inside.length - 1];
+  // An edge is the first or last control in the sheet, or the sheet itself while it holds focus
+  // and nothing inside it can (a loading or explanatory panel).
+  const atEdge =
+    document.activeElement === sheet ||
+    (edge !== undefined && document.activeElement === edge);
+  if (!atEdge) return;
+  const page = tabbablesIn(sheet.ownerDocument.body).filter(
+    element => !sheet.contains(element)
+  );
+  // The nearest stop on that side of the sheet in the document, as the browser would take:
+  // other popups' portals can follow the sheet, so "the page's last" is not "before the sheet".
+  // Round to the far end when nothing lies that way, as Tab goes round the page.
+  const before = page.filter(
+    element =>
+      (sheet.compareDocumentPosition(element) &
+        Node.DOCUMENT_POSITION_PRECEDING) !==
+      0
+  );
+  const after = page.filter(element => !before.includes(element));
+  const next = event.shiftKey
+    ? (before[before.length - 1] ?? page[page.length - 1])
+    : (after[0] ?? page[0]);
+  if (next === undefined) return;
+  event.preventDefault();
+  next.focus();
+}
+
 /**
  * SheetContent
  *
@@ -296,6 +384,10 @@ function SheetDragHandle({ onDismiss }: { onDismiss: () => void }) {
  * - **Padding**: 24px (p-6)
  * - **Border**: On appropriate edge based on side
  * - **Close Button**: Positioned in top-right corner (16px from edges)
+ *
+ * Kept directly above the declaration: the declaration bundler carries a doc
+ * comment only when it is attached to the declaration, so the `@public` tag
+ * reaches the published types from here and from nowhere else.
  *
  * @param side - Which edge to slide in from: "left", "right", "top", "bottom"
  * @public
@@ -308,7 +400,14 @@ const SheetContent: React.ForwardRefExoticComponent<
   SheetContentProps
 >(
   (
-    { side = "right", className, children, dragHandle = false, ...props },
+    {
+      side = "right",
+      className,
+      children,
+      dragHandle = false,
+      onKeyDown,
+      ...props
+    },
     ref
   ) => {
     const portalContainer = usePortalContainer();
@@ -329,6 +428,12 @@ const SheetContent: React.ForwardRefExoticComponent<
           data-slot="sheet-content"
           className={cn(sheetVariants({ side }), className)}
           {...props}
+          onKeyDown={event => {
+            onKeyDown?.(event);
+            // A sheet beside the page lets the keyboard move between the two; a modal one
+            // holds focus, as Radix does.
+            if (!modal) leaveNonModalAtEdge(event);
+          }}
         >
           {draggable ? (
             <>

@@ -72,6 +72,8 @@ const writes: Record<string, unknown>[] = [];
  */
 const single = vi.hoisted(() => ({
   refuse: undefined as string | undefined,
+  /** Whether the next writes fail on the network, with no answer read. */
+  offline: false,
   keepalive: [] as boolean[],
   gate: undefined as Promise<void> | undefined,
 }));
@@ -93,6 +95,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
       writes.push(data);
       single.keepalive.push(options?.keepalive?.() === true);
       await single.gate;
+      if (single.offline) throw new TypeError("Failed to fetch");
       if (single.refuse !== undefined) throw new Error("Validation failed.");
       return { id: "1" };
     },
@@ -142,7 +145,7 @@ function Editor({ steps }: { steps: EditorStep[] }): React.JSX.Element {
     });
     return () => connect(null);
   }, [connect, steps]);
-  const [current, choose] = React.useState<string | null>("variables");
+  const [current, choose] = React.useState<string | null>("colours");
   return (
     <SiteStyleHistoryContext.Provider value={style.history}>
       <SiteStylePreviewContext.Provider value={style.preview}>
@@ -168,9 +171,10 @@ function Editor({ steps }: { steps: EditorStep[] }): React.JSX.Element {
               </TokensStudio>
             )}
             tabs={{
-              variables: () => <VariablesTab />,
-              classes: () => <p>Shared styles content</p>,
-              fonts: () => <p>Fonts content</p>,
+              colours: () => <VariablesTab tab="colours" />,
+              type: () => <VariablesTab tab="type" />,
+              spacing: () => <VariablesTab tab="spacing" />,
+              styles: () => <p>Styles content</p>,
             }}
           />
         </StyleRevisionContext.Provider>
@@ -226,6 +230,7 @@ beforeEach(() => {
   stored.data = { tokens: null };
   writes.length = 0;
   single.refuse = undefined;
+  single.offline = false;
   single.keepalive = [];
   single.gate = undefined;
   toastError.mockClear();
@@ -242,7 +247,8 @@ afterEach(() => {
 /** Open Brand's editor and answer its Light field. */
 function openBrand(): HTMLElement {
   act(() => {
-    fireEvent.click(screen.getByRole("button", { name: /^Brand/ }));
+    // The row, not the "Brand" group's heading, which reads "Brand, <count>".
+    fireEvent.click(screen.getByRole("button", { name: /^Brand, (?!\d+$)/ }));
   });
   return screen.getByLabelText("Light");
 }
@@ -328,7 +334,7 @@ describe("the Design panel's writes", () => {
     act(() => {
       // Hidden from the tree while the modal editor is open, and still there.
       fireEvent.mouseDown(
-        screen.getByRole("tab", { name: "Fonts", hidden: true }),
+        screen.getByRole("tab", { name: "Styles", hidden: true }),
         { button: 0 }
       );
     });
@@ -583,9 +589,6 @@ describe("the Design panel's writes", () => {
     return refusal;
   }
 
-  const REFUSED =
-    "A change to the site's variables wasn't saved, so this page wasn't either: That colour cannot be stored.";
-
   it("makes Save wait for a write released earlier that has not answered", async () => {
     let open: () => void = () => {};
     single.gate = new Promise(resolve => {
@@ -615,18 +618,21 @@ describe("the Design panel's writes", () => {
     expect(saved).toBe(true);
   });
 
-  it("refuses Save when the held edit it writes is refused, and says why", async () => {
+  it("lets Save go ahead when the held edit's value is refused and taken back, and says why", async () => {
+    // Refused for its value, the variable is taken back and nothing the page
+    // could point at is left unsaved; holding the page's save as well would
+    // refuse every save until a reload.
     single.refuse = "That colour cannot be stored.";
     render(<Editor steps={[]} />);
     enter(openBrand(), "#000021");
-    expect(await save()).toBe(REFUSED);
+    expect(await save()).toBeUndefined();
     expect(writes).toHaveLength(1);
     expect(screen.getByRole("alert", { hidden: true }).textContent).toBe(
       "That colour cannot be stored."
     );
   });
 
-  it("refuses Save for a held edit refused after the pause, before Save", async () => {
+  it("lets Save go ahead for a held edit refused for its value after the pause", async () => {
     single.refuse = "That colour cannot be stored.";
     render(<Editor steps={[]} />);
     enter(openBrand(), "#000022");
@@ -634,7 +640,17 @@ describe("the Design panel's writes", () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(writes).toHaveLength(1);
-    expect(await save()).toBe(REFUSED);
+    expect(await save()).toBeUndefined();
+  });
+
+  it("refuses Save while the held edit's write failed on the network, and says why", async () => {
+    // Whether it was stored is unknown, so the page waits for it.
+    single.offline = true;
+    render(<Editor steps={[]} />);
+    enter(openBrand(), "#000028");
+    expect(await save()).toBe(
+      "A change to the site's variables wasn't saved, so this page wasn't either: Failed to fetch"
+    );
   });
 
   it("lets Save go ahead once a later edit of the section is stored", async () => {
@@ -697,13 +713,24 @@ describe("the Design panel's writes", () => {
     expect(saved).toBe(true);
   });
 
-  it("refuses Save, once the editor has closed, for an edit it left that is refused", async () => {
+  it("lets Save go ahead, once the editor has closed, for an edit it left refused for its value", async () => {
     single.refuse = "That colour cannot be stored.";
     const { unmount } = render(<Editor steps={[]} />);
     enter(openBrand(), "#000027");
     unmount();
     beforeAction.run = undefined;
-    expect(await save()).toBe(REFUSED);
+    expect(await save()).toBeUndefined();
+  });
+
+  it("refuses Save, once the editor has closed, for an edit it left that failed on the network", async () => {
+    single.offline = true;
+    const { unmount } = render(<Editor steps={[]} />);
+    enter(openBrand(), "#000029");
+    unmount();
+    beforeAction.run = undefined;
+    expect(await save()).toMatch(
+      /^A change to the site's variables wasn't saved/
+    );
   });
 
   it("tracks a held edit with the form from when it is held until it answers", async () => {
@@ -730,5 +757,100 @@ describe("the Design panel's writes", () => {
     open();
     await settle();
     expect(answered).toBe(true);
+  });
+});
+
+describe("a value drawn as it is typed", () => {
+  /** Type into a field without leaving it, as an author part-way through. */
+  function type(field: HTMLElement, value: string): void {
+    act(() => {
+      fireEvent.change(field, { target: { value } });
+    });
+  }
+
+  it("draws each valid colour as it is typed, and writes once when the field is left", async () => {
+    const steps: EditorStep[] = [];
+    render(<Editor steps={steps} />);
+    const field = openBrand();
+    type(field, "#ff0000");
+    expect(canvas()).toBe("#ff0000");
+    // Half a colour keeps the last valid one drawn.
+    type(field, "#00ff0");
+    expect(canvas()).toBe("#ff0000");
+    type(field, "#00ff00");
+    expect(canvas()).toBe("#00ff00");
+    // However long the author takes, nothing typed is written yet.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(writes).toEqual([]);
+
+    act(() => {
+      fireEvent.blur(field);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toHaveLength(1);
+    expect(lastBrand()).toBe("#00ff00");
+    expect(steps).toHaveLength(1);
+    expect(canvas()).toBe("#00ff00");
+  });
+
+  it("draws what is stored again when the field is left with nothing to write", async () => {
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    type(field, "#ff0000");
+    expect(canvas()).toBe("#ff0000");
+    // Typed back to what the variable holds: nothing to write.
+    type(field, "#1d2b6b");
+    act(() => {
+      fireEvent.blur(field);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toEqual([]);
+    expect(canvas()).toBe("none");
+    expect(previewing()).toBe("0");
+  });
+
+  it("keeps an edit still waiting for its write drawn when a later preview ends unwritten", async () => {
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    enter(field, "#000031");
+    expect(canvas()).toBe("#000031");
+    type(field, "#ff0000");
+    expect(canvas()).toBe("#ff0000");
+    // Typed back to what the edit holds: nothing more to write.
+    type(field, "#000031");
+    act(() => {
+      fireEvent.blur(field);
+    });
+    expect(canvas()).toBe("#000031");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(writes).toHaveLength(1);
+    expect(lastBrand()).toBe("#000031");
+    expect(canvas()).toBe("#000031");
+  });
+
+  it("draws what is stored again when the editor closes mid-edit", async () => {
+    render(<Editor steps={[]} />);
+    const field = openBrand();
+    type(field, "#ff0000");
+    expect(canvas()).toBe("#ff0000");
+    act(() => {
+      fireEvent.keyDown(field, { key: "Escape" });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    // Escape leaves the typing unwritten, as it always has; nothing it drew
+    // stays drawn.
+    expect(writes).toEqual([]);
+    expect(canvas()).toBe("none");
+    expect(previewing()).toBe("0");
   });
 });

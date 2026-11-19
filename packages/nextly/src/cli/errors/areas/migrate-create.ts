@@ -130,6 +130,28 @@ export const MIGRATE_CREATE_CODES = defineCodes({
       },
     ],
   },
+  // `--record-snapshot` writes the config as it was at the last migration, so a config with a table
+  // change to migrate is refused; its message names the tables and the steps that record them.
+  RECORD_SNAPSHOT_HAS_CHANGES: {
+    cause:
+      "`nextly migrate:create --record-snapshot` was run with a config that has table changes to migrate, which the snapshot would take in without a migration.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "record-snapshot-has-changes",
+        // The message's second sentence says nothing was written, which belongs with what
+        // happened; the why is what the snapshot would do to every later run.
+        describe: error => {
+          const { what, why: written, next } = refusal(error, 1);
+          return {
+            what: written ? `${what} ${written}` : what,
+            why: "The snapshot it writes would take in those changes with no migration making them, so each later `nextly migrate:create` would plan as if they had been made.",
+            next,
+          };
+        },
+      },
+    ],
+  },
   RECORD_SNAPSHOT_STORAGE_MISSING: {
     cause:
       "`nextly migrate:create --record-snapshot` would record translated fields that the database has no translations table or column for.",

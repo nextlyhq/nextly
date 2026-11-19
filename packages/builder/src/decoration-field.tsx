@@ -38,10 +38,12 @@ import * as React from "react";
 
 // Enter commits without submitting the entry form the builder sits in.
 import { commitOnEnter } from "./commit-on-enter";
+import { useFieldDescription } from "./css-hint";
 import { IconChoiceField } from "./icon-choice-field";
 import { InheritedValue } from "./inherited-value";
 import { commitRawCss } from "./raw-css";
 import { SectionHeld } from "./section-held";
+import { useStoredDraft } from "./stored-draft";
 import type { AlignmentGroup } from "./style-alignment-icons";
 import { keywordLabel } from "./style-keyword-labels";
 
@@ -234,8 +236,14 @@ export function DecorationField({
         </PopoverTrigger>
         {/* Mounted outside the editor's root: the builder's tokens come
             with it, and the popover's own rule gives it the inspector's
-            density. */}
-        <PopoverContent className="nx-builder-tokens nx-style-inspector__decoration-popover">
+            density. Spell-check is off here for the same reason it is off
+            on the Style tab, which this layer is drawn outside of and so
+            does not inherit from: a thickness, a colour code or a line of
+            CSS is not words to correct. */}
+        <PopoverContent
+          className="nx-builder-tokens nx-style-inspector__decoration-popover"
+          spellCheck={false}
+        >
           <DecorationStyle
             parts={parts.current}
             write={write}
@@ -345,16 +353,11 @@ const STYLE_LABELS: Readonly<Record<string, string>> = {
 /**
  * A draft that follows the value it edits: a stored change (an undo, a shared
  * style's update) moves it, so leaving the field never writes back the value
- * that change replaced.
+ * that change replaced. The inspector's one draft rule (`useStoredDraft`), so
+ * Escape in the field puts an edit back here as in every other field.
  */
-function useDraft(
-  value: string | undefined
-): [string, React.Dispatch<React.SetStateAction<string>>] {
-  const [draft, setDraft] = React.useState(value ?? "");
-  React.useEffect(() => {
-    setDraft(value ?? "");
-  }, [value]);
-  return [draft, setDraft];
+function useDraft(value: string | undefined): [string, (next: string) => void] {
+  return useStoredDraft(value ?? "");
 }
 
 /**
@@ -376,11 +379,13 @@ function DecorationStyle({
   held: boolean;
   children: React.ReactNode;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const [thickness, setThickness] = useDraft(parts?.thickness);
   const [color, setColor] = useDraft(parts?.color);
   const disabled = held || parts === undefined || parts.line === "none";
   const refusal = {
-    "aria-describedby": describedBy,
+    "aria-describedby": described,
     "aria-invalid": describedBy === undefined ? undefined : true,
   } as const;
   const commitThickness = () => {
@@ -467,6 +472,8 @@ function DecorationCss({
   held: boolean;
   onCommit: (value: string | null) => CommitOutcome;
 }): React.JSX.Element {
+  // The refusal, and the CSS names while they are shown.
+  const described = useFieldDescription(describedBy);
   const [text, setText] = useDraft(stored);
   const commit = () => {
     commitRawCss(text, stored, onCommit);
@@ -476,7 +483,7 @@ function DecorationCss({
       <span>Write as CSS</span>
       <Input
         aria-label={`${actionName} as CSS`}
-        aria-describedby={describedBy}
+        aria-describedby={described}
         aria-invalid={describedBy === undefined ? undefined : true}
         disabled={held}
         placeholder="underline overline"

@@ -24,10 +24,11 @@ import {
   useDocumentActionsContext,
   useHostedRecoveryPoint,
   useHostedStored,
+  useSaveChipDrawn,
 } from "./DocumentActionsContext";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { useHostedRecoveryOffer } from "./RecoveryOfferContext";
-import { SaveStateIndicator } from "./SaveStateIndicator";
+import { SaveStateIndicator, type OfferedSave } from "./SaveStateIndicator";
 import type { DocumentActionBindings } from "./useDocumentActionBindings";
 
 /**
@@ -64,6 +65,8 @@ function HostedSaveIndicator({
   // The recovery offer, made in the chip; its control claims it, which takes
   // down the banner.
   const offer = useHostedRecoveryOffer();
+  // Drawn, so the document's Save keeps that offer while it waits.
+  useSaveChipDrawn();
   return (
     <>
       <SaveStateIndicator
@@ -71,6 +74,10 @@ function HostedSaveIndicator({
         recovery={recovery}
         stored={stored}
         offer={offer}
+        // The document's own Save, which keeps changes on offer while they
+        // wait (see `pendingRecovery`), so the chip's Save and the bar's
+        // are one action, refused for the same reasons.
+        save={offeredSave(hosted)}
         {...(className === undefined ? {} : { className })}
       />
       <DocumentStatusLive
@@ -79,6 +86,17 @@ function HostedSaveIndicator({
       />
     </>
   );
+}
+
+/** The document's Save, as the chip's recovery offer runs it. */
+function offeredSave(hosted: DocumentActionBindings): OfferedSave {
+  const reason = hosted.bindings.save?.disabledReason;
+  return {
+    run: () => {
+      void hosted.run("save");
+    },
+    ...(reason === undefined ? {} : { disabledReason: reason }),
+  };
 }
 
 /**
@@ -93,23 +111,35 @@ function HostedSaveIndicator({
 export function DocumentPrimaryAction(): JSX.Element | null {
   const hosted = useDocumentActionsContext();
   if (hosted === null) return null;
-  const { run } = hosted;
-  const bindings: Record<string, ActionBinding | undefined> = {};
-  for (const [id, binding] of Object.entries(hosted.bindings)) {
-    if (binding === undefined) continue;
-    bindings[id] = {
-      onSelect: () => {
-        void run(id);
-      },
-      ...(binding.disabledReason === undefined
-        ? {}
-        : { disabledReason: binding.disabledReason }),
-    };
-  }
+  const bindings = bindingsThroughRun(hosted);
   // No spinner on the control: "saving" includes a write the page depends on
   // (a site-wide style), which Publish waits for rather than being busy
   // with, and the save chip beside it already says so.
   return (
     <CompactDocumentActionBar actions={hosted.actions} bindings={bindings} />
   );
+}
+
+/**
+ * The host's bindings as a surface's controls take them: each runs its
+ * action through the host's `run`, never a native submit, with the reason it
+ * can't run now. One adapter for every control drawn outside the header, so
+ * they run and refuse alike.
+ */
+export function bindingsThroughRun(
+  hosted: DocumentActionBindings
+): Record<string, ActionBinding | undefined> {
+  const bindings: Record<string, ActionBinding | undefined> = {};
+  for (const [id, binding] of Object.entries(hosted.bindings)) {
+    if (binding === undefined) continue;
+    bindings[id] = {
+      onSelect: () => {
+        void hosted.run(id);
+      },
+      ...(binding.disabledReason === undefined
+        ? {}
+        : { disabledReason: binding.disabledReason }),
+    };
+  }
+  return bindings;
 }

@@ -9,6 +9,12 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
+import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
+import {
+  judgeMove,
+  moveDestinations,
+  type MoveContext,
+} from "@admin/lib/builder/move-rule";
 import {
   buildOutline,
   flattenOutline,
@@ -31,17 +37,26 @@ import { Outline, type OutlineCallbacks } from "../Outline";
 // device memory keeps interface preferences only under the admin's keys.
 const FOLD_KEY = "nextly:admin:builder-fold:test:outline-fixture";
 
-function callbacks(): OutlineCallbacks &
-  Record<string, ReturnType<typeof vi.fn>> {
+/** The page's side, with the move rule's real answers over the fixture. */
+function callbacks(entityReadOnly = false) {
+  const fields = nestedFixtureFields();
+  const ctx: MoveContext = { entityReadOnly, surface: "collection" };
   return {
     select: vi.fn(),
     addAt: vi.fn(),
-    move: vi.fn(),
     duplicate: vi.fn(),
+    rename: vi.fn(),
+    canRename: vi.fn(() => true),
     remove: vi.fn(),
     setHidden: vi.fn(),
     openFieldGroup: vi.fn(),
-  };
+    fields,
+    judgeMove: vi.fn((id: string, target: FieldInsertPosition) =>
+      judgeMove(fields, id, target, ctx)
+    ),
+    moveDestinations: vi.fn((id: string) => moveDestinations(fields, id, ctx)),
+    commitMove: vi.fn(),
+  } satisfies OutlineCallbacks;
 }
 
 function fixtureOutline(entityReadOnly = false): OutlineNode[] {
@@ -60,7 +75,7 @@ function renderOutline(
     on?: ReturnType<typeof callbacks>;
   } = {}
 ) {
-  const on = options.on ?? callbacks();
+  const on = options.on ?? callbacks(options.readOnly);
   const nodes = options.nodes ?? fixtureOutline(options.readOnly);
   const view = render(
     <DndContext>
@@ -207,6 +222,17 @@ describe("the outline of the nested fixture", () => {
     expect(on.setHidden).toHaveBeenCalledWith("f-internal-note", false);
   });
 
+  // Rename… opens the field's settings with its rename asked for, where the field can be renamed.
+  it("offers Rename… on a row, for the field's own settings to take", async () => {
+    const { on } = renderOutline();
+    (row("internal_note") as HTMLElement).focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Rename…" })
+    );
+    expect(on.rename).toHaveBeenCalledWith("f-internal-note");
+  });
+
   it("shows each accepted field group's own count, on its own row", () => {
     renderOutline({
       nodes: buildOutline(
@@ -323,6 +349,7 @@ describe("a read-only row", () => {
     "Move up",
     "Move down",
     "Duplicate",
+    "Rename…",
     "Hide",
     "Show",
     "Delete",
@@ -368,7 +395,7 @@ describe("a read-only row", () => {
       (row(path) as HTMLElement).focus();
       await userEvent.keyboard("/{Alt>}{ArrowUp}{ArrowDown}{/Alt}");
       expect(on.addAt).not.toHaveBeenCalled();
-      expect(on.move).not.toHaveBeenCalled();
+      expect(on.commitMove).not.toHaveBeenCalled();
     }
   );
 
@@ -509,7 +536,13 @@ describe("the tree", () => {
     const { on } = renderOutline();
     (row("summary_b") as HTMLElement).focus();
     await userEvent.keyboard("{Alt>}{ArrowUp}{/Alt}");
-    expect(on.move).toHaveBeenCalledWith("f-summary-b", -1);
+    expect(on.commitMove).toHaveBeenCalledTimes(1);
+    const [moved] = on.commitMove.mock.calls[0] as [BuilderField[]];
+    expect(moved.slice(0, 3).map(field => field.name)).toEqual([
+      "title",
+      "summary_b",
+      "summary_a",
+    ]);
     expect(
       screen.getByText("Moved Summary up, position 2 of 11.")
     ).toBeInTheDocument();
@@ -732,7 +765,7 @@ describe("moving past a read-only sibling", () => {
     // meta/title's next sibling is meta/rating, which a plugin owns.
     (row("meta/title") as HTMLElement).focus();
     await userEvent.keyboard("{Alt>}{ArrowDown}{/Alt}");
-    expect(on.move).not.toHaveBeenCalled();
+    expect(on.commitMove).not.toHaveBeenCalled();
     await userEvent.keyboard("{Shift>}{F10}{/Shift}");
     expect(
       await screen.findByRole("menuitem", { name: "Move down" })

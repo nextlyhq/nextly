@@ -94,7 +94,7 @@ describe("an Entry content block, judged by validation", () => {
     ]);
   });
 
-  it.each(["page", "component", "pattern", "region"])(
+  it.each(["page", "component", "pattern"])(
     "refuses one in a document of kind %s",
     kind => {
       expect(

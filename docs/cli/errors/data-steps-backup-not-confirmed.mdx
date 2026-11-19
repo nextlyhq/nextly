@@ -1,0 +1,24 @@
+---
+title: DATA_STEPS_BACKUP_NOT_CONFIRMED
+description: "A command would change data an earlier Nextly release stored, and no backup was confirmed, with no terminal attached to ask."
+---
+
+## Cause
+
+A command would change data an earlier Nextly release stored, and no backup was confirmed, with no terminal attached to ask.
+
+`nextly migrate` brings data an earlier release stored up to date once its migrations have applied: it hashes passwords stored as written, removes passwords kept in version history and converts roles holding a retired manage permission. `nextly db:sync` takes the same steps once it has synced a development database. `nextly i18n:convert-zoned-dates` converts translated date columns kept with a time zone. Each rewrites stored values in place, so the command asks whether the database is backed up before it changes anything. With no terminal attached, as in CI, it cannot ask, and `--backup-confirmed` was not passed. Nothing was changed: `nextly migrate` checks before it applies a migration, so its pending migrations are not applied either. The one exception is a run that could not see the work beforehand, under `--step` or on a table its migrations create: it stops after its migrations applied, says that its schema changes applied, and leaves the stored data as it was. The message names the first step with work and how much.
+
+## Fix
+
+- Back up the database.
+- Run the command the message names again with `--backup-confirmed`. The flag is ignored when there is nothing to change, so it is safe to keep in a deploy script.
+
+## Example
+
+```text
+✗ `nextly migrate` would change data an earlier Nextly release stored (hash passwords stored before this release: 3), and does so only once a backup is confirmed.
+  Why:  No terminal is attached to ask whether the database is backed up, and `--backup-confirmed` was not passed. Nothing was changed.
+  Next: Back up the database, then run `nextly migrate --backup-confirmed`.
+  Docs: https://nextlyhq.com/docs/cli/errors/data-steps-backup-not-confirmed  (DATA_STEPS_BACKUP_NOT_CONFIRMED)
+```

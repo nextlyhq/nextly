@@ -28,11 +28,20 @@
  * @module batch-style
  */
 
-import type {
-  BlockNode,
-  StyleValue,
-  TokenKind,
-  ValidationIssue,
+import {
+  getBlock,
+  isLook,
+  isTextStyle,
+  stylePropertiesForSupports,
+  supportedStylesOf,
+  TEXT_STYLE_PROPERTIES,
+  type AnyBlockDefinition,
+  type BlockNode,
+  type NamedClass,
+  type NodeStyles,
+  type StyleValue,
+  type TokenKind,
+  type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
 import { sameStyleValue, type BuilderOp } from "./op-vocabulary";
@@ -40,6 +49,8 @@ import {
   readStyleValue,
   styleClearOp,
   styleWriteOp,
+  styleWriteOps,
+  type StyleWriteRequest,
   type StyleAddress,
   type StylePolicy,
 } from "./style-values";
@@ -195,6 +206,23 @@ export function batchStyleWriteOps(
 }
 
 /**
+ * The ops that set several addresses, each to its own value, across a
+ * selection: the sides of a margin set together, or two parts of one value.
+ * One op per block, the writes folded into it, so the gesture is one entry in
+ * the history.
+ */
+export function batchStyleWritesOps(
+  nodes: readonly BlockNode[],
+  writes: readonly StyleWriteRequest[],
+  policy?: StylePolicy
+): BatchStyleWrite {
+  const shared = batchPolicy(policy);
+  return collect(nodes, node =>
+    styleWriteOps(node.id, node.styles, writes, shared)
+  );
+}
+
+/**
  * The ops that clear one address across a selection.
  *
  * Clearing is not writing an empty value, and the distinction survives the
@@ -312,4 +340,146 @@ function collect(
     if (result.op !== null) ops.push(result.op);
   }
   return { ops, refused: undefined, warnings: [...warnings.values()] };
+}
+
+/**
+ * One block's look as "Copy style" takes it: its own values, every state and
+ * device, and the classes it wears (its block style, its text style and its
+ * shared styles), as the class list holds them.
+ */
+export interface StyleSource {
+  readonly styles: NodeStyles | undefined;
+  readonly classes: readonly string[];
+}
+
+/** What a paste reads besides the blocks. */
+export interface StylePasteOptions {
+  /**
+   * The site's styles, to tell a block style and a text style from a shared
+   * style. Unread, every class is pasted as it is.
+   */
+  readonly library?: readonly NamedClass[] | undefined;
+  /** Where block definitions are read: the registry, unless told. */
+  readonly definitions?: (type: string) => AnyBlockDefinition | undefined;
+}
+
+/** How many of the source's settings one target had no place for. */
+export interface SkippedSettings {
+  readonly nodeId: string;
+  readonly type: string;
+  readonly count: number;
+}
+
+/** What a paste would do: the ops as one group, and what each target skips. */
+export interface BatchStylePaste {
+  /** One op per target that changes, in selection order; empty when none does. */
+  readonly ops: readonly BuilderOp[];
+  /** The targets that skip something, in selection order. */
+  readonly skipped: readonly SkippedSettings[];
+}
+
+/**
+ * The ops that give each block the source's look: the source's own values in
+ * place of the block's, and the source's classes in place of the ones it
+ * wears. The block's words, images and links are not touched.
+ *
+ * Each op updates a block's own `styles` and `classes` and nothing else, so a
+ * paste never writes into a shared style, whatever the editing bar targets.
+ *
+ * A block keeps only what it can show: a value its type does not support
+ * (read by `supportedStylesOf`, as "Turn into" reads it), a block style of
+ * another type, and a text style on a block with no text settings are
+ * skipped and counted, one per value at each state and device, so the
+ * author can be told how many.
+ */
+export function batchStylePasteOps(
+  nodes: readonly BlockNode[],
+  source: StyleSource,
+  options: StylePasteOptions = {}
+): BatchStylePaste {
+  const definitionOf = options.definitions ?? getBlock;
+  const ops: BuilderOp[] = [];
+  const skipped: SkippedSettings[] = [];
+  for (const node of nodes) {
+    const supports = definitionOf(node.type)?.supports;
+    const supported = new Set(
+      stylePropertiesForSupports(supports).map(entry => entry.property)
+    );
+    const styles = supportedStylesOf(source.styles, supports);
+    const classes = keptClasses(
+      source.classes,
+      node.type,
+      supported,
+      options.library
+    );
+    const count = styles.skipped + classes.skipped;
+    if (count > 0) skipped.push({ nodeId: node.id, type: node.type, count });
+    const op = pasteOp(node, styles.styles, classes.kept);
+    if (op !== null) ops.push(op);
+  }
+  return { ops, skipped };
+}
+
+/**
+ * The source's classes a block can wear, and how many it can't: a block
+ * style belongs to one block type, and a text style is offered only on a
+ * block with text settings. A shared style, and a class the site doesn't
+ * name, are worn as they are.
+ */
+function keptClasses(
+  classes: readonly string[],
+  type: string,
+  supported: ReadonlySet<string>,
+  library: readonly NamedClass[] | undefined
+): { kept: string[]; skipped: number } {
+  const takesText = [...TEXT_STYLE_PROPERTIES].some(property =>
+    supported.has(property)
+  );
+  const kept: string[] = [];
+  let skipped = 0;
+  for (const id of classes) {
+    const entry = library?.find(each => each.id === id);
+    const fits =
+      entry === undefined ||
+      (isLook(entry)
+        ? entry.blockType === type
+        : !isTextStyle(entry) || takesText);
+    if (fits) kept.push(id);
+    else skipped += 1;
+  }
+  return { kept, skipped };
+}
+
+/**
+ * The one op that leaves a block with these values and classes, or `null`
+ * when it already has them. A field left empty is removed by name, as every
+ * style op removes one.
+ */
+function pasteOp(
+  node: BlockNode,
+  styles: NodeStyles | undefined,
+  classes: readonly string[]
+): BuilderOp | null {
+  const patch: { styles?: NodeStyles; classes?: string[] } = {};
+  const unset: ("styles" | "classes")[] = [];
+  if (!sameStyleValue(node.styles ?? {}, styles ?? {})) {
+    if (styles === undefined) unset.push("styles");
+    else patch.styles = styles;
+  }
+  if (!sameIds(node.classes ?? [], classes)) {
+    if (classes.length === 0) unset.push("classes");
+    else patch.classes = [...classes];
+  }
+  if (Object.keys(patch).length === 0 && unset.length === 0) return null;
+  return {
+    kind: "update",
+    id: node.id,
+    patch,
+    ...(unset.length === 0 ? {} : { unset }),
+  };
+}
+
+/** Two class lists by value, in order: the order is what a block stores. */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
 }

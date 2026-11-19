@@ -80,9 +80,8 @@ vi.mock("@nextlyhq/ui", async importOriginal => {
   };
 });
 
-const { usePublishOffer, useFormPublishOffer } = await import(
-  "./publish-offer"
-);
+const { usePublishOffer, useFormPublishOffer, usePublishQuestion } =
+  await import("./publish-offer");
 
 afterEach(() => {
   cleanup();
@@ -201,6 +200,22 @@ describe("before a publish", () => {
     expect(routes).toHaveBeenCalledTimes(1);
   });
 
+  it("says a live component's new setting isn't published, and what publishing it takes", async () => {
+    server({ dependencies: [{ ...card, newSettings: true }], missing: 0 });
+    render(<Harness />);
+    const running = publish();
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain(
+      "This page uses 1 component with a new setting that isn't published"
+    );
+    expect(dialog.textContent).toContain(
+      "Visitors see a component without its new setting until it's published, and publishing it publishes its other unpublished changes too."
+    );
+    expect(dialog.textContent).not.toContain("Visitors see nothing");
+    fireEvent.click(screen.getByRole("button", { name: "Publish page only" }));
+    await expect(running).resolves.toBeUndefined();
+  });
+
   it("cancels the publish when the author says no", async () => {
     server({ dependencies: [card], missing: 0 });
     render(<Harness />);
@@ -273,7 +288,7 @@ describe("before a publish", () => {
     expect(listed).toEqual([
       "Pricing card, component",
       "Badge in the card, component",
-      "Landing, Layout",
+      "Landing, header & footer set",
     ]);
     fireEvent.click(screen.getByRole("button", { name: "Publish all 4" }));
     await running;
@@ -438,8 +453,10 @@ describe("before a publish", () => {
     render(<Harness layout="l1" />);
     const running = publish();
     const dialog = await screen.findByRole("alertdialog");
-    expect(dialog.textContent).toContain("This page's Layout isn't published");
-    expect(dialog.textContent).toContain("site's default Layout");
+    expect(dialog.textContent).toContain(
+      "This page's header & footer set isn't published"
+    );
+    expect(dialog.textContent).toContain("site's default header & footer set");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Publish both" }));
     });
@@ -584,5 +601,36 @@ describe("an edit made while the question is asked", () => {
     );
     // Bounded: it stops asking rather than chase the author's typing.
     expect(edits).toBe(3);
+  });
+});
+
+describe("the question for a document published through its own session", () => {
+  it("publishes none of the chosen parts once the document may no longer be written", async () => {
+    server({ dependencies: [card], missing: 0 });
+    let offer:
+      | ((
+          documents: readonly unknown[],
+          stillMay: () => boolean
+        ) => Promise<void>)
+      | undefined;
+    function Session(): JSX.Element {
+      const question = usePublishQuestion("component");
+      offer = question.offer;
+      return question.dialog;
+    }
+    render(<Session />);
+    let mayWrite = true;
+
+    const running = offer?.([DOCUMENT], () => mayWrite);
+    await screen.findByRole("alertdialog");
+    // A colleague takes the header over while the author is asked.
+    mayWrite = false;
+    fireEvent.click(screen.getByRole("button", { name: "Publish both" }));
+
+    await expect(running).rejects.toThrow();
+    expect(routes).not.toHaveBeenCalledWith(
+      "/publish-dependencies",
+      expect.anything()
+    );
   });
 });

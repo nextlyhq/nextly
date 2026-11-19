@@ -155,6 +155,12 @@ export const NEXTLY_ERROR_STATUS = {
   // database is migrated, and running `nextly migrate` is the recovery.
   NEXTLY_DATABASE_NOT_MIGRATED: 503,
   NEXTLY_CORE_DESTRUCTIVE_REFUSED: 409,
+  // A core upgrade drizzle-kit cannot plan from this database, refused
+  // before any statement: the database is as it was, and an earlier release
+  // takes it the first step.
+  NEXTLY_CORE_UPGRADE_UNSUPPORTED: 409,
+  // A core upgrade that ran and still left a declared column or table out.
+  NEXTLY_CORE_UPGRADE_INCOMPLETE: 500,
   NEXTLY_MIGRATION_DRIFT: 409,
   NEXTLY_MIGRATION_APPLY_FAILED: 500,
   // A SQLite migration unit would leave a row referencing a row that does
@@ -163,6 +169,9 @@ export const NEXTLY_ERROR_STATUS = {
   // A migration unit marked to run outside a transaction failed part-way;
   // the statements before the failing one stayed applied.
   NEXTLY_MIGRATION_PARTIALLY_APPLIED: 500,
+  // A pending app migration the database already stands at the end of, whose snapshot does not
+  // prove all it does, refused rather than recorded applied without running.
+  NEXTLY_MIGRATION_NOT_PROVEN: 409,
   // Another run recorded the same migration applied, or rolled back, while
   // this one was running it: this run's ledger write lost, and its work is
   // rolled back wherever the transaction can undo it.

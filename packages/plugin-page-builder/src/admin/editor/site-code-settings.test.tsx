@@ -22,6 +22,7 @@ import type {
   SiteCodeRead,
   SiteCodeSaved,
 } from "../../library-contract";
+import type { SiteCssRead, SiteCssSaved } from "../../site-css-contract";
 
 let codeRead: SiteCodeRead;
 const refetch = vi.fn();
@@ -36,15 +37,69 @@ let held: Promise<void> | null = null;
 /** What a save answers; undefined is a route that answered nothing at all. */
 let saveAnswer: SiteCodeSaved | undefined;
 
+/** The site's CSS as its read answers, each read in order, and its saves. */
+let cssRead: SiteCssRead;
+let cssReadError: Error | null = null;
+const cssReads: SiteCssRead[] = [];
+const cssWrites: Record<string, unknown>[] = [];
+/** What a CSS save answers, or the refusal it throws. */
+let cssSave: () => SiteCssSaved;
+
+/** A refusal as the admin's transport raises it. */
+function refusal(
+  status: number,
+  message: string,
+  errors?: { path: string; code: string; message: string }[]
+): Error {
+  return Object.assign(new Error(message), {
+    status,
+    code: status === 409 ? "CONFLICT" : "VALIDATION_ERROR",
+    ...(errors === undefined ? {} : { data: { errors } }),
+  });
+}
+
+/** The canvas's read of the CSS it draws, and each time it was asked again. */
+const drawnRefetch = vi.fn();
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
-  usePluginRoute: () => ({
-    data: codeRead,
-    pending: false,
-    error: readError,
-    fetching: refreshing,
-    refetch,
-  }),
-  writePluginRoute: async ({ body }: { body: Record<string, unknown> }) => {
+  usePluginRoute: ({ path }: { path: string }) =>
+    path === "/site/css/drawn"
+      ? {
+          data: { css: cssRead.css },
+          pending: false,
+          error: null,
+          fetching: false,
+          refetch: drawnRefetch,
+        }
+      : {
+          data: codeRead,
+          pending: false,
+          error: readError,
+          fetching: refreshing,
+          refetch,
+        },
+  readPluginRoute: async ({ path }: { path: string }) => {
+    expect(path).toBe("/site/css");
+    if (cssReadError !== null) throw cssReadError;
+    cssReads.push(cssRead);
+    return cssRead;
+  },
+  isApiError: (reason: unknown) =>
+    reason instanceof Error &&
+    typeof (reason as { status?: unknown }).status === "number",
+  validationIssues: (reason: unknown) =>
+    (reason as { data?: { errors?: unknown[] } }).data?.errors ?? [],
+  writePluginRoute: async ({
+    path,
+    body,
+  }: {
+    path: string;
+    body: Record<string, unknown>;
+  }) => {
+    if (path === "/site/css") {
+      cssWrites.push(body);
+      return { message: "", item: cssSave() };
+    }
     writes.push(body);
     if (held !== null) await held;
     const item = body.dryRun === true ? checkAnswer : saveAnswer;
@@ -58,6 +113,7 @@ vi.mock("@nextlyhq/builder/shell", () => ({
 }));
 
 const { SiteCodeSection } = await import("./site-code-settings");
+const { useDrawnSiteCss } = await import("../site-css-read");
 
 /** A place with nothing refused, holding `elements`. */
 const judged = (elements = 1) => ({ refusals: [], notes: [], elements });
@@ -92,6 +148,17 @@ beforeEach(() => {
     changedBy: null,
   };
   writes.length = 0;
+  cssRead = {
+    css: "",
+    sha256: "e".repeat(64),
+    changedAt: null,
+    changedBy: null,
+  };
+  cssReadError = null;
+  cssReads.length = 0;
+  cssWrites.length = 0;
+  cssSave = () => ({ sha256: "f".repeat(64) });
+  drawnRefetch.mockClear();
   fetched.length = 0;
   refetch.mockClear();
   livePolicy = null;
@@ -139,9 +206,12 @@ function editHead(head: string): void {
 }
 
 describe("the site's code in Settings", () => {
-  it("says a site with none has nothing yet, and offers to add it", () => {
+  it("says a site with none has nothing yet, and offers to add it", async () => {
     show();
-    expect(screen.getAllByText("Nothing yet")).toHaveLength(2);
+    // The CSS, the head and the end of the body.
+    await waitFor(() =>
+      expect(screen.getAllByText("Nothing yet")).toHaveLength(3)
+    );
     expect(screen.getByRole("button", { name: "Add code" })).toBeTruthy();
     // The code itself is shown only once it is opened.
     expect(screen.queryByRole("textbox")).toBeNull();
@@ -626,5 +696,250 @@ describe("the site's code in Settings", () => {
     ).toBeTruthy();
     expect(screen.queryByText(/\(reported only\)/)).toBeNull();
     expect(screen.getByText("script-src · declared, live")).toBeTruthy();
+  });
+});
+
+/** Open the code, and type `css` into the CSS box once it is read. */
+async function editCss(css: string): Promise<HTMLTextAreaElement> {
+  fireEvent.click(screen.getByRole("button", { name: /^(Add|Edit) code$/ }));
+  const box = (await screen.findByRole("textbox", {
+    name: "CSS",
+  })) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: css } });
+  return box;
+}
+
+/** The refusals listed under the CSS box, as written. */
+function cssRefusals(): string[] {
+  const box = screen.getByRole("textbox", { name: "CSS" });
+  const list = document.getElementById(
+    (box.getAttribute("aria-describedby") ?? "").split(" ").at(-1) ?? ""
+  );
+  return [...(list?.querySelectorAll("li") ?? [])].map(
+    item => item.textContent ?? ""
+  );
+}
+
+describe("the site's CSS in Settings → Code", () => {
+  it("draws a CSS box above Head, with its line, for whoever may change the site's settings", async () => {
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Add code" }));
+    const box = await screen.findByRole("textbox", { name: "CSS" });
+    const line = document.getElementById(
+      (box.getAttribute("aria-describedby") ?? "").split(" ")[0] ?? ""
+    );
+    expect(line?.textContent).toBe(
+      "CSS for every page of the site. Write plain CSS; no <style> tags needed."
+    );
+    // The CSS box comes first, as the page's Code tab has it, then the code.
+    const boxes = screen.getAllByRole("textbox");
+    expect(boxes.map(each => each.getAttribute("id"))).toEqual(
+      ["CSS", "Head", "End of body"].map(name =>
+        screen.getByRole("textbox", { name }).getAttribute("id")
+      )
+    );
+  });
+
+  it("shows the saved CSS in the summary in plain words, and opens it to edit", async () => {
+    cssRead = { ...cssRead, css: "body {\n  margin: 0;\n}" };
+    show();
+    expect(await screen.findByText("3 lines of CSS")).toBeTruthy();
+    // CSS alone is something saved: the way in edits rather than adds.
+    fireEvent.click(screen.getByRole("button", { name: "Edit code" }));
+    expect(
+      (
+        (await screen.findByRole("textbox", {
+          name: "CSS",
+        })) as HTMLTextAreaElement
+      ).value
+    ).toBe("body {\n  margin: 0;\n}");
+  });
+
+  it("saves an accepted sheet from the CSS it was read at, and says it applies to every published page at once", async () => {
+    const told = show();
+    await editCss("body { outline: 4px solid red; }");
+    expect(told.editing).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    expect(await screen.findByText("Site CSS saved")).toBeTruthy();
+    expect(
+      screen.getByText("It applies to every published page at once.")
+    ).toBeTruthy();
+    expect(cssWrites).toEqual([
+      { css: "body { outline: 4px solid red; }", sha256: "e".repeat(64) },
+    ]);
+    // The code was not changed, so it was neither checked nor saved.
+    expect(writes).toEqual([]);
+    expect(screen.queryByText("Site code saved")).toBeNull();
+    // Read again for the summary.
+    await waitFor(() => expect(cssReads.length).toBeGreaterThan(1));
+  });
+
+  it("refuses an @import, naming its line, and saves nothing", async () => {
+    show();
+    const box = await editCss(
+      "body { color: red; }\n@import url(https://example.com/x.css);"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    await waitFor(() =>
+      expect(cssRefusals()).toEqual(["Line 2: @import isn't allowed."])
+    );
+    expect(box.getAttribute("aria-invalid")).toBe("true");
+    expect(screen.getByText("Nothing was saved.")).toBeTruthy();
+    expect(cssWrites).toEqual([]);
+    expect(writes).toEqual([]);
+    expect(box.value).toBe(
+      "body { color: red; }\n@import url(https://example.com/x.css);"
+    );
+  });
+
+  it("refuses a url() to another site, naming its line, and saves nothing", async () => {
+    show();
+    await editCss(
+      'a { color: red; }\n\n.hero { background: url("https://cdn.example/a.png"); }'
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    await waitFor(() =>
+      expect(cssRefusals()).toEqual([
+        'Line 3: Only pictures and fonts from this site can be used: "https://cdn.example/a.png" isn\'t a path on this site.',
+      ])
+    );
+    expect(cssWrites).toEqual([]);
+  });
+
+  it("refuses a pasted <style> tag with the hint to leave the tags out, rather than stripping them", async () => {
+    show();
+    const box = await editCss("<style>body{}</style>");
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    await waitFor(() =>
+      expect(cssRefusals()).toEqual(["Line 1: Leave out the <style> tags."])
+    );
+    // What the author pasted is what is still there.
+    expect(box.value).toBe("<style>body{}</style>");
+    expect(cssWrites).toEqual([]);
+  });
+
+  it("names each refused line, focuses the first, and saves neither the CSS nor the code beside it", async () => {
+    show();
+    await editCss('@import "/a.css";\np { behavior: url(/x.htc); }');
+    fireEvent.change(screen.getByRole("textbox", { name: "Head" }), {
+      target: { value: "<meta name=a content=b>" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    await waitFor(() =>
+      expect(cssRefusals()).toEqual([
+        "Line 1: @import isn't allowed.",
+        "Line 2: behavior isn't allowed: it can run script.",
+      ])
+    );
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toBe(
+        "Line 1: @import isn't allowed."
+      )
+    );
+    // The code was checked, as every save checks it, and nothing was saved.
+    expect(writes.map(write => write.dryRun)).toEqual([true]);
+    expect(cssWrites).toEqual([]);
+  });
+
+  it("saves the CSS before the code, so a CSS refusal saves neither", async () => {
+    checkAnswer = {
+      ...unchecked,
+      csp: [
+        {
+          source: "declared",
+          check: { checked: true, findings: [] },
+          additions: [],
+          policies: 1,
+        },
+      ],
+    };
+    cssSave = () => {
+      throw refusal(400, "Validation failed.", [
+        {
+          path: "css",
+          code: "SITE_CSS_REFUSED",
+          message: "Line 1: This CSS can't be read.",
+        },
+      ]);
+    };
+    show();
+    await editCss("a { color: red; }");
+    fireEvent.change(screen.getByRole("textbox", { name: "Head" }), {
+      target: { value: "<meta name=a content=b>" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    // The server's own refusal, listed under the box as the browser's is.
+    await waitFor(() =>
+      expect(cssRefusals()).toEqual(["Line 1: This CSS can't be read."])
+    );
+    expect(writes.map(write => write.dryRun === true)).toEqual([true]);
+  });
+
+  it("keeps the draft when someone else saved the CSS first, says so plainly, and saves over theirs only when asked again", async () => {
+    cssSave = () => {
+      throw refusal(409, "Someone changed the site CSS; reload to see it");
+    };
+    show();
+    const box = await editCss("main { gap: 1rem; }");
+    // Theirs, as the read answers once they have saved.
+    cssRead = {
+      ...cssRead,
+      css: "main { gap: 2rem; }",
+      sha256: "a".repeat(64),
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    expect(
+      await screen.findByText(
+        "Someone else saved the site CSS while you were editing, so nothing was saved. Your CSS is still here: save again to replace theirs, or cancel to see what they saved."
+      )
+    ).toBeTruthy();
+    expect(box.value).toBe("main { gap: 1rem; }");
+    expect(screen.queryByText("Site CSS saved")).toBeNull();
+    cssSave = () => ({ sha256: "b".repeat(64) });
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    expect(await screen.findByText("Site CSS saved")).toBeTruthy();
+    // The second save is made from their CSS, read again after the refusal.
+    expect(cssWrites.map(write => write.sha256)).toEqual([
+      "e".repeat(64),
+      "a".repeat(64),
+    ]);
+  });
+
+  it("has the canvas read the CSS it draws again once a save stores it, and not before", async () => {
+    /** The canvas, as it reads the site's CSS to draw. */
+    function Canvas(): null {
+      useDrawnSiteCss();
+      return null;
+    }
+    render(<Canvas />);
+    show();
+    await editCss("body { outline: 4px solid red; }");
+    // Refused CSS is not stored, so the canvas has nothing new to draw.
+    fireEvent.change(screen.getByRole("textbox", { name: "CSS" }), {
+      target: { value: '@import "/a.css";' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    await waitFor(() => expect(cssRefusals()).toHaveLength(1));
+    expect(drawnRefetch).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox", { name: "CSS" }), {
+      target: { value: "body { outline: 4px solid red; }" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save code" }));
+    await screen.findByText("Site CSS saved");
+    expect(drawnRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the code editable when the CSS can't be read, and offers Retry", async () => {
+    cssReadError = new Error("offline");
+    show();
+    expect(
+      await screen.findByText("The site's CSS could not be loaded.")
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Add code" }));
+    expect(screen.getByRole("textbox", { name: "Head" })).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "CSS" })).toBeNull();
+    cssReadError = null;
+    fireEvent.click(screen.getAllByRole("button", { name: "Retry" })[0]!);
+    expect(await screen.findByRole("textbox", { name: "CSS" })).toBeTruthy();
   });
 });

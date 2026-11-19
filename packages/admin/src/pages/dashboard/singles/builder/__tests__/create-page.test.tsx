@@ -1,50 +1,65 @@
 /**
- * The "How is this edited?" answer must reach both places a new Single is
- * recorded: the create request (so the server makes the field) and
- * ui-schema.json (so the committed schema agrees). Dropping it left a Single
- * made for the Page Builder with no blocks field, so its editor had nothing
- * for the Page Builder to attach to.
+ * Create on the Single create page makes the Single a pending change: it waits
+ * in this tab's unsaved entities, with the starting field the "What will
+ * editors make?" answer names, and its editor opens. Nothing is created on the
+ * server until the editor's save.
  */
 import { render } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder";
+import type { UnsavedEntity } from "@admin/lib/builder/unsaved-entities";
+import type { FieldDefinition } from "@admin/types/collection";
 
-let submit: ((values: BuilderSettingsValues) => void) | undefined;
-vi.mock("@admin/components/features/schema-builder", () => ({
-  BuilderSettingsModal: (props: {
-    onSubmit: (values: BuilderSettingsValues) => void;
-  }) => {
-    submit = props.onSubmit;
-    return null;
-  },
-}));
+let submit:
+  | ((
+      values: BuilderSettingsValues,
+      templateFields: FieldDefinition[],
+      needed: Omit<UnsavedEntity, "token">[]
+    ) => void)
+  | undefined;
+vi.mock(
+  "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
+  () => ({
+    NewEntityDialog: (props: {
+      onCreate: (
+        values: BuilderSettingsValues,
+        templateFields: FieldDefinition[],
+        needed: Omit<UnsavedEntity, "token">[]
+      ) => void;
+    }) => {
+      submit = props.onCreate;
+      return null;
+    },
+  })
+);
 
 const mockCreate = vi.fn();
 vi.mock("@admin/hooks/queries", () => ({
   useCreateSingle: () => ({ mutate: mockCreate, isPending: false }),
 }));
 
-const mockWriteSingle = vi.fn();
-vi.mock("@admin/services/schemaFileApi", () => ({
-  schemaFileApi: {
-    writeSingle: (...args: unknown[]) => mockWriteSingle(...args),
-  },
+const mockNavigate = vi.fn();
+vi.mock("@admin/lib/navigation", () => ({
+  navigateTo: (...args: unknown[]) => mockNavigate(...args),
 }));
-
-vi.mock("@admin/lib/navigation", () => ({ navigateTo: vi.fn() }));
 vi.mock("@admin/components/ui", () => ({
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
 }));
 
-import { toast } from "@admin/components/ui";
-import { parseApiError } from "@admin/lib/api/parseApiError";
+import {
+  removeUnsavedEntity,
+  unsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
 
 import SingleBuilderPage from "../index";
 
 function values(startingFieldType: string | null): BuilderSettingsValues {
   return {
-    singularName: "Homepage",
+    singularName: "Home page",
+    slug: "home-page",
+    icon: "Home",
+    status: true,
     startingFieldType,
   } as BuilderSettingsValues;
 }
@@ -52,64 +67,54 @@ function values(startingFieldType: string | null): BuilderSettingsValues {
 beforeEach(() => {
   vi.clearAllMocks();
   submit = undefined;
-  mockWriteSingle.mockResolvedValue(undefined);
 });
 
+afterEach(() => removeUnsavedEntity("single", "home-page"));
+
 describe("Single create page", () => {
-  it("creates the Single with the starting field its answer names", () => {
+  it("keeps the Single unsaved, with the starting field its answer names", () => {
     render(<SingleBuilderPage />);
-    submit?.(values("blocks"));
+    submit?.(values("blocks"), [], []);
 
-    expect(mockCreate).toHaveBeenCalledTimes(1);
-    expect(mockCreate.mock.calls[0][0].fields).toEqual([
+    expect(unsavedEntity("single", "home-page")).toEqual({
+      // The store gives each entity a token of its own.
+      token: expect.any(String),
+      kind: "single",
+      address: "home-page",
+      settings: expect.objectContaining({
+        singularName: "Home page",
+        slug: "home-page",
+        icon: "Home",
+        status: true,
+      }),
+      fields: [{ name: "blocks", type: "blocks" }],
+    });
+  });
+
+  it("keeps a Single with no starting field for standard fields", () => {
+    render(<SingleBuilderPage />);
+    submit?.(values(null), [], []);
+
+    expect(unsavedEntity("single", "home-page")?.fields).toEqual([]);
+  });
+
+  it("keeps the template's fields after the starting field", () => {
+    render(<SingleBuilderPage />);
+    submit?.(values("blocks"), [{ name: "lede", type: "text" }], []);
+
+    expect(unsavedEntity("single", "home-page")?.fields).toEqual([
       { name: "blocks", type: "blocks" },
+      { name: "lede", type: "text" },
     ]);
   });
 
-  it("writes the same starting field to ui-schema.json", async () => {
+  it("creates nothing on the server, and opens the Single's editor", () => {
     render(<SingleBuilderPage />);
-    submit?.(values("blocks"));
-    const { onSuccess } = mockCreate.mock.calls[0][1];
-    onSuccess();
-    await vi.waitFor(() => expect(mockWriteSingle).toHaveBeenCalledTimes(1));
+    submit?.(values(null), [], []);
 
-    const entity = mockWriteSingle.mock.calls[0][0];
-    expect(entity.fields).toEqual([
-      expect.objectContaining({ name: "blocks", type: "blocks" }),
-    ]);
-  });
-
-  it("creates a Single with no starting field for standard fields", () => {
-    render(<SingleBuilderPage />);
-    submit?.(values(null));
-
-    expect(mockCreate.mock.calls[0][0].fields).toEqual([]);
-  });
-
-  /**
-   * A refused address arrives as a validation envelope whose own message is
-   * only "Validation failed."; the reason is the field's. Toasting the
-   * envelope's message told the person their Single was refused without why.
-   */
-  it("shows the reason a refused address gives, not the envelope's message", () => {
-    const reason =
-      "Single address 'home-locales' cannot end in '_locales': that suffix names a localization table";
-    render(<SingleBuilderPage />);
-    submit?.(values(null));
-    const { onError } = mockCreate.mock.calls[0][1];
-    onError(
-      parseApiError(
-        {
-          error: {
-            code: "VALIDATION_ERROR",
-            message: "Validation failed.",
-            data: { errors: [{ path: "slug", message: reason }] },
-          },
-        },
-        400
-      )
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith(
+      "/admin/builder/singles/home-page"
     );
-
-    expect(toast.error).toHaveBeenCalledWith(reason);
   });
 });

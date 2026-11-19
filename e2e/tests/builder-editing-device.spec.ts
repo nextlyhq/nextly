@@ -46,7 +46,7 @@ function devices(page: Page) {
   return page.getByRole("radiogroup", { name: "Device" });
 }
 
-/** The zoom menu's trigger, whose name says whether it is fitting. */
+/** The zoom menu's trigger, whose name says whether it is fitting ("Fit"). */
 function zoomTrigger(page: Page) {
   return page.getByRole("button", { name: /^Canvas zoom:/ });
 }
@@ -108,16 +108,15 @@ test.describe("the device being edited", () => {
 
     await clickBlock(page, TEXT_ID);
     await page.getByRole("tab", { name: "Style" }).click();
-    // Colour sits in Typography, which starts closed for a text block.
-    const section = page.getByRole("button", {
-      name: "Typography",
-      exact: true,
+    // Colour sits in Text, which starts closed for a text block.
+    const section = page.getByTestId("inspector").getByRole("button", {
+      name: /^Text(\s?has changes)?$/,
     });
     if ((await section.getAttribute("aria-expanded")) !== "true") {
       await section.click();
     }
     const color = page
-      .getByRole("region", { name: /^Typography/ })
+      .getByRole("region", { name: /^Text(\s?has changes)?$/ })
       .getByRole("textbox", { name: "Colour", exact: true });
     await color.fill("#1155cc");
     await color.press("Enter");
@@ -149,14 +148,15 @@ test.describe("the device being edited", () => {
     await openLayers(page);
     await expect(
       devices(page).getByRole("radio", { checked: true })
-    ).toHaveText("Desktop · 1280px");
+    ).toHaveAccessibleName(/^Desktop · 1280px · /);
+    await expect(page.locator("[data-nx-active-width]")).toHaveText("1280px");
 
     await devices(page)
       .getByRole("radio", { name: /^Tablet/ })
       .click();
     const chosen = devices(page).getByRole("radio", { checked: true });
-    await expect(chosen).toHaveAccessibleName(/^Tablet/);
-    await expect(chosen).toHaveText("Tablet · 1024px");
+    await expect(chosen).toHaveAccessibleName(/^Tablet · 1024px · /);
+    await expect(page.locator("[data-nx-active-width]")).toHaveText("1024px");
 
     await openLayers(page);
     await expect(chosen).toHaveAccessibleName(/^Tablet/);
@@ -202,7 +202,7 @@ test.describe("the zoom", () => {
     await trigger.click();
     await page.getByRole("menuitemradio", { name: "Fit" }).click();
     await expect(trigger).toHaveText(/^Fit · \d+%$/);
-    await expect(trigger).toHaveAccessibleName(/^Canvas zoom: fitting, \d+%$/);
+    await expect(trigger).toHaveAccessibleName(/^Canvas zoom: Fit, \d+%$/);
   });
 
   test("goes to actual size on mod+0 and back to fitting on Shift+1", async ({
@@ -295,9 +295,9 @@ test.describe("the device buttons", () => {
       // The menu's button names the device being styled; no button is checked,
       // and the canvas lays the page out at the phone's width.
       await expect(more).toHaveAccessibleName(
-        "More devices, styling Phone, up to 480 pixels"
+        "More devices, styling Phone · 480px · styles for 480px and narrower"
       );
-      await expect(more).toHaveText("Phone · 480px");
+      await expect(page.locator("[data-nx-active-width]")).toHaveText("480px");
       await expect(
         devices(page).getByRole("radio", { checked: true })
       ).toHaveCount(0);

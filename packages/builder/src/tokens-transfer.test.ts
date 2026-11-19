@@ -14,20 +14,22 @@
  * @module tokens-transfer.test
  */
 import {
+  compileSiteSheet,
   dtcgToTokens,
   emitTokenBlocks,
+  resolveSiteTokens,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
   applyImport,
-  exportCss,
   exportDtcg,
   exportDtcgWithTheme,
   exportForFigma,
   importDtcg,
   planImport,
+  variableCss,
 } from "./tokens-transfer";
 
 /** A site whose second token is RENAMED, so identity and name differ. */
@@ -60,13 +62,13 @@ describe("what comes out", () => {
     expect(brand?.values.light).toBe("#3b82f6");
   });
 
-  it("exports the DECLARATIONS a visitor's stylesheet holds", () => {
-    // Asserted against the emitter rather than by repeating the same
-    // `compileSiteSheet` call: two identical calls compared to each other agree
-    // by construction, whatever either is passed, so a wrong argument would
-    // break neither side. `emitTokenBlocks` is the function that decides what a
-    // token declaration IS, and it is reached by a different route.
-    const css = exportCss(SITE);
+  it("copies the DECLARATIONS a visitor's stylesheet holds", () => {
+    // Asserted against the emitter rather than by repeating the same call:
+    // two identical calls compared to each other agree by construction,
+    // whatever either is passed, so a wrong argument would break neither
+    // side. `emitTokenBlocks` is the function that decides what a token
+    // declaration IS, and the site sheet is reached by a different route.
+    const { css } = variableCss(SITE);
     const declared = emitTokenBlocks(SITE, ":root").css;
     expect(declared).not.toBe("");
     for (const property of [
@@ -75,17 +77,15 @@ describe("what comes out", () => {
       "--site-space-4",
     ]) {
       expect(declared, "the emitter writes it").toContain(property);
-      expect(css.text, "and the export carries it").toContain(property);
+      expect(css, "and the copy carries it").toContain(property);
     }
   });
 
-  it("offers a name and a type for each artefact", () => {
+  it("offers a name and a type for each file", () => {
     // Part of the file rather than chrome: a download called "download" is one
     // the author has to rename before anything else will read it.
     expect(exportDtcg(SITE).filename).toBe("tokens.json");
     expect(exportDtcg(SITE).mime).toBe("application/json");
-    expect(exportCss(SITE).filename).toBe("tokens.css");
-    expect(exportCss(SITE).mime).toBe("text/css");
   });
 
   it("pretty-prints, so a diff is readable", () => {
@@ -812,11 +812,10 @@ describe("what a file can and cannot carry back out", () => {
     expect(made?.skipped.join(" ")).toContain("cannot be written to a file");
   });
 
-  it("hands over NOTHING when there is no CSS to write", () => {
-    // A newline downloads as `tokens.css` and reports as saved, telling an
-    // author their tokens were written when nothing was.
-    const made = exportCss({ tokens: [] });
-    expect(made.text).toBe("");
+  it("hands over NOTHING when there is no CSS to copy", () => {
+    // A lone newline would be copied and confirmed, telling an author their
+    // variables were copied when nothing was.
+    expect(variableCss({ tokens: [] })).toEqual({ css: "", skipped: [] });
   });
 });
 
@@ -1472,7 +1471,8 @@ describe("an import is planned before anything changes", () => {
       { name: "color.ink", kind: "color", values: { light: "#222222" } },
       // Added.
       { name: "color.brand", kind: "color", values: { light: "#1d2b6b" } },
-      // Skipped: a composite this site has no kind for.
+      // Added too: a custom value, which the format has no type for and the
+      // file carries in this system's extension.
       { name: "shadow.card", kind: "custom", values: { light: "x" } },
     ],
   }).text;
@@ -1483,7 +1483,7 @@ describe("an import is planned before anything changes", () => {
       MINE
     );
     if (!plan.ok) throw new Error(plan.error);
-    expect(plan.added.map(t => t.name)).toEqual(["color.brand"]);
+    expect(plan.added.map(t => t.name)).toEqual(["color.brand", "shadow.card"]);
     expect(plan.changed.map(t => t.name)).toEqual(["color.paper"]);
     expect(plan.unchanged.map(t => t.name)).toEqual(["space.4"]);
     expect(
@@ -1530,6 +1530,7 @@ describe("an import is planned before anything changes", () => {
       "color.paper",
       "space.4",
       "color.brand",
+      "shadow.card",
     ]);
     expect(
       result.tokens.tokens.find(t => t.name === "color.paper")?.values.dark
@@ -1924,5 +1925,252 @@ describe("an import that leaves out a variable's optional fields", () => {
       ...stored.tokens[0],
       values: { light: "#111111", dark: "#eeeeee" },
     });
+  });
+});
+
+describe("what an export says it did not write", () => {
+  const SHADOW: SiteTokenSet = {
+    tokens: [
+      { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      {
+        name: "shadow.card",
+        label: "Card shadow",
+        kind: "shadow",
+        values: { light: "0 1px 2px rgb(0 0 0 / 0.2)" },
+      },
+    ],
+  };
+
+  it("lists a shadow as left out of Figma, saying why in plain words", () => {
+    const gaps = exportForFigma(SHADOW).flatMap(file => file.gaps);
+    expect(gaps).toEqual([
+      {
+        name: "shadow.card",
+        label: "Card shadow",
+        outcome: "left-out",
+        why: "Figma keeps these as effect styles and text styles; the variables they use are in the file",
+      },
+    ]);
+  });
+
+  it("lists a value the token file keeps only as Nextly data", () => {
+    const gaps = exportDtcgWithTheme({
+      tokens: [
+        { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+        { name: "space.lead", kind: "dimension", values: { light: "1.5em" } },
+      ],
+    }).flatMap(file => file.gaps);
+    expect(gaps).toEqual([
+      {
+        name: "space.lead",
+        label: "Lead",
+        outcome: "kept",
+        why: "Design tools take sizes in px or rem only.",
+      },
+    ]);
+  });
+
+  it("lists a dark value only the token file's Nextly data holds", () => {
+    // The light value is one the format types, so the variable is in the
+    // token file as other tools read it; its dark value is not, so the theme
+    // file has no dark value for it and other tools use the light one.
+    const files = exportDtcgWithTheme({
+      tokens: [
+        {
+          name: "space.lead",
+          kind: "dimension",
+          values: { light: "16px", dark: "2em" },
+        },
+        {
+          name: "space.4",
+          kind: "dimension",
+          values: { light: "1rem", dark: "1.5rem" },
+        },
+      ],
+    });
+    expect(files.flatMap(file => file.gaps)).toEqual([
+      {
+        name: "space.lead",
+        label: "Lead",
+        outcome: "kept",
+        why: "Its dark value is kept for Nextly only, so design tools use its light value in dark mode. Design tools take sizes in px or rem only.",
+      },
+    ]);
+  });
+
+  it("names a variable once when both its values are Nextly data", () => {
+    const gaps = exportDtcgWithTheme({
+      tokens: [
+        {
+          name: "space.lead",
+          kind: "dimension",
+          values: { light: "1.5em", dark: "2em" },
+        },
+      ],
+    }).flatMap(file => file.gaps);
+    expect(gaps).toEqual([
+      {
+        name: "space.lead",
+        label: "Lead",
+        outcome: "kept",
+        why: "Design tools take sizes in px or rem only.",
+      },
+    ]);
+  });
+
+  it("says a variable that lost only its vendor data was exported without it", () => {
+    const gaps = exportDtcg({
+      tokens: [
+        {
+          name: "color.ink",
+          label: "Ink",
+          kind: "color",
+          values: { light: "#111111" },
+          extensions: { vendor: new Map([["lost", 1]]) } as never,
+        },
+      ],
+    }).gaps;
+    expect(gaps).toEqual([
+      {
+        name: "color.ink",
+        label: "Ink",
+        outcome: "without-data",
+        why: "It holds data from another tool that a file can't store, so the file has its value but not that data. Importing the file back treats it as a new variable.",
+      },
+    ]);
+  });
+
+  it("never calls a value kept for Nextly left out because its vendor data was lost", () => {
+    const gaps = exportDtcg({
+      tokens: [
+        {
+          name: "space.lead",
+          label: "Lead",
+          kind: "dimension",
+          values: { light: "1.5em" },
+          extensions: { vendor: new Map([["lost", 1]]) } as never,
+        },
+      ],
+    }).gaps;
+    expect(gaps.map(gap => gap.outcome).sort()).toEqual([
+      "kept",
+      "without-data",
+    ]);
+  });
+
+  it("names nothing when every variable was written", () => {
+    expect(exportDtcgWithTheme(SITE).flatMap(file => file.gaps)).toEqual([]);
+    expect(exportForFigma(SITE).flatMap(file => file.gaps)).toEqual([]);
+  });
+
+  it("says why in plain words for each reason Figma gives", () => {
+    const why = (token: SiteTokenSet["tokens"][number]): string | undefined =>
+      exportForFigma({ tokens: [token] })[0]?.gaps[0]?.why;
+    expect(
+      why({ name: "space.x", kind: "dimension", values: { light: "2em" } })
+    ).toBe(
+      "Figma takes sizes in px or rem, and fluid sizes that end in px or rem."
+    );
+    expect(
+      why({
+        name: "color.mix",
+        kind: "color",
+        values: { light: "color-mix(in srgb, red, blue)" },
+      })
+    ).toBe("Figma takes colours written as hex or rgb().");
+    expect(
+      why({ name: "time.slow", kind: "duration", values: { light: "slow" } })
+    ).toBe("Figma takes durations in ms or s.");
+    // The words never say "token": the author's word is "variable".
+    const named = (tokens: SiteTokenSet["tokens"]): string[] => [
+      ...exportForFigma({ tokens })[0]!.gaps.map(gap => gap.why),
+      ...exportDtcg({ tokens }).gaps.map(gap => gap.why),
+    ];
+    const badName = named([
+      { name: "bad name", kind: "number", values: { light: "1" } },
+    ]);
+    expect(badName).toEqual([
+      "Its code name can't be written to a file.",
+      "Its code name can't be written to a file.",
+    ]);
+    const underAVariable = named([
+      { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      { name: "color.ink.soft", kind: "color", values: { light: "#333333" } },
+    ]);
+    expect(underAVariable).toEqual([
+      "Another variable's group already uses this name.",
+      '"color.ink" is a variable, so nothing can sit under its name.',
+    ]);
+    for (const why of [...badName, ...underAVariable]) {
+      expect(why).not.toMatch(/token/i);
+    }
+  });
+
+  it("names a default site's one kept value, so its export has a list", () => {
+    const gaps = exportDtcgWithTheme(resolveSiteTokens(undefined)).flatMap(
+      file => file.gaps
+    );
+    expect(gaps.map(gap => [gap.name, gap.outcome])).toEqual([
+      ["space.paragraph", "kept"],
+    ]);
+  });
+});
+
+describe("what each exported file holds, in words", () => {
+  const DARK: SiteTokenSet = {
+    tokens: [
+      {
+        name: "color.brand",
+        kind: "color",
+        values: { light: "#1d2b6b", dark: "#8fa7ff" },
+      },
+    ],
+  };
+
+  it("names the variables and the theme file's dark values", () => {
+    expect(exportDtcgWithTheme(DARK).map(file => file.label)).toEqual([
+      "variables",
+      "dark values in a theme file",
+    ]);
+  });
+
+  it("names each Figma file by its mode", () => {
+    expect(exportForFigma(DARK).map(file => file.label)).toEqual([
+      "light mode",
+      "dark mode",
+    ]);
+  });
+});
+
+describe("the CSS variables an author copies", () => {
+  const DARK: SiteTokenSet = {
+    tokens: [
+      {
+        name: "color.brand",
+        kind: "color",
+        values: { light: "#1d2b6b", dark: "#8fa7ff" },
+      },
+      { name: "space.4", kind: "dimension", values: { light: "1rem" } },
+    ],
+  };
+
+  it("are the site sheet's own variable blocks, light and dark", () => {
+    const copied = variableCss(DARK).css;
+    const sheet = compileSiteSheet(
+      { tokens: DARK, breakpoints: { viewport: [], container: [] } },
+      {}
+    ).css;
+    expect(sheet).toContain(copied.trimEnd());
+    expect(copied).toContain("--site-color-brand:#1d2b6b");
+    expect(copied).toContain("--site-color-brand:#8fa7ff");
+    expect(copied).toContain("prefers-color-scheme:dark");
+    // Variables only: the sheet's content-width rule is not a variable.
+    expect(copied).not.toContain(".nx-pb-page");
+  });
+
+  it("follow the site's prefix", () => {
+    const copied = variableCss({ ...DARK, prefix: "--brand-" }).css;
+    expect(copied).toContain("--brand-color-brand:");
+    expect(copied).not.toContain("--site-");
   });
 });

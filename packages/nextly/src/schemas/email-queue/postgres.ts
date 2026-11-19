@@ -42,6 +42,28 @@ export const emailQueuePg = pgTable(
     principalId: varchar("principal_id", { length: 191 }),
     /** The last failed attempt's failure, as JSON, with no address. */
     failure: text("failure"),
+    /**
+     * The template it is sent from, in clear so the Activity list can show
+     * and filter by it: a slug names a kind of message, never a person. Null
+     * for a message queued without a template, and for one queued before
+     * this column existed.
+     */
+    templateSlug: varchar("template_slug", { length: 255 }),
+    /**
+     * What was queued, in clear for the Activity: `message` or `template`,
+     * and the kinds of recipient it goes to (`to`, `cc`, `bcc`, comma
+     * separated), never an address. Null for one queued before these were
+     * recorded.
+     */
+    messageKind: varchar("message_kind", { length: 16 }),
+    recipientKinds: varchar("recipient_kinds", { length: 16 }),
+    /**
+     * The provider its latest attempt went through, as its delivery records
+     * name it: null until an attempt is made.
+     */
+    providerType: varchar("provider_type", { length: 50 }),
+    providerId: varchar("provider_id", { length: 36 }),
+    providerOrigin: varchar("provider_origin", { length: 16 }),
     createdAt: bigint("created_at", { mode: "number" }).notNull(),
     updatedAt: bigint("updated_at", { mode: "number" }).notNull(),
     /** When it was sent, failed for good, or was cancelled. */
@@ -50,5 +72,10 @@ export const emailQueuePg = pgTable(
   t => [
     index("email_queue_state_idx").on(t.state, t.settledAt),
     index("email_queue_principal_idx").on(t.principalKind, t.principalId),
+    // The Activity list: newest first, by cursor, and by template.
+    index("email_queue_created_idx").on(t.createdAt, t.id),
+    index("email_queue_template_idx").on(t.templateSlug, t.createdAt),
+    index("email_queue_provider_type_idx").on(t.providerType, t.createdAt),
+    index("email_queue_provider_origin_idx").on(t.providerOrigin, t.createdAt),
   ]
 );

@@ -5,54 +5,28 @@
  * are drawn into.
  */
 import {
-  act,
   cleanup,
   fireEvent,
   render,
   screen,
-  waitFor,
   within,
 } from "@testing-library/react";
 import * as React from "react";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const can = vi.hoisted(() => ({ update: true }));
-type SpacingAnswer =
-  | { saved: true; refreshed: true }
-  | { saved: true; refreshed: false; issue: string }
-  | { saved: false; issue: string };
-
-const spacing = vi.hoisted(() => ({
-  saved: [] as string[],
-  answer: { saved: true, refreshed: true } as SpacingAnswer,
-  /** Answers one save; by default at once with `answer`. */
-  reply: null as null | ((mode: string) => Promise<SpacingAnswer>),
-}));
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: (permission: string) =>
     permission === "update-site-style" ? can.update : false,
 }));
 
-vi.mock("../site-style-client", () => ({
+vi.mock("../site-style-client", async () => ({
+  // Outside an editor: no history, and nothing drawn over the read.
+  SiteStyleHistoryContext: (await import("react")).createContext(null),
+  SiteStylePreviewContext: (await import("react")).createContext(new Map()),
   useSaveSiteStyle: () => ({
     save: vi.fn(() => Promise.resolve({ saved: true, issues: [] })),
-  }),
-  useSaveSpacingMode: () => ({
-    save: (mode: string) => {
-      spacing.saved.push(mode);
-      return spacing.reply === null
-        ? Promise.resolve(spacing.answer)
-        : spacing.reply(mode);
-    },
   }),
   useHeldSiteStyle: () => ({ extend: () => {}, release: async () => {} }),
   useFontCatalogueClient: () => ({
@@ -65,24 +39,31 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
   usePluginClientConfig: () => undefined,
+  // The author the catalogue keeps the choice to show previews for.
+  useCurrentUserId: () => "u1",
 }));
 
+import type { SiteTokenSet, TokenMode } from "@nextlyhq/blocks-engine";
 import {
   CanvasFrame,
   CanvasFrameProvider,
   type CanvasFrameSource,
-  type VariablesPreview,
 } from "@nextlyhq/builder/shell";
+import { TooltipProvider } from "@nextlyhq/ui";
 
-import { previewedCanvas, useCanvasPreviewMode } from "./canvas-preview-mode";
-import { DesignPanel } from "./design-panel";
 import {
-  FontsPanelWithUpload,
-  TokensStudio,
-  VariablesTab,
-} from "./site-style-studios";
+  CanvasModeSwitch,
+  previewedCanvas,
+  useCanvasPreviewMode,
+} from "./canvas-preview-mode";
+import { DesignPanel } from "./design-panel";
+import { SiteFontsScreen } from "./site-style-fonts";
+import { TokensStudio, VariablesTab } from "./site-style-studios";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+});
 
 beforeAll(() => {
   (window as unknown as Record<string, unknown>).ResizeObserver =
@@ -98,14 +79,32 @@ beforeAll(() => {
  * the Variables tab reading from it. The tab is the panel's own state here,
  * as the shell keeps it.
  */
+/** The site's variables in these tests: a colour and a gap with dark values. */
+const SITE: SiteTokenSet = {
+  tokens: [
+    {
+      name: "color.brand",
+      kind: "color",
+      values: { light: "#1d2b6b", dark: "#8fa7ff" },
+    },
+    // Its row shows the previewed mode's value; a colour's swatch shows both
+    // of its values whatever the preview.
+    {
+      name: "space.gap",
+      kind: "dimension",
+      values: { light: "8px", dark: "12px" },
+    },
+  ],
+};
+
 function Studio({
   start,
-  spacingMode = "classic",
-  preview,
+  mode,
+  tokens = SITE,
 }: {
   start: string;
-  spacingMode?: "classic" | "gaps";
-  preview?: VariablesPreview;
+  mode?: TokenMode;
+  tokens?: SiteTokenSet;
 }): React.JSX.Element {
   const [current, choose] = React.useState<string | null>(start);
   return (
@@ -113,33 +112,25 @@ function Studio({
       view={{ current, choose }}
       frame={tabs => (
         <TokensStudio
-          merged={{
-            tokens: [
-              {
-                name: "color.brand",
-                kind: "color",
-                values: { light: "#1d2b6b", dark: "#8fa7ff" },
-              },
-            ],
-          }}
+          merged={tokens}
           supplied={undefined}
           pending={false}
-          spacingMode={spacingMode}
-          {...(preview === undefined ? {} : { preview })}
+          {...(mode === undefined ? {} : { mode })}
         >
           {tabs}
         </TokensStudio>
       )}
       tabs={{
-        variables: () => <VariablesTab />,
-        classes: () => <p>Shared styles content</p>,
-        fonts: () => <p>Fonts content</p>,
+        colours: () => <VariablesTab tab="colours" />,
+        type: () => <VariablesTab tab="type" />,
+        spacing: () => <VariablesTab tab="spacing" />,
+        styles: () => <p>Styles content</p>,
       }}
     />
   );
 }
 
-function renderStudio(start = "variables"): void {
+function renderStudio(start = "colours"): void {
   render(<Studio start={start} />);
 }
 
@@ -171,156 +162,64 @@ describe("the Variables studio", () => {
     expect(screen.getByRole("button", { name: "Add colour" })).toBeTruthy();
   });
 
-  it("draws its preview switch and menu into the Design panel's header", async () => {
+  it("draws its More design actions menu into the Design panel's header, and no light/dark switch or Preview label", async () => {
     can.update = true;
     renderStudio();
-    const header = screen.getByRole("heading", { name: "Design" })
-      .parentElement as HTMLElement;
     expect(
-      await within(header).findByRole("group", { name: "Preview" })
+      await within(header()).findByRole("button", {
+        name: "More design actions",
+      })
     ).toBeTruthy();
-    expect(
-      within(header).getByRole("button", { name: "Import or export" })
-    ).toBeTruthy();
+    expectNoModeSwitchIn(header());
   });
 });
 
 describe("the space between blocks", () => {
-  const classic = () =>
-    screen.getByRole("radio", { name: /From each block’s margins/ });
-  const gaps = () =>
-    screen.getByRole("radio", { name: /From the container’s gap/ });
-
-  it("shows the site's model above the spacing variables", () => {
+  it("is no longer a choice: blocks are always spaced by their container's gap", () => {
     can.update = true;
     renderStudio();
-    const group = screen.getByRole("radiogroup", {
-      name: "Space between blocks",
-    });
-    expect(group).toBeTruthy();
-    expect((classic() as HTMLInputElement).checked).toBe(true);
-    expect((gaps() as HTMLInputElement).checked).toBe(false);
-  });
-
-  beforeEach(() => {
-    spacing.saved.length = 0;
-    spacing.answer = { saved: true, refreshed: true };
-    spacing.reply = null;
-  });
-
-  it("saves a choice and shows it at once", async () => {
-    can.update = true;
-    renderStudio();
-    fireEvent.click(gaps());
-    expect((gaps() as HTMLInputElement).checked).toBe(true);
-    await waitFor(() => expect(spacing.saved).toEqual(["gaps"]));
-  });
-
-  it("lets the latest of two quick choices win, sent in the order they were made", async () => {
-    can.update = true;
-    const pending: ((answer: SpacingAnswer) => void)[] = [];
-    spacing.reply = () =>
-      new Promise<SpacingAnswer>(resolve => pending.push(resolve));
-    renderStudio();
-    fireEvent.click(gaps());
-    await waitFor(() => expect(spacing.saved).toEqual(["gaps"]));
-    fireEvent.click(classic());
-    // The second waits for the first, so the server cannot store them out of
-    // order; the screen shows the latest choice meanwhile.
-    await act(() => new Promise(resolve => setTimeout(resolve, 20)));
-    expect(spacing.saved).toEqual(["gaps"]);
-    expect((classic() as HTMLInputElement).checked).toBe(true);
-    // The first answers, refused: it is superseded, so it neither rolls the
-    // choice back nor speaks.
-    pending[0]?.({ saved: false, issue: "An older refusal." });
-    await waitFor(() => expect(spacing.saved).toEqual(["gaps", "classic"]));
-    expect(screen.queryByText("An older refusal.")).toBeNull();
-    expect((classic() as HTMLInputElement).checked).toBe(true);
-    pending[1]?.({ saved: true, refreshed: true });
-    await waitFor(() =>
-      expect((classic() as HTMLInputElement).checked).toBe(true)
-    );
-  });
-
-  it("never sends a choice replaced before its turn", async () => {
-    can.update = true;
-    const pending: ((answer: SpacingAnswer) => void)[] = [];
-    spacing.reply = () =>
-      new Promise<SpacingAnswer>(resolve => pending.push(resolve));
-    renderStudio();
-    fireEvent.click(gaps());
-    await waitFor(() => expect(spacing.saved).toEqual(["gaps"]));
-    fireEvent.click(classic());
-    fireEvent.click(gaps());
-    pending[0]?.({ saved: true, refreshed: true });
-    await waitFor(() => expect(spacing.saved).toEqual(["gaps", "gaps"]));
-    pending[1]?.({ saved: true, refreshed: true });
-    expect((gaps() as HTMLInputElement).checked).toBe(true);
-  });
-
-  it("keeps a stored choice shown and says so when the editor could not read it back", async () => {
-    can.update = true;
-    spacing.answer = {
-      saved: true,
-      refreshed: false,
-      issue: "Saved, but not read back.",
-    };
-    renderStudio();
-    fireEvent.click(gaps());
-    expect(await screen.findByText("Saved, but not read back.")).toBeTruthy();
-    expect((gaps() as HTMLInputElement).checked).toBe(true);
-  });
-
-  it("puts the stored model back and says why when the save is refused", async () => {
-    can.update = true;
-    spacing.answer = { saved: false, issue: "Not allowed here." };
-    renderStudio();
-    fireEvent.click(gaps());
-    expect(await screen.findByText("Not allowed here.")).toBeTruthy();
-    expect((classic() as HTMLInputElement).checked).toBe(true);
-  });
-
-  it("offers no other model to a role that may not change the site style", () => {
-    can.update = false;
-    renderStudio();
-    expect((gaps() as HTMLInputElement).disabled).toBe(true);
-    fireEvent.click(gaps());
-    expect(spacing.saved).toEqual([]);
+    // The Variables tab is drawn, so a choice above its spacing variables
+    // would be on screen if one were offered.
+    expect(screen.getByRole("tab", { name: "Colours" })).toBeTruthy();
+    expect(
+      screen.queryByRole("radiogroup", { name: "Space between blocks" })
+    ).toBeNull();
   });
 });
 
 describe("the Design panel's header", () => {
-  it("is the same on every tab: the preview switch and the import and export menu", async () => {
+  it("is the same on every tab: the More design actions menu, and no light/dark switch", async () => {
     can.update = true;
-    for (const tab of ["variables", "classes", "fonts"]) {
+    for (const tab of ["colours", "type", "spacing", "styles"]) {
       renderStudio(tab);
       expect(
-        await within(header()).findByRole("group", { name: "Preview" })
+        await within(header()).findByRole("button", {
+          name: "More design actions",
+        })
       ).toBeTruthy();
-      expect(
-        within(header()).getByRole("button", { name: "Import or export" })
-      ).toBeTruthy();
+      expectNoModeSwitchIn(header());
       cleanup();
     }
   });
 
-  it("keeps the preview chosen while the author moves between tabs", async () => {
+  it("has no box above the tabs: an export or import says so in a toast", async () => {
     can.update = true;
-    renderStudio("variables");
-    const dark = () => within(header()).getByRole("button", { name: "Dark" });
-    fireEvent.click(
-      await within(header()).findByRole("button", { name: "Dark" })
-    );
-    openTab("Fonts");
-    expect(await screen.findByText("Fonts content")).toBeTruthy();
-    expect(dark()).toHaveProperty("ariaPressed", "true");
-    openTab("Variables");
-    // The Variables tab draws the mode the header chose.
-    const swatch = (
-      await screen.findByRole("button", { name: /^Brand/ })
-    ).querySelector(".nx-vars__swatch--main") as HTMLElement;
-    expect(swatch.style.getPropertyValue("--nx-swatch")).toBe("#8fa7ff");
-    expect(dark()).toHaveProperty("ariaPressed", "true");
+    renderStudio();
+    await within(header()).findByRole("button", {
+      name: "More design actions",
+    });
+    expect(document.querySelector(".nx-pb-design__reports")).toBeNull();
+  });
+
+  it("shows the editor's mode on every tab", async () => {
+    can.update = true;
+    render(<Studio start="styles" mode="dark" />);
+    expect(await screen.findByText("Styles content")).toBeTruthy();
+    openTab("Spacing");
+    // The Variables tab draws the mode the editor previews.
+    expect(
+      await screen.findByRole("button", { name: /^Gap, 12px/ })
+    ).toBeTruthy();
   });
 });
 
@@ -335,32 +234,58 @@ const UNLOADED_PAGE: CanvasFrameSource = {
 };
 
 /**
- * The Design panel and the canvas as the editor wires them: one preview mode,
- * held above both, picked by the panel's switch and drawn by the frame, with
- * the frame's theme and its tags from the editor's own `previewedCanvas`.
+ * No light/dark switch and no "Preview" label inside `place`: the preview
+ * is the top bar's.
  */
-function PreviewedEditor({ variant }: { variant?: string }): React.JSX.Element {
-  const mode = useCanvasPreviewMode();
+function expectNoModeSwitchIn(place: HTMLElement): void {
+  expect(within(place).queryByRole("group", { name: "Preview" })).toBeNull();
+  expect(within(place).queryByRole("button", { name: "Light" })).toBeNull();
+  expect(within(place).queryByRole("button", { name: "Dark" })).toBeNull();
+  expect(
+    within(place).queryByRole("button", { name: "Preview in dark mode" })
+  ).toBeNull();
+  expect(place.textContent).not.toMatch(/Preview/);
+}
+
+/**
+ * The top bar's switch, the Design panel and the canvas as the editor wires
+ * them: one preview mode, held above all three, picked by the switch and
+ * drawn by the frame, with the frame's theme and its tags from the editor's
+ * own `previewedCanvas`.
+ */
+function PreviewedEditor({
+  variant,
+  tokens = SITE,
+}: {
+  variant?: string;
+  tokens?: SiteTokenSet;
+}): React.JSX.Element {
+  const mode = useCanvasPreviewMode(tokens);
   const previewed = previewedCanvas(mode, variant);
   return (
-    <CanvasFrameProvider>
-      <Studio start="variables" preview={mode} />
-      <CanvasFrame
-        width={1280}
-        title="Home"
-        source={UNLOADED_PAGE}
-        theme={previewed.theme}
-        overlay={previewed.tags}
-      />
-    </CanvasFrameProvider>
+    <TooltipProvider>
+      <CanvasFrameProvider>
+        <div data-testid="top-bar">
+          <CanvasModeSwitch preview={mode} />
+        </div>
+        <Studio start="spacing" mode={mode.mode} tokens={tokens} />
+        <CanvasFrame
+          width={1280}
+          title="Home"
+          source={UNLOADED_PAGE}
+          theme={previewed.theme}
+          overlay={previewed.tags}
+        />
+      </CanvasFrameProvider>
+    </TooltipProvider>
   );
 }
 
-/** The row of tags over the canvas, drawn only while one shows. */
-function tagRow(): HTMLElement {
-  const row = document.querySelector<HTMLElement>(".nx-canvas-tags");
-  if (row === null) throw new Error("no tags over the canvas");
-  return row;
+/** The top bar's switch, or nothing while it is not offered. */
+function darkSwitch(): HTMLElement | null {
+  return within(screen.getByTestId("top-bar")).queryByRole("button", {
+    name: "Preview in dark mode",
+  });
 }
 
 function canvasElement(): HTMLIFrameElement {
@@ -369,63 +294,105 @@ function canvasElement(): HTMLIFrameElement {
   return frame;
 }
 
-describe("the canvas previewed in the mode the Design panel picks", () => {
-  it("draws the canvas in Dark once Dark is picked, and says so over it", async () => {
+/**
+ * An element's accessible name, as a screen reader hears it: read through the
+ * role query, which computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
+/** The gap's row, which shows the value of the mode the panel shows. */
+const gapRow = (): Promise<HTMLElement> =>
+  screen.findByRole("button", { name: /^Gap, / });
+
+describe("the canvas previewed in the mode the top bar's switch picks", () => {
+  it("draws the canvas and the swatches light first, and both dark once the switch is pressed", async () => {
     can.update = true;
     render(<PreviewedEditor />);
-    const dark = await within(header()).findByRole("button", { name: "Dark" });
-    // Nothing picked: the canvas draws the page's own mode and no tag shows.
-    expect(canvasElement().style.colorScheme).toBe("");
-    expect(screen.queryByRole("button", { name: "Use device" })).toBeNull();
+    expect(nameOf(await gapRow())).toMatch(/^Gap, 8px/);
+    expect(canvasElement().style.colorScheme).toBe("light");
+    expect(darkSwitch()?.getAttribute("aria-pressed")).toBe("false");
 
-    fireEvent.click(dark);
+    fireEvent.click(darkSwitch() as HTMLElement);
 
     expect(canvasElement().style.colorScheme).toBe("dark");
-    expect(within(tagRow()).getByRole("status").textContent).toBe(
-      "Dark preview"
-    );
-    expect(dark).toHaveProperty("ariaPressed", "true");
+    expect(nameOf(await gapRow())).toMatch(/^Gap, 12px/);
+    expect(darkSwitch()?.getAttribute("aria-pressed")).toBe("true");
+    // No tag over the canvas and no switch in the panel: the top bar says it.
+    expect(document.querySelector(".nx-canvas-tags")).toBeNull();
+    expectNoModeSwitchIn(header());
+
+    fireEvent.click(darkSwitch() as HTMLElement);
+    expect(canvasElement().style.colorScheme).toBe("light");
+    expect(nameOf(await gapRow())).toMatch(/^Gap, 8px/);
   });
 
-  it("goes back to the page's own mode from the tag's Use device, on the canvas and the switch", async () => {
+  it("hides the switch and returns the canvas and the swatches to light when the last dark value goes while previewing dark", async () => {
     can.update = true;
-    render(<PreviewedEditor />);
+    const { rerender } = render(<PreviewedEditor />);
     fireEvent.click(
-      await within(header()).findByRole("button", { name: "Dark" })
+      (await screen.findByRole("button", {
+        name: "Preview in dark mode",
+      })) as HTMLElement
     );
     expect(canvasElement().style.colorScheme).toBe("dark");
 
-    fireEvent.click(screen.getByRole("button", { name: "Use device" }));
+    // Every variable light only, the built-in colours included.
+    const lightOnly: SiteTokenSet = {
+      tokens: [
+        ...SITE.tokens.map(token => ({
+          ...token,
+          values: { light: token.values.light },
+        })),
+        ...[
+          "color.primary",
+          "color.text",
+          "color.background",
+          "color.surface",
+          "color.border",
+          "color.border-strong",
+          "color.muted",
+        ].map(name => ({
+          name,
+          kind: "color" as const,
+          values: { light: "#777777" },
+        })),
+      ],
+    };
+    rerender(<PreviewedEditor tokens={lightOnly} />);
 
-    expect(canvasElement().style.colorScheme).toBe("");
-    expect(screen.queryByRole("button", { name: "Use device" })).toBeNull();
-    // The switch shows what the canvas draws again: this device's light.
-    expect(
-      within(header()).getByRole("button", { name: "Light" })
-    ).toHaveProperty("ariaPressed", "true");
+    expect(darkSwitch()).toBeNull();
+    expect(canvasElement().style.colorScheme).toBe("light");
+    expect(nameOf(await gapRow())).toMatch(/^Gap, 8px/);
   });
 
-  it("puts the picked mode beside a previewed variant, in one row", async () => {
+  it("keeps the variant's tag over the canvas alone, whichever mode is previewed", async () => {
     can.update = true;
     render(<PreviewedEditor variant="Featured" />);
-    fireEvent.click(
-      await within(header()).findByRole("button", { name: "Light" })
-    );
-    expect(canvasElement().style.colorScheme).toBe("light");
+    fireEvent.click(darkSwitch() as HTMLElement);
+    expect(canvasElement().style.colorScheme).toBe("dark");
     const rows = document.querySelectorAll(".nx-canvas-tags");
     expect(rows).toHaveLength(1);
     expect(
-      within(tagRow())
-        .getAllByRole("status")
-        .map(status => status.textContent)
-    ).toEqual(["Previewing Featured", "Light preview"]);
+      [...(rows[0]?.querySelectorAll('[role="status"]') ?? [])].map(
+        status => status.textContent
+      )
+    ).toEqual(["Previewing Featured"]);
   });
 });
 
 describe("the Fonts tab", () => {
   function renderFonts(): void {
     render(
-      <FontsPanelWithUpload
+      <SiteFontsScreen
         faces={[]}
         tokens={{ tokens: [] }}
         storedFaces={[]}

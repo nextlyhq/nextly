@@ -11,7 +11,7 @@
 import type { NextlyError } from "../../../errors/nextly-error";
 import type { CliErrorParts } from "../cli-error";
 import { defineCodes } from "../define";
-import { contextString, sentences } from "../messages";
+import { asSentence, contextString, sentences } from "../messages";
 
 /**
  * The refusal of a start whose configured schema holds no installation while another schema of
@@ -30,6 +30,25 @@ function movedSchema(error: NextlyError): CliErrorParts {
     next:
       next.join(" ") ||
       "Point db.postgres.schema back at the schema the installation is in.",
+  };
+}
+
+/** Why a save a stopped process left part-way refuses a command that reads the project. */
+const LEFT_SAVE_WHY =
+  "A Builder save writes its definition, its migration files and its database changes in turn, and a process that stopped between them left those describing different schemas.";
+
+/**
+ * The refusal of a Builder save left part-way, as its three parts: its first sentence, naming the
+ * save; `why`; and the rest of the message, which names the step that settles or clears it.
+ */
+function leftSave(error: NextlyError, why: string): CliErrorParts {
+  const [what = error.publicMessage, ...next] = sentences(error.publicMessage);
+  return {
+    what,
+    why,
+    next:
+      next.join(" ") ||
+      "Start the app in development (`next dev`) on this project, which settles the save, then run the command again.",
   };
 }
 
@@ -100,9 +119,10 @@ function leftoverRefusal(error: NextlyError): CliErrorParts {
   const why = (next === undefined ? rest : rest.slice(0, -1)).join(" ");
   return {
     what: colon === -1 ? message : `${message.slice(0, colon)}.`,
-    why:
-      why ||
-      "Tables nothing registered owns stand where it would build, and they hold rows or something else depends on them.",
+    // Capitalised: after the colon a refusal may go on with "the view …" or "the shared …".
+    why: why
+      ? asSentence(why)
+      : "Tables nothing registered owns stand where it would build, and they hold rows or something else depends on them.",
     next: next ?? "Drop or rename the tables it names, then retry the create.",
   };
 }
@@ -319,10 +339,16 @@ export const SCHEMA_CODES = defineCodes({
         describe: leftoverRefusal,
       },
       {
-        // A table not keyed as the create's junction stands where it would build one, or a view
-        // reads one of the leftover's tables.
+        // A table not keyed as the create's junction stands where it would build one.
         code: "CONFLICT",
         reason: "create-objects-taken",
+        describe: leftoverRefusal,
+      },
+      {
+        // A view reads one of the leftover's tables, and dropping or redefining the view is the
+        // remedy, not renaming the tables it reads.
+        code: "CONFLICT",
+        reason: "create-table-viewed",
         describe: leftoverRefusal,
       },
     ],
@@ -340,6 +366,30 @@ export const SCHEMA_CODES = defineCodes({
           why: "A save writes a migration into the folder, and the folder or its ledger is in a state `nextly migrate` refuses: an applied file was edited or removed, or an attempt is unfinished.",
           next: "Settle what the message names, with `nextly migrate:resolve` or by restoring the file, then save again.",
         }),
+      },
+    ],
+  },
+  // A Builder save records that it started, in a `nextly_meta` row and a `.nextly/` marker, and
+  // clears the record once its outcome is recorded. A record left standing is a save a stopped
+  // process left part-way: the refusals that read it, and a later save that finds its record
+  // unreadable, end here. The thrown message names each save and the step that settles it.
+  BUILDER_SAVE_LEFT_PART_WAY: {
+    cause:
+      "A Schema Builder save stopped part-way and its record still stands, so the command refused to go on until the save is settled.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "builder-save-left-part-way",
+        describe: error => leftSave(error, LEFT_SAVE_WHY),
+      },
+      {
+        code: "CONFLICT",
+        reason: "builder-save-record-unreadable",
+        describe: error =>
+          leftSave(
+            error,
+            "The record does not say which save it stands for, so nothing can settle it, and a save over it could not tell what it would write over."
+          ),
       },
     ],
   },

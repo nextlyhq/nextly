@@ -19,13 +19,13 @@ import type {
   BuilderSaveSetup,
   CollectionSave,
   CollectionSaveDeps,
+  CollectionSavePreview,
 } from "../../domains/schema/builder-save/collection-save";
+import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
-import type { PipelineResult } from "../../domains/schema/pipeline/pushschema-pipeline";
-import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { NextlyError } from "../../errors/nextly-error";
 import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
@@ -78,7 +78,8 @@ export async function checkBuilderSaveHistory(
 /**
  * Apply a change through `apply` (the dialog's push) and write it as the
  * entity's migration: in development the writer runs `apply` and records the
- * files applied; elsewhere it writes them and `apply` runs after, as the
+ * files applied, or runs the files themselves where `fileRoad` says the push
+ * carries no values; elsewhere it writes them and `apply` runs after, as the
  * dialog applies a change today, for the deploy's `nextly migrate` to find
  * done. Without a writer, `apply` alone runs. The history was checked first.
  */
@@ -105,14 +106,36 @@ export async function writeBuilderSchemaChange(
    * Whether `apply`'s push has landed (`landingPush`): a failure after it,
    * such as a companion reconcile, leaves the main table changed, so the
    * files describing that change are kept, recorded applied nowhere, and the
-   * failure is still thrown.
+   * failure is thrown saying the database holds part of the change, naming
+   * the kept files and what to run next.
    */
-  landed?: () => boolean
-): Promise<void> {
+  landed?: () => boolean,
+  /**
+   * The save's own migration file in place of `apply` in development, where `pushWhen` answers
+   * false (`pushCarriesValues`): the writer runs it as `nextly migrate` runs one, in tries over a
+   * busy table and on SQLite with foreign keys off, and records it applied; `afterFile` then
+   * brings what the file does not reach in step (the companion's reconcile, planned from the
+   * companion as the file left it). A failure of `afterFile` leaves the file recorded applied.
+   *
+   * `registry`, the caller's registry write for the save, runs inside the last file's
+   * transaction, after its ledger row, so the change and the row the registry keeps of it commit
+   * or roll back together, and a failed write leaves the save as it was. On every other road the
+   * caller writes it after this returns.
+   */
+  fileRoad?: {
+    pushWhen: () => Promise<boolean>;
+    afterFile: () => Promise<void>;
+    registry?: () => Promise<void>;
+  }
+): Promise<{ registryWritten: boolean }> {
   if (deps === undefined) {
     await apply();
-    return;
+    return { registryWritten: false };
   }
+  // Asked before the save writes anything, as a change reaching a relation's storage is judged
+  // against the live table; only where the answer is used, a save the writer runs.
+  const runsFile =
+    deps.applies && fileRoad !== undefined && !(await fileRoad.pushWhen());
   const { save } = saveOfSchemaChange({
     ...change,
     row: {
@@ -125,49 +148,28 @@ export async function writeBuilderSchemaChange(
     }),
   });
   const { writeEntitySave } = await loadEntitySave();
-  // Held in an object, as the apply below sets it from inside the writer.
-  const failed: { error?: unknown } = {};
-  await writeEntitySave(deps, save, async () => {
+  if (runsFile) {
+    await writeEntitySave(deps, save, apply, {
+      runsFile: true,
+      ...(fileRoad.registry === undefined
+        ? {}
+        : { inLastTransaction: fileRoad.registry }),
+    });
+    await fileRoad.afterFile();
+    return { registryWritten: fileRoad.registry !== undefined };
+  }
+  // A failure after the push landed keeps the files, and is told as a collection's is: what the
+  // database holds, the files kept and what to run next (`partWayPush`).
+  const pushed = partWayPush(async onLanded => {
     try {
       await apply();
-      return undefined;
-    } catch (error) {
-      if (landed?.() !== true) throw error;
-      failed.error = error;
-      return "partly-applied";
+    } finally {
+      if (landed?.() === true) onLanded();
     }
   });
-  if ("error" in failed) throw failed.error;
-}
-
-/**
- * A schema dialog's push that notes once one of its pushes may have changed
- * the database, for `writeBuilderSchemaChange` to tell a failure before the
- * main table changed from one after it: a push that succeeded, and on MySQL
- * any push at all, since MySQL commits each schema statement as it runs, so
- * a push refused part way may have left some of them applied.
- */
-export function landingPush(
-  push: (desired: DesiredSchema) => Promise<PipelineResult>,
-  dialect: "postgresql" | "mysql" | "sqlite"
-): {
-  push: (desired: DesiredSchema) => Promise<PipelineResult>;
-  landed: () => boolean;
-} {
-  let landed = false;
-  return {
-    push: async desired => {
-      try {
-        const result = await push(desired);
-        if (result.success || dialect === "mysql") landed = true;
-        return result;
-      } catch (error) {
-        if (dialect === "mysql") landed = true;
-        throw error;
-      }
-    },
-    landed: () => landed,
-  };
+  const written = await writeEntitySave(deps, save, pushed.appliedBy);
+  pushed.throwIfFailed(written?.files ?? []);
+  return { registryWritten: false };
 }
 
 /**
@@ -180,8 +182,8 @@ export function landingPush(
 export async function reviewBuilderSchemaChange(
   deps: CollectionSaveDeps | undefined,
   change: Parameters<typeof writeBuilderSchemaChange>[2]
-): Promise<string[]> {
-  if (deps === undefined) return [];
+): Promise<BuilderSaveReview> {
+  if (deps === undefined) return NOTHING_TO_REVIEW;
   const { save } = saveOfSchemaChange({
     ...change,
     row: {
@@ -194,5 +196,26 @@ export async function reviewBuilderSchemaChange(
     }),
   });
   const { previewCollectionSave } = await loadCollectionSave();
-  return (await previewCollectionSave(deps, save)).notices;
+  return reviewOf(await previewCollectionSave(deps, save));
+}
+
+/**
+ * What a save's review shows beside the change: each line, and each conversion by the key its
+ * apply confirms it by (`acknowledgedConversions`), which the Builder sends back once the person
+ * confirms the review.
+ */
+export type BuilderSaveReview = Pick<
+  CollectionSavePreview,
+  "notices" | "conversions"
+>;
+
+/** The review of a save with no writer: nothing beyond the change. */
+export const NOTHING_TO_REVIEW: BuilderSaveReview = {
+  notices: [],
+  conversions: [],
+};
+
+/** The review a save's preview gives. */
+export function reviewOf(preview: CollectionSavePreview): BuilderSaveReview {
+  return { notices: preview.notices, conversions: preview.conversions };
 }

@@ -76,10 +76,17 @@ export { icon, type IconProps } from "./icon";
 export {
   form,
   FORM_FIELD_TYPES,
-  FORM_METHODS,
+  FORM_FILE_NEEDS_SCRIPT,
+  FORM_HONEYPOT_FIELD,
+  FORM_POST_FIELDS,
+  FORM_SENT_MESSAGE,
+  formFieldDrawings,
+  formFields,
+  sentNameOf,
+  type FormAfterSending,
+  type FormField,
   type FormFieldSpec,
   type FormFieldType,
-  type FormMethod,
   type FormProps,
 } from "./form";
 // `GALLERY_BLOCK` / `GALLERY_ITEM_BLOCK` are deliberately NOT re-exported, for
@@ -125,7 +132,13 @@ export {
   listEntryCount,
   listShownCount,
   namedListBase,
+  // A list's entries read as the list block reads them, for an editor that
+  // shows one of them (the binding picker's samples) without a second query.
+  readList,
+  type ListDiagnostic,
   type ListEntryCount,
+  type ListOutcome,
+  type ListReads,
 } from "./list-read";
 // A list's named query run where it is asked for, the editor's canvas route
 // among them, with the outcome the renderer draws: one run for every host.

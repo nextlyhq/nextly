@@ -111,10 +111,10 @@ export type SharedStyleInputs = Pick<
   // its `childGap` changes the rules `compilePageCss` writes for every page
   // holding one, so it has to move the stamp as `blockBases` does.
   | "childGaps"
-  // The spacing model decides which element and block defaults compile and
-  // whether any gap is written, so a sheet compiled under one model must not
-  // be served under the other.
-  | "spacingMode"
+  // Custom CSS: which checker judged it, and the site's own. A sheet compiled
+  // under one checker draws what that checker accepted, and the site's CSS is
+  // drawn into every page's sheet, so either moving changes the sheet.
+  | "customCss"
 >;
 
 /**
@@ -155,8 +155,49 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * writes those declarations on the part, off the wrapper. A sheet stored
  * before wrote a wrapped image's corners and proportion on its root, which the
  * renderer now gives the image's look as well, so it is refused, not served.
+ *
+ * `v6`: one spacing model. A sheet stored for a site on the classic model
+ * carries the old heading and paragraph margins and no container gap, and a
+ * read with no compile context judges a stored sheet by this encoding alone,
+ * so only a new one keeps that sheet from being served on such a read.
+ *
+ * `v7`: a contained block is padded in, not narrowed. Every inline padding is
+ * written as at least the containment inset. A sheet stored before wrote an
+ * author's side padding as the bare value, which outweighs the containment and
+ * lets the content run past the content width, so it is refused, not served.
+ *
+ * `v8`: a flex item, and a block taken out of the flow, carry flags
+ * the containment inset reads. A sheet stored before has neither, so a
+ * contained item in a row is inset from the whole row: refused, not served.
+ *
+ * `v9`: a flex item that fills its row, and the children of a
+ * `display: contents` wrapper, carry flags of their own. A sheet stored
+ * before has neither: refused, not served.
+ *
+ * `v10`: a container may hold its content to a width of its own. The site
+ * sheet's content-width rule reads `--nx-content-width` before the site's
+ * width, and its reset sets that property to the site's width on every
+ * element, so a width of one container stays its own. A sheet stored before
+ * reads the site's width alone: refused, not served.
+ *
+ * `v11`: a site with dark values states its `color-scheme` in each token
+ * block, light on the root and the light marker, dark in both dark blocks, so
+ * the browser draws checkboxes, radios and scrollbars in the scheme the colours
+ * are in. A sheet stored before states none, and a dark page draws them light:
+ * refused, not served.
+ *
+ * `v12`: the links inside a container take its text colour. For each rule
+ * giving a container a text colour, while the site's Links row sets none, the
+ * compiler writes a zero-specificity rule making the links inside inherit it.
+ * A sheet stored before has none, and its links keep the browser's colour in
+ * a dark section: refused, not served.
+ *
+ * `v13`: a disclosure icon stored as "browser" draws the plus in the title
+ * row, as the Accordion's default now does, where it restored the browser's
+ * own marker. A sheet stored before (a shared style holding it) keeps the
+ * marker: refused, not served.
  */
-const ENCODING = "v5";
+const ENCODING = "v13";
 
 /**
  * Whether a stored stamp was written under the current {@link ENCODING}.
@@ -551,6 +592,20 @@ function classParts(entry: unknown, reading: Reading): unknown {
     ...(entry.isDefault === undefined
       ? []
       : [["own-look", structural(entry.isDefault, reading)]]),
+    // The ★ mark writes the look again for its type's blocks that wear no
+    // look, so moving it moves the stamp: a page saved before the move is
+    // compiled again rather than served with the old default. Spread, so
+    // every class without it stamps as before.
+    ...(entry.starred === undefined
+      ? []
+      : [["starred", structural(entry.starred, reading)]]),
+    // A text style's role decides its tier and the name it is written under,
+    // so a class becoming one moves the stamp and a stored sheet written for
+    // the shared style is compiled again. Spread, so a class with no role
+    // stamps exactly as before.
+    ...(entry.role === undefined
+      ? []
+      : [["role", structural(entry.role, reading)]]),
   ] as unknown;
 }
 
@@ -684,13 +739,27 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // A fixed slot would have invalidated every page on the site to record a
     // field that is unset on all of them.
     ...(inputs.previewStates === true ? ["preview-states"] : []),
-    // The classic spacing model, SPREAD for the same reason: absent and `gaps`
-    // compile exactly as before the model existed, so every artifact stored
-    // under them keeps its stamp, and only a classic compile moves it. The
-    // defaults the model swaps in are in the block and element tiers above
-    // already; this slot is what tells apart two compiles those tiers agree
-    // on, since the classic model also drops every child gap.
-    ...(inputs.spacingMode === "classic" ? ["spacing-classic"] : []),
+    // Custom CSS, SPREAD for the reason `previewStates` is: with no checker the
+    // compile draws none, and every artifact stored for such a page keeps its
+    // stamp. With one, the stamp moves, so a sheet stored before a host passed
+    // its checker is compiled once more with the custom CSS it now draws, and
+    // again whenever the checker or the site's CSS changes. The page's and the
+    // blocks' CSS are in the document, which the sheet is compiled from, so
+    // they need no place here. The site's is kept as a digest: it is drawn on
+    // every page and may be long.
+    ...(inputs.customCss === undefined
+      ? []
+      : [
+          [
+            "custom-css",
+            String(inputs.customCss.id),
+            hashId(
+              typeof inputs.customCss.site === "string"
+                ? inputs.customCss.site
+                : ""
+            ),
+          ],
+        ]),
   ]);
 }
 

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { DynamicCollectionSchemaService } from "../../../../dynamic-collections/services/dynamic-collection-schema-service";
-import { buildDesiredTableFromFields } from "../build-from-fields";
+import {
+  buildDesiredTableFromComponentFields,
+  buildDesiredTableFromFields,
+} from "../build-from-fields";
 
 function idxNames(t: { indexes?: { name: string; unique: boolean }[] }) {
   return (t.indexes ?? []).map(i => `${i.name}:${i.unique ? "u" : "n"}`).sort();
@@ -91,15 +94,22 @@ describe("buildDesiredTableFromFields — indexes", () => {
         { name: "title", type: "text" },
         builderRelation("oneToOne"),
       ];
-      // The creator's own DDL makes the column unique by the relation's cardinality...
+      // The creator's own DDL makes the column unique by the relation's cardinality, with a named
+      // unique index beside the plain one every relationship gets...
       const emitted = new DynamicCollectionSchemaService(
         undefined,
         dialect
       ).generateMigrationSQL("dc_posts", fields as never);
-      expect(emitted).toMatch(/[`"]profile[`"][^,\n]*UNIQUE/i);
+      expect(emitted).toMatch(
+        /CREATE UNIQUE INDEX[^\n]*[`"]uq_dc_posts_profile[`"][^\n]*[`"]profile[`"]/i
+      );
+      expect(emitted).toMatch(
+        /CREATE INDEX[^\n]*[`"]idx_dc_posts_profile[`"]/i
+      );
 
-      // ...so the desired schema a migration is written from says so too, or the migration
-      // creates the column without it and the table takes two rows naming one entry.
+      // ...so the desired schema a migration is written from declares the same two, or the
+      // migration creates the column without its uniqueness and the table takes two rows naming
+      // one entry.
       const t = buildDesiredTableFromFields(
         "dc_posts",
         fields as never,
@@ -109,7 +119,7 @@ describe("buildDesiredTableFromFields — indexes", () => {
         }
       );
       expect(idxNames(t)).toContain("uq_dc_posts_profile:u");
-      expect(idxNames(t)).not.toContain("idx_dc_posts_profile:n");
+      expect(idxNames(t)).toContain("idx_dc_posts_profile:n");
     }
   );
 
@@ -132,4 +142,78 @@ describe("buildDesiredTableFromFields — indexes", () => {
     );
     expect(idxNames(codeFirst)).not.toContain("uq_dc_posts_profile:u");
   });
+});
+
+// "Unique" on a relation holding a list of references would mean no two entries hold the identical
+// list, and a btree over a long list refuses the save on PostgreSQL. Such a field declares no
+// unique index on any dialect; a relation to one entry, or one polymorphic reference, keeps it.
+describe("buildDesiredTableFromFields — a unique relation holding a list", () => {
+  const fields = [
+    {
+      name: "tags",
+      type: "relationship",
+      relationTo: "tags",
+      hasMany: true,
+      unique: true,
+    },
+    {
+      name: "files",
+      type: "upload",
+      relationTo: "media",
+      hasMany: true,
+      unique: true,
+    },
+    {
+      name: "refs",
+      type: "relationship",
+      relationTo: ["a", "b"],
+      hasMany: true,
+      unique: true,
+    },
+    { name: "owner", type: "relationship", relationTo: "users", unique: true },
+    {
+      name: "pick",
+      type: "relationship",
+      relationTo: ["a", "b"],
+      unique: true,
+    },
+  ];
+
+  for (const dialect of ["postgresql", "sqlite"] as const) {
+    it(`declares no unique index for a list, and keeps one for a single reference (${dialect})`, () => {
+      const unique = (
+        buildDesiredTableFromFields("dc_posts", fields as never, dialect, {
+          builtBy: "codeFirst",
+        }).indexes ?? []
+      )
+        .filter(index => index.unique && index.name.startsWith("uq_"))
+        .map(index => index.name)
+        .sort();
+      expect(unique).toEqual(["uq_dc_posts_owner", "uq_dc_posts_pick"]);
+    });
+
+    it(`declares none on a field-group row either, a many-to-many included (${dialect})`, () => {
+      const unique = (
+        buildDesiredTableFromComponentFields(
+          "comp_card",
+          [
+            ...fields,
+            {
+              name: "links",
+              type: "relationship",
+              relationTo: "posts",
+              unique: true,
+              options: { relationType: "manyToMany" },
+            },
+          ] as never,
+          dialect,
+          { builtBy: "codeFirst" }
+        ).indexes ?? []
+      )
+        .filter(index => index.unique)
+        .map(index => index.name)
+        .sort();
+      expect(unique).toEqual(["uq_comp_card_owner", "uq_comp_card_pick"]);
+    });
+  }
 });

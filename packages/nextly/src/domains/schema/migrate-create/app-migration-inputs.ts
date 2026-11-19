@@ -20,23 +20,24 @@ import type {
   UiSchemaEntity,
   UiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { assertPluginFieldDeclarations } from "../../../shared/lib/assert-plugin-field-declarations";
-import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
-import { loadUiSchema } from "../ui-schema/loader";
 import {
-  applyDeferredExtendsToManifest,
-  mergeUiEntities,
-} from "../ui-schema/merge";
+  storageNamesFor,
+  underNaming,
+  type FieldGroupNaming,
+  type FieldGroupStorageNames,
+} from "../../field-groups/services/field-group-storage-names";
+import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import {
+  judgeBuilderDefinitions,
+  readBuilderDefinitions,
+} from "../ui-schema/builder-definitions";
 import {
   buildCollectionMetadataUpsert,
   buildComponentMetadataUpsert,
   buildSingleMetadataUpsert,
 } from "../ui-schema/metadata-sql";
-import {
-  resolveCollectionTableName,
-  resolveComponentTableName,
-} from "../utils/resolve-table-name";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
 import { assertMigrationAddresses, type JudgedEntity } from "./addresses";
 import {
@@ -44,15 +45,17 @@ import {
   hasAppStreamTables,
   type AppStreamTables,
 } from "./app-stream";
-import { toMinimalEntities } from "./config-entities";
 import type { EntitySettingsRecord, SettingsObject } from "./entity-settings";
 import { removedEntityTables, type MinimalConfigEntity } from "./generate";
 import { assertMigrationSiblingFields } from "./sibling-fields";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  type LatestSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
+import { templateStartFor } from "./template-start";
+import { holdInBuilderChange } from "./writer-hold";
 
 /**
  * The parts of the app's config a migration is generated from: the code-first
@@ -61,9 +64,16 @@ import {
  * running app's plugin-transformed config, which a Schema Builder save reads,
  * is one too.
  */
+// `permissions`: the app's own custom permissions, which every snapshot records beside the
+// plugins' (`declaredPermissionsOf`), so a Builder save records the ones `migrate:create` does.
 export type AppMigrationConfig = Pick<
   SanitizedNextlyConfig,
-  "collections" | "singles" | "fieldGroups" | "plugins" | "localization"
+  | "collections"
+  | "singles"
+  | "fieldGroups"
+  | "plugins"
+  | "localization"
+  | "permissions"
 > & {
   db: Pick<SanitizedNextlyConfig["db"], "uiSchemaFile" | "migrationsDir">;
 };
@@ -102,6 +112,20 @@ export interface AppMigrationInputsArgs {
   dialect: SupportedDialect;
   /** Where each warning goes, and the lines a refusal names before it is thrown. */
   logger: { warn(message: string): void; error(message: string): void };
+  /**
+   * The naming the site's field-group storage is on (`field-group-storage-names`): the table each
+   * field group is generated under, and the registry its Builder row is upserted into. A Builder
+   * save reads it from the database it writes to. Absent, the legacy names, which every migration
+   * history this release writes is on.
+   */
+  fieldGroupNaming?: FieldGroupNaming;
+  /**
+   * The table each field group's registry row names, by slug, where the caller read the registry
+   * (`field-group-stored-tables`): a group the registry holds is generated under the table it is
+   * stored in, whatever naming it was created under, and only a group it does not hold takes its
+   * name from `fieldGroupNaming`.
+   */
+  fieldGroupTables?: ReadonlyMap<string, string>;
 }
 
 /** The inputs `generateMigration` takes, as `appMigrationInputs` prepares them. */
@@ -112,8 +136,11 @@ export interface AppMigrationInputs {
   metadataUpserts: { tableName: string; sql: string }[];
   previousMetadataUpserts: { tableName: string; sql: string }[];
   appStream: AppStreamTables;
-  /** The latest snapshot file, or null where the folder has none. */
-  latest: { data: SnapshotFile } | null;
+  /**
+   * The latest snapshot file, or null where the folder has none. The one read
+   * of it: `generateMigration` is handed this (`GenerateArgs.previous`).
+   */
+  latest: LatestSnapshot | null;
   /** Whether there is nothing a migration could be generated from (`nothingToGenerate`). */
   nothing: boolean;
 }
@@ -127,99 +154,53 @@ export async function appMigrationInputs(
   input: AppMigrationInputsArgs
 ): Promise<AppMigrationInputs> {
   const { config, dialect, logger } = input;
-  // Convert config entries to the minimal shape the orchestrator needs. Each
-  // kind resolves its table name through the same helper the runtime uses, so
-  // generated names match the live database (collections, singles, and
-  // components each normalize differently).
-  const codeCollections = toMinimalEntities(config.collections, e =>
-    resolveCollectionTableName(e.slug, e.dbName)
-  );
-  const codeSingles = toMinimalEntities(config.singles ?? [], e =>
-    resolveSingleTableName({ slug: e.slug, dbName: e.dbName })
-  );
-  const codeComponents = toMinimalEntities(config.fieldGroups ?? [], e =>
-    resolveComponentTableName(e.slug)
-  );
-
-  // Load + merge UI-built entities (code-first wins on slug collision).
-  let manifest =
-    input.manifest ??
-    (await loadUiSchema({
-      projectRoot: input.projectRoot,
-      uiSchemaFile: config.db.uiSchemaFile,
-    }));
-
-  // Materialize plugin extends that target Builder-made entities (P8): append
-  // the deferred extend fields onto the matching ui-schema entity so they land
-  // in BOTH the table diff (below) and the dynamic_collections.fields metadata.
-  manifest = applyDeferredExtendsToManifest(
-    manifest,
-    input.deferredExtends ?? []
-  );
-
-  const merged = mergeUiEntities({
-    codeCollections,
-    codeSingles,
-    codeComponents,
-    manifest,
-  });
-  for (const slug of merged.droppedUiSlugs) {
-    logger.warn(
-      `ui-schema.json entry '${slug}' is shadowed by a code-first collection of the same slug; the code definition wins.`
-    );
+  // A Builder save (the one caller that names the entity it is about) holds
+  // the folder from here, its first read of it, so what it reads is still the
+  // newest when it writes. Every other caller only reads, or holds it already.
+  if (input.judged !== undefined) {
+    await holdInBuilderChange(input.migrationsDir);
   }
+  // The Builder's definitions, read and judged as `migrate:check` reads them
+  // (`readBuilderDefinitions`), merged with the configuration's entities.
   // Each Builder entity carries its manifest entry as its settings, as each
-  // code-first one carries its config entry, so the snapshot records both;
-  // the merge sets them (`uiToMinimal`).
-  const { collections, singles, components } = merged;
-
-  // Checked on the config's and the manifest's own entries rather than the
-  // merged ones: the merge has already dropped shadowed Builder entities by
-  // slug, and those are filtered per kind below instead.
+  // code-first one carries its config entry, so the snapshot records both; the
+  // merge sets them (`uiToMinimal`).
   //
   // A migration is the one artifact that outlives the process that wrote it, so
   // a declaration its own field type rejects would become a deployment that
-  // materializes the schema and then cannot boot on it.
-  //
-  // A Builder entity shadowed by a code-first one of the same slug contributes
-  // nothing to this migration, so it is skipped rather than failed on — a
-  // cleanup that changes no DDL is not worth blocking on.
-  // Shadowing is per KIND: the manifest allows the same slug on a collection, a
-  // single and a field group, and the merge resolves each kind separately. A
-  // single set of dropped slugs would filter out an unshadowed single named
-  // `home` because a collection of that name was shadowed, and it would then
-  // reach the migration unchecked.
-  const survivingOf = <T extends { slug: string }>(
-    list: readonly T[],
-    codeFirst: ReadonlyArray<{ slug: string }>
-  ): T[] => {
-    const shadowed = new Set(codeFirst.map(e => e.slug));
-    return list.filter(e => !shadowed.has(e.slug));
-  };
-
+  // materializes the schema and then cannot boot on it: the configuration's
+  // declarations are checked here, the definition's by the reader.
   assertPluginFieldDeclarations({
     collections: config.collections,
     singles: config.singles,
     fieldGroups: config.fieldGroups,
   });
-  assertPluginFieldDeclarations({
-    collections: survivingOf(manifest.collections, config.collections),
-    singles: survivingOf(manifest.singles, config.singles ?? []),
-    fieldGroups: survivingOf(manifest.components, config.fieldGroups ?? []),
+  const definitions = await readBuilderDefinitions({
+    config,
+    ...(input.deferredExtends === undefined
+      ? {}
+      : { deferredExtends: input.deferredExtends }),
+    projectRoot: input.projectRoot,
+    ...(input.manifest === undefined ? {} : { manifest: input.manifest }),
+    logger,
   });
+  // Each field group under the table it is stored in on this site (`withFieldGroupTables`).
+  const fieldGroupNames = storageNamesFor(input.fieldGroupNaming ?? "legacy");
+  const merged = withFieldGroupTables(
+    definitions.merged,
+    fieldGroupNames,
+    input.fieldGroupTables
+  );
+  const { collections, singles, components } = merged;
 
   // §4.12.7: per-dialect metadata-row upserts for UI-built entities that
-  // survived the merge (code-first wins → shadowed UI slugs are skipped).
-  // Shadowing is per kind, as above: `merged.droppedUiSlugs` is one list for
-  // every kind, and filtering by it would leave out the row of an unshadowed
-  // Single whose slug a shadowed collection shares.
+  // survived the merge (code-first wins, per kind, so an unshadowed Single
+  // whose slug a shadowed collection shares keeps its row).
   const metadataUpserts = builderMetadataUpserts(
-    {
-      collections: survivingOf(manifest.collections, config.collections),
-      singles: survivingOf(manifest.singles, config.singles ?? []),
-      components: survivingOf(manifest.components, config.fieldGroups ?? []),
-    },
-    dialect
+    definitions.surviving,
+    dialect,
+    fieldGroupNames,
+    input.fieldGroupTables
   );
 
   // The APP stream's extension schema, compiled the way boot compiles it:
@@ -231,7 +212,29 @@ export async function appMigrationInputs(
   // but extension schema. Taking that early return first meant an
   // extension-only configuration wrote no migration at all and production
   // never received the table.
-  const latest = await loadLatestSnapshot(resolve(input.migrationsDir, "meta"));
+  //
+  // A project made from a template starts from the template's older-format
+  // snapshot, read as the tables its listed entities were made with.
+  const latest = await loadLatestSnapshot(
+    resolve(input.migrationsDir, "meta"),
+    templateStartFor({
+      collections,
+      singles,
+      plugins: config.plugins,
+      dialect,
+    })
+  );
+
+  // The definitions judged against that snapshot, as `migrate:check` judges
+  // them: a Builder entity the file lost (the drop below would take its
+  // table), then each relationship's target. A save writing one entity's
+  // migration judges that entity's relationships alone, and no loss
+  // (`judgeBuilderDefinitions`).
+  judgeBuilderDefinitions({
+    definitions,
+    recorded: latest?.data.entities,
+    ...(input.judged === undefined ? {} : { judged: input.judged }),
+  });
 
   // Before the app stream compiles: a plugin hook still extending a removed
   // collection's, Single's or field group's table would stop that compile with
@@ -276,6 +279,29 @@ export async function appMigrationInputs(
     config: config,
     dialect,
     logger: { warn: m => logger.warn(m) },
+    // Each field group under the table the entities above name, so a contribution to it attaches
+    // to the same physical table in both streams. Only where the caller said where groups are
+    // stored; otherwise both streams derive the same names, as before.
+    ...(input.fieldGroupNaming === undefined &&
+    input.fieldGroupTables === undefined
+      ? {}
+      : {
+          fieldGroupTables: new Map(
+            components.map(component => [component.slug, component.tableName])
+          ),
+          // And the discriminator each holds as the newest migration recorded it
+          // (`chooseTypeColumns`: a table no migration made yet takes its name's).
+          fieldGroupTypeColumns: chooseTypeColumns(
+            (latest?.data.snapshot.tables ?? []).map(table => ({
+              table: table.name,
+              columns: table.columns.map(column => column.name),
+            })),
+            components.map(component => component.tableName),
+            dialect === "mysql"
+              ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+              : identifierCaseRules({ dialect })
+          ),
+        }),
   });
 
   // A new address is judged by the one address rule before anything is written.
@@ -293,7 +319,9 @@ export async function appMigrationInputs(
   // way down. A snapshot with no settings record has none to offer.
   const previousMetadataUpserts = builderMetadataUpserts(
     builderEntriesOf(latest?.data.entities),
-    dialect
+    dialect,
+    fieldGroupNames,
+    input.fieldGroupTables
   );
   const nothing = nothingToGenerate({
     entityCount: collections.length + singles.length + components.length,
@@ -403,6 +431,39 @@ export function nothingToGenerate(input: {
 }
 
 /**
+ * The merged entities with each field group's table as it is stored: the table its registry row
+ * names where `stored` holds one, otherwise its derived name under `names`' prefix.
+ *
+ * Every field group's name is derived as the legacy prefix and the slug's table form, by its own
+ * kind's rule (`resolveComponentTableName` for code-first, `uiToMinimal` for Builder groups), so
+ * moving it to the current names swaps the prefix and keeps that form. The storage migration moves
+ * a derived name the same way (`fg_` + the slug's form), so a site that migrated holds exactly
+ * these names, except for a row an earlier release created under the other naming, which `stored`
+ * names.
+ */
+function withFieldGroupTables<T extends { components: MinimalConfigEntity[] }>(
+  merged: T,
+  names: FieldGroupStorageNames,
+  stored: ReadonlyMap<string, string> | undefined
+): T {
+  if (
+    names.naming === "legacy" &&
+    (stored === undefined || stored.size === 0)
+  ) {
+    return merged;
+  }
+  return {
+    ...merged,
+    components: merged.components.map(component => ({
+      ...component,
+      tableName:
+        stored?.get(component.slug) ??
+        underNaming(names.naming, component.tableName),
+    })),
+  };
+}
+
+/**
  * The registry-row upserts for UI-built entities (spec §4.12.7), keyed by data
  * table. The caller hands in only the entries no code-first entity of the
  * same kind shadows.
@@ -413,12 +474,14 @@ function builderMetadataUpserts(
     singles: readonly UiSchemaEntity[];
     components: readonly UiSchemaEntity[];
   },
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /** The field-group registry each Builder group's row goes to, and the prefix its table carries. */
+  fieldGroupNames: FieldGroupStorageNames,
+  /** The table each group's registry row already names, by slug (`withFieldGroupTables`). */
+  storedTables: ReadonlyMap<string, string> | undefined
 ): { tableName: string; sql: string }[] {
-  const tn = (
-    slug: string,
-    prefix: "dc_" | "single_" | typeof STORAGE_FORMAT.tablePrefix
-  ) => `${prefix}${slug.replace(/-/g, "_")}`;
+  const tn = (slug: string, prefix: string) =>
+    `${prefix}${slug.replace(/-/g, "_")}`;
   const upserts: { tableName: string; sql: string }[] = [];
   for (const c of entries.collections) {
     upserts.push({
@@ -434,8 +497,14 @@ function builderMetadataUpserts(
   }
   for (const cp of entries.components) {
     upserts.push({
-      tableName: tn(cp.slug, STORAGE_FORMAT.tablePrefix),
-      sql: buildComponentMetadataUpsert(cp, dialect),
+      tableName:
+        storedTables?.get(cp.slug) ?? tn(cp.slug, fieldGroupNames.tablePrefix),
+      sql: buildComponentMetadataUpsert(
+        cp,
+        dialect,
+        fieldGroupNames.registryTable,
+        storedTables?.get(cp.slug)
+      ),
     });
   }
   return upserts;

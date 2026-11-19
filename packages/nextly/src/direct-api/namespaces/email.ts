@@ -5,6 +5,7 @@
  * - `nextly.email.*`             — raw send + template send
  * - `nextly.emailProviders.*`    — provider CRUD
  * - `nextly.emailTemplates.*`    — template CRUD + preview + layout
+ * - `nextly.emailDeliveries.*`   — the delivery log and queued email, read
  * - `nextly.userFields.*`        — user field definitions CRUD
  *
  * Each of these shares the same plumbing (error conversion, optional
@@ -20,7 +21,9 @@
  * nobody is refused as unauthenticated. A trusted call is unchanged. Sending
  * through `nextly.email.*` is the site's own code acting, with no REST
  * counterpart, so it takes no grant; cancelling a queued email as a person
- * (`email.cancelQueued`) asks `manage-email-deliveries`.
+ * (`email.cancelQueued`) asks `manage-email-deliveries`, and the Activity
+ * reads (`emailDeliveries.*`) ask `read-email-deliveries`, as their REST
+ * routes do.
  *
  * @packageDocumentation
  */
@@ -48,6 +51,8 @@ import type {
   UndoEmailTemplateUpdateArgs,
 } from "../types/email";
 import type {
+  ActivityEntry,
+  ActivityPage,
   CancelQueuedEmailArgs,
   CreateEmailProviderArgs,
   CreateEmailTemplateArgs,
@@ -55,11 +60,20 @@ import type {
   DeleteEmailProviderArgs,
   DeleteEmailTemplateArgs,
   DeleteUserFieldArgs,
+  DeliveryActivity,
+  DeliveryDetail,
+  DirectAPIConfig,
+  EmailLastSentArgs,
+  EmailOverdueArgs,
+  FindEmailActivityArgs,
+  FindEmailDeliveriesArgs,
+  FindEmailDeliveryByIDArgs,
   FindEmailProviderByIDArgs,
   FindEmailProvidersArgs,
   FindEmailTemplateByIDArgs,
   FindEmailTemplateBySlugArgs,
   FindEmailTemplatesArgs,
+  FindQueuedEmailsArgs,
   FindUserFieldByIDArgs,
   FindUserFieldsArgs,
   ListResult,
@@ -67,12 +81,16 @@ import type {
   PreviewEmailTemplateArgs,
   ReorderUserFieldsArgs,
   QueuedEmail,
+  QueuedEmailActivity,
+  QueuedEmailDetail,
+  QueuedEmailOverdue,
   QueueEmailArgs,
   QueueTemplateEmailArgs,
   SendEmailArgs,
   SendEmailResult,
   SendTemplateEmailArgs,
   SetDefaultProviderArgs,
+  TemplatesLastSent,
   TestEmailProviderArgs,
   UpdateEmailProviderArgs,
   UpdateEmailTemplateArgs,
@@ -243,6 +261,81 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
         userId: actor?.type === "user" ? (actor.id ?? null) : null,
       });
       return { message: "Email cancelled.", item };
+    },
+  };
+}
+
+/**
+ * @experimental `nextly.emailDeliveries.*` namespace — the Email hub's
+ * Activity reads. None returns an address, subject or body. A checked call
+ * needs `read-email-deliveries`.
+ */
+export interface EmailDeliveriesNamespace {
+  /** Delivery records, newest first, by outcome, template, provider and time. */
+  find(args?: FindEmailDeliveriesArgs): Promise<ActivityPage<DeliveryActivity>>;
+  /**
+   * Queued emails and the deliveries of sends not queued, merged newest
+   * first under one cursor, by status, template, provider and time.
+   */
+  activity(args?: FindEmailActivityArgs): Promise<ActivityPage<ActivityEntry>>;
+  /** Queued emails, newest first, by state, template and time. */
+  findQueued(
+    args?: FindQueuedEmailsArgs
+  ): Promise<ActivityPage<QueuedEmailActivity>>;
+  /** When each template was last sent. */
+  lastSent(args?: EmailLastSentArgs): Promise<TemplatesLastSent>;
+  /** Whether queued email is overdue because the jobs trigger is not running. */
+  overdue(args?: EmailOverdueArgs): Promise<QueuedEmailOverdue>;
+  /** One delivery's detail and timeline; null for an id that names none. */
+  findByID(args: FindEmailDeliveryByIDArgs): Promise<DeliveryDetail | null>;
+  /** One queued email's detail and attempts; null for an id that names none. */
+  findQueuedByID(
+    args: FindEmailDeliveryByIDArgs
+  ): Promise<QueuedEmailDetail | null>;
+}
+
+/**
+ * Build the `emailDeliveries` namespace for a `Nextly` instance. Each read
+ * is checked first, as its REST route checks it.
+ */
+export function createEmailDeliveriesNamespace(
+  ctx: NextlyContext
+): EmailDeliveriesNamespace {
+  const checked = async (args: DirectAPIConfig): Promise<void> => {
+    await checkRead(
+      ctx.defaultConfig,
+      args,
+      SYSTEM_READ_POLICY.emailDeliveries.read
+    );
+  };
+  return {
+    async find(args = {}) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.listDeliveries(args);
+    },
+    async activity(args = {}) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.listActivity(args);
+    },
+    async findQueued(args = {}) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.listQueuedEmails(args);
+    },
+    async lastSent(args = {}) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.lastSentByTemplate(args.slugs);
+    },
+    async overdue(args = {}) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.overdue();
+    },
+    async findByID(args) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.findDelivery(args.id);
+    },
+    async findQueuedByID(args) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.findQueuedEmail(args.id);
     },
   };
 }
@@ -555,6 +648,8 @@ export function createEmailTemplatesNamespace(
           variables: args.data.variables,
           attachments: args.data.attachments,
           description: args.data.description,
+          format: args.data.format,
+          blocks: args.data.blocks,
         },
         directApiActor(ctx.defaultConfig, args)
       );

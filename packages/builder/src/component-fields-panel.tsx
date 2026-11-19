@@ -93,6 +93,11 @@ export interface ComponentFieldsBinding {
   readonly requestRemoval: (removal: FieldRemoval) => void;
   /** The component's name, for the card heading its view; absent if unknown. */
   readonly name?: string | undefined;
+  /**
+   * How many pages use the component, as its view counts them, for the
+   * data picker's line over the component's settings; absent while uncounted.
+   */
+  readonly pages?: ComponentFieldsHost["pages"];
 }
 
 /**
@@ -176,6 +181,7 @@ function useComponentFields(
           },
           requestRemoval: setRemoval,
           name: host?.name,
+          pages: host?.pages,
         };
   const dialog =
     component === undefined || removal === null ? null : (
@@ -409,8 +415,8 @@ export function PropExposeControl({
 }
 
 /**
- * Above a block's props while a component is edited: its Shown row, with the
- * same icon, letting each page hide the block.
+ * In the Advanced tab's Visibility section while a component is edited: its
+ * Shown row, with the same icon, letting each page hide the block.
  */
 export function VisibilityExposeControl({
   binding,
@@ -622,7 +628,9 @@ export function ExposedFieldsList({
   const slots = exposedSlotIds(component);
   const headingId = React.useId();
   return (
-    <div className="nx-inspector" data-component-fields="">
+    // No box of its own: drawn inside the panel's frame for the document,
+    // among the host's own rows for it.
+    <div className="contents" data-component-fields="">
       <ComponentHeader
         name={binding.name ?? "This component"}
         fieldCount={fields.length + slots.length}

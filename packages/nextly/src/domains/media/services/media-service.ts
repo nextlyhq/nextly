@@ -51,6 +51,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
+import { visitorReadsSystemResource } from "../../../auth/resource-readable";
+import { SYSTEM_READ_POLICY } from "../../../domains/auth/system-write-policy";
 import type { RetentionRunner } from "../../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../../domains/webhooks/after-drain";
 import { isUnscopedRecordingActive } from "../../../domains/webhooks/recording-activation";
@@ -91,6 +93,15 @@ import {
   type MediaView,
   type Media as LegacyMedia,
 } from "../../../types/media";
+import {
+  copiesOfMedia,
+  copyOfMedia,
+  type CopyDeps,
+  mediaCopyStorage,
+  mediaIdOfCopySource,
+  type MediaCopy,
+  type MediaCopySource,
+} from "../copies/media-copies";
 import type { MediaLibraryCounts } from "../media-library-query";
 import type { DeleteClaim, PendingMediaDeletes } from "../pending-delete";
 import { withMediaRevalidationBatch } from "../revalidate-media";
@@ -625,6 +636,91 @@ export class MediaService {
     }
 
     return this.mapToMediaFile(result.data);
+  }
+
+  /**
+   * A resized copy of an image, by its address, at the allowed width nearest
+   * `width`: made the first time it is fetched and kept beside the original.
+   * `null` when no copy can be had, and the original is to be used: an
+   * address that is not a media item's, an image type that is not resized, a
+   * storage that cannot keep copies, or an install without the image library.
+   *
+   * Reads like `findById`, so a missing item is NOT_FOUND. Whoever calls it
+   * has decided the caller may read the item; the copy route serves it only
+   * to whoever may read the item.
+   *
+   * @experimental
+   */
+  async copyOf(
+    source: MediaCopySource,
+    width: number,
+    context: RequestContext = {}
+  ): Promise<MediaCopy | null> {
+    const item = await this.copySourceItem(source, context);
+    if (item === null) return null;
+    return await copyOfMedia(item, width, this.copyDeps());
+  }
+
+  /**
+   * Every resized copy of an image up to `upTo` wide, narrowest first: one per
+   * allowed width no wider than `upTo` or than the original, by the address
+   * each is served at. `[]` where no copy can be had, as `copyOf` answers
+   * `null`. The item is read and judged once for every width, and nothing is
+   * resized here: each copy is made the first time its address is fetched.
+   *
+   * @experimental
+   */
+  async copiesOf(
+    source: MediaCopySource,
+    upTo: number,
+    context: RequestContext = {}
+  ): Promise<MediaCopy[]> {
+    const item = await this.copySourceItem(source, context);
+    if (item === null) return [];
+    return await copiesOfMedia(item, upTo, this.copyDeps());
+  }
+
+  /**
+   * The media item a copy is asked of, read once, or `null` where its copies
+   * are not to be offered: an address that is not a media item's, or one whose
+   * item is gone, and any item while a visitor may not read media.
+   */
+  private async copySourceItem(
+    source: MediaCopySource,
+    context: RequestContext
+  ): Promise<MediaFile | null> {
+    const id = mediaIdOfCopySource(source);
+    if (id === undefined) return null;
+    let item: MediaFile;
+    try {
+      item = await this.findById(id, context);
+    } catch (error) {
+      // An address naming an item that is gone is used as it is, like any
+      // other address that is not a media item's; an id asked for directly
+      // is not found, as `findById` answers.
+      if ("url" in source && NextlyError.isNotFound(error)) return null;
+      throw error;
+    }
+    // A copy's address is on the public media route, which serves copies
+    // only while a visitor may read media. Where one may not, the address
+    // could never load, so the original is used as it is.
+    if (
+      !(await visitorReadsSystemResource(
+        SYSTEM_READ_POLICY.media.read.resource
+      ))
+    ) {
+      return null;
+    }
+    return item;
+  }
+
+  /** What making and naming copies needs, from this service. */
+  private copyDeps(): CopyDeps {
+    return {
+      storage: mediaCopyStorage(),
+      processor: this.imageProcessor,
+      logger: this.logger,
+    };
   }
 
   /**

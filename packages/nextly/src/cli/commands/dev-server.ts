@@ -77,7 +77,6 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 // The legacy fallback sync path is deleted (dead code post-Option E).
 // addMissingColumnsForFields is extracted to utils/missing-columns.ts.
 import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns";
-import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import {
   reconcileSingleTables,
   singleTableSources,
@@ -299,23 +298,14 @@ export async function ensureCoreTables(
     const mayChangeSchema = options.autoSync !== false;
 
     if (dialect === "sqlite" && mayChangeSchema) {
-      await applyCoreStatements(
-        drizzleAdapter,
-        logger,
-        sqliteCoreStatementsFor({
-          registryTable: registryTable ?? STORAGE_FORMAT.registryTable,
-          // Not this replay's to create: its CREATE TABLE is a fixed string,
-          // and a rename landing beside it would restore the empty legacy
-          // table. A registry that is genuinely absent is created below,
-          // through the service that resolves the spelling first.
-          mayCreateRegistryTable: false,
-        })
-      );
-      // Under the exclusion, and only now: the service resolves the registry
-      // name and then creates it, with awaits in between, so a migration
-      // renaming the table between those two steps would put the empty legacy
-      // one back. The replay above has already run, so the lock's own table is
-      // available — which is why this could not wrap the replay itself.
+      // The lock first, then the replay, so a run refused on a held lock, or on a storage
+      // migration in flight, has added nothing: the replay creates whatever core table or index
+      // this database lacks, which is a write. The lock keeps its own table, creating it where
+      // it is missing, so it does not wait on the replay for one.
+      //
+      // The registry step runs under the same hold: the service resolves the registry name and
+      // then creates it, with awaits in between, so a migration renaming the table between
+      // those two steps would put the empty legacy one back.
       const repaired = await withMigrationExcluded(
         {
           adapter: drizzleAdapter,
@@ -330,7 +320,21 @@ export async function ensureCoreTables(
           // outcome, which is the trade a sync already makes.
           releaseOnInterrupt: true,
         },
-        () => ensureSystemTables(drizzleAdapter, logger)
+        async () => {
+          await applyCoreStatements(
+            drizzleAdapter,
+            logger,
+            sqliteCoreStatementsFor({
+              registryTable: registryTable ?? STORAGE_FORMAT.registryTable,
+              // Not this replay's to create: its CREATE TABLE is a fixed string,
+              // and a rename landing beside it would restore the empty legacy
+              // table. A registry that is genuinely absent is created just below,
+              // through the service that resolves the spelling first.
+              mayCreateRegistryTable: false,
+            })
+          );
+          return ensureSystemTables(drizzleAdapter, logger);
+        }
       );
 
       // Dropped as soon as the claim is: the resolver memoises per adapter for
@@ -474,16 +478,15 @@ export async function ensureCoreTables(
 }
 
 /**
- * What a sync does in production, where it never pushes schema: it refuses, naming them, when its
- * registry step found collections created or updated, and otherwise goes on without a push
- * (undefined). The one decision of it: the real sync acts on it, and its dry run names it.
+ * The refusal of `db:sync` in production, or undefined anywhere else. The one decision of it: the
+ * command asks it before it opens the database, promote and demote before they read anything, the
+ * push below as its own guard, and the dry runs to name what a real run does.
+ *
+ * Only `NODE_ENV=production` counts. With it unset, or set to anything else, a sync runs.
  */
-export function productionSyncRefusal(
-  sync: Pick<CollectionSyncResultWithValidation["sync"], "created" | "updated">
-): CliError | undefined {
-  const pendingCollections = [...sync.created, ...sync.updated];
-  return pendingCollections.length > 0
-    ? schemaSyncInProduction(pendingCollections)
+export function productionSyncRefusal(): CliError | undefined {
+  return process.env.NODE_ENV === "production"
+    ? schemaSyncInProduction()
     : undefined;
 }
 
@@ -737,13 +740,11 @@ export async function performAutoSync(
     );
   }
 
-  // Production guard: never auto-apply schema in production. Users must
-  // explicitly run `nextly migrate:create` + `nextly migrate`.
-  if (process.env.NODE_ENV === "production") {
-    const refusal = productionSyncRefusal(syncResult.sync);
-    if (refusal !== undefined) exitWithError(logger, refusal);
-    return;
-  }
+  // Production guard: never auto-apply schema in production. The command refuses before it
+  // opens the database, so this is reached only by a caller that skipped that check, and it
+  // refuses the same way rather than push.
+  const refusal = productionSyncRefusal();
+  if (refusal !== undefined) exitWithError(logger, refusal);
 
   const start = Date.now();
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
@@ -807,6 +808,8 @@ export async function performAutoSync(
         databaseName,
         // A field the config makes translated keeps its value as this language's.
         defaultLocale: config.localization?.defaultLocale ?? "en",
+        // A refused type change ends with the step that tries it again: this command.
+        nextStep: "run db:sync again",
       });
     },
     // db-sync runs before any UI version-conflict-relevant state — these
@@ -1302,8 +1305,17 @@ export async function performComponentsAutoSync(
       continue;
     }
 
-    // Canonical resolution: custom dbName verbatim, else comp_ + normalized slug.
-    const tableName = resolveComponentTableName(slug);
+    // The table the group's registry row names after the sync: its own storage, on whichever
+    // naming the site is. Derived again from the slug, it would be the legacy name on a site
+    // whose storage moved to the current names.
+    const tableName = syncResult.tableNames[slug];
+    if (tableName === undefined) {
+      errors.push({
+        slug,
+        error: "Component table name not recorded by the sync",
+      });
+      continue;
+    }
 
     try {
       const tableAlreadyExists = await drizzleAdapter.tableExists(tableName);

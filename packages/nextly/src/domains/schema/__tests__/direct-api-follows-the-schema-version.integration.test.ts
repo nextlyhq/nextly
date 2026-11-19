@@ -35,8 +35,8 @@ import { reloadDynamicTables } from "../../../init/reload-dynamic-tables";
 import {
   createSchemaRegistry,
   initializeSchemaRegistry,
-  registerConfigTablesInResolver,
 } from "../../../di/register";
+import { registerConfigTablesInResolver } from "../../../di/register-config-tables";
 import {
   definitionsLoaded,
   loadingDefinitions,

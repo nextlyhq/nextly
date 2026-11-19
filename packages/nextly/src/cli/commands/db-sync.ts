@@ -12,10 +12,12 @@
  *
  * ## Auto-Sync Mode (Development Only)
  *
- * In development mode (NODE_ENV !== 'production'), this command automatically
+ * Outside production (NODE_ENV !== 'production'), this command automatically
  * syncs schema changes to the database without creating migration files.
  * Dev databases are treated as sandboxes where schema changes are
- * auto-applied without migration files.
+ * auto-applied without migration files. In production it refuses, in every mode,
+ * before it opens the database: `migrate:create` and `nextly migrate` change a
+ * production schema.
  *
  * **WARNING:** Auto-sync may cause data loss when tables are recreated.
  * Use `--no-auto-sync` to disable this behavior and use migrations instead.
@@ -64,7 +66,10 @@ import type { Command } from "commander";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { loadBuilderEntities } from "../../di/load-dynamic-tables";
-import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
+import {
+  assertNoMigrationInFlight,
+  withMigrationExcluded,
+} from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import {
@@ -111,8 +116,9 @@ import {
   performPermissionSeeding,
   syncUserFields,
 } from "./dev-build";
-import { ensureCoreTables } from "./dev-server";
+import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
 import { createDebouncedSync } from "./dev-watcher";
+import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { syncSchemaInOrder } from "./sync-schema";
 
 // ============================================================================
@@ -187,6 +193,12 @@ export interface DbSyncCommandOptions {
   dryRun?: boolean;
 
   /**
+   * `--backup-confirmed`: the operator's statement that the database is backed up. Read only
+   * where an earlier release stored data the run brings up to date once it has synced.
+   */
+  backupConfirmed?: boolean;
+
+  /**
    * `--lock-timeout <seconds>`: how long one try of the sync's schema change waits for a table
    * another database session is using; handed on as `NEXTLY_LOCK_TIMEOUT`.
    */
@@ -217,6 +229,31 @@ export interface ResolvedDevOptions extends DbSyncCommandOptions {
 // ============================================================================
 
 /**
+ * Stops a run in production, in every mode, before anything is read, locked or written: no
+ * database is opened, so no table is created and no registry row is written. True when the run
+ * is over; a real run does not return, it exits with the refusal.
+ *
+ * A dry run reports the same refusal as what a real run would do and ends without a failure,
+ * since it changes nothing wherever it runs.
+ */
+function stoppedInProduction(
+  dryRun: boolean,
+  logger: CommandContext["logger"]
+): boolean {
+  const refusal = productionSyncRefusal();
+  if (refusal === undefined) return false;
+  if (!dryRun) exitWithError(logger, refusal);
+  reportDryRun(logger, {
+    changes: [],
+    refusals: [`${refusal.what} ${refusal.why}`],
+    notes: [
+      "NODE_ENV is production: a real run refuses before it reads or changes anything (use nextly migrate:create and nextly migrate).",
+    ],
+  });
+  return true;
+}
+
+/**
  * Execute the dev command
  *
  * @param options - Combined global and command options
@@ -228,6 +265,10 @@ export async function runDbSync(
 ): Promise<void> {
   const { logger } = context;
   const startTime = Date.now();
+
+  // Before the database is opened or the configuration read. The command's action asks this
+  // first; asked here too, so a caller of this function gets the same refusal.
+  if (stoppedInProduction(options.dryRun === true, logger)) return;
 
   logger.header("Nextly Dev");
 
@@ -299,7 +340,44 @@ export async function runDbSync(
     exitWithError(logger, error);
   }
 
+  // What the run does with data an earlier release stored: the steps `nextly
+  // migrate` takes once its migrations have applied, taken here once the
+  // sync is done, for a database that has no migrations to apply.
+  const storedData = storedDataOfRun({
+    adapter: adapter as unknown as DrizzleAdapter,
+    command: "nextly db:sync",
+    // The sync goes on registering tables in the registry it installed.
+    restoreResolver: () =>
+      (adapter as unknown as DrizzleAdapter).setTableResolver(schemaRegistry),
+    // The steps take the schema lock once the sync has let it go, and a
+    // field-group storage migration may have taken it between the two and
+    // stopped part-way. Its marker is read under the steps' lock, as the
+    // sync reads it under its own, so no step reads half-renamed tables.
+    underLock: () =>
+      assertNoMigrationInFlight({
+        adapter: adapter as unknown as DrizzleAdapter,
+        logger,
+        action: "db:sync's steps over data an earlier release stored",
+      }),
+    logger,
+    backupConfirmed: options.backupConfirmed === true,
+    lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+  });
+
+  const takesDataSteps = options.autoSync !== false;
+
   try {
+    // Step 3.4: Work of that kind whose backup nobody confirmed is refused
+    // here, before the core tables or the sync change anything. Counted with
+    // the field types this configuration registered, as every step below is.
+    // Not under `--no-auto-sync`, which leaves the tables as they are: the
+    // steps read them in the shape the configuration gives them.
+    if (takesDataSteps) {
+      await runWithFieldTypes(configResult.fieldTypes, () =>
+        storedData.confirmBeforeSchemaChanges()
+      );
+    }
+
     // Step 3.5: Ensure core tables exist.
     // For fresh databases, the system tables (users, roles, permissions,
     // dynamic_collections, etc.) must exist before any sync or query.
@@ -411,6 +489,18 @@ export async function runDbSync(
         })
     );
 
+    // Step 6: Data an earlier release stored, brought up to date under the
+    // schema lock, which the sync above has let go: once in a run, a watched
+    // one included. A backup refusal made only now, for work the check before
+    // the sync could not see, ends the run with the sync applied.
+    if (takesDataSteps) {
+      await runWithFieldTypes(configResult.fieldTypes, () =>
+        storedData.takeAfterSchemaChanges()
+      );
+    }
+    const storedDataRefused = storedData.refusal();
+    if (storedDataRefused !== null) throw storedDataRefused;
+
     // Step 7: Watch mode. Gated on any entity kind this command syncs, not just
     // collections and singles: `loadConfig({ watch: true })` has already opened
     // the file watcher, so a user-fields-only project stayed alive with no
@@ -499,9 +589,24 @@ async function reportSyncDryRun(
     installStaticSchemaRegistry(adapter);
     // Loaded only for a dry run, so a real sync loads none of the preview's modules.
     const { planDbSync } = await import("./db-sync-dry-run");
+    const plan = await planDbSync(configResult, adapter, options, context);
+    // The data steps a real run takes after its sync, counted read-only on
+    // the database as it stands and listed after the sync's own changes.
+    const stored = await runWithFieldTypes(configResult.fieldTypes, () =>
+      storedDataOfRun({
+        adapter: adapter as unknown as DrizzleAdapter,
+        command: "nextly db:sync",
+        logger,
+        backupConfirmed: options.backupConfirmed === true,
+        lockTtlSeconds: undefined,
+      }).plan()
+    );
     reportDryRun(
       logger,
-      await planDbSync(configResult, adapter, options, context)
+      // `--no-auto-sync` takes no data step.
+      planWithStoredData(plan, stored, {
+        takesSteps: options.autoSync !== false,
+      })
     );
   } finally {
     await adapter.disconnect();
@@ -578,6 +683,10 @@ export async function dbSyncAction(
   if (cmdOptions.force) {
     exitWithError(context.logger, retiredForce());
   }
+
+  // Production refuses every mode of the command, promote and demote included, before anything
+  // is read or changed; their dry runs name that refusal.
+  if (stoppedInProduction(cmdOptions.dryRun === true, context.logger)) return;
 
   // Surface the flag as an env var so downstream modules (the
   // schema-change prompt, the auto-sync path) pick it up without

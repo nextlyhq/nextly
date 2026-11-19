@@ -9,7 +9,7 @@
  *   through the host's `findLinkTargets` and offers what was typed as an
  *   address. Set, it is a chip naming the page, the entry or the address,
  *   with ✕ to clear it.
- * - **Open in new tab** is a switch row, and **Link options** a disclosure of
+ * - **Open in a new tab** is a switch row, and **Link options** a disclosure of
  *   `rel` checkboxes. Both are drawn only while a link is set.
  *
  * Which props make up the link, and what each change writes, are decided in
@@ -410,7 +410,9 @@ function pickKey(pick: LinkPick): string | undefined {
 
 /** What the trigger is announced as: the link it holds, or what it does. */
 function triggerLabel(label: string, words: ChipWords | undefined): string {
-  if (words === undefined) return `${label}: search pages or paste a URL`;
+  // The placeholder's own words, so someone who says what they see
+  // reaches it; the search field it opens says it in full.
+  if (words === undefined) return `${label}: search or paste a URL`;
   const detail = words.detail === undefined ? "" : `, ${words.detail}`;
   return `${label}: ${words.title}${detail}. Change`;
 }
@@ -509,6 +511,8 @@ interface LinkControlProps {
    * block's default has nothing stored, so clearing it would change nothing.
    */
   readonly clearable: boolean;
+  /** The id of the words under the row that explain the link, if it has any. */
+  readonly describedBy?: string | undefined;
 }
 
 /** The link combobox: an empty trigger or the chosen link's chip, and the list. */
@@ -522,6 +526,7 @@ function LinkControl({
   onPick,
   onClear,
   clearable,
+  describedBy,
 }: LinkControlProps): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const [typed, setTyped] = React.useState("");
@@ -563,6 +568,7 @@ function LinkControl({
               aria-haspopup="listbox"
               aria-expanded={open}
               aria-label={triggerLabel(label, words)}
+              aria-describedby={describedBy}
               // Coming back to a link whose lookup failed asks again, once.
               onFocus={retry}
               onKeyDown={event => {
@@ -1022,7 +1028,7 @@ export interface LinkGroupFieldProps {
  * where its field says, so it is a link to qualify even with no address of
  * its own stored.
  */
-function isLinkBound(
+export function isLinkBound(
   group: LinkGroup,
   bound: Readonly<Record<string, unknown>> | undefined
 ): boolean {
@@ -1075,6 +1081,30 @@ function bindOptions(
   };
 }
 
+/** The link's hint under it, read as its description, where it has one. */
+function LinkHint({
+  id,
+  hint,
+}: {
+  id: string | undefined;
+  hint: string | undefined;
+}): React.JSX.Element | null {
+  if (id === undefined || hint === undefined) return null;
+  return (
+    <p className="nx-inspector__note" id={id}>
+      {hint}
+    </p>
+  );
+}
+
+/** The words a block gives its link to explain it, as any prop's hint. */
+function linkHintOf(
+  linkProp: Pick<EditableProp, "schema"> | undefined
+): string | undefined {
+  const hint = linkProp?.schema.hint;
+  return typeof hint === "string" && hint !== "" ? hint : undefined;
+}
+
 /**
  * A block's link group, drawn where its link prop sits: the link, and under
  * a set link its new-tab switch and its Link options. The link's address
@@ -1094,6 +1124,7 @@ export function LinkGroupField({
 }: LinkGroupFieldProps): React.JSX.Element {
   const id = React.useId();
   const tabId = React.useId();
+  const ownHintId = React.useId();
   // Each prop as it applies: what is stored, else the block's default, so a
   // block that declares a default link reads as linked, and its target and
   // rel show what applies, as every other control shows a default.
@@ -1103,6 +1134,8 @@ export function LinkGroupField({
   const linkProp = props.find(prop => prop.name === group.link);
   const label =
     linkProp === undefined ? "Link" : propLabel(linkProp.name, linkProp.schema);
+  const hint = linkHintOf(linkProp);
+  const hintId = hint === undefined ? undefined : ownHintId;
   const value = linkValueOf(group, values);
   const bound = bindingsOfBlock(document, nodeId);
   const linkBound = isLinkBound(group, bound);
@@ -1141,6 +1174,7 @@ export function LinkGroupField({
               disabled={!destinationWritable}
               find={services?.findLinkTargets}
               clearable={clearable}
+              describedBy={hintId}
               onPick={pick => {
                 const changes = pickChanges(group, pick);
                 if (changes !== undefined && destinationWritable) {
@@ -1162,6 +1196,7 @@ export function LinkGroupField({
                 );
               }}
             />
+            <LinkHint id={hintId} hint={hint} />
           </div>
         </HeldByLock>,
         bindOptions(group, destination, writable, bound)
@@ -1169,7 +1204,7 @@ export function LinkGroupField({
       {!linked || group.target === undefined ? null : (
         <HeldByLock reasonId={held(group.target)}>
           <div className="nx-inspector__field" data-content-control="checkbox">
-            <Label htmlFor={tabId}>Open in new tab</Label>
+            <Label htmlFor={tabId}>Open in a new tab</Label>
             <Switch
               id={tabId}
               disabled={!writable(group.target)}

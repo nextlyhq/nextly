@@ -59,7 +59,7 @@ export function useTreeKeyDown(
     },
     select: (_, row) => actions.select(row.node.id),
     menu: (_, row) => actions.setMenuOpen(row.node.id),
-    move: (command, row) => actions.move(row.node.id, command.delta),
+    move: (command, row) => actions.move(row.node.id, command.step),
     "add-after": (_, row) => actions.addAfter(row.node.id),
     "type-ahead": (command, _, index) => {
       const now = Date.now();

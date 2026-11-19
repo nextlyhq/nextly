@@ -12,6 +12,10 @@
  * Email services are non-paginated (they return plain arrays), so list
  * methods use respondData with a named field rather than respondList
  * plus synthetic pagination meta.
+ *
+ * The Email hub's Activity reads (`/api/email-deliveries`) are dispatched
+ * directly by the route handler to `handleEmailDeliveryRequest`, which asks
+ * `read-email-deliveries` itself and pages by cursor.
  */
 
 import { z } from "zod";
@@ -21,20 +25,31 @@ import {
   respondAction,
   respondData,
   respondDoc,
+  respondList,
   respondMutation,
 } from "../../api/response-shapes";
+import { withErrorHandler } from "../../api/with-error-handler";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
+import { isErrorResponse, requireAnyPermission } from "../../auth/middleware";
+import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { container } from "../../di/container";
+import { SYSTEM_READ_POLICY } from "../../domains/auth/system-write-policy";
 import { brandSettingsUpdateSchema } from "../../domains/email/brand-settings";
+import { EmailDeliveryActivity } from "../../domains/email/delivery-activity";
 import { draftPreviewSchema } from "../../domains/email/draft-preview-request";
 import { toDescriptor } from "../../domains/email/provider-definition";
 import { sendOutcomeMessage } from "../../domains/email/send-outcome";
+import type { EmailDeliveryService } from "../../domains/email/services/email-delivery-service";
 import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
 import {
   applyOwnerUpdateSchema,
   overrideTemplateSchema,
   undoOwnerUpdateSchema,
 } from "../../domains/email/template-ownership-requests";
+import {
+  collectTemplateReferences,
+  sendersBySlug,
+} from "../../domains/email/template-references";
 import { templateVariablesSchema } from "../../domains/email/template-variables";
 import { testSendRecipientOf } from "../../domains/email/test-send-recipient";
 import type { UserService } from "../../domains/users/services/user-service";
@@ -42,8 +57,10 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailService } from "../../services/email/email-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
+import { consoleLogger } from "../../shared/types";
 import { readAuthenticatedActor } from "../helpers/authenticated-actor";
 import {
+  getAdapterFromDI,
   getEmailProviderServiceFromDI,
   getEmailTemplateServiceFromDI,
 } from "../helpers/di";
@@ -95,6 +112,14 @@ function fromContainer<T>(name: string): T | undefined {
     // DI not initialized
     return undefined;
   }
+}
+
+/** A plugin's references handler that failed, for the server log. */
+function logReferenceFailure(error: unknown): void {
+  consoleLogger.warn(
+    "An email.templateReferences handler failed; what sends each email could not all be checked",
+    { error: error instanceof Error ? error.message : String(error) }
+  );
 }
 
 /** The email service, or the generic internal error when it isn't wired. */
@@ -355,14 +380,46 @@ const EMAIL_TEMPLATE_METHODS: Record<
     // says whether it is kept on the previous engine, so the admin's list can
     // name those emails without asking once per row; the service answers for
     // the whole list in one pass.
+    //
+    // Each row also says what sends it: what its owner declares, and the
+    // settings that send it (a form's notification rules). Whether every
+    // plugin answered is said once, for the list.
     execute: async svc => {
       const records = await svc.templateService.listTemplates();
       const kept = await svc.templateService.keptOnOldEngineIds(records);
+      const { references, complete } = await collectTemplateReferences(
+        {},
+        logReferenceFailure
+      );
+      const senders = sendersBySlug(
+        records.map(record => record.slug),
+        slug => svc.templateService.ownerSentBy(slug),
+        references
+      );
       const templates = records.map(record => ({
         ...record,
         keptOnOldEngine: kept.has(record.id),
+        sentBy: senders.get(record.slug),
       }));
-      return respondData({ templates });
+      return respondData({ templates, referencesComplete: complete });
+    },
+  },
+  templateSenders: {
+    // What sends one template, read fresh, for the delete guard: what would
+    // stop sending if it went. `complete` is false when a plugin could not
+    // be asked, so the admin says so rather than "nothing sends this".
+    execute: async (svc, p) => {
+      const template = await svc.templateService.getTemplate(p.templateId);
+      const { references, complete } = await collectTemplateReferences(
+        { slug: template.slug },
+        logReferenceFailure
+      );
+      const senders = sendersBySlug(
+        [template.slug],
+        slug => svc.templateService.ownerSentBy(slug),
+        references
+      ).get(template.slug);
+      return respondData({ ...senders, complete });
     },
   },
   createTemplate: {
@@ -379,9 +436,27 @@ const EMAIL_TEMPLATE_METHODS: Record<
     },
   },
   getTemplate: {
+    // The one record the workbench edits, carrying what each list row
+    // carries: what sends it, and whether every plugin answered — the
+    // workbench's details and state line show senders from this record, so
+    // without them here the column the list adds would never reach the
+    // edit screen.
     execute: async (svc, p) => {
       const template = await svc.templateService.getTemplate(p.templateId);
-      return respondDoc(template);
+      const { references, complete } = await collectTemplateReferences(
+        { slug: template.slug },
+        logReferenceFailure
+      );
+      const senders = sendersBySlug(
+        [template.slug],
+        slug => svc.templateService.ownerSentBy(slug),
+        references
+      );
+      return respondDoc({
+        ...template,
+        sentBy: senders.get(template.slug),
+        referencesComplete: complete,
+      });
     },
   },
   updateTemplate: {
@@ -668,4 +743,141 @@ export function dispatchEmailTemplates(
   const handler = EMAIL_TEMPLATE_METHODS[method];
   if (!handler) throw new Error(`Unknown method: ${method}`);
   return handler.execute({ templateService }, params, body);
+}
+
+// ============================================================
+// The Email hub's Activity reads
+// ============================================================
+
+/** The filters a list route takes, as its query string gives them. */
+const DELIVERY_FILTER_KEYS = [
+  "outcome",
+  "template",
+  "providerId",
+  "providerType",
+  "from",
+  "to",
+  "before",
+  "limit",
+] as const;
+const ACTIVITY_FILTER_KEYS = [
+  "status",
+  "template",
+  "providerType",
+  "providerOrigin",
+  "from",
+  "to",
+  "before",
+  "limit",
+] as const;
+const QUEUED_FILTER_KEYS = [
+  "state",
+  "template",
+  "from",
+  "to",
+  "before",
+  "limit",
+] as const;
+
+/** The named query parameters, each once; anything else is ignored. */
+function queryOf(
+  query: URLSearchParams,
+  keys: readonly string[]
+): Record<string, string> {
+  const picked: Record<string, string> = {};
+  for (const key of keys) {
+    const value = query.get(key);
+    if (value !== null) picked[key] = value;
+  }
+  return picked;
+}
+
+/** A detail that was found, or the not-found every unknown id answers. */
+function found<T>(detail: T | null): T {
+  if (detail === null) throw NextlyError.notFound();
+  return detail;
+}
+
+/** Each Activity read, by the method the route parser names. */
+const EMAIL_DELIVERY_READS: Record<
+  string,
+  (
+    activity: EmailDeliveryActivity,
+    query: URLSearchParams,
+    params: Record<string, string>
+  ) => Promise<Response>
+> = {
+  findDelivery: async (activity, _search, params) =>
+    respondDoc(found(await activity.findDelivery(params.deliveryId ?? ""))),
+  findQueuedEmail: async (activity, _search, params) =>
+    respondDoc(found(await activity.findQueuedEmail(params.queuedId ?? ""))),
+  listDeliveries: async (activity, query) => {
+    const { items, meta } = await activity.listDeliveries(
+      queryOf(query, DELIVERY_FILTER_KEYS)
+    );
+    return respondList(items, meta);
+  },
+  listActivity: async (activity, query) => {
+    const { items, meta } = await activity.listActivity(
+      queryOf(query, ACTIVITY_FILTER_KEYS)
+    );
+    return respondList(items, meta);
+  },
+  listQueuedEmails: async (activity, query) => {
+    const { items, meta } = await activity.listQueuedEmails(
+      queryOf(query, QUEUED_FILTER_KEYS)
+    );
+    return respondList(items, meta);
+  },
+  // `?slug=a&slug=b` names the templates; none names every template sent.
+  lastSentByTemplate: async (activity, query) => {
+    const slugs = query.getAll("slug");
+    return respondData({
+      ...(await activity.lastSentByTemplate(
+        slugs.length > 0 ? slugs : undefined
+      )),
+    });
+  },
+  overdueQueuedEmails: async activity =>
+    respondData({ ...(await activity.overdue()) }),
+};
+
+/**
+ * The Email hub's Activity reads: the delivery list, the queued-email list,
+ * each template's last send, and whether queued email is overdue. Each asks
+ * `read-email-deliveries` before anything is read, refused as every other
+ * route refuses, and none returns an address, subject or body.
+ */
+export function handleEmailDeliveryRequest(
+  req: Request,
+  method: string,
+  params: Record<string, string> = {}
+): Promise<Response> {
+  return withErrorHandler(async (request: Request): Promise<Response> => {
+    const read = EMAIL_DELIVERY_READS[method];
+    if (!read) {
+      throw NextlyError.notFound({
+        logContext: { service: "email", method },
+      });
+    }
+    const auth = await requireAnyPermission(request, [
+      ...SYSTEM_READ_POLICY.emailDeliveries.read.anyOf,
+    ]);
+    // Thrown, so the refusal has the envelope every other 401/403 has.
+    if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+    const adapter = getAdapterFromDI();
+    if (!adapter) {
+      throw NextlyError.internal({
+        logContext: { reason: "database-adapter-unavailable" },
+      });
+    }
+    return read(
+      new EmailDeliveryActivity(
+        adapter,
+        container.get<EmailDeliveryService>("emailDeliveryService")
+      ),
+      new URL(request.url).searchParams,
+      params
+    );
+  })(req);
 }

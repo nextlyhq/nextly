@@ -49,6 +49,14 @@ export interface VariableReach {
    * a place, though there is no document to open.
    */
   readonly blockDefaults: readonly string[];
+  /**
+   * The site's variables whose own values name it through `var()`, by
+   * identity: a shadow variable keeps its colour that way. Absent where the
+   * host does not say.
+   */
+  readonly variables?: readonly string[];
+  /** The Site text rows using it (`link`, `h2`). Absent where not said. */
+  readonly siteText?: readonly string[];
   /** False makes `documents`, and so the places, a floor: "at least". */
   readonly complete: boolean;
 }
@@ -67,6 +75,21 @@ export interface VariablesUsage {
   readonly mayCount?: boolean;
   /** Each variable asked about, by identity (`tokenIdentity`). */
   readonly variables: ReadonlyMap<string, VariableReach>;
+}
+
+/**
+ * How many documents some variables are used in together, each document
+ * once however many of them it names: the host's own count, numbers alone.
+ *
+ * @experimental Settles with the Variables tab's usage.
+ */
+export interface VariablesTogether {
+  /** How many documents use any of the variables. */
+  readonly documents: number;
+  /** The same documents, by kind. */
+  readonly byKind: Readonly<Record<SharedStyleKind, number>>;
+  /** False makes `documents`, and so the places, a floor: "at least". */
+  readonly complete: boolean;
 }
 
 /**
@@ -129,6 +152,16 @@ export interface VariablesAccess {
     identities: readonly string[],
     signal: AbortSignal
   ) => Promise<VariablesUsage>;
+  /**
+   * How many documents each group of variables is used in together, each
+   * document once, answered in the order asked: at most fifty groups, naming
+   * at most fifty variables in all, per read. Optional: without it, or while
+   * it fails, a group's documents are its variables' added up.
+   */
+  readonly usageTogether?: (
+    groups: readonly (readonly string[])[],
+    signal: AbortSignal
+  ) => Promise<readonly VariablesTogether[]>;
   /** One page, from 1, of the places a variable is used. */
   readonly uses: (
     identity: string,
@@ -190,6 +223,25 @@ export function combinedReach(
 }
 
 /**
+ * One reach for variables counted together: {@link combinedReach}, with the
+ * documents the host counted for them together, each once, in place of
+ * their sum. The sum where the host gave no count of its own.
+ */
+export function reachTogether(
+  reaches: readonly (VariableReach | undefined)[],
+  together: VariablesTogether | undefined
+): VariableReach | undefined {
+  const combined = combinedReach(reaches);
+  if (combined === undefined || together === undefined) return combined;
+  return {
+    ...combined,
+    documents: together.documents,
+    byKind: together.byKind,
+    complete: together.complete,
+  };
+}
+
+/**
  * How many places use a variable: its documents, its shared styles, and the
  * block types whose default styles name it.
  */
@@ -207,47 +259,20 @@ function placesWords(count: number): string {
 /** What a floor adds: why the number is a minimum. */
 const NOT_COUNTED_YET = "Some pages aren't counted yet.";
 
-/** A row's count: what it shows, what it says, and how it is drawn. */
-export interface VariableCount {
-  /** What the row shows: "14", "2+", or words for a zero not counted yet. */
-  readonly text: string;
-  /** What it says on hover and to a screen reader. */
-  readonly words: string;
-  /** Drawn muted: nothing found. */
-  readonly zero: boolean;
-  /** A floor: "at least". */
-  readonly floor: boolean;
-}
-
 /**
- * A row's count: a bare number of places, "2+" while that is a floor. A zero
- * that is a floor says "Not counted yet", as a shared style's row does,
- * rather than "0+", a number that says nothing.
+ * How widely a variable is used, in the words its row's tooltip says and
+ * its name says to a screen reader: "Used in 14 places", "Not used", or,
+ * while some pages are not counted, "Not counted yet" or a floor ("Used in
+ * at least 2 places").
  */
-export function variableCount(reach: VariableReach): VariableCount {
+export function variableCountWords(reach: VariableReach): string {
   const places = variablePlaces(reach);
   if (!reach.complete) {
-    if (places === 0) {
-      return {
-        text: "Not counted yet",
-        words: `No uses counted yet. ${NOT_COUNTED_YET}`,
-        zero: true,
-        floor: true,
-      };
-    }
-    return {
-      text: `${String(places)}+`,
-      words: `Used in at least ${placesWords(places)}. ${NOT_COUNTED_YET}`,
-      zero: false,
-      floor: true,
-    };
+    return places === 0
+      ? "Not counted yet"
+      : `Used in at least ${placesWords(places)}. ${NOT_COUNTED_YET}`;
   }
-  return {
-    text: String(places),
-    words: places === 0 ? NOT_USED : `Used in ${placesWords(places)}`,
-    zero: places === 0,
-    floor: false,
-  };
+  return places === 0 ? "Not used" : `Used in ${placesWords(places)}`;
 }
 
 /** What an unused variable's row and editor say. */
@@ -255,18 +280,43 @@ const NOT_USED = "Not used anywhere";
 
 /**
  * What Remove does for a variable the site added: go ahead behind the
- * confirm (`free`), refuse while it is used (`in-use`), or wait for the
- * pages to be counted (`not-whole`). `unread` while nothing has been read,
- * when Remove confirms as it always has and the save refuses a use.
+ * confirm (`free`), or refuse while a use is known (`in-use`). `unread` while
+ * nothing has been read, when Remove confirms as well. A zero not counted
+ * across every page is `free` too: the save counts the pages before it
+ * decides, and refuses a use it finds, so the editor never refuses one for
+ * want of a count.
  */
-export type VariableRemoval = "free" | "in-use" | "not-whole" | "unread";
+export type VariableRemoval = "free" | "in-use" | "unread";
 
 export function variableRemoval(
   reach: VariableReach | undefined
 ): VariableRemoval {
   if (reach === undefined) return "unread";
-  if (variablePlaces(reach) > 0) return "in-use";
-  return reach.complete ? "free" : "not-whole";
+  return variablePlaces(reach) > 0 ? "in-use" : "free";
+}
+
+/**
+ * Whether a variable is used, for the usage filter: "counting" until the
+ * site's documents are all counted, since an absence proves nothing before.
+ *
+ * Used means something the site stores names it: a document, a shared or
+ * block style, a Site text row, or another variable through `var()`. A block type's own
+ * built-in look does not count: a built-in colour only a core block uses is
+ * one the site never chose.
+ */
+export type UsageState = "used" | "unused" | "counting";
+
+export function usageState(reach: VariableReach | undefined): UsageState {
+  if (reach === undefined) return "counting";
+  const named =
+    (reach.variables?.length ?? 0) > 0 || (reach.siteText?.length ?? 0) > 0;
+  if (named || reach.documents > 0 || reach.sharedStyles.length > 0) {
+    return "used";
+  }
+  // A count that says nothing of the variables or rows naming it, as an
+  // older host's does, has not shown it unused.
+  const said = reach.variables !== undefined && reach.siteText !== undefined;
+  return reach.complete && said ? "unused" : "counting";
 }
 
 /** The editor's line beside Remove: how widely the variable is used. */
@@ -276,7 +326,8 @@ export function variableStatus(reach: VariableReach | undefined): string {
   if (places > 0) {
     return `Used in ${reach.complete ? "" : "at least "}${placesWords(places)}`;
   }
-  return reach.complete ? NOT_USED : "Counting where it's used…";
+  // Not "counting": nothing may be counting, and the row says the same.
+  return reach.complete ? NOT_USED : "Not counted yet";
 }
 
 /** "It's used in 14 places, and they would lose this colour:". */

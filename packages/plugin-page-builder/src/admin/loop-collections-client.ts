@@ -10,7 +10,8 @@
  * shares one read between the loop's two controls.
  *
  * It decides nothing about access: the route lists only the collections the
- * signed-in author may read.
+ * signed-in author may read. What it keeps is that author's alone, for their
+ * session (`session-answers`).
  *
  * @module admin/loop-collections-client
  */
@@ -33,6 +34,9 @@ import {
   type LoopRelationItem,
 } from "../loop-collections-contract";
 
+import { sessionAnswer } from "./session-answers";
+import { readStarted } from "./startup-reads";
+
 /** Said when the route answered with something that is not a list of collections. */
 const UNEXPLAINED = "Collections could not be listed. Try again.";
 
@@ -46,17 +50,57 @@ const UNEXPLAINED = "Collections could not be listed. Try again.";
  * absent for the default.
  */
 export async function listLoopCollections(
-  locale?: string
+  locale?: string,
+  userId: string | null = null
 ): Promise<readonly LoopCollectionItem[]> {
-  const body = await readPluginRoute<LoopCollectionsResponse>({
-    plugin: PAGE_BUILDER_PLUGIN_NAME,
-    // In the language being edited, so the fields offered are the ones a
-    // save in that language takes.
-    path: loopCollectionsPath(locale),
-  });
+  // In the language being edited, so the fields offered are the ones a save
+  // in that language takes; the builder's start-up answer when it opens.
+  const path = loopCollectionsPath(locale);
+  const body = await readStarted(
+    path,
+    () =>
+      readPluginRoute<LoopCollectionsResponse>({
+        plugin: PAGE_BUILDER_PLUGIN_NAME,
+        path,
+      }),
+    userId
+  );
   const collections = loopCollectionsOf(body);
   if (collections === undefined) throw new Error(UNEXPLAINED);
   return collections;
+}
+
+/** Each person's read of the loop collections, one function per language. */
+const loopCollectionReads = new Map<
+  string,
+  () => Promise<readonly LoopCollectionItem[]>
+>();
+
+/**
+ * The read of the collections a list or condition may name, in `locale`, as
+ * `userId`, the person signed in, may read them: the same function for every
+ * caller, so the inspector and the canvas's condition badges share one read
+ * (the builder shares a read by the function's identity), and its answer
+ * kept for the person's session, so selecting a block asks nothing again.
+ */
+export function loopCollectionsIn(
+  locale: string | undefined,
+  userId: string | null
+): () => Promise<readonly LoopCollectionItem[]> {
+  // Per person too: the answer is read with their access, and a read still in
+  // flight when one person signs out must never be handed to the next.
+  const key = JSON.stringify([locale ?? "", userId]);
+  let read = loopCollectionReads.get(key);
+  if (read === undefined) {
+    read = () =>
+      sessionAnswer(
+        userId,
+        JSON.stringify(["loop-collections", locale ?? ""]),
+        () => listLoopCollections(locale, userId)
+      );
+    loopCollectionReads.set(key, read);
+  }
+  return read;
 }
 
 /**
@@ -112,6 +156,12 @@ function collectionOf(item: unknown): LoopCollectionItem | undefined {
       typeof name === "string" ? name : undefined
     ),
     readable: eachOf(record.readable, readableOf),
+    ...(typeof record.titleField === "string"
+      ? { titleField: record.titleField }
+      : {}),
+    ...(typeof record.entriesHavePages === "boolean"
+      ? { entriesHavePages: record.entriesHavePages }
+      : {}),
   };
 }
 
@@ -167,6 +217,9 @@ function readableOf(value: unknown): LoopReadableField | undefined {
     // Both decide a field's kind for a list, as the save reads them.
     ...(record.timeOnly === true ? { timeOnly: true as const } : {}),
     ...(isStoragePrimitive(storage) ? { storage } : {}),
+    ...(typeof record.takesImages === "boolean"
+      ? { takesImages: record.takesImages }
+      : {}),
   };
 }
 

@@ -16,8 +16,10 @@ import { describe, expect, it } from "vitest";
 
 import { VARIABLE_LOSS_WORDS } from "./editor-words";
 import {
+  reachTogether,
   sharedStyleSets,
-  variableCount,
+  usageState,
+  variableCountWords,
   variableLossSentence,
   variableRemoval,
   variableStatus,
@@ -38,60 +40,86 @@ function reach(
     byKind: { ...NONE, pages: documents },
     sharedStyles,
     blockDefaults,
+    // As a current host answers: no variable and no Site text row names it.
+    variables: [],
+    siteText: [],
     complete,
   };
 }
 
-describe("the count at the end of a row", () => {
+describe("how widely a row's variable is used, in words", () => {
   it("is the places: the documents and the shared styles together", () => {
     // 12 documents and 2 shared styles: a count of either alone is wrong.
-    expect(variableCount(reach(12, ["c-card", "c-hero"]))).toEqual({
-      text: "14",
-      words: "Used in 14 places",
-      zero: false,
-      floor: false,
-    });
+    expect(variableCountWords(reach(12, ["c-card", "c-hero"]))).toBe(
+      "Used in 14 places"
+    );
   });
 
   it("counts the block types whose default styles name it as places too", () => {
     // 2 documents, 1 shared style and 2 block types: 5 places.
     expect(
-      variableCount(reach(2, ["c-card"], true, ["core/button", "core/heading"]))
-        .words
+      variableCountWords(
+        reach(2, ["c-card"], true, ["core/button", "core/heading"])
+      )
     ).toBe("Used in 5 places");
-    expect(variableCount(reach(0, [], true, ["core/button"])).text).toBe("1");
+    expect(variableCountWords(reach(0, [], true, ["core/button"]))).toBe(
+      "Used in 1 place"
+    );
   });
 
   it("says one place in the singular", () => {
-    expect(variableCount(reach(0, ["c-card"])).words).toBe("Used in 1 place");
-    expect(variableCount(reach(1)).words).toBe("Used in 1 place");
+    expect(variableCountWords(reach(0, ["c-card"]))).toBe("Used in 1 place");
+    expect(variableCountWords(reach(1))).toBe("Used in 1 place");
   });
 
-  it("is a muted zero when nothing uses it", () => {
-    expect(variableCount(reach(0))).toEqual({
-      text: "0",
-      words: "Not used anywhere",
-      zero: true,
-      floor: false,
-    });
+  it('says "Not used" when nothing uses it', () => {
+    expect(variableCountWords(reach(0))).toBe("Not used");
   });
 
-  it("is a floor, 2+, while some pages are not counted yet", () => {
-    expect(variableCount(reach(1, ["c-card"], false))).toEqual({
-      text: "2+",
-      words: "Used in at least 2 places. Some pages aren't counted yet.",
-      zero: false,
-      floor: true,
-    });
-  });
-
-  it("says a zero that is a floor in words, as a shared style's row does", () => {
-    const count = variableCount(reach(0, [], false));
-    expect(count.text).toBe("Not counted yet");
-    expect(count.words).toBe(
-      "No uses counted yet. Some pages aren't counted yet."
+  it("is a floor while some pages are not counted yet", () => {
+    expect(variableCountWords(reach(1, ["c-card"], false))).toBe(
+      "Used in at least 2 places. Some pages aren't counted yet."
     );
-    expect(count.zero).toBe(true);
+  });
+
+  it('says "Not counted yet" for a zero that is a floor', () => {
+    expect(variableCountWords(reach(0, [], false))).toBe("Not counted yet");
+  });
+});
+
+describe("whether a variable is used, for the usage filter", () => {
+  it("is used by a page, a component or any other document", () => {
+    expect(usageState(reach(1))).toBe("used");
+  });
+
+  it("is used by a shared style or a block style", () => {
+    expect(usageState(reach(0, ["card"]))).toBe("used");
+  });
+
+  it("is used where a Site text row uses it", () => {
+    expect(usageState({ ...reach(0), siteText: ["link"] })).toBe("used");
+  });
+
+  it("is used where another variable names it through var()", () => {
+    expect(usageState({ ...reach(0), variables: ["shadow.lift"] })).toBe(
+      "used"
+    );
+  });
+
+  it("is unused where only a core block's built-in look names it", () => {
+    expect(usageState(reach(0, [], true, ["core/button"]))).toBe("unused");
+  });
+
+  it("is still counting where the count says nothing of the variables or rows naming it", () => {
+    // An older server's answer: neither relation is said, so neither is none.
+    const { variables: _v, siteText: _s, ...unsaid } = reach(0);
+    expect(usageState(unsaid)).toBe("counting");
+  });
+
+  it("is unused only once every document is counted", () => {
+    expect(usageState(reach(0))).toBe("unused");
+    expect(usageState(reach(0, [], false))).toBe("counting");
+    expect(usageState(undefined)).toBe("counting");
   });
 });
 
@@ -109,8 +137,8 @@ describe("what Remove may do", () => {
     expect(variableRemoval(reach(1, [], false))).toBe("in-use");
   });
 
-  it("waits while a zero is not counted whole", () => {
-    expect(variableRemoval(reach(0, [], false))).toBe("not-whole");
+  it("goes ahead while a zero is not counted whole: the save counts and decides", () => {
+    expect(variableRemoval(reach(0, [], false))).toBe("free");
   });
 
   it("is unread before the usage is read", () => {
@@ -130,11 +158,10 @@ describe("the editor's status line", () => {
     );
   });
 
-  it("says it is unused, or that the uses are still being counted", () => {
+  it("says it is unused, or that it is not counted yet", () => {
     expect(variableStatus(reach(0))).toBe("Not used anywhere");
-    expect(variableStatus(reach(0, [], false))).toBe(
-      "Counting where it's used…"
-    );
+    // Not "counting": nothing may be.
+    expect(variableStatus(reach(0, [], false))).toBe("Not counted yet");
   });
 
   it("says nothing before the usage is read", () => {
@@ -268,5 +295,35 @@ describe("what a shared style sets with a variable", () => {
       },
     };
     expect(sharedStyleSets([odd], "c-odd", "color.brand")).toBe("uses it");
+  });
+});
+
+describe("some variables' usage as one count", () => {
+  it("takes the host's count of their documents together, and joins the rest", () => {
+    // A page naming both is one document, as the host counted it.
+    expect(
+      reachTogether([reach(9, ["c-card"]), reach(2, ["c-card", "c-hero"])], {
+        documents: 10,
+        byKind: { ...NONE, pages: 8, components: 2 },
+        complete: false,
+      })
+    ).toEqual({
+      documents: 10,
+      byKind: { ...NONE, pages: 8, components: 2 },
+      sharedStyles: ["c-card", "c-hero"],
+      blockDefaults: [],
+      complete: false,
+    });
+  });
+
+  it("adds the documents up without the host's count, and is unread until every part is", () => {
+    expect(reachTogether([reach(9), reach(2)], undefined)?.documents).toBe(11);
+    expect(
+      reachTogether([reach(9), undefined], {
+        documents: 9,
+        byKind: { ...NONE, pages: 9 },
+        complete: true,
+      })
+    ).toBeUndefined();
   });
 });
