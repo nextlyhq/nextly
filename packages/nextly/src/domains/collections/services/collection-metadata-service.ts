@@ -544,7 +544,9 @@ export class CollectionMetadataService extends BaseService {
    * writer, recorded applied once `push` (the update's own push, in
    * development) has run; a settings-only update writes the settings-only
    * migration, recorded the same way. A refusal or failure comes back as the
-   * result the caller returns.
+   * result the caller returns. `writeRow`, the update's registry write, runs in
+   * the transaction that records the files, so a failed write takes their
+   * record back with it and the update answers that it failed part way.
    */
   private async writeUpdate(
     deps: CollectionSaveDeps,
@@ -563,7 +565,8 @@ export class CollectionMetadataService extends BaseService {
       };
     },
     update: UpdateSettings,
-    push: ((onLanded: () => void) => Promise<void>) | undefined
+    push: ((onLanded: () => void) => Promise<void>) | undefined,
+    writeRow: () => Promise<void>
   ): Promise<MetadataServiceResult | undefined> {
     // A push that fails after changing the database keeps the update's files, recorded applied
     // nowhere, and its failure tells the admin so; one that fails before withdraws them.
@@ -601,7 +604,7 @@ export class CollectionMetadataService extends BaseService {
           junctions: relations.junctions,
           keys: relations.keys,
         },
-        { appliedBy: pushed.appliedBy }
+        { appliedBy: pushed.appliedBy, inLastTransaction: writeRow }
       );
       pushed.throwIfFailed(written.files, written.checked);
       return undefined;
@@ -1283,6 +1286,10 @@ export class CollectionMetadataService extends BaseService {
       // `migrate:create`'s, recorded applied once the push has run, and a
       // settings-only update writes the settings-only migration.
       const writerDeps = this.saveDeps();
+      // The registry row as the save writer wrote it, in the transaction that records the update's
+      // files applied (development only); left unset, it is written below.
+      let updatedInSave: unknown;
+      let writtenInSave = false;
       if (writerDeps !== undefined) {
         const refused = await this.writeUpdate(
           writerDeps,
@@ -1290,7 +1297,23 @@ export class CollectionMetadataService extends BaseService {
           before,
           updateArtifacts,
           body,
-          updateArtifacts.migrationSQL ? pushUpdate : undefined
+          updateArtifacts.migrationSQL ? pushUpdate : undefined,
+          async () => {
+            // The row and the stored schema version in one transaction, joined to the record of
+            // the files (`writeRegistryRows`): recorded applied, as the files are.
+            updatedInSave = await writeRegistryRows(this.adapter, () =>
+              this.collectionService.updateCollectionMetadata(
+                params.collectionName,
+                {
+                  ...updateArtifacts.metadataUpdates,
+                  ...(updateArtifacts.migrationSQL
+                    ? { migrationStatus: "applied" as const }
+                    : {}),
+                }
+              )
+            );
+            writtenInSave = true;
+          }
         );
         if (refused !== undefined) return refused;
       }
@@ -1394,16 +1417,48 @@ export class CollectionMetadataService extends BaseService {
                 );
               }
             } else {
-              updateArtifacts.metadataUpdates.migrationStatus = "failed";
+              // Answered as the failure it is, never as an update that went through. Where the
+              // save writer recorded the row with its files, it holds the change; otherwise no row
+              // is written. The writer refuses before this when the table does not stand as its
+              // file says (`recordWhatWasPushed`), so this is met without one.
               this.logger.error(
                 `Table "${existingCollection.tableName}" not found after migration update`
               );
+              return errorToMetadataResult(
+                new NextlyError({
+                  code: "NEXTLY_MIGRATION_APPLY_FAILED",
+                  publicMessage: writtenInSave
+                    ? `Table "${existingCollection.tableName}" was not found after the schema change, though its migration and the collection's record were saved.`
+                    : `Table "${existingCollection.tableName}" was not found after the schema change, so the collection's record was left as it was.`,
+                  logContext: {
+                    reason: "table-missing-after-update",
+                    slug: params.collectionName,
+                  },
+                }),
+                {
+                  statusCode: 500,
+                  defaultMessage: "The schema change could not be applied",
+                },
+                this.dialect
+              );
             }
           } catch (migrationError: unknown) {
-            updateArtifacts.metadataUpdates.migrationStatus = "failed";
             this.logger.error(
               `Migration update failed: ${migrationError instanceof Error ? migrationError.message : String(migrationError)}`
             );
+            // Without the save writer nothing is recorded yet, so the update is answered as failed
+            // with no row written. With it, the change and its row were recorded together, and
+            // only this process's view of the table could not be brought up to them.
+            if (!writtenInSave) {
+              return errorToMetadataResult(
+                migrationError,
+                {
+                  statusCode: 500,
+                  defaultMessage: "The schema change could not be applied",
+                },
+                this.dialect
+              );
+            }
           }
 
           // No on-disk hot-reload needed: registerRuntimeSchema above already
@@ -1416,16 +1471,18 @@ export class CollectionMetadataService extends BaseService {
       // dropped: the factory's generic "Resource already exists." satisfies
       // §13.8 and the slug stays in logContext via the underlying DbError
       // cause chain.
-      let updated;
+      let updated = updatedInSave;
       try {
         // The row and the stored schema version in one transaction
-        // (`writeRegistryRows`).
-        updated = await writeRegistryRows(this.adapter, () =>
-          this.collectionService.updateCollectionMetadata(
-            params.collectionName,
-            updateArtifacts.metadataUpdates
-          )
-        );
+        // (`writeRegistryRows`), unless the save writer wrote it with its files.
+        if (!writtenInSave) {
+          updated = await writeRegistryRows(this.adapter, () =>
+            this.collectionService.updateCollectionMetadata(
+              params.collectionName,
+              updateArtifacts.metadataUpdates
+            )
+          );
+        }
       } catch (dbError: unknown) {
         return errorToMetadataResult(
           dbError,
