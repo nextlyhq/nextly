@@ -597,7 +597,8 @@ describe.each(getConfiguredTestDialects())(
         current = await bootSteps(dialect);
         await admin();
         await person(app(), "rita", everywhere("sign-off"));
-        const desk = await role(app(), "legal-desk", []);
+        // A role needs a permission to exist; reading posts gives it nothing a review needs.
+        const desk = await role(app(), "legal-desk", [["read", "posts"]]);
 
         await door.update(SAM, "editorial", {
           revision: 0,
