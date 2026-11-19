@@ -163,8 +163,17 @@ export function useSettingsPlace<TFieldValues extends FieldValues>(
     }),
     [css, apply]
   );
-  if (document === null) return null;
-  return { context, tabProps, flushHeld: held.flush, pageCode, pageCss };
+  // One value while each part is the same, so Page settings, which is handed
+  // the place and memoised, is not drawn again for a render that changed
+  // none of it, such as a block selected.
+  const flushHeld = held.flush;
+  return useMemo(
+    () =>
+      document === null
+        ? null
+        : { context, tabProps, flushHeld, pageCode, pageCss },
+    [document, context, tabProps, flushHeld, pageCode, pageCss]
+  );
 }
 
 /**

@@ -1,6 +1,7 @@
 /**
  * The admin's client for `/api/workflows`: a document's review state, taking
- * a step, and assigning a part.
+ * a step, and assigning a part; and the registered workflows and one
+ * workflow's settings, read and changed.
  *
  * Thin over `fetcher`, like every other service here. One route serves
  * collections and Singles alike: a document is named in the query for a read
@@ -11,6 +12,7 @@
  */
 
 import { fetcher } from "../lib/api/fetcher";
+import type { ListResponse, MutationResponse } from "../lib/api/response-types";
 import type { ReleaseDocumentRef } from "../types/releases";
 import type {
   AssignmentPayload,
@@ -18,6 +20,9 @@ import type {
   ReviewStateAnswer,
   TakeStepPayload,
   WorkflowDocumentRef,
+  WorkflowSettingsChange,
+  WorkflowSettingsView,
+  WorkflowSummary,
 } from "../types/workflows";
 
 /** A document as the workflow routes name it, from the editor's own reference. */
@@ -81,3 +86,41 @@ export const assignWorkflowParts = (
     { method: "POST", body: JSON.stringify({ assignments }) },
     true
   );
+
+/** The registered workflows, each with what its diagram draws and its attachments. */
+export async function listWorkflows(): Promise<ListResponse<WorkflowSummary>> {
+  return fetcher<ListResponse<WorkflowSummary>>(
+    "/workflows",
+    { cache: "no-store" },
+    true
+  );
+}
+
+/** One workflow's settings, as they read now. */
+export async function getWorkflowSettings(
+  slug: string
+): Promise<WorkflowSettingsView> {
+  return fetcher<WorkflowSettingsView>(
+    `/workflows/${encodeURIComponent(slug)}/settings`,
+    { cache: "no-store" },
+    true
+  );
+}
+
+/**
+ * Changes a workflow's settings over the revision read, answering them as they
+ * then read: the mutation's `item`. A stale revision is refused with a
+ * conflict, and a part the server cannot accept with a validation error naming
+ * its path.
+ */
+export async function updateWorkflowSettings(
+  slug: string,
+  change: WorkflowSettingsChange
+): Promise<WorkflowSettingsView> {
+  const result = await fetcher<MutationResponse<WorkflowSettingsView>>(
+    `/workflows/${encodeURIComponent(slug)}/settings`,
+    { method: "PATCH", body: JSON.stringify(change) },
+    true
+  );
+  return result.item;
+}

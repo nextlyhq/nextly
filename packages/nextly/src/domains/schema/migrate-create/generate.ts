@@ -90,6 +90,7 @@ import {
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
+import { mergedBy } from "../migrate/history-line";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -1611,6 +1612,22 @@ function startOf(
 }
 
 /**
+ * Where a migration's snapshot places it in the project's line, from the
+ * snapshot file its run started from (`startOf`): its parent is that
+ * migration (none for a run that started from none), and it records a merge
+ * of every other branch end in the folder as it is written (`mergedBy`).
+ * Nothing is recorded where the run cannot say what it started from.
+ */
+async function lineFrom(
+  migrationsDir: string,
+  startedFrom: string | undefined | null
+): Promise<{ parent: string | null; merges: string[] } | undefined> {
+  if (startedFrom === null) return undefined;
+  const parent = startedFrom?.replace(/\.snapshot\.json$/, "") ?? null;
+  return { parent, merges: await mergedBy(migrationsDir, parent) };
+}
+
+/**
  * Refuses where the newest snapshot in the folder is no longer `startedFrom`,
  * the one this run reads as its starting point: another writer has written a
  * migration since, and this run's would be a second from the snapshot it
@@ -1933,7 +1950,8 @@ async function writeMigrationPair(
             pair.sqlContent,
             pair.contributions,
             pair.entities,
-            pair.permissions
+            pair.permissions,
+            await lineFrom(args.migrationsDir, pair.startedFrom)
           ),
           await prepareWhole(sqlPath, pair.sqlContent),
         ];

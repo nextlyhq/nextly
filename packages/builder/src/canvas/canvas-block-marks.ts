@@ -31,13 +31,10 @@ import {
   gatedAsStored,
 } from "../conditions/condition-gate";
 import { isLocked } from "../locking";
-import {
-  entryContentLabel,
-  type PreviewedCollection,
-} from "../previewed-entry";
 
 import { isOutermostForAddress, nodeAddressOf } from "./canvas-addressing";
 import { CANVAS_REGION_CLASS, REGION_EDITED_ATTRIBUTE } from "./canvas-regions";
+import { entryContentLabel, type PreviewedCollection } from "./previewed-entry";
 
 /**
  * A region of the layout drawn around the page and not edited: a document

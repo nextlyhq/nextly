@@ -28,7 +28,7 @@ import {
 
 import type { EditorState } from "../editor-state";
 import { useInlineEditing } from "./use-inline-editing";
-import { createOpenPassages } from "../open-passages";
+import { createOpenPassages } from "./open-passages";
 import { useInlineRichText } from "./use-inline-rich-text";
 
 afterEach(() => {

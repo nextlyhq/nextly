@@ -1,0 +1,329 @@
+/**
+ * The rules behind what the Variables tab says about usage: the count at the
+ * end of a row, the editor's status line, whether Remove may go ahead, and
+ * what a shared style using a variable sets with it.
+ *
+ * `tokens-panel.usage.test` drives the same rules through the panel.
+ *
+ * @module variable-usage.test
+ */
+import {
+  BASE_BREAKPOINT,
+  type NamedClass,
+  type StyleValues,
+} from "@nextlyhq/blocks-engine";
+import { describe, expect, it } from "vitest";
+
+import { VARIABLE_LOSS_WORDS } from "../../editor-words";
+import {
+  reachTogether,
+  sharedStyleSets,
+  usageState,
+  variableCountWords,
+  variableLossSentence,
+  variableRemoval,
+  variableStatus,
+  type VariableReach,
+} from "./variable-usage";
+
+const NONE = { pages: 0, components: 0, patterns: 0, layouts: 0 };
+
+/** A reach of `documents` pages, these shared styles and these block defaults. */
+function reach(
+  documents: number,
+  sharedStyles: readonly string[] = [],
+  complete = true,
+  blockDefaults: readonly string[] = []
+): VariableReach {
+  return {
+    documents,
+    byKind: { ...NONE, pages: documents },
+    sharedStyles,
+    blockDefaults,
+    // As a current host answers: no variable and no Site text row names it.
+    variables: [],
+    siteText: [],
+    complete,
+  };
+}
+
+describe("how widely a row's variable is used, in words", () => {
+  it("is the places: the documents and the shared styles together", () => {
+    // 12 documents and 2 shared styles: a count of either alone is wrong.
+    expect(variableCountWords(reach(12, ["c-card", "c-hero"]))).toBe(
+      "Used in 14 places"
+    );
+  });
+
+  it("counts the block types whose default styles name it as places too", () => {
+    // 2 documents, 1 shared style and 2 block types: 5 places.
+    expect(
+      variableCountWords(
+        reach(2, ["c-card"], true, ["core/button", "core/heading"])
+      )
+    ).toBe("Used in 5 places");
+    expect(variableCountWords(reach(0, [], true, ["core/button"]))).toBe(
+      "Used in 1 place"
+    );
+  });
+
+  it("says one place in the singular", () => {
+    expect(variableCountWords(reach(0, ["c-card"]))).toBe("Used in 1 place");
+    expect(variableCountWords(reach(1))).toBe("Used in 1 place");
+  });
+
+  it('says "Not used" when nothing uses it', () => {
+    expect(variableCountWords(reach(0))).toBe("Not used");
+  });
+
+  it("is a floor while some pages are not counted yet", () => {
+    expect(variableCountWords(reach(1, ["c-card"], false))).toBe(
+      "Used in at least 2 places. Some pages aren't counted yet."
+    );
+  });
+
+  it('says "Not counted yet" for a zero that is a floor', () => {
+    expect(variableCountWords(reach(0, [], false))).toBe("Not counted yet");
+  });
+});
+
+describe("whether a variable is used, for the usage filter", () => {
+  it("is used by a page, a component or any other document", () => {
+    expect(usageState(reach(1))).toBe("used");
+  });
+
+  it("is used by a shared style or a block style", () => {
+    expect(usageState(reach(0, ["card"]))).toBe("used");
+  });
+
+  it("is used where a Site text row uses it", () => {
+    expect(usageState({ ...reach(0), siteText: ["link"] })).toBe("used");
+  });
+
+  it("is used where another variable names it through var()", () => {
+    expect(usageState({ ...reach(0), variables: ["shadow.lift"] })).toBe(
+      "used"
+    );
+  });
+
+  it("is unused where only a core block's built-in look names it", () => {
+    expect(usageState(reach(0, [], true, ["core/button"]))).toBe("unused");
+  });
+
+  it("is still counting where the count says nothing of the variables or rows naming it", () => {
+    // An older server's answer: neither relation is said, so neither is none.
+    const { variables: _v, siteText: _s, ...unsaid } = reach(0);
+    expect(usageState(unsaid)).toBe("counting");
+  });
+
+  it("is unused only once every document is counted", () => {
+    expect(usageState(reach(0))).toBe("unused");
+    expect(usageState(reach(0, [], false))).toBe("counting");
+    expect(usageState(undefined)).toBe("counting");
+  });
+});
+
+describe("what Remove may do", () => {
+  it("goes ahead behind the confirm only when nothing uses it, counted whole", () => {
+    expect(variableRemoval(reach(0))).toBe("free");
+  });
+
+  it("refuses while anything uses it, a shared style alone included", () => {
+    expect(variableRemoval(reach(3))).toBe("in-use");
+    expect(variableRemoval(reach(0, ["c-card"]))).toBe("in-use");
+    // A block type's default style alone is a use as well.
+    expect(variableRemoval(reach(0, [], true, ["core/button"]))).toBe("in-use");
+    // A floor above zero is a use, whatever the rest of the count says.
+    expect(variableRemoval(reach(1, [], false))).toBe("in-use");
+  });
+
+  it("goes ahead while a zero is not counted whole: the save counts and decides", () => {
+    expect(variableRemoval(reach(0, [], false))).toBe("free");
+  });
+
+  it("is unread before the usage is read", () => {
+    expect(variableRemoval(undefined)).toBe("unread");
+  });
+});
+
+describe("the editor's status line", () => {
+  it("says how widely it is used, at least while that is a floor", () => {
+    expect(variableStatus(reach(14))).toBe("Used in 14 places");
+    expect(variableStatus(reach(0, ["c-card"]))).toBe("Used in 1 place");
+    expect(variableStatus(reach(1, [], true, ["core/button"]))).toBe(
+      "Used in 2 places"
+    );
+    expect(variableStatus(reach(2, [], false))).toBe(
+      "Used in at least 2 places"
+    );
+  });
+
+  it("says it is unused, or that it is not counted yet", () => {
+    expect(variableStatus(reach(0))).toBe("Not used anywhere");
+    // Not "counting": nothing may be.
+    expect(variableStatus(reach(0, [], false))).toBe("Not counted yet");
+  });
+
+  it("says nothing before the usage is read", () => {
+    expect(variableStatus(undefined)).toBe("");
+  });
+});
+
+describe("what the places would lose", () => {
+  it("names the loss by the variable's kind", () => {
+    expect(variableLossSentence(reach(14), VARIABLE_LOSS_WORDS.color)).toBe(
+      "It's used in 14 places, and they would lose this colour:"
+    );
+    expect(variableLossSentence(reach(1), VARIABLE_LOSS_WORDS.dimension)).toBe(
+      "It's used in 1 place, and they would lose this size:"
+    );
+    expect(
+      variableLossSentence(reach(2, [], false), VARIABLE_LOSS_WORDS.fontFamily)
+    ).toBe("It's used in at least 2 places, and they would lose this font:");
+  });
+
+  it("has a word for every kind", () => {
+    expect(VARIABLE_LOSS_WORDS).toEqual({
+      color: "colour",
+      dimension: "size",
+      fontFamily: "font",
+      fontWeight: "font weight",
+      number: "value",
+      shadow: "shadow",
+      duration: "value",
+      custom: "value",
+      lineHeight: "line height",
+    });
+  });
+});
+
+describe("what a shared style sets with a variable", () => {
+  const CARD: NamedClass = {
+    id: "c-card",
+    slug: "card",
+    orderIndex: 0,
+    styles: {
+      base: {
+        [BASE_BREAKPOINT]: {
+          color: { $token: "color.brand" },
+          // Another variable in the same style says nothing of this one.
+          backgroundColor: { $token: "color.surface" },
+        },
+      },
+      // Under another state, inside a structured value.
+      hover: {
+        [BASE_BREAKPOINT]: { padding: { blockStart: { $token: "space.4" } } },
+      },
+    },
+  };
+
+  it("names the property that names the variable, in plain words", () => {
+    expect(sharedStyleSets([CARD], "c-card", "color.brand")).toBe(
+      "sets text colour"
+    );
+    expect(sharedStyleSets([CARD], "c-card", "color.surface")).toBe(
+      "sets background colour"
+    );
+  });
+
+  it("finds a look by its id and block type, apart from another type's look of that id", () => {
+    const look = (blockType: string, property: string): NamedClass => ({
+      id: "look-default",
+      slug: "default",
+      orderIndex: 0,
+      blockType,
+      styles: {
+        base: { [BASE_BREAKPOINT]: { [property]: { $token: "color.brand" } } },
+      },
+    });
+    const looks = [
+      look("core/heading", "color"),
+      look("core/button", "backgroundColor"),
+    ];
+    expect(
+      sharedStyleSets(looks, "look-default", "color.brand", "core/button")
+    ).toBe("sets background colour");
+    expect(
+      sharedStyleSets(looks, "look-default", "color.brand", "core/heading")
+    ).toBe("sets text colour");
+  });
+
+  it("reads every state and a structured value's parts", () => {
+    expect(sharedStyleSets([CARD], "c-card", "space.4")).toBe("sets padding");
+  });
+
+  it("lists each property once, joined in words", () => {
+    const both: NamedClass = {
+      ...CARD,
+      id: "c-both",
+      styles: {
+        base: {
+          [BASE_BREAKPOINT]: {
+            color: { $token: "color.brand" },
+            backgroundColor: { $token: "color.brand" },
+          },
+        },
+        hover: { [BASE_BREAKPOINT]: { color: { $token: "color.brand" } } },
+      },
+    };
+    expect(sharedStyleSets([both], "c-both", "color.brand")).toBe(
+      "sets text colour and background colour"
+    );
+  });
+
+  it("says it uses it where the style is not in hand or the property has no plainer word", () => {
+    expect(sharedStyleSets(undefined, "c-card", "color.brand")).toBe("uses it");
+    expect(sharedStyleSets([CARD], "c-gone", "color.brand")).toBe("uses it");
+    const filtered: NamedClass = {
+      ...CARD,
+      id: "c-filter",
+      styles: { base: { [BASE_BREAKPOINT]: { filter: { $token: "x.blur" } } } },
+    };
+    expect(sharedStyleSets([filtered], "c-filter", "x.blur")).toBe("uses it");
+  });
+
+  it("reads a stored property key as data, not as the words table's prototype", () => {
+    const odd: NamedClass = {
+      ...CARD,
+      id: "c-odd",
+      styles: {
+        base: {
+          [BASE_BREAKPOINT]: JSON.parse(
+            '{"__proto__":{"$token":"color.brand"}}'
+          ) as StyleValues,
+        },
+      },
+    };
+    expect(sharedStyleSets([odd], "c-odd", "color.brand")).toBe("uses it");
+  });
+});
+
+describe("some variables' usage as one count", () => {
+  it("takes the host's count of their documents together, and joins the rest", () => {
+    // A page naming both is one document, as the host counted it.
+    expect(
+      reachTogether([reach(9, ["c-card"]), reach(2, ["c-card", "c-hero"])], {
+        documents: 10,
+        byKind: { ...NONE, pages: 8, components: 2 },
+        complete: false,
+      })
+    ).toEqual({
+      documents: 10,
+      byKind: { ...NONE, pages: 8, components: 2 },
+      sharedStyles: ["c-card", "c-hero"],
+      blockDefaults: [],
+      complete: false,
+    });
+  });
+
+  it("adds the documents up without the host's count, and is unread until every part is", () => {
+    expect(reachTogether([reach(9), reach(2)], undefined)?.documents).toBe(11);
+    expect(
+      reachTogether([reach(9), undefined], {
+        documents: 9,
+        byKind: { ...NONE, pages: 9 },
+        complete: true,
+      })
+    ).toBeUndefined();
+  });
+});

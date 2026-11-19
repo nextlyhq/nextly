@@ -16,19 +16,16 @@ import {
 import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { useCallback, useEffect, useRef } from "react";
 
-import {
-  keepClickedEntriesFor,
-  rememberClickedEntries,
-} from "../clicked-entry";
-import { isElement } from "../dom-kind";
-import { selectionModeFor, type SelectionMode } from "../selection";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { nodeAddressOf, nodeIdFromEvent } from "./canvas-addressing";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import type { CanvasProps } from "./canvas-props";
+import { keepClickedEntriesFor, rememberClickedEntries } from "./clicked-entry";
+import { isElement } from "./dom-kind";
 import { useHoveredBlockSetter } from "./hovered-block";
+import { selectionModeFor, type SelectionMode } from "./selection";
 
 /**
  * The block a context gesture is aimed at, or `null` when it is aimed at

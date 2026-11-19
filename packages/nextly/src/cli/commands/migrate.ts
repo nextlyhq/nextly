@@ -36,6 +36,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
+import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   isLocalizationIntentRefusal,
@@ -168,6 +169,7 @@ import {
   asServiceLogger,
   reconcileMigrationMetadata,
 } from "../../domains/schema/migrate/reconcile-metadata";
+import { refuseForkedHistory } from "../../domains/schema/migrate/history-line";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
   findRegistryDisagreements,
@@ -264,6 +266,7 @@ import {
   markedForSchemaLock,
 } from "../../domains/schema/pipeline/schema-lock";
 import {
+  appliedAppMigrations,
   newestAppliedAppMigration,
   writeRegistryRows,
 } from "../../domains/schema/schema-version";
@@ -272,6 +275,7 @@ import { UserExtSchemaService } from "../../domains/users/services/user-ext-sche
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
 import { NextlyError, describeError } from "../../errors";
 import { configWatchAllowed } from "../../runtime/hmr-listener";
+import { getCoreTableNames } from "../../schemas/core-schema";
 import type { UserConfig } from "../../users/config/types";
 import { busyTableNotices } from "../busy-table-options";
 import { reportDryRun } from "../dry-run";
@@ -862,6 +866,18 @@ export async function runMigrate(
         // run does not put unmigrated edits back to the snapshot. Everywhere
         // else the rows are brought to the newest applied snapshot.
         registryRows: configWatchAllowed() ? "insert-missing" : "write",
+        // A deleted entity's field-group values are read through the ORM, which this command's
+        // resolver of Nextly's own tables cannot address: every field group's table is added to
+        // it first, as `prune` adds them (`registerComponentSchemas`).
+        prepareLeftoverTables: async () => {
+          const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+          await registerComponentSchemas({
+            adapter: drizzleAdapter,
+            registry: installRegistryResolver(drizzleAdapter),
+            dialect,
+            logger,
+          });
+        },
         // An app file or a plugin module waits for a busy table in tries; each try's notice goes
         // to standard error, so a run with --json keeps one document on standard output, and is
         // kept back under --quiet.
@@ -939,7 +955,8 @@ export async function runMigrate(
         ran === 0
           ? metadata.stillPending > 0 ||
             metadata.unreadable.length > 0 ||
-            metadata.rowsNotWritten.length > 0
+            metadata.rowsNotWritten.length > 0 ||
+            (metadata.leftoversLeft?.length ?? 0) > 0
             ? "No migration files to apply."
             : "Nothing to migrate. Database is up to date."
           : `${formatCount(ran, "migration")} applied.`
@@ -1285,6 +1302,12 @@ export interface MigrateCoreDeps {
    */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
   /**
+   * Makes every field group's table addressable before a deleted entity's
+   * leftovers are removed: given by the command, whose adapter resolves
+   * Nextly's own tables alone; a booted app's adapter resolves them already.
+   */
+  prepareLeftoverTables?: () => Promise<void>;
+  /**
    * Seam for tests; defaults to recording and retiring element owner rows
    * against the database.
    */
@@ -1402,6 +1425,9 @@ export interface MigrateCoreResult {
     fieldGroupsRegistered: number;
     rowsNotWritten: string[];
     rowsRemoved: string[];
+    leftoversRemoved: string[];
+    /** The dropped entities whose leftovers this run could not remove, owed to the next run. */
+    leftoversLeft?: string[];
     marked: number;
     stillPending: number;
     awaitingMigration: number;
@@ -1516,7 +1542,9 @@ export async function previewMigrate(args: {
     [...moduleRuns, ...pendingFiles.map(file => fileUnit(file, dialect))],
     db,
     dialect,
-    { adapter, migrationsDir: args.migrationsDir }
+    { adapter, migrationsDir: args.migrationsDir },
+    // The run this previews reconciles Nextly's own tables first.
+    true
   );
   const moduleDeletions = new Map(
     judged
@@ -2484,6 +2512,12 @@ function reportMetadataOutcome(
     );
   }
 
+  // What deleted entities left in the tables every entity shares, removed once
+  // their rows were gone: each entity named with what went.
+  for (const line of metadata.leftoversRemoved) {
+    logger.success(`Removed what the deleted ${line}.`);
+  }
+
   if (marked > 0) {
     logger.success(
       `${formatCount(marked, "registry row")} recorded as applied.`
@@ -2713,6 +2747,10 @@ export async function migrateCore(
   await assertFilesPresent(historyArgs);
   await refuseAttempts(historyArgs);
   await assertFilesUnchanged({ ...historyArgs, recordChecksums: false });
+  // And the history is one line: migrations written without each other are
+  // refused before any of them applies, until a migration records the merge,
+  // with those this database has applied, where it has, named as applied.
+  await refuseForkedAppHistory(deps);
   // Before the lock as well: taking it creates the lock's own table on a
   // database that has none, and a refused run leaves the schema as it was. A
   // file another run records meanwhile is only refused once more.
@@ -2753,6 +2791,7 @@ export async function migrateCore(
     fieldGroupsRegistered: 0,
     rowsNotWritten: [] as string[],
     rowsRemoved: [] as string[],
+    leftoversRemoved: [] as string[],
     marked: 0,
     stillPending: 0,
     awaitingMigration: 0,
@@ -2786,6 +2825,9 @@ export async function migrateCore(
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
+    ...(deps.prepareLeftoverTables === undefined
+      ? {}
+      : { prepareLeftoverTables: deps.prepareLeftoverTables }),
     logger: {
       info: (m: string) => deps.logger.debug(m),
       warn: (m: string) => deps.logger.warn(m),
@@ -3005,6 +3047,11 @@ export async function migrateCore(
         deps,
         agreedDeletions
       );
+      // And the history as one line, read again under the lock and after the
+      // files this run applies were read from the folder: a migration written
+      // beside another while the run waited is among those files only if it
+      // is in the folder now, where this reads it, before the first write.
+      await refuseForkedAppHistory(deps);
       // An applied file edited since it ran is refused here too, before the
       // first write; one recorded without a checksum gets its checksum.
       await (deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged)(
@@ -3620,7 +3667,9 @@ async function judgeFileDeletions(
     units,
     deps.db,
     deps.dialect,
-    { adapter: deps.adapter, migrationsDir: deps.migrationsDir }
+    { adapter: deps.adapter, migrationsDir: deps.migrationsDir },
+    // This run reconciles Nextly's own tables first (Phase 1), before a module or a file.
+    true
   )) {
     const source = deletionSource(unit.label, unit.text);
     for (const deletion of deletions) sources.set(deletion, source);
@@ -3784,9 +3833,14 @@ export async function pendingPluginDeletions(
   // install applies the same modules through the same phase, so a module renaming onto a name
   // already there is refused before it starts (`refuseRenamesOntoTakenTargets`).
   await refuseRenamesOntoTakenTargets(units, deps.db, deps.dialect);
-  return (await pendingRunDeletions(units, deps.db, deps.dialect)).map(
-    ({ unit, deletions }) => ({ label: unit.label, text: unit.text, deletions })
-  );
+  // An install runs the modules alone: nothing makes Nextly's own tables first.
+  return (
+    await pendingRunDeletions(units, deps.db, deps.dialect, undefined, false)
+  ).map(({ unit, deletions }) => ({
+    label: unit.label,
+    text: unit.text,
+    deletions,
+  }));
 }
 
 /**
@@ -3829,6 +3883,31 @@ function pluginModuleUnits(
 }
 
 /**
+ * Nextly's own tables as the run's first phase makes them, by the names the deletion facts
+ * use: the core schema's, with the field-group registry under the name that phase resolves
+ * for this database (`resolveRegistryNameFromCatalog`, as Phase 1 asks it). None where that
+ * name could not be read, so nothing is taken for made that may not be.
+ */
+async function coreTablesTheRunMakes(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<ReadonlySet<string>> {
+  try {
+    const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
+      dialect,
+      getDrizzle: <T>() => db as T,
+    });
+    return new Set(
+      getCoreTableNames({ fieldGroupRegistryTable }).map(name =>
+        name.toLowerCase()
+      )
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+/**
  * What each unit of a run deletes, the run read as one list
  * (`runDeletions`): a unit is judged against the schema as the units before
  * it leave it, so a table an earlier one creates holds only what the run
@@ -3846,10 +3925,24 @@ async function pendingRunDeletions(
   units: readonly RunUnit[],
   db: unknown,
   dialect: SupportedDialect,
-  entities?: { adapter?: unknown; migrationsDir: string }
+  entities: { adapter?: unknown; migrationsDir: string } | undefined,
+  /**
+   * Whether the run these units belong to makes Nextly's own tables before any of them runs:
+   * `nextly migrate` and a start's migrations do, in their first phase (the core reconcile),
+   * so a registry row a unit writes on a database that holds nothing lands in a plain new
+   * table. An install of a plugin's modules makes nothing first.
+   */
+  makesCoreTablesFirst: boolean
 ): Promise<{ unit: RunUnit; deletions: Deletion[] }[]> {
   const lists = units.map(unit => unit.statements);
-  const facts = await readDeletionFacts(db, dialect, runStatements(lists));
+  const facts = await readDeletionFacts(
+    db,
+    dialect,
+    runStatements(lists),
+    makesCoreTablesFirst
+      ? { madeBeforeTheFiles: await coreTablesTheRunMakes(db, dialect) }
+      : {}
+  );
   const read = runDeletions(lists, dialect, facts);
   const retires =
     entities === undefined
@@ -3956,6 +4049,50 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
   // A removal stands for the applied outcome it was recorded after.
   const removed = removedOnPurpose(rows, await repo.listFileRemovals());
   return { files, rows, removed, repo, oldBuilder };
+}
+
+/**
+ * Those of `adopted`, the indexes a file adopts, that are on a table
+ * `before`, the snapshot before the file, holds: the ones the comparison of
+ * the database with the file's sides leaves out. One on a table the file
+ * itself creates stays in it.
+ */
+function adoptedOnTablesOf<T extends { table: string }>(
+  before: NextlySchemaSnapshot,
+  adopted: readonly T[]
+): T[] {
+  const held = new Set(before.tables.map(table => table.name.toLowerCase()));
+  return adopted.filter(index => held.has(index.table));
+}
+
+/**
+ * Refuses a forked history of the app's migrations (`history-line.ts`),
+ * read-only: the folder's snapshots, and the migrations the ledger records
+ * applied where the database has a ledger.
+ */
+async function refuseForkedAppHistory(args: {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+}): Promise<void> {
+  // Detected, not assumed: a caller of the run's seam may hand an adapter
+  // without this operation, which then has no ledger to read.
+  const probe = args.adapter as unknown as {
+    tableExists?: (table: string) => Promise<boolean>;
+  };
+  const hasLedger =
+    typeof probe.tableExists === "function" &&
+    (await probe.tableExists("nextly_schema_events"));
+  const applied = hasLedger
+    ? appliedAppMigrations(
+        await new SchemaEventsRepository(
+          args.db,
+          args.dialect
+        ).listFileApplies()
+      )
+    : new Set<string>();
+  await refuseForkedHistory(args.migrationsDir, applied);
 }
 
 /**
@@ -5065,9 +5202,12 @@ export async function runFileMigrations(args: {
         before,
         target,
         // Without the indexes the file adopted, which its snapshot before it does not record.
+        // On a table the file itself creates they stay: a table that is there already, with
+        // them, is the file's own end, as where a migration written to record a merge
+        // creates a table an earlier one of the merge made.
         live: withoutAdoptedIndexes(
           await introspectLiveSnapshot(db, dialect, managed),
-          adoption.adopted
+          adoptedOnTablesOf(before, adoption.adopted)
         ),
         contributions: mergeContributions(
           beforeContributions,

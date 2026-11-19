@@ -55,19 +55,24 @@ import { Button } from "@nextlyhq/ui";
 import { ImageOff, ImagePlus } from "lucide-react";
 import * as React from "react";
 
-import type { ContentServices, PickedMedia } from "../content-services";
-import { isElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
-import { addPicturesTo, picturesHeld } from "../gallery-pictures";
 import type { Rect } from "../geometry";
-import { lockViewOf, propIsWritable } from "../inspector";
-import { selectionModeFor, type SelectionMode } from "../selection";
+import type {
+  ContentServices,
+  PickedMedia,
+} from "../inspector/content/content-services";
+import {
+  addPicturesTo,
+  picturesHeld,
+} from "../inspector/content/gallery-pictures";
+import { lockViewOf, propIsWritable } from "../inspector/inspector";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { nodeAddressOf, nodeElement } from "./canvas-addressing";
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
+import { isElement } from "./dom-kind";
 import {
   chosenPictures,
   emptyGalleryBoxes,
@@ -94,6 +99,7 @@ import {
   takesPicture,
   type ImageEmptyReason,
 } from "./image-states-model";
+import { selectionModeFor, type SelectionMode } from "./selection";
 
 export interface ImageStatesProps {
   /** The editor the choices write through. */
