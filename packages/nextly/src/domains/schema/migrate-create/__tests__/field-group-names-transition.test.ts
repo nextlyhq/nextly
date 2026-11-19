@@ -105,6 +105,39 @@ describe("the transition to the current names", () => {
     ]);
   });
 
+  // The rename carries every index and key on the type column with it, so the snapshot names it
+  // under its current name there too, or the next migrate:check reads a spurious index change.
+  it("renames the type column inside each index and foreign key of a field-group table", () => {
+    const moved = snapshotUnderCurrentNames(
+      {
+        tables: [
+          {
+            name: "comp_card",
+            columns: [
+              { name: "_component_type", type: "varchar", nullable: true },
+            ],
+            indexes: [
+              { name: "card_type_idx", columns: ["_component_type"] } as never,
+            ],
+            foreignKeys: [
+              {
+                name: "card_type_fk",
+                columns: ["_component_type"],
+                referencedTable: "kinds",
+                referencedColumns: ["id"],
+              } as never,
+            ],
+          },
+        ],
+      },
+      new Set(["comp_card"])
+    );
+
+    const [card] = moved.tables;
+    expect(card?.indexes?.[0]?.columns).toEqual(["_field_group_type"]);
+    expect(card?.foreignKeys?.[0]?.columns).toEqual(["_field_group_type"]);
+  });
+
   it("keys the app's contributions to a field-group table by its current name", () => {
     const elements = {
       columns: ["badge"],

@@ -36,6 +36,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
+import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   isLocalizationIntentRefusal,
@@ -232,6 +233,7 @@ import {
   EMPTY_SNAPSHOT,
   isOlderFormatSnapshot,
   parseSnapshotFile,
+  snapshotFieldGroupNaming,
   type SnapshotFile,
 } from "../../domains/schema/migrate-create/snapshot-io";
 import {
@@ -3368,17 +3370,16 @@ async function missingFromStream(
 async function missingFromAppStream(
   deps: MigrateCoreDeps
 ): Promise<MissingFromDatabase[]> {
-  // The applied app migrations in run order, as the files are discovered.
-  const appliedInOrder = (
-    await listMigrationFiles(
-      deps.adapter,
-      deps.db,
-      deps.dialect,
-      deps.migrationsDir,
-      deps.logger,
-      deps.declared
-    )
-  )
+  // The app migrations in run order, as the files are discovered.
+  const files = await listMigrationFiles(
+    deps.adapter,
+    deps.db,
+    deps.dialect,
+    deps.migrationsDir,
+    deps.logger,
+    deps.declared
+  );
+  const appliedInOrder = files
     .filter(entry => entry.applied)
     .map(entry => entry.file.name);
   if (appliedInOrder.length === 0) return [];
@@ -3407,8 +3408,8 @@ async function missingFromAppStream(
   if (newest !== undefined) {
     await refuseMovedStorageBehindLegacyHistory({
       adapter: deps.adapter as unknown as DrizzleAdapter,
-      migrationsDir: deps.migrationsDir,
       newestApplied: newest.fieldGroupNaming ?? "legacy",
+      nextPending: await namingOfNextPending(deps.migrationsDir, files),
     });
   }
   // With the move to the current names still to apply, the database already holds the field
@@ -3423,6 +3424,23 @@ async function missingFromAppStream(
   // files then, so nothing is named rather than a table or column it removed on purpose.
   if (appliedInOrder.at(-1) !== snapshots.at(-1)?.migration) return [];
   return missingFromStream(deps, compared);
+}
+
+/**
+ * The field-group naming the next app file to apply records, where it has a snapshot: what tells
+ * a moved database's run whether the file in front of it is the one that moves the history.
+ */
+async function namingOfNextPending(
+  migrationsDir: string,
+  files: ReadonlyArray<{ applied: boolean; file: { name: string } }>
+): Promise<FieldGroupNaming | undefined> {
+  const next = files.find(entry => !entry.applied);
+  if (next === undefined) return undefined;
+  const target = await loadTargetSnapshot(
+    resolve(migrationsDir, "meta"),
+    next.file.name
+  );
+  return target === null ? undefined : snapshotFieldGroupNaming(target);
 }
 
 /**

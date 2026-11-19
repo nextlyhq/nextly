@@ -82,7 +82,10 @@ import {
   unwrittenChangesError,
 } from "../../domains/schema/migrate/unwritten-changes";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
-import { withFieldGroupTables } from "../../domains/schema/migrate-create/app-migration-inputs";
+import {
+  recordedTypeColumns,
+  withFieldGroupTables,
+} from "../../domains/schema/migrate-create/app-migration-inputs";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
@@ -222,9 +225,15 @@ export async function runMigrateCheck(
   }
   // Each field group under the names the history keeps them under, as `migrate:create` names them
   // (`appMigrationInputs`): a history moved to the current names compares `fg_<slug>` tables.
+  // A snapshot this CLI cannot read is reported by the checks below, as `INVALID_SNAPSHOT` naming
+  // the file; read here first, it would end the run as an unexpected error. Until then the names
+  // are taken as legacy, which every history before the record is on.
   const fieldGroupNaming = await fieldGroupNamingOfHistory({
     projectRoot: cwd,
     config: configResult.config,
+  }).catch((error: unknown) => {
+    if (error instanceof SnapshotFileError) return "legacy" as const;
+    throw error;
   });
   const merged = withFieldGroupTables(
     definitions.merged,
@@ -259,6 +268,16 @@ export async function runMigrateCheck(
       : {
           fieldGroupTables: new Map(
             merged.components.map(c => [c.slug, c.tableName])
+          ),
+          // And the discriminator each holds, as `migrate:create` compiles them.
+          fieldGroupTypeColumns: recordedTypeColumns(
+            (
+              await loadLatestSnapshot(resolve(migrationsDir, "meta")).catch(
+                () => null
+              )
+            )?.data.snapshot,
+            merged.components,
+            dialect
           ),
         }),
   });

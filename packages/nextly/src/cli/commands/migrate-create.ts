@@ -784,7 +784,13 @@ export async function runMigrateCreate(
     // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
     if (nothing && options.recordSnapshot === true)
       nothingToRecord(logger, options.dryRun);
-    if (nothing && !declaresPermissions) {
+    // The move to the current field-group names is written even for a project that has nothing
+    // left: its history still records names, which the first entity it gains is written under.
+    if (
+      nothing &&
+      !declaresPermissions &&
+      options.fieldGroupNames !== "current"
+    ) {
       logger.warn(
         "No collections, singles, components, or extension tables defined in config."
       );

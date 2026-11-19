@@ -167,9 +167,34 @@ export function snapshotUnderCurrentNames(
             ? { ...column, name: MIGRATION_TARGET.columnType }
             : column
         ),
+        // The rename carries every index and key on the column with it, so each one that names
+        // the type column names it under its current name.
+        ...(table.indexes === undefined
+          ? {}
+          : {
+              indexes: table.indexes.map(index => ({
+                ...index,
+                columns: index.columns.map(currentTypeColumn),
+              })),
+            }),
+        ...(table.foreignKeys === undefined
+          ? {}
+          : {
+              foreignKeys: table.foreignKeys.map(key => ({
+                ...key,
+                columns: key.columns.map(currentTypeColumn),
+              })),
+            }),
       };
     }),
   };
+}
+
+/** A column name, with the legacy type column under its current name. */
+function currentTypeColumn(column: string): string {
+  return column === STORAGE_FORMAT.columns.type
+    ? MIGRATION_TARGET.columnType
+    : column;
 }
 
 /** `contributions` keyed by each field-group table's current name. */

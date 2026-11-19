@@ -34,6 +34,7 @@ import {
   namingOfRegistry,
   type FieldGroupNaming,
 } from "../../domains/field-groups/services/field-group-storage-names";
+import { declaredFieldGroupStorage } from "../../domains/field-groups/services/field-group-stored-tables";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-companion-spec";
 import {
@@ -1234,7 +1235,8 @@ export async function runMigrateBaseline(
       config,
       dialect,
       logger: { warn: m => logger.warn(m) },
-      // A contribution to a field group attaches to the table the database holds it in.
+      // A contribution to a field group attaches to the table the database holds it in, with the
+      // type column that table has.
       ...(fieldGroupNaming === "legacy"
         ? {}
         : {
@@ -1243,6 +1245,12 @@ export async function runMigrateBaseline(
                 .filter(entity => entity.kind === "fieldGroup")
                 .map(entity => [entity.slug, entity.tableName])
             ),
+            fieldGroupTypeColumns: (
+              await declaredFieldGroupStorage(
+                adapter as unknown as DrizzleAdapter,
+                resolved.entities.filter(entity => entity.kind === "fieldGroup")
+              )
+            )?.typeColumns,
           }),
     });
 

@@ -476,7 +476,23 @@ async function applyPendingMigrations(label: string): Promise<number> {
     const { compileExtensionSchema } = await import(
       "../domains/schema/extension/publish"
     );
+    // Each field group's stored table and type column, so a contribution to a group is compiled,
+    // and its ownership recorded, against the table the group is in (`fg_<slug>` once migrated),
+    // as `nextly migrate` and a production start compile it.
+    const { declaredFieldGroupStorage } = await import(
+      "../domains/field-groups/services/field-group-stored-tables"
+    );
+    const fieldGroups = await declaredFieldGroupStorage(
+      drizzleAdapter,
+      configResult.config.fieldGroups
+    );
     const extensionSchema = await compileExtensionSchema({
+      ...(fieldGroups === undefined
+        ? {}
+        : {
+            fieldGroupTables: fieldGroups.tables,
+            fieldGroupTypeColumns: fieldGroups.typeColumns,
+          }),
       dialect: drizzleAdapter.dialect,
       plugins: configResult.config.plugins ?? [],
       config: configResult.config,

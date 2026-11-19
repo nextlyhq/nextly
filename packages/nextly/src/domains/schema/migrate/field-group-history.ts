@@ -11,14 +11,17 @@
  * @module domains/schema/migrate/field-group-history
  */
 
-import { resolve } from "node:path";
-
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import {
   namingOfRegistry,
   type FieldGroupNaming,
 } from "../../field-groups/services/field-group-storage-names";
+import {
+  readStoredFieldGroupTables,
+  type RegistryReadAdapter,
+} from "../../field-groups/services/field-group-stored-tables";
 import {
   resolveRegistryNameFromCatalog,
   type CatalogReadAdapter,
@@ -29,7 +32,6 @@ import {
   snapshotUnderCurrentNames,
 } from "../migrate-create/field-group-names-transition";
 import {
-  historyFieldGroupNamingIn,
   snapshotFieldGroupNaming,
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
@@ -47,25 +49,47 @@ export async function underDatabaseFieldGroupNames<
     snapshot: NextlySchemaSnapshot;
     fieldGroupNaming?: FieldGroupNaming;
   },
->(adapter: CatalogReadAdapter, snapshots: readonly T[]): Promise<T[]> {
+>(
+  adapter: CatalogReadAdapter & RegistryReadAdapter,
+  snapshots: readonly T[]
+): Promise<T[]> {
   if (!snapshots.some(entry => entry.fieldGroupNaming !== "current")) {
     return [...snapshots];
   }
   if ((await databaseFieldGroupNaming(adapter)) === "legacy") {
     return [...snapshots];
   }
+  // Which tables are field groups' is read from the moved registry, never from the `comp_` prefix,
+  // which a collection's own table name may share.
+  const groupTables = movedGroupTables(
+    (await readStoredFieldGroupTables(adapter)).tables
+  );
   return snapshots.map(entry => {
     if (entry.fieldGroupNaming === "current") return entry;
-    const groupTables = new Set(
-      entry.snapshot.tables
-        .map(table => table.name)
-        .filter(name => name.startsWith(STORAGE_FORMAT.tablePrefix))
-    );
     return {
       ...entry,
       snapshot: snapshotUnderCurrentNames(entry.snapshot, groupTables),
     };
   });
+}
+
+/**
+ * The legacy names of the field-group tables a moved registry holds: `comp_<rest>` for each
+ * `fg_<rest>` it names, the rename the storage migration made. A table under a name of its own
+ * was never renamed, so it is not one of them.
+ */
+function movedGroupTables(
+  stored: ReadonlyMap<string, string>
+): ReadonlySet<string> {
+  return new Set(
+    [...stored.values()]
+      .filter(table => table.startsWith(MIGRATION_TARGET.tablePrefix))
+      .map(
+        table =>
+          STORAGE_FORMAT.tablePrefix +
+          table.slice(MIGRATION_TARGET.tablePrefix.length)
+      )
+  );
 }
 
 /** The names the database keeps its field groups under, read from its registry in the catalog. */
@@ -76,19 +100,19 @@ async function databaseFieldGroupNaming(
 }
 
 /**
- * Whether a migration moves the history from the legacy field-group names to the current ones:
- * its snapshot records `current` and the snapshot before it does not. A project whose first
- * snapshot is already on the current names has no transition.
+ * Whether a migration is the first of the history on the current field-group names: its snapshot
+ * records `current` and the snapshot before it does not, or there is none before it (a history
+ * that starts on the current names, as `migrate:baseline` of a moved database writes one). Either
+ * way it applies only to a database whose field groups are on the current names.
  */
 export function isFieldGroupTransition(
   before: Pick<SnapshotFile, "fieldGroupStorage"> | null,
   target: Pick<SnapshotFile, "fieldGroupStorage"> | null
 ): boolean {
   return (
-    before !== null &&
     target !== null &&
-    snapshotFieldGroupNaming(before) === "legacy" &&
-    snapshotFieldGroupNaming(target) === "current"
+    snapshotFieldGroupNaming(target) === "current" &&
+    (before === null || snapshotFieldGroupNaming(before) === "legacy")
   );
 }
 
@@ -126,24 +150,21 @@ export function fieldGroupStorageNotMigratedError(
 
 /**
  * Refuses a database whose field groups moved to the current names while the project's history,
- * up to its newest applied file, is still on the legacy ones and has no transition to come. Read
- * before the database is compared with that file, which would otherwise name every `comp_` table
- * as missing. A history whose newest file records the current names has the transition pending,
- * and applying it settles the two.
+ * up to its newest applied file, is still on the legacy ones, unless the next file to apply is the
+ * one that moves the history: applying it settles the two. Any other pending file is still planned
+ * against the legacy names the database no longer has, so the run stops before it. Read before the
+ * database is compared with its newest applied file, which would otherwise name every `comp_`
+ * table as missing.
  */
 export async function refuseMovedStorageBehindLegacyHistory(args: {
   adapter: CatalogReadAdapter;
-  migrationsDir: string;
   newestApplied: FieldGroupNaming;
+  /** The naming the next app file to apply records, where there is one with a snapshot. */
+  nextPending: FieldGroupNaming | undefined;
 }): Promise<void> {
   if (args.newestApplied === "current") return;
   if ((await databaseFieldGroupNaming(args.adapter)) === "legacy") return;
-  if (
-    (await historyFieldGroupNamingIn(resolve(args.migrationsDir, "meta"))) ===
-    "current"
-  ) {
-    return;
-  }
+  if (args.nextPending === "current") return;
   throw fieldGroupHistoryBehindStorageError();
 }
 
