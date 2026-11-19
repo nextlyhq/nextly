@@ -193,7 +193,9 @@ describe("snapshot-io", () => {
         tables: [
           {
             name: "comp_card",
-            columns: [{ name: "_component_type", type: "text", nullable: true }],
+            columns: [
+              { name: "_component_type", type: "text", nullable: true },
+            ],
           },
         ],
       };

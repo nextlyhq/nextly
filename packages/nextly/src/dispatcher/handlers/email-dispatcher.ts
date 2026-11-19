@@ -807,9 +807,9 @@ const EMAIL_DELIVERY_READS: Record<
     params: Record<string, string>
   ) => Promise<Response>
 > = {
-  findDelivery: async (activity, _query, params) =>
+  findDelivery: async (activity, _search, params) =>
     respondDoc(found(await activity.findDelivery(params.deliveryId ?? ""))),
-  findQueuedEmail: async (activity, _query, params) =>
+  findQueuedEmail: async (activity, _search, params) =>
     respondDoc(found(await activity.findQueuedEmail(params.queuedId ?? ""))),
   listDeliveries: async (activity, query) => {
     const { items, meta } = await activity.listDeliveries(

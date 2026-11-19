@@ -1070,12 +1070,12 @@ export async function generateMigration(
   // each reads as new, and recording them is the record's own work. Counted, they would leave a
   // project with a translated unique field no way to record.
   const pendingTables = [
-      ...operations.map(operationTableName),
-      ...[
-        ...companionPlans,
-        ...fieldLeavesPlans.map(({ plan }) => plan.shared),
-        ...fieldJoinsPlans.map(({ plan }) => plan),
-      ].map(({ spec }) => spec.mainTable),
+    ...operations.map(operationTableName),
+    ...[
+      ...companionPlans,
+      ...fieldLeavesPlans.map(({ plan }) => plan.shared),
+      ...fieldJoinsPlans.map(({ plan }) => plan),
+    ].map(({ spec }) => spec.mainTable),
   ];
   const record: Omit<MigrationPair, "sqlContent"> = {
     startedFrom: startOf(previous),

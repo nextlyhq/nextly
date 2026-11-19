@@ -85,10 +85,15 @@ import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
 import { migrationDriftError, type DriftItem } from "../migrate/drift-error";
 import {
+  applyFailedError,
+  assertNotPartiallyApplied,
+  isConcurrentRun,
   reconcileFile,
   recordAlreadyApplied,
+  recordRunInTransaction,
   runRecordedAttempt,
   snapshotsEquivalent,
+  toDriftItem,
 } from "../migrate/drift-reconcile";
 import { refuseRequiredColumnsOverNulls } from "../migrate/required-column-guard";
 import { resolveMigration } from "../migrate/resolve";
@@ -100,6 +105,7 @@ import {
   type AppMigrationInputsArgs,
   type HeldEntity,
 } from "../migrate-create/app-migration-inputs";
+import { declaredPermissionsOf } from "../migrate-create/declared-permissions";
 import {
   buildDesiredSnapshotFromConfig,
   generateMigration,
@@ -152,6 +158,7 @@ import {
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
 
+import { partlyAppliedChange } from "./landing-push";
 import {
   openSaveRecords,
   recordSaveStarted,
@@ -376,11 +383,16 @@ export async function writeCollectionSave(
       // the history does not describe would meet statements written for
       // another one.
       runsFile: deps.applies && options.appliedBy === undefined,
+      pushes: deps.applies && options.appliedBy !== undefined,
     });
     // Once a push has run, the database changed outside the files: they stay.
     let pushed = false;
     try {
       if (deps.applies && options.appliedBy !== undefined) {
+        // Judged before the push, as the file road's reconcile judges a file before its statements:
+        // a push over a table the history does not describe would change it and leave the files
+        // unrecordable.
+        await refuseDriftBeforePush(deps, written.files, written.table);
         const applied = await options.appliedBy();
         pushed = true;
         if (applied === "partly-applied") {
@@ -519,7 +531,12 @@ export async function prepareCollectionSave(
 async function writeSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  options: { historyChecked?: boolean; runsFile?: boolean }
+  options: {
+    historyChecked?: boolean;
+    runsFile?: boolean;
+    /** The change is applied by a push (`appliedBy`), which reaches the translations table too. */
+    pushes?: boolean;
+  }
 ): Promise<{
   files: SaveFiles;
   names: readonly string[];
@@ -536,7 +553,10 @@ async function writeSave(
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
-  if (options.runsFile === true) {
+  // The translations table is judged before anything is written wherever the change reaches it:
+  // the file's statements are planned from the history's record of it, and a push changes it too,
+  // after which only the main table is compared (`recordWhatWasPushed`).
+  if (options.runsFile === true || options.pushes === true) {
     await refuseCompanionDrift(deps, save, plan.table);
   }
 
@@ -1849,6 +1869,14 @@ async function generateFor(
     // The names the site's storage is on, which the save named its field groups under: a history
     // on the other names is refused, naming the step between them, rather than planned across.
     fieldGroupNaming: inputs.fieldGroupNaming,
+    // Every permission the config declares, by owner, from the same entities and by the same
+    // function `migrate:create` records them with. Left out, the snapshot carried the previous
+    // one's record forward, without the permissions of an entity this save made or removed, and
+    // the next `migrate:create` wrote a migration of that difference alone.
+    permissions: declaredPermissionsOf(deps.config, {
+      collections: inputs.collections,
+      singles: inputs.singles,
+    }),
     metadataUpserts: inputs.metadataUpserts,
     previousMetadataUpserts: inputs.previousMetadataUpserts,
     appStream: inputs.appStream,
@@ -2166,6 +2194,7 @@ async function runWritten(
       ? undefined
       : await unitOf(deps, files.adopt);
   let before = await scopedSnapshotBefore(deps, ordered[0], table);
+  if (await ranAsOneUnit()) return;
   for (const filename of ordered) {
     // A column made required over rows that would break it, refused before
     // any statement, as `nextly migrate` refuses it. Asked outside the
@@ -2174,10 +2203,102 @@ async function runWritten(
     // cannot name (a column restated through a prepared statement) was taken
     // as part-way, and a refusal that ran nothing was reported as a failure
     // whose statements stayed applied, its files kept for `migrate:resolve`.
-    await refuseBeforeAnyStatement(filename);
-    running = filename;
-    await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
+    try {
+      await refuseBeforeAnyStatement(filename);
+      running = filename;
+      await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
+    } catch (error) {
+      // A file failing, or refused before its first statement, after one of this save was applied,
+      // which only a run file by file meets (MySQL, or a file outside a transaction): the database
+      // holds part of the save. The files already run stay recorded applied, this one and those
+      // after it are kept, recorded nowhere, and the failure says so with what to run next, as a
+      // push that failed part way says it.
+      if (applied.length > 0) {
+        throw partlyAppliedChange(error, ordered.slice(applied.length));
+      }
+      throw error;
+    }
     applied.push(filename);
+  }
+
+  /**
+   * On SQLite and PostgreSQL, a save of several files, each run in a transaction, runs them as one
+   * unit: their statements in order in ONE transaction on one connection, each file's ledger rows
+   * written in it after the last statement (`recordRunInTransaction`), then the caller's
+   * `inLastTransaction`. A later file's failure then takes the earlier ones back with it, as the
+   * push's single transaction does, and the save's files are withdrawn with nothing of them
+   * applied; a busy table's tries restart the whole save. The history is judged once, before
+   * anything runs: the database must stand where the save starts (`before`). Anything else is left
+   * to the file-by-file run below, which judges each file against the live table: a database
+   * standing elsewhere, MySQL, which commits each schema statement as it runs, and a save with a
+   * file marked to run outside a transaction. Answers whether it ran the save.
+   */
+  async function ranAsOneUnit(): Promise<boolean> {
+    if (ordered.length < 2 || dialect === "mysql") return false;
+    const units = await Promise.all(
+      ordered.map(filename => unitOf(deps, filename))
+    );
+    if (units.some(unit => !unit.transaction)) return false;
+    if (!snapshotsEquivalent(await liveTable(deps, table), before)) {
+      return false;
+    }
+    for (const unit of units) {
+      await assertNotPartiallyApplied(unit, dialect, repo, "rerun");
+      await refuseBeforeAnyStatement(unit.filename);
+    }
+    const parts = await Promise.all(
+      units.map(async unit => ({
+        unit,
+        statements: splitSqlStatements(unit.sql, dialect, {
+          transaction: true,
+        }),
+        hasSnapshot: (await snapshotOf(deps, unit.filename)) !== null,
+      }))
+    );
+    // A table adopted first is recorded applied with the first file a snapshot describes, as the
+    // file-by-file run records it.
+    const adoptedWith = parts.findIndex(part => part.hasSnapshot);
+    const adoption = pendingAdoption;
+    try {
+      await runUnitInTries(
+        deps.adapter,
+        parts.flatMap(part => part.statements),
+        { source: ordered.join(", "), transaction: true },
+        async handle => {
+          for (const [index, part] of parts.entries()) {
+            await recordRunInTransaction(
+              {
+                file: part.unit,
+                dialect,
+                repo,
+                ...(index === adoptedWith && adoption !== undefined
+                  ? {
+                      recordApplied: (held: unknown) =>
+                        recordAlreadyApplied(adoption, repo.boundTo(held)),
+                    }
+                  : {}),
+              },
+              handle,
+              part.statements.length,
+              undefined
+            );
+          }
+          await inLastTransaction?.();
+        },
+        {
+          bounds,
+          notify: line => deps.logger.warn(line),
+          appliedBefore: () => [],
+        }
+      );
+    } catch (error) {
+      // A lost race, and a busy table's stop, are thrown as they are, as a file run alone throws
+      // them; any other failure names the file whose statement the database refused.
+      if (isConcurrentRun(error)) throw error;
+      if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) throw error;
+      throw applyFailedError(fileRefusedIn(parts, error), error);
+    }
+    return true;
   }
 
   async function refuseBeforeAnyStatement(filename: string): Promise<void> {
@@ -2226,6 +2347,33 @@ async function runWritten(
     pendingAdoption = undefined;
     before = scopedTarget;
   }
+}
+
+/**
+ * The file whose statement the database refused, of a save run as one unit: the one holding the
+ * statement a driver's error quotes ("Failed query: ..."), the database's own message naming it
+ * whole. The last file where none is found.
+ */
+function fileRefusedIn(
+  parts: readonly {
+    unit: { filename: string };
+    statements: readonly string[];
+  }[],
+  error: unknown
+): string {
+  const said: string[] = [];
+  for (
+    let cause: unknown = error;
+    cause instanceof Error;
+    cause = cause.cause
+  ) {
+    said.push(cause.message);
+  }
+  const text = said.join("\n");
+  const holding = parts.find(part =>
+    part.statements.some(statement => text.includes(statement.trim()))
+  );
+  return (holding ?? parts[parts.length - 1]).unit.filename;
 }
 
 /**
@@ -2343,6 +2491,33 @@ async function liveTable(
     ),
     table
   );
+}
+
+/**
+ * Refuse a save that applies its change by a push (`appliedBy`) where the collection's table is
+ * not, in the database, what the history before the save's files records of it: a column added by
+ * hand, say. Asked before the push, as the file road's reconcile asks before a file's statements
+ * (`reconcileFile`), with the same baseline (`scopedSnapshotBefore`) and the same refusal
+ * (`NEXTLY_MIGRATION_DRIFT`, naming each difference). Pushed over such a table, the change would
+ * stand in the database while no file could be recorded for it. A save that adopts its table
+ * writes a file describing the table as it stands, so it has nothing to judge.
+ */
+async function refuseDriftBeforePush(
+  deps: CollectionSaveDeps,
+  files: SaveFiles,
+  table: string
+): Promise<void> {
+  const first = files.change[0];
+  if (files.adopt !== undefined || first === undefined) return;
+  const before = await scopedSnapshotBefore(deps, first, table);
+  const live = await liveTable(deps, table);
+  if (snapshotsEquivalent(live, before)) return;
+  const migration = first.replace(/\.sql$/, "");
+  throw migrationDriftError({
+    migration,
+    file: join(deps.migrationsDir, first),
+    driftItems: diffSnapshots(before, live).map(toDriftItem),
+  });
 }
 
 /**

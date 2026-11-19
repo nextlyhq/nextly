@@ -444,7 +444,10 @@ function fieldGroupStorageProblem(
   if (fieldGroupStorage !== undefined && fieldGroupStorage !== "current") {
     return `expected fieldGroupStorage to be "current" when present, got ${JSON.stringify(fieldGroupStorage)}`;
   }
-  if (version === CURRENT_NAMES_SNAPSHOT_VERSION && fieldGroupStorage === undefined) {
+  if (
+    version === CURRENT_NAMES_SNAPSHOT_VERSION &&
+    fieldGroupStorage === undefined
+  ) {
     return `expected fieldGroupStorage: "current" in a version ${CURRENT_NAMES_SNAPSHOT_VERSION} snapshot`;
   }
   if (version === 1 && fieldGroupStorage !== undefined) {

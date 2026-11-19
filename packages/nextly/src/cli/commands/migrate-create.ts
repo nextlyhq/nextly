@@ -595,7 +595,10 @@ export async function runMigrateCreate(
       options.plugin !== undefined ||
       options.recordSnapshot === true)
   ) {
-    exitWithError(logger, fieldGroupNamesOptionInvalid(options.fieldGroupNames));
+    exitWithError(
+      logger,
+      fieldGroupNamesOptionInvalid(options.fieldGroupNames)
+    );
   }
 
   if (options.plugin) {

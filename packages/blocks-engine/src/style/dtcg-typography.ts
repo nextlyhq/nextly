@@ -125,22 +125,35 @@ function partToDtcg(
 ): unknown {
   if (isTokenRef(stated)) {
     if (stated.times === undefined) return aliasOf(stated.$token, kind);
-    // A scaled variable has no alias: its value at the factor is written.
+    // A scaled variable has no alias: its value at the factor is written,
+    // typed as the part types a plain value, so one of another type (a size
+    // scaled from a number) or out of the part's range is no value of it,
+    // and the style is kept as Nextly data only.
     const found = context.typed.get(stated.$token);
-    return found === undefined ? undefined : scaled(found.typed, stated.times);
+    const text =
+      found === undefined ? undefined : scaledText(found.typed, stated.times);
+    return text === undefined ? undefined : partValue(text, kind);
   }
   if (typeof stated !== "string" && typeof stated !== "number")
     return undefined;
-  return typedValue({ name: "part", kind, values: { light: String(stated) } })
-    ?.value;
+  return partValue(String(stated), kind);
 }
 
-/** A typed value at a factor: a dimension's or a number's, else nothing. */
-function scaled(typed: TypedValue, times: number): unknown {
+/** CSS text as a value of a part of `kind`, by the format's own typing. */
+function partValue(text: string, kind: TokenKind): unknown {
+  return typedValue({ name: "part", kind, values: { light: text } })?.value;
+}
+
+/** A typed value at a factor, as CSS text: a dimension's or a number's. */
+function scaledText(typed: TypedValue, times: number): string | undefined {
   const value = typed.value;
-  if (typeof value === "number") return value * times;
-  if (isPlainObject(value) && typeof value.value === "number") {
-    return { ...value, value: value.value * times };
+  if (typeof value === "number") return String(value * times);
+  if (
+    isPlainObject(value) &&
+    typeof value.value === "number" &&
+    typeof value.unit === "string"
+  ) {
+    return `${String(value.value * times)}${value.unit}`;
   }
   return undefined;
 }

@@ -231,7 +231,8 @@ export async function resolveDeclaredSchema(
   args: ResolveSchemaArgs
 ): Promise<ResolvedSchema> {
   const resolvers = args.resolvers ?? DEFAULT_TABLE_NAME_RESOLVERS;
-  const naming = args.fieldGroupNaming ?? (await fieldGroupNamingOfHistory(args));
+  const naming =
+    args.fieldGroupNaming ?? (await fieldGroupNamingOfHistory(args));
   // Every field group, code-first and Builder alike, by the one resolver under the history's
   // naming: the storage migration moves a derived name by its prefix alone.
   const fieldGroupTable = (e: { slug: string }) =>

@@ -466,6 +466,46 @@ describe("an import carrying the site's own design data", () => {
     ).toEqual(["ts-b"]);
   });
 
+  it("leaves out a text style naming a variable neither the file nor this site has, saying so, and stores the rest", () => {
+    const style = (id: string, label: string, size: string): NamedClass => ({
+      id,
+      slug: label.toLowerCase(),
+      label,
+      orderIndex: 0,
+      role: "text",
+      styles: { base: { base: { fontSize: { $token: size } } } },
+    });
+    const source: SiteTokenSet = {
+      tokens: [
+        { name: "font-size.lead", kind: "dimension", values: { light: "2rem" } },
+      ],
+    };
+    const lost = style("ts-lost", "Lost", "font-size.nowhere");
+    // A built-in variable every site has is one this site has.
+    const builtIn = style("ts-built-in", "Heading", "font-size.h2");
+    const lead = style("ts-lead", "Lead", "font-size.lead");
+    const plan = ready(
+      planImport(files(source, [lost, builtIn, lead]), { tokens: [] }, {
+        textStyles: [],
+      })
+    );
+    expect(plan.extras.textStyles.added.map(entry => entry.id)).toEqual([
+      "ts-built-in",
+      "ts-lead",
+    ]);
+    expect(plan.skipped).toContain(
+      "“Lost” was not imported: a variable it uses, “font-size.nowhere”, isn't on this site or in the file."
+    );
+    const applied = applyImport(plan, { tokens: [] }, new Map());
+    if (!applied.ok) throw new Error(applied.error);
+    const edited = applied.classes?.([]);
+    expect(
+      edited !== undefined && "classes" in edited
+        ? edited.classes.map(entry => entry.id)
+        : []
+    ).toEqual(["ts-built-in", "ts-lead"]);
+  });
+
   it("plans a large file into a site with another prefix without slowing with its size", () => {
     // Each variable's value is remapped through one table built per import,
     // not one per variable.
@@ -597,6 +637,24 @@ describe("an import carrying the site's own design data", () => {
       h3: { fontSize: "var(--site-t-own-h2, 1rem)" },
       h4: { fontSize: "calc(var(--site-t-own-h2) * 1.2)" },
     });
+  });
+
+  it("skips a colour order this site can't store, saying so, and imports the rest", () => {
+    const source: SiteTokenSet = {
+      tokens: [
+        { name: "color.accent", kind: "color", values: { light: "#ff0000" } },
+      ],
+      order: ["color.accent", "color.accent"],
+      builtInColoursShown: false,
+    };
+    const plan = ready(
+      planImport(files(source, []), { tokens: [] }, { textStyles: [] })
+    );
+    expect(plan.skipped).toContain(
+      "The colour order in the file could not be read, so it was skipped."
+    );
+    expect(plan.extras.site).toEqual({ builtInColoursShown: false });
+    expect(plan.added.map(token => token.name)).toEqual(["color.accent"]);
   });
 
   it("orders the file's colours under the ids they merge into here", () => {

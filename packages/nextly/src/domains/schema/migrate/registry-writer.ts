@@ -387,8 +387,9 @@ async function recordedRows(
   const fieldGroups = new FieldGroupRegistryService(deps.adapter, deps.logger);
   // The field-group registry under the name the database holds it, which a Builder group's new
   // row is written into and named by.
-  const fieldGroupRegistry = (await resolveFieldGroupRegistryTable(deps.adapter))
-    .name;
+  const fieldGroupRegistry = (
+    await resolveFieldGroupRegistryTable(deps.adapter)
+  ).name;
   // A slug the system keeps for its own resources is never a registry row,
   // whatever a snapshot says.
   const kept = ([slug]: [string, RecordedEntitySettings]) =>

@@ -40,7 +40,6 @@ import {
   type PluginMigration,
 } from "./plugin/plugin-migration";
 import { recordedContributions } from "./plugin/recorded-contributions";
-
 import { ledgerNameOfSnapshot, type IsAppliedFn } from "./snapshot-source";
 
 /** A table, or one of its columns, the database lacks. */

@@ -20,10 +20,8 @@ export interface SessionTryBound {
 // One implementation: the session bounds a migration unit's tries use (SQLite's busy timeout;
 // the servers' per-lock backstops, MySQL's row wait included, set back afterwards; the session's
 // id told to the watch) are the ones every other runner of a try uses too.
-export {
-  boundSessionTry,
-  boundSqliteWait,
-} from "../migrate/migration-transaction";
+export { boundSessionTry } from "../migrate/migration-transaction";
+export { boundSqliteWait } from "./sqlite-wait";
 
 /**
  * `statement` as it is sent while the schema lock may be held: marked with the lock's claim on the

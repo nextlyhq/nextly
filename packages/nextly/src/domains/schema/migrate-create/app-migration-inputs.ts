@@ -65,9 +65,16 @@ import { holdInBuilderChange } from "./writer-hold";
  * running app's plugin-transformed config, which a Schema Builder save reads,
  * is one too.
  */
+// `permissions`: the app's own custom permissions, which every snapshot records beside the
+// plugins' (`declaredPermissionsOf`), so a Builder save records the ones `migrate:create` does.
 export type AppMigrationConfig = Pick<
   SanitizedNextlyConfig,
-  "collections" | "singles" | "fieldGroups" | "plugins" | "localization"
+  | "collections"
+  | "singles"
+  | "fieldGroups"
+  | "plugins"
+  | "localization"
+  | "permissions"
 > & {
   db: Pick<SanitizedNextlyConfig["db"], "uiSchemaFile" | "migrationsDir">;
 };
@@ -287,8 +294,7 @@ export async function appMigrationInputs(
     // Each field group under the table the entities above name, so a contribution to it attaches
     // to the same physical table in both streams. Only where the caller said where groups are
     // stored; otherwise both streams derive the same names, as before.
-    ...(fieldGroupNaming === "legacy" &&
-    input.fieldGroupTables === undefined
+    ...(fieldGroupNaming === "legacy" && input.fieldGroupTables === undefined
       ? {}
       : {
           fieldGroupTables: new Map(
@@ -447,7 +453,9 @@ export function nothingToGenerate(input: {
  * these names, except for a row an earlier release created under the other naming, which `stored`
  * names.
  */
-export function withFieldGroupTables<T extends { components: MinimalConfigEntity[] }>(
+export function withFieldGroupTables<
+  T extends { components: MinimalConfigEntity[] },
+>(
   merged: T,
   names: FieldGroupStorageNames,
   stored: ReadonlyMap<string, string> | undefined
