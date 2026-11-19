@@ -39,7 +39,8 @@ interface ActivityLogEntry {
   userName: string | null;
   /** Null once the actor's account was deleted and their identity erased. */
   userEmail: string | null;
-  action: "create" | "update" | "delete";
+  /** `read` is a search of the email delivery log by address, which is logged. */
+  action: "create" | "update" | "delete" | "read";
   /** What happened, by the server's closed set. Absent from an older server, or for a row it names none for. */
   event?: ActivityEvent;
   collection: string;
@@ -76,12 +77,14 @@ const ACTION_LABELS: Record<string, string> = {
   create: "created",
   update: "updated",
   delete: "deleted",
+  read: "searched email deliveries",
 };
 
 const ACTION_CATEGORIES: Record<string, ActivityCategory> = {
   create: "success",
   update: "info",
   delete: "destructive",
+  read: "info",
 };
 
 function mapEntry(entry: ActivityLogEntry): Activity {
@@ -135,7 +138,14 @@ function shared(
 // A widget answer's rows
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ACTIONS: ReadonlySet<string> = new Set(["create", "update", "delete"]);
+// Every action the feed can hold: a row whose action is missing here is
+// dropped as unreadable, so a new action needs its place here too.
+const ACTIONS: ReadonlySet<string> = new Set([
+  "create",
+  "update",
+  "delete",
+  "read",
+]);
 /**
  * Every event the server names, keyed so the list cannot miss one: a key the union lacks, or a
  * member without a key, fails to compile.
@@ -232,7 +242,9 @@ export function activityHref(
   addressOf: DocumentAddressOf
 ): string | undefined {
   const collection = textOrNull(row.collection);
-  if (!collection || row.action === "delete") return undefined;
+  // A deletion's subject is gone, and a search reads no one document.
+  if (!collection || row.action === "delete" || row.action === "read")
+    return undefined;
   if (row.subjectKind === "single") {
     return addressOf({ kind: "single", slug: collection });
   }

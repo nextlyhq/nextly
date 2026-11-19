@@ -19,7 +19,11 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
 import { documentAddress } from "@admin/lib/navigation/document-address";
 import type { DocumentAddressOf } from "@admin/lib/navigation/useDocumentAddress";
 
-import { activityHref, useRecentActivity } from "./useRecentActivity";
+import {
+  activityFromRow,
+  activityHref,
+  useRecentActivity,
+} from "./useRecentActivity";
 
 /** The shared rule over a collection that opens its entries in a view. */
 const addressOf: DocumentAddressOf = (document, options = {}) =>
@@ -179,5 +183,28 @@ describe("where a feed row leads", () => {
       activityHref({ ...row, subjectKind: "settings" }, addressOf)
     ).toBeUndefined();
     expect(activityHref({ ...row, entryId: null }, addressOf)).toBeUndefined();
+  });
+});
+
+describe("a search of the email delivery log", () => {
+  const search = {
+    ...row,
+    action: "read",
+    collection: "email-deliveries",
+    entryId: null,
+  };
+
+  it("is drawn as a search, never dropped as an action this build can't read", () => {
+    const activity = activityFromRow(search);
+    expect(activity).toBeDefined();
+    expect(activity?.type).toBe("read");
+    expect(activity?.action).toBe("searched email deliveries");
+    expect(activity?.category).toBe("info");
+  });
+
+  it("leads nowhere, since a search opens no one document", () => {
+    expect(
+      activityHref({ ...search, entryId: "doc-1" }, addressOf)
+    ).toBeUndefined();
   });
 });
