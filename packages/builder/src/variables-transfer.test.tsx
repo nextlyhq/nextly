@@ -298,7 +298,7 @@ describe("What wasn't exported", () => {
     expect(within(row).getByText("Left out")).toBeDefined();
     expect(
       within(row).getByText(
-        "Figma keeps shadows as effect styles, not variables."
+        "Figma keeps these as effect styles and text styles; the variables they use are in the file"
       )
     ).toBeDefined();
   });

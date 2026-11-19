@@ -18,13 +18,16 @@ import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
   type ColumnOrigin,
   fieldsStoredOnRow,
-  getColumnDescriptor,
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
 import { describeClassed } from "../describe";
 import type { RowKey } from "../types";
 
-import { type FieldTypeOnDialect, fieldTypeOnDialect } from "./field-type";
+import {
+  columnDescriptorAt,
+  type FieldTypeOnDialect,
+  fieldTypeOnDialect,
+} from "./field-type";
 import {
   FIRST_KEYS,
   fieldAccepts,
@@ -83,7 +86,13 @@ export function fieldTypeChangesOf(args: {
   renamed?: ReadonlyMap<string, string>;
   dialect: SupportedDialect;
   builtBy: ColumnOrigin;
+  /** Whether the fields are kept on a field group's row (`columnDescriptorAt`). */
+  componentRow?: boolean;
 }): FieldTypeChange[] {
+  const at = {
+    builtBy: args.builtBy,
+    ...(args.componentRow === true ? { componentRow: true } : {}),
+  };
   const oldNameOf = new Map(
     [...(args.renamed ?? new Map<string, string>())].map(([from, to]) => [
       to,
@@ -99,13 +108,13 @@ export function fieldTypeChangesOf(args: {
     const from = byName.get(oldNameOf.get(to.name) ?? to.name);
     if (from === undefined) continue;
     if (
-      getColumnDescriptor(from, args.dialect, args.builtBy) === null ||
-      getColumnDescriptor(to, args.dialect, args.builtBy) === null
+      columnDescriptorAt(from, args.dialect, at) === null ||
+      columnDescriptorAt(to, args.dialect, at) === null
     ) {
       continue;
     }
-    const fromType = fieldTypeOnDialect(from, args.dialect, args.builtBy);
-    const toType = fieldTypeOnDialect(to, args.dialect, args.builtBy);
+    const fromType = fieldTypeOnDialect(from, args.dialect, args.builtBy, at);
+    const toType = fieldTypeOnDialect(to, args.dialect, args.builtBy, at);
     if (!sameType(fromType, toType)) {
       changes.push({ to, from, fromType, toType });
     }
@@ -134,6 +143,8 @@ export async function judgeFieldTypeChanges(args: {
   db: unknown;
   dialect: SupportedDialect;
   builtBy: ColumnOrigin;
+  /** Whether the fields are kept on a field group's row (`columnDescriptorAt`). */
+  componentRow?: boolean;
   table: string;
   translationsTable?: string;
   translated?: ReadonlySet<string>;
@@ -196,6 +207,7 @@ async function whereHeld(
   args: {
     dialect: SupportedDialect;
     builtBy: ColumnOrigin;
+    componentRow?: boolean;
     table: string;
     translationsTable?: string;
     translated?: ReadonlySet<string>;
@@ -207,7 +219,7 @@ async function whereHeld(
   );
   if (args.translated?.has(change.from.name) === true) tables.reverse();
   const columns = [change.from, change.to]
-    .map(field => getColumnDescriptor(field, args.dialect, args.builtBy)?.name)
+    .map(field => columnDescriptorAt(field, args.dialect, args)?.name)
     .filter((name): name is string => name !== undefined);
   for (const column of columns) {
     for (const table of tables) {
@@ -487,6 +499,8 @@ export interface EntityTypeChangeInput {
   /** The registry row's status: a definition still awaiting its migration is not judged against. */
   migrationStatus?: string | null;
   builtBy: ColumnOrigin;
+  /** Whether the entity keeps its fields on a field group's rows (`columnDescriptorAt`). */
+  componentRow?: boolean;
   /** The fields whose lost values the owner consented to clearing, by name. */
   acknowledged?: ReadonlySet<string>;
 }
@@ -507,6 +521,7 @@ export async function fieldTypeChangeRefusals(
     ...(entity.renamed !== undefined ? { renamed: entity.renamed } : {}),
     dialect,
     builtBy: entity.builtBy,
+    ...(entity.componentRow === true ? { componentRow: true } : {}),
   });
   if (changes.length === 0) return [];
   const pending =
@@ -520,6 +535,7 @@ export async function fieldTypeChangeRefusals(
       db,
       dialect,
       builtBy: entity.builtBy,
+      ...(entity.componentRow === true ? { componentRow: true } : {}),
       table: entity.table,
       ...(entity.translationsTable !== undefined
         ? { translationsTable: entity.translationsTable }

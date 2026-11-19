@@ -993,7 +993,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await appliedFiles(t)).toContain(update);
     });
 
-    it("keeps a field group delete's files, recorded nowhere, when it stops after its first teardown", async () => {
+    it("keeps a field group delete's files, recorded nowhere, when it stops after its first teardown on MySQL, and withdraws them with the delete undone elsewhere", async () => {
       const t = await boot();
       await dispatchComponents(
         "createComponent",
@@ -1011,8 +1011,20 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toBeDefined();
 
       const deleted = migrationFiles(t).find(f => /_meta_delete\.sql$/.test(f));
-      expect(deleted).toBeDefined();
-      expect(await appliedFiles(t)).not.toContain(deleted);
+      if (dialect === "mysql") {
+        // Each step commits on its own there, so a stop part way leaves the files for a retry or
+        // `nextly migrate` to finish, recorded applied nowhere.
+        expect(deleted).toBeDefined();
+        expect(await appliedFiles(t)).not.toContain(deleted);
+      } else {
+        // One transaction, undone whole: nothing the file describes ran, so it is withdrawn, and
+        // the field group is all still there.
+        expect(deleted).toBeUndefined();
+        expect(await t.adapter.tableExists("comp_meta")).toBe(true);
+        expect(
+          await t.getService("fieldGroupRegistryService").getComponent("meta")
+        ).toBeTruthy();
+      }
     });
 
     it("writes a renamed nested field group's moved rows into the field group's migration", async () => {

@@ -108,6 +108,16 @@ export interface RepairRule {
     readonly document: BlockDocument;
     readonly steps: readonly RepairStep[];
   };
+  /**
+   * Whether `document` holds anything this rule repairs: `false` exactly when
+   * `apply` would change nothing and return no steps.
+   *
+   * Optional. When every rule answers `false`, the planner answers without
+   * its copies, its size surveys or any rule's run, which on a large page are
+   * most of what an edit costs while the editor plans again on each one. A
+   * rule that does not answer is always run.
+   */
+  finds?(document: BlockDocument, context: RepairContext): boolean;
 }
 
 /** A repair: the steps to show, and the document confirming them stores. */
@@ -131,7 +141,12 @@ export interface RepairPlan {
 
 /**
  * Plan the repair of `document`, rule by rule. The document is not changed;
- * the plan's `result` is a new one.
+ * the plan's `result` is a new one, or `document` itself when nothing is
+ * planned.
+ *
+ * A page none of the rules finds anything in, which is most pages, is
+ * answered before any of that work: no steps, the document as the result,
+ * and the breaks it holds named as for any plan.
  *
  * A document past its node or depth limits is not one a save would store, so
  * nothing is planned for it: no steps, the document itself as the result, and
@@ -146,13 +161,20 @@ export function planRepair(
   rules: readonly RepairRule[] = [lockRepairRule]
 ): RepairPlan {
   const limits = sources.limits ?? DEFAULT_LIMITS;
+  const context: RepairContext = { sources };
+  // Asked of every rule, so one that cannot tell keeps the plan running. The
+  // breaks are still named: a rule finding nothing to repair says nothing of
+  // breaks no rule given here repairs.
+  if (rules.every(rule => rule.finds?.(document, context) === false)) {
+    return { steps: [], result: document, ...breaksLeftIn(document, sources) };
+  }
   if (!withinLimits(document, limits)) {
     return { steps: [], result: document, ...breaksLeftIn(document, sources) };
   }
   let result = structuredClone(document);
   const steps: RepairStep[] = [];
   for (const rule of rules) {
-    const applied = rule.apply(result, { sources });
+    const applied = rule.apply(result, context);
     result = applied.document;
     steps.push(...applied.steps);
   }
@@ -209,6 +231,10 @@ export function placementSourcesOf(
  */
 export const lockRepairRule: RepairRule = {
   name: "nextly/locks",
+  // The breaks `apply` starts from: none found, and it repairs nothing.
+  finds(document, { sources }) {
+    return lockBreaksIn(document, sources).length > 0;
+  },
   apply(document, context) {
     const current = structuredClone(document);
     const steps: RepairStep[] = [];
