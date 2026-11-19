@@ -440,7 +440,7 @@ function unkeptValuesStop(
     return stopWhereNot(target.dialect, table, {
       guard: `nextly_unreadable_date_${column}`,
       reason: "an_entry_holds_a_date_sqlite_cannot_keep",
-      kept: `substr(strftime('%f', ${held.text}), 4) = '000' AND strftime('%s', ${held.text}) IS NOT NULL`,
+      kept: sqliteDateKept(held.text),
       where: holds,
     });
   }
@@ -481,9 +481,22 @@ export function missingValuesStop(
 }
 
 /**
- * A run's stop where some row matching `where` fails `kept`: each such row's test goes into a
- * temporary table's NOT NULL column as 1, or NULL where it fails, so the run stops on that
- * constraint, the table and column naming why. Their names are bounded as every derived identifier
+ * SQLite's rule for a date it keeps as the same instant: read at all (`strftime`), in whole
+ * seconds, on a day that exists (the date part reads back as itself: `2026-02-30` would read as
+ * 2 March), at a time of day that exists (hour to 23, minute and second to 59), as
+ * `movesAsTheSameDate` judges it before the save.
+ */
+function sqliteDateKept(value: string): string {
+  const day = `substr(${value}, 1, 10)`;
+  const time = `(length(${value}) = 10 OR (substr(${value}, 12, 2) <= '23' AND substr(${value}, 15, 2) <= '59' AND (substr(${value}, 17, 1) <> ':' OR substr(${value}, 18, 2) <= '59')))`;
+  return `substr(strftime('%f', ${value}), 4) = '000' AND strftime('%s', ${value}) IS NOT NULL AND date(${day}) = ${day} AND ${time}`;
+}
+
+/**
+ * A run's stop where some row matching `where` fails `kept` (a test that reads as NULL fails):
+ * the first such row puts NULL into a temporary table's NOT NULL column, so the run stops on that
+ * constraint, the table and column naming why. Only that one row is written, whatever the size
+ * of the table, and none where every row passes. Their names are bounded as every derived identifier
  * is (`boundedIdentifier`): a long field keeps as much of its name as fits, then a hash of the
  * whole, within the 63 characters every dialect takes.
  */
@@ -500,7 +513,7 @@ function stopWhereNot(
   const temporary = dialect === "mysql" ? "TEMPORARY" : "TEMP";
   return [
     `CREATE ${temporary} TABLE ${guard} (${reason} INTEGER NOT NULL);`,
-    `INSERT INTO ${guard} (${reason}) SELECT CASE WHEN ${stop.kept} THEN 1 END FROM ${table} WHERE ${stop.where};`,
+    `INSERT INTO ${guard} (${reason}) SELECT NULL FROM ${table} WHERE ${stop.where} AND (CASE WHEN ${stop.kept} THEN 0 ELSE 1 END) = 1 LIMIT 1;`,
     dialect === "mysql"
       ? `DROP TEMPORARY TABLE ${guard};`
       : `DROP TABLE ${guard};`,

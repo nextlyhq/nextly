@@ -645,11 +645,13 @@ export function planEntityMoves(args: {
   };
   // The system columns the table holds before the save, `title` and `slug` among them while no
   // field takes their name.
-  const systemBefore = new Set(
-    systemColumnsForFields(args.before, args.dialect, {
-      builtBy: "collection",
-    }).map(column => column.name)
-  );
+  const systemOf = (fields: readonly FieldDefinition[]) =>
+    new Set(
+      systemColumnsForFields(fields, args.dialect, {
+        builtBy: "collection",
+      }).map(column => column.name)
+    );
+  const system = { before: systemOf(args.before), after: systemOf(args.after) };
   refuseOverlapping(args.moves);
   refuseSameNames(args.moves);
   refuseUnpairedNames(args, args.renames ?? []);
@@ -671,7 +673,7 @@ export function planEntityMoves(args: {
     refuseRenamedColumns(request, move, args.renames ?? []);
     refuseMadeRequired(request, move, args.before);
     refuseUnplaceable(request, move, columns);
-    refuseSystemColumn(request, move, systemBefore);
+    refuseSystemColumn(request, move, system);
     // A field moving between places on one level (a group with no name) keeps its column, and
     // one whose group only changes its spelling (`seoMeta` to `seo_meta`) keeps its column and
     // key: a copy onto itself, then the clear of the place it left, would delete every value.
@@ -693,21 +695,32 @@ export function planEntityMoves(args: {
 }
 
 /**
- * Refuses a move out of a group onto a column the table keeps for itself while no field takes its
- * name, such as `title` or `slug`: every entry already holds its own value there, which the copy
- * would write over, and an entry without the moved value would show its old one as the field's.
+ * Refuses a move onto or off a column the table keeps for itself while no field takes its name,
+ * such as `title` or `slug`. Out of a group onto one, every entry already holds its own value
+ * there, which the copy would write over. Into a group off one, the table takes the column back
+ * for itself, under the same name.
  */
 function refuseSystemColumn(
   request: FieldMoveRequest,
   move: PlannedMove,
-  systemBefore: ReadonlySet<string>
+  system: { before: ReadonlySet<string>; after: ReadonlySet<string> }
 ): void {
-  if (move.to.kind !== "column" || !systemBefore.has(move.to.column)) return;
   const name = request.from.at(-1) ?? "This field";
-  throw refused(
-    request,
-    `Every entry already keeps its own ${move.to.column} while no field is named ${move.to.column}, and moving ${name} there would write over it. Rename ${name} inside the group first, then move it out.`
-  );
+  if (move.to.kind === "column" && system.before.has(move.to.column)) {
+    throw refused(
+      request,
+      `Every entry already keeps its own ${move.to.column} while no field is named ${move.to.column}, and moving ${name} there would write over it. Rename ${name} inside the group first, then move it out.`
+    );
+  }
+  // The other way: a field leaving a column the table takes back for itself once no field is
+  // named so. Its own values would then fill that column again, and the way back would turn them
+  // into the field's type before the group's values reach it.
+  if (move.from.kind === "column" && system.after.has(move.from.column)) {
+    throw refused(
+      request,
+      `${name} leaves the ${move.from.column} column, which every entry keeps for its own ${move.from.column} once no field is named ${move.from.column}. Rename ${name} first, then move it into the group.`
+    );
+  }
 }
 
 /** Whether two places are one key of one JSON column, each read as the database stores it. */

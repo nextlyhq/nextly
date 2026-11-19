@@ -1057,6 +1057,7 @@ describe.each(getConfiguredTestDialects())(
         it.each([
           ["a date SQLite does not read", "July 17, 2026"],
           ["a date with milliseconds", "2026-07-17T10:00:05.123Z"],
+          ["a day that does not exist", "2026-02-30"],
         ])(
           "stops a replayed move of dates out of a group, nothing changed, where an entry holds %s",
           async (_what, unkept) => {

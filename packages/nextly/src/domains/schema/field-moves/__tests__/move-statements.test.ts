@@ -327,6 +327,33 @@ describe("moveDataStatements on SQLite", () => {
     }
   });
 
+  it("stops before it writes where an entry holds a day or a time of day that does not exist", () => {
+    const out = moveDataStatements(
+      { from: key("meta", "published"), to: column("published") },
+      sqlite("timestamp", "integer")
+    );
+    // SQLite reads each as the day or time it rolls into: 2 March, the next day.
+    for (const unkept of [
+      "2026-02-30",
+      "2025-02-29T10:00:00Z",
+      "2026-07-17T24:00:00Z",
+      "2026-07-17T10:60:00Z",
+    ]) {
+      const db = table("published integer");
+      db.exec(
+        `INSERT INTO dc_posts (id, meta) VALUES (1, '{"published":"${unkept}"}');`
+      );
+      expect(() => run(db, [...out.stop, ...out.copy]), unkept).toThrow(
+        "NOT NULL constraint failed: nextly_unreadable_date_published.an_entry_holds_a_date_sqlite_cannot_keep"
+      );
+    }
+    const db = table("published integer");
+    db.exec(
+      `INSERT INTO dc_posts (id, meta) VALUES (1, '{"published":"2024-02-29T23:59:59Z"}'), (2, '{"published":"2026-07-17T10:00:05+05:00"}');`
+    );
+    run(db, [...out.stop, ...out.copy]);
+  });
+
   it("copies dates SQLite keeps, whole seconds written with milliseconds among them", () => {
     const db = table("published integer");
     db.exec(
@@ -519,11 +546,18 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
     });
     // The guard table's NOT NULL column takes 1 for each held date SQLite keeps, NULL where it
     // reads none or would drop its milliseconds: the run stops there, its transaction undone.
-    expect(moved.stop).toEqual([
-      `CREATE TEMP TABLE "nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep" INTEGER NOT NULL);`,
-      `INSERT INTO "nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep") SELECT CASE WHEN substr(strftime('%f', json_extract("meta", '$."published"')), 4) = '000' AND strftime('%s', json_extract("meta", '$."published"')) IS NOT NULL THEN 1 END FROM "dc_posts" WHERE json_type("meta", '$."published"') IS NOT NULL AND json_type("meta", '$."published"') <> 'null';`,
-      `DROP TABLE "nextly_unreadable_date_published";`,
-    ]);
+    const [create, insert, drop] = moved.stop;
+    expect(create).toBe(
+      `CREATE TEMP TABLE "nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep" INTEGER NOT NULL);`
+    );
+    // One row at most, NULL, from the first entry whose date SQLite does not keep.
+    expect(insert).toMatch(
+      /^INSERT INTO "nextly_unreadable_date_published" \("an_entry_holds_a_date_sqlite_cannot_keep"\) SELECT NULL FROM "dc_posts" WHERE json_type\("meta", '\$\."published"'\) IS NOT NULL AND .* LIMIT 1;$/
+    );
+    expect(insert).toContain(
+      `date(substr(json_extract("meta", '$."published"'), 1, 10)) = substr(json_extract("meta", '$."published"'), 1, 10)`
+    );
+    expect(drop).toBe(`DROP TABLE "nextly_unreadable_date_published";`);
     expect(moved.copy[0]).toMatch(/^UPDATE "dc_posts" SET "published" = /);
   });
 

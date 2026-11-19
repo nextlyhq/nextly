@@ -25,11 +25,12 @@ const base = {
 
 describe("planEntityMoves", () => {
   it("copies a field into an existing group before the file drops its column, and back on the way down", () => {
+    // A name no system column holds: the table takes `title` back for itself once it is free.
     const planned = planEntityMoves({
       ...base,
-      before: [text("title"), group("meta", [])],
-      after: [group("meta", [text("title")])],
-      moves: [{ from: ["title"], to: ["meta", "title"] }],
+      before: [text("subtitle"), group("meta", [])],
+      after: [group("meta", [text("subtitle")])],
+      moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
     });
     // An empty column carried as JSON null (over any stale key), then the copy.
     expect(planned.up.first).toHaveLength(2);
@@ -41,11 +42,11 @@ describe("planEntityMoves", () => {
     // Down: the file re-adds the column first; the value comes back after it, and the key goes.
     expect(planned.down.first).toEqual([]);
     expect(planned.down.last.join("\n")).toContain(
-      `SET "title" = json_extract`
+      `SET "subtitle" = json_extract`
     );
     expect(planned.down.last.join("\n")).toContain(`json_remove`);
     expect(planned.movedColumns).toEqual([
-      { table: "dc_posts", column: "title", into: "meta" },
+      { table: "dc_posts", column: "subtitle", into: "meta" },
     ]);
   });
 
@@ -508,29 +509,29 @@ describe("planEntityMoves", () => {
   it("refuses moving into a group a top-level field the entity's admin settings name", () => {
     // The definition file holds the admin settings beside the fields, and is read again only
     // where they name a top-level field: one moved into a group would leave it unreadable.
-    const moveTitle = (admin: {
+    const moveHeadline = (admin: {
       useAsTitle?: string;
       defaultColumns?: string[];
     }) =>
       planEntityMoves({
         ...base,
-        before: [text("title"), group("meta", [])],
-        after: [group("meta", [text("title")])],
-        moves: [{ from: ["title"], to: ["meta", "title"] }],
+        before: [text("headline"), group("meta", [])],
+        after: [group("meta", [text("headline")])],
+        moves: [{ from: ["headline"], to: ["meta", "headline"] }],
         admin,
       });
     for (const admin of [
-      { useAsTitle: "title" },
-      { defaultColumns: ["slug", "title"] },
+      { useAsTitle: "headline" },
+      { defaultColumns: ["slug", "headline"] },
     ]) {
-      expect(() => moveTitle(admin)).toThrow(
+      expect(() => moveHeadline(admin)).toThrow(
         expect.objectContaining({
           publicData: {
             errors: [
               expect.objectContaining({
                 code: "FIELD_MOVE_REFUSED",
                 message: expect.stringContaining(
-                  "title is named in the admin settings"
+                  "headline is named in the admin settings"
                 ),
               }),
             ],
@@ -539,7 +540,7 @@ describe("planEntityMoves", () => {
       );
     }
     expect(() =>
-      moveTitle({ useAsTitle: "slug", defaultColumns: ["slug"] })
+      moveHeadline({ useAsTitle: "slug", defaultColumns: ["slug"] })
     ).not.toThrow();
   });
 
@@ -596,6 +597,32 @@ describe("planEntityMoves", () => {
         },
       ])
     ).not.toThrow();
+  });
+
+  it("refuses a move into a group off the title or slug column the table then keeps for itself", () => {
+    for (const name of ["title", "slug"]) {
+      expect(
+        () =>
+          planEntityMoves({
+            ...base,
+            before: [text(name), group("meta", [])],
+            after: [group("meta", [text(name)])],
+            moves: [{ from: [name], to: ["meta", name] }],
+          }),
+        name
+      ).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: `${name} leaves the ${name} column, which every entry keeps for its own ${name} once no field is named ${name}. Rename ${name} first, then move it into the group.`,
+              }),
+            ],
+          },
+        })
+      );
+    }
   });
 
   it("refuses a move out of a group onto the title or slug every entry keeps while no field takes it", () => {
