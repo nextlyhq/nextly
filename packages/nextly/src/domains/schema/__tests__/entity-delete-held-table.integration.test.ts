@@ -53,6 +53,17 @@ afterEach(async () => {
 });
 
 const HISTORY = "./database/history";
+
+/**
+ * The next step a stop without a retry gives: what ran before the wait may have acted outside the
+ * database, so it says to check that first, never only to delete again.
+ */
+function expectChecksFirst(stopped: unknown): void {
+  const message = (stopped as { publicMessage?: unknown }).publicMessage;
+  expect(String(message)).toMatch(
+    /may have acted outside the database[\s\S]*check what it did before you delete again/
+  );
+}
 /** The plugin's own collection, which its handler reads in the delete's transaction. */
 const DESIGNS = "edh_designs";
 /** A `comp_` table the registry does not know, with no `_parent_table` column. */
@@ -269,6 +280,7 @@ describe.each(getConfiguredTestDialects())(
               /stopped without trying again: table busy\.[\s\S]*a call of code the system does not know[\s\S]*through 1 try /
             ),
           });
+          expectChecksFirst(stopped);
           expect(handled).toEqual([entity.slug]);
           // Rolled back whole: the collection, its translations and its row stand.
           expect(await t.adapter.tableExists(entity.table)).toBe(true);
@@ -307,6 +319,7 @@ describe.each(getConfiguredTestDialects())(
               /stopped without trying again: table busy\.[\s\S]*through 1 try /
             ),
           });
+          expectChecksFirst(stopped);
           expect(handled).toEqual([entity.slug]);
           expect(await t.adapter.tableExists(entity.table)).toBe(true);
           expect(await registryRowCount(t, entity)).toBe(1);
@@ -325,9 +338,18 @@ describe.each(getConfiguredTestDialects())(
      */
     async function siteTrigger(
       t: TestNextly,
-      kind: "row" | "event"
+      kind: "row" | "event" | "rule"
     ): Promise<() => Promise<void>> {
       const run = (statement: string) => t.adapter.executeQuery(statement);
+      if (kind === "rule") {
+        // A rewrite rule runs with the statements on its table, as a trigger does.
+        await run(
+          `CREATE RULE edh_keep AS ON DELETE TO "dynamic_collections" DO ALSO NOTHING`
+        );
+        return async () => {
+          await run(`DROP RULE IF EXISTS edh_keep ON "dynamic_collections"`);
+        };
+      }
       if (kind === "row") {
         await run(
           `CREATE OR REPLACE FUNCTION edh_audit() RETURNS trigger AS $$ BEGIN RETURN OLD; END $$ LANGUAGE plpgsql`
@@ -360,9 +382,10 @@ describe.each(getConfiguredTestDialects())(
         kind: "event",
         says: "a schema statement, which fires the database's DDL event trigger",
       },
+      { kind: "rule", says: "a call of code the system does not know" },
     ] as const) {
       it.runIf(dialect === "postgresql")(
-        `a collection's, on a database with ${trigger.kind === "row" ? "a row" : "an event"} trigger of its own, stops without trying again`,
+        `a collection's, on a database with ${{ row: "a row trigger", event: "an event trigger", rule: "a rewrite rule" }[trigger.kind]} of its own, stops without trying again`,
         async () => {
           const t = await boot();
           const entity = await anEntity(t, "collection");
@@ -390,6 +413,7 @@ describe.each(getConfiguredTestDialects())(
               expect(
                 (stopped as { publicMessage: string }).publicMessage
               ).toContain(trigger.says);
+              expectChecksFirst(stopped);
               expect(await t.adapter.tableExists(entity.table)).toBe(true);
               expect(await registryRowCount(t, entity)).toBe(1);
               expect(deleteFiles(t, entity)).toEqual([]);
@@ -419,9 +443,10 @@ describe.each(getConfiguredTestDialects())(
 
           const release = await holdTable(t, companion);
           try {
-            // A second a try, three in all: a try or two, then a stop, well before the holder ends.
+            // A second a try, five in all: tries at 0 and about 2 seconds, then a stop (a third,
+            // after a longer pause, would not end by 5), well before the holder ends at 8.
             vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
-            vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "3");
+            vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "5");
             const ending = new Promise<void>(resolve =>
               setTimeout(resolve, 8_000)
             ).then(release);
@@ -430,7 +455,14 @@ describe.each(getConfiguredTestDialects())(
               () => "deleted",
               (error: unknown) => error
             );
-            expect(stopped).toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+            // Tried again before the stop: a 1-second try and a 5-second total allow a second try,
+            // so a delete that stopped at its first would say "through 1 try".
+            expect(stopped).toMatchObject({
+              code: "NEXTLY_TABLE_BUSY",
+              publicMessage: expect.stringMatching(
+                /stopped: table busy, nothing changed\.[\s\S]*through ([2-9]|\d{2,}) tries /
+              ),
+            });
 
             // Nothing changed: the entity, its translations, its row; and no delete file is left.
             expect(await t.adapter.tableExists(entity.table)).toBe(true);
