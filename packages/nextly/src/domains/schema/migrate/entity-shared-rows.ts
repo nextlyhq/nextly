@@ -18,7 +18,8 @@
  * counted (`countEntityRows`): a table without the entity's rows,
  * or absent, is left out, and one that cannot be counted is listed without a
  * count rather than failing the run. Every read is bounded by one time budget
- * per run (`ENTITY_COUNT_BUDGET_MS`). Shared rows are listed only for an
+ * per run (`ENTITY_COUNT_BUDGET_MS`), which the run's other deletions share when
+ * the caller counts them too (`countDeadline`, `countWithin`). Shared rows are listed only for an
  * entity the run retires (`retiredByRun`), never for a main table dropped
  * while its entity lives on under another.
  *
@@ -231,6 +232,18 @@ export interface SharedRowsReader {
   retires?: (entity: EntityRef) => boolean;
   /** How long the counts may take in all (`ENTITY_COUNT_BUDGET_MS` when absent). */
   budgetMs?: number;
+  /**
+   * When every count of the listing must be done by (`countDeadline`), shared with the counts the
+   * caller makes of the run's other deletions (`countWithin`); one from `budgetMs` when absent.
+   */
+  deadline?: number;
+}
+
+/** When a listing's counts must be done by: its budget (`ENTITY_COUNT_BUDGET_MS` when absent) from now. */
+export function countDeadline(
+  reader: Pick<SharedRowsReader, "budgetMs">
+): number {
+  return Date.now() + (reader.budgetMs ?? ENTITY_COUNT_BUDGET_MS);
 }
 
 /**
@@ -252,7 +265,7 @@ export async function withEntityCoverage(
   if (perUnit.every(list => list.length === 0)) {
     return perUnit.map(list => [...list]);
   }
-  const deadline = Date.now() + (reader.budgetMs ?? ENTITY_COUNT_BUDGET_MS);
+  const deadline = reader.deadline ?? countDeadline(reader);
   const entities =
     (await within(readCoveredEntities(reader.db, reader.dialect), deadline)) ??
     [];
@@ -322,7 +335,7 @@ async function countEntityTables(
 export async function countEntityRows(
   deletions: readonly Deletion[],
   reader: SharedRowsReader,
-  deadline: number = Date.now() + (reader.budgetMs ?? ENTITY_COUNT_BUDGET_MS)
+  deadline: number = reader.deadline ?? countDeadline(reader)
 ): Promise<Deletion[]> {
   const pending = deletions.filter(isUncountedEntityRows);
   if (pending.length === 0) return [...deletions];
@@ -435,6 +448,41 @@ function withCount(
 ): Deletion[] {
   if (count === undefined) return [deletion];
   return count === 0 ? [] : [{ ...deletion, count }];
+}
+
+/**
+ * `deletions` with each table, column or removal of rows not counted yet counted on the database
+ * by `deadline` (`boundedCount`), as an entity's own tables are: a table's rows, a column's
+ * non-empty values, and for a removal of rows its table's rows. One that cannot be counted in time,
+ * or at all, is kept without a count. An entity's rows in a shared table are counted by what reads
+ * them (`countEntityRows`), never here.
+ */
+export async function countWithin(
+  deletions: readonly Deletion[],
+  reader: SharedRowsReader,
+  deadline: number
+): Promise<Deletion[]> {
+  const counted: Deletion[] = [];
+  for (const deletion of deletions) {
+    if (
+      deletion.kind === "unnamed" ||
+      deletion.count !== undefined ||
+      (deletion.kind === "rows" && deletion.of !== undefined)
+    ) {
+      counted.push(deletion);
+      continue;
+    }
+    const count = await boundedCount(
+      reader,
+      deletion.table,
+      deletion.kind === "column"
+        ? sql`${sql.identifier(deletion.column)} IS NOT NULL`
+        : undefined,
+      deadline
+    );
+    counted.push(count === undefined ? deletion : { ...deletion, count });
+  }
+  return counted;
 }
 
 /**

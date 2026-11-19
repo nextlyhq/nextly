@@ -84,7 +84,6 @@ import {
 } from "../../domains/schema/migrate/core-reconcile";
 import {
   consentToCover,
-  countDeletions,
   describeDeletion,
   resolveDataLossConsent,
   type DataLossConsent,
@@ -111,8 +110,11 @@ import {
   runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
+  countDeadline,
+  countWithin,
   retiredByRun,
   withEntityCoverage,
+  type SharedRowsReader,
 } from "../../domains/schema/migrate/entity-shared-rows";
 import {
   readDeletionFacts,
@@ -3835,7 +3837,8 @@ function pluginModuleUnits(
  * it leave it, so a table an earlier one creates holds only what the run
  * put there. The live facts are read once, for every unit's statements. Each
  * deletion carries how much it deletes where the database before the run can
- * say (`countedRunDeletions`), so the listing reads `table dc_notes (1 row)`.
+ * say within the listing's one budget (`countedRunDeletions`), so the listing
+ * reads `table dc_notes (1 row)`.
  *
  * With `entities`, as `nextly migrate` judges its run, each deletion in a
  * table a collection or Single owns belongs to its main table, and a unit
@@ -3861,6 +3864,8 @@ async function pendingRunDeletions(
           resolve(entities.migrationsDir, "meta"),
           units.map(unit => unit.label.replace(/\.sql$/, ""))
         );
+  // One budget for every count of the listing: the entities' tables and rows, then the rest.
+  const deadline = countDeadline({});
   const perUnit =
     entities === undefined
       ? read
@@ -3868,9 +3873,10 @@ async function pendingRunDeletions(
           db,
           dialect,
           adapter: entities.adapter,
+          deadline,
           ...(retires === undefined ? {} : { retires }),
         });
-  const counted = await countedRunDeletions(perUnit, db, dialect);
+  const counted = await countedRunDeletions(perUnit, { db, dialect }, deadline);
   return units.map((unit, at) => ({ unit, deletions: counted[at] ?? [] }));
 }
 
@@ -3878,28 +3884,31 @@ async function pendingRunDeletions(
 const CHANGED_EARLIER_IN_RUN = "an earlier migration in this run changes it";
 
 /**
- * Each unit's deletions with how much each deletes, read from the database before the run
- * (`countDeletions`): a table's rows, a column's non-empty values. A deletion in a table an
- * earlier unit's deletion already names is not counted, and says so (`notCounted`): that unit has
- * changed the table by then, so the database before the run cannot say what is left in it.
+ * Each unit's deletions with how much each deletes, read from the database before the run within
+ * the listing's budget (`countWithin`): a table's rows, a column's non-empty values. One the
+ * entities' coverage counted keeps its count. A deletion not counted yet in a table an earlier
+ * unit's deletion already names is not counted, and says so (`notCounted`): that unit has changed
+ * the table by then, so the database before the run cannot say what is left in it.
  */
 async function countedRunDeletions(
   perUnit: readonly (readonly Deletion[])[],
-  db: unknown,
-  dialect: SupportedDialect
+  reader: SharedRowsReader,
+  deadline: number
 ): Promise<Deletion[][]> {
   const earlierTables = new Set<string>();
   const counted: Deletion[][] = [];
   for (const deletions of perUnit) {
     const unit: Deletion[] = [];
     for (const deletion of deletions) {
-      const changedEarlier =
-        deletion.kind !== "unnamed" && earlierTables.has(deletion.table);
-      unit.push(
-        changedEarlier && deletion.kind !== "unnamed"
-          ? { ...deletion, notCounted: CHANGED_EARLIER_IN_RUN }
-          : ((await countDeletions([deletion], db, dialect))[0] ?? deletion)
-      );
+      if (
+        deletion.kind !== "unnamed" &&
+        deletion.count === undefined &&
+        earlierTables.has(deletion.table)
+      ) {
+        unit.push({ ...deletion, notCounted: CHANGED_EARLIER_IN_RUN });
+        continue;
+      }
+      unit.push(...(await countWithin([deletion], reader, deadline)));
     }
     for (const deletion of deletions) {
       if (deletion.kind !== "unnamed") earlierTables.add(deletion.table);
