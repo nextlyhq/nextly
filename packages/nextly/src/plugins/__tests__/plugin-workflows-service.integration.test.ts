@@ -939,11 +939,16 @@ describe("ctx.services.workflows outside a request (sqlite)", () => {
         )
       );
 
+      // Malformed on purpose: what a plugin's untyped caller could hand the service, which
+      // the service's own parse must refuse, so it goes in past the compile-time shape.
       const refused = await thrown(() =>
-        workflows().submit(changed as Parameters<Workflows["submit"]>[0], {
-          as: "user",
-          user: kim,
-        })
+        workflows().submit(
+          changed as unknown as Parameters<Workflows["submit"]>[0],
+          {
+            as: "user",
+            user: kim,
+          }
+        )
       );
 
       expect(refused.code).toBe("VALIDATION_ERROR");
