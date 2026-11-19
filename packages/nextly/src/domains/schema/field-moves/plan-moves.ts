@@ -192,7 +192,7 @@ function refuseUnpairedNames(
   for (const request of given.moves) {
     if (samePath(request.from, request.to)) continue;
     const name = request.from.at(-1) ?? "";
-    // A move that changes the name is refused on its own (`checkMove`), with that reason.
+    // A move that changes the name is refused on its own (`refuseUnbound`), with that reason.
     if (request.to.at(-1) !== name) continue;
     for (const side of sides) {
       const rival = side.unpaired.find(
