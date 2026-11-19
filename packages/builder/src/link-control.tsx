@@ -410,7 +410,9 @@ function pickKey(pick: LinkPick): string | undefined {
 
 /** What the trigger is announced as: the link it holds, or what it does. */
 function triggerLabel(label: string, words: ChipWords | undefined): string {
-  if (words === undefined) return `${label}: search pages or paste a URL`;
+  // The placeholder's own words, so someone who says what they see
+  // reaches it; the search field it opens says it in full.
+  if (words === undefined) return `${label}: search or paste a URL`;
   const detail = words.detail === undefined ? "" : `, ${words.detail}`;
   return `${label}: ${words.title}${detail}. Change`;
 }

@@ -15,6 +15,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { labelNotInName } from "../label-in-name.fixture";
 import { CanvasZoomControl } from "./canvas-zoom-control";
 import { FIT_ZOOM } from "./canvas-zoom";
 
@@ -154,15 +155,19 @@ describe("the canvas zoom control", () => {
      * "60%" alone does not say whether it is about to change when a panel
      * opens, and that is the entire difference between the two states. The
      * visible text names the mode ("Fit · 60%") and so does the accessible
-     * name; a chosen scale shows the number alone.
+     * name, in the same words; a chosen scale shows the number alone.
      */
     mount({ zoom: FIT_ZOOM, appliedScale: 0.6 });
-    expect(trigger().getAttribute("aria-label")).toContain("fitting");
+    expect(trigger().getAttribute("aria-label")).toBe("Canvas zoom: Fit, 60%");
+    // The words drawn, "Fit · 60%", are in the name in their order, so a
+    // speech-input user saying what they see reaches the control.
+    expect(labelNotInName(trigger())).toBeNull();
 
     cleanup();
     mount({ zoom: { kind: "fixed", scale: 0.6 }, appliedScale: 0.6 });
-    expect(trigger().getAttribute("aria-label")).not.toContain("fitting");
+    expect(trigger().getAttribute("aria-label")).toBe("Canvas zoom: 60%");
     expect(trigger().textContent).toBe("60%");
+    expect(labelNotInName(trigger())).toBeNull();
   });
 
   it("renders nothing where nothing can act on a choice", () => {

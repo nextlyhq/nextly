@@ -109,7 +109,10 @@ function SeoTurnedOff({ plural }: { plural: string }): ReactNode {
       {mayChange ? (
         <AdminLink
           href={CONTENT_TYPES_HREF}
-          className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+          // In the text colour, underlined: the primary token is a fill a
+          // brand may set to any colour, and small text drawn in it can fall
+          // under AA.
+          className="text-sm font-medium text-foreground underline underline-offset-4"
         >
           SEO settings
         </AdminLink>
