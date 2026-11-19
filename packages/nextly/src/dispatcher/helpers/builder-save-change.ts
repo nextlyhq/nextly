@@ -168,7 +168,7 @@ export async function writeBuilderSchemaChange(
     }
   });
   const written = await writeEntitySave(deps, save, pushed.appliedBy);
-  pushed.throwIfFailed(written?.files ?? []);
+  pushed.throwIfFailed(written?.files ?? [], written?.checked);
   return { registryWritten: false };
 }
 
