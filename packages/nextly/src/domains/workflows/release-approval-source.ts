@@ -321,6 +321,9 @@ async function detailOf(adapter: DrizzleAdapter, held: HeldDocument) {
     held.parts.map(entry => ({
       stage: entry.stage,
       assignee: entry.state?.assignee ?? null,
+      // Who brought the part into its stage: an assignee the step refuses as that person (no
+      // self-approval) cannot move it, so the part waits for every holder, as its read names.
+      enteredBy: entry.state?.enteredBy ?? null,
     }))
   );
   return {

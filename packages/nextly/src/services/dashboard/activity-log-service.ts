@@ -59,8 +59,12 @@ import {
   type ReadCaller,
 } from "./readable-resources";
 
-/** The three mutation actions tracked in the activity log. */
-export type ActivityLogAction = "create" | "update" | "delete";
+/**
+ * What an activity-log entry records was done: the three mutations, and
+ * `read` for a read worth recording, such as a search of the delivery log by
+ * address (`address-search-activity`).
+ */
+export type ActivityLogAction = "create" | "update" | "delete" | "read";
 
 /** A single activity log record as returned by queries. */
 export interface ActivityLogEntry {
@@ -1212,14 +1216,7 @@ export class ActivityLogService extends BaseService {
    */
   async logActivity(input: LogActivityInput): Promise<void> {
     try {
-      if (this.dialect === "sqlite") {
-        await this.logActivityInTx(this.db as ActivityWriteDb, input);
-        return;
-      }
-
-      await (this.db as TransactionalActivityDb).transaction(tx =>
-        this.logActivityInTx(tx, input)
-      );
+      await this.logActivityOrThrow(input);
     } catch (error) {
       this.logger.error("Failed to log activity", {
         error: error instanceof Error ? error.message : String(error),
@@ -1230,6 +1227,22 @@ export class ActivityLogService extends BaseService {
         },
       });
     }
+  }
+
+  /**
+   * Record an activity log entry as a self-contained write, as
+   * {@link logActivity} does, with a failure reaching the caller: for an
+   * action that must not take place unrecorded, which the caller refuses
+   * when its entry cannot be written.
+   */
+  async logActivityOrThrow(input: LogActivityInput): Promise<void> {
+    if (this.dialect === "sqlite") {
+      await this.logActivityInTx(this.db as ActivityWriteDb, input);
+      return;
+    }
+    await (this.db as TransactionalActivityDb).transaction(tx =>
+      this.logActivityInTx(tx, input)
+    );
   }
 
   /**
@@ -1408,6 +1421,9 @@ export class ActivityLogService extends BaseService {
       and: [
         ...starting,
         { column: "createdAt", op: ">", value: options.since },
+        // A recorded read (a search by address) is in the feed, but it
+        // changed nothing.
+        { column: "action", op: "!=", value: "read" },
       ],
     };
     // As many rows as the walk can find, so it stops at the table's end or at its own bound.

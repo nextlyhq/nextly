@@ -106,10 +106,11 @@ describeEachDialect("a field removed in the Schema Builder", dialect => {
     expect(later.success, JSON.stringify(later)).toBe(true);
   });
 
-  it("refuses a save while a column no field describes is there, and leaves it with its data", async () => {
+  it("refuses a save while a column no field describes is there, leaves it with its data, and saves once it is put back", async () => {
     // A MySQL install from before removed fields dropped their columns keeps those columns, with
-    // their data. A save applies the whole table, so it would drop such a column; it is refused
-    // instead, naming the column and how to go on, before anything is dropped.
+    // their data. The migration history records no such column, so a save is refused as drift
+    // before anything is dropped, naming the column and the way on that works for a save: put the
+    // table back as the history records it, then save again.
     const created = await handler().createCollection({
       name: "notes",
       label: "Note",
@@ -146,13 +147,15 @@ describeEachDialect("a field removed in the Schema Builder", dialect => {
       { fields: [{ name: "views", type: "number" }] }
     );
     expect(saved.success, JSON.stringify(saved)).toBe(false);
-    // The reason and the way on, so a refusal for anything else does not pass for this one.
-    expect(saved.message).toMatch(
-      /collection "notes" holds a column "legacy_note" that no field describes/
+    // The reason, the column and the way on, so a refusal for anything else does not pass for
+    // this one; and no command that cannot act on a refused save, whose files are withdrawn.
+    expect(saved.message).toContain("schema drift detected");
+    expect(saved.message).toContain("+ dc_notes.legacy_note present in DB");
+    expect(saved.message).toContain(
+      "put the table back as the history records it"
     );
-    expect(saved.message).toMatch(
-      /Drop the column by hand, or add a field that describes it, then save again/
-    );
+    expect(saved.message).not.toContain("migrate:resolve");
+    expect(saved.message).not.toContain("migrate:create");
 
     // Nothing was dropped: neither the column no field describes nor the removed field's.
     const columns = await columnsOf(current, dialect, "dc_notes");
@@ -162,6 +165,19 @@ describeEachDialect("a field removed in the Schema Builder", dialect => {
       `SELECT ${quote("legacy_note")} AS legacy_note FROM ${quote("dc_notes")}`
     );
     expect(rows.map(row => row.legacy_note)).toEqual(["kept"]);
+
+    // The way on, followed: the column dropped by hand, and the same save made again finishes.
+    await run(
+      `ALTER TABLE ${quote("dc_notes")} DROP COLUMN ${quote("legacy_note")}`
+    );
+    const again = await handler().updateCollection(
+      { collectionName: "notes" },
+      { fields: [{ name: "views", type: "number" }] }
+    );
+    expect(again.success, JSON.stringify(again)).toBe(true);
+    const after = await columnsOf(current, dialect, "dc_notes");
+    expect(after).not.toContain("aside");
+    expect(after).toContain("views");
   });
 
   it("takes its column from a Single, and later writes are accepted", async () => {

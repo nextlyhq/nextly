@@ -99,7 +99,12 @@ export type WorkflowDocumentRef =
 export interface TakeStepPayload {
   document: WorkflowDocumentRef;
   step: string;
-  parts: (string | null)[];
+  /**
+   * The parts to move: languages, and null for the shared part. `"all"` is
+   * every part of the document; those whose stage the step does not leave
+   * from are named in the answer's `left`.
+   */
+  parts: (string | null)[] | "all";
   seen: { part: string | null; revision: number; version: string }[];
   comment?: string | null;
 }
