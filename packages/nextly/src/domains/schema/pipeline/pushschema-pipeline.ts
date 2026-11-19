@@ -163,7 +163,6 @@ import {
   assertLiveCounts,
   assertPreCleanupAccepted,
   clearConsentedValues,
-  preCleanupRunsStatements,
   withAddedColumnsLeftToTighten,
 } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
@@ -309,8 +308,9 @@ export interface PipelineResult {
   /**
    * On a failure, how many of the statements the apply ran stay applied: on MySQL and SQLite, which
    * hand their statements over one at a time, read from the record of finished statements
-   * (`committedOf`), pre-cleanup counted as one as it starts; 0 for a failure before anything ran.
-   * Absent on PostgreSQL, whose failure rolls back whole, so a reader keeps its own rule there.
+   * (`committedOf`), pre-cleanup's each as it runs; 0 for a failure before anything ran, on every
+   * dialect. Otherwise absent on PostgreSQL, whose failure rolls back whole, so a reader keeps its
+   * own rule there.
    */
   statementsKept?: number;
   /**
@@ -1650,19 +1650,6 @@ export class PushSchemaPipeline {
           // Phase D' (F5 PR 4): pre-cleanup executor runs UPDATE/DELETE for
           // provide_default + delete_nonconforming resolutions, every one of
           // them already accepted before the first statement above.
-          // Counted as it starts, where it runs anything (`preCleanupRunsStatements`), as one
-          // statement that stays: on MySQL a column it adds commits as it runs, and on SQLite each
-          // of its statements does.
-          if (
-            preCleanupRunsStatements({
-              resolutions: dispatchResult.resolutions,
-              events: classificationResult.events,
-              dialect,
-              clearing: dispatchResult.clearing,
-            })
-          ) {
-            finishedThisTry.push(true);
-          }
           try {
             await this.deps.preCleanupExecutor.execute({
               tx,
@@ -1673,6 +1660,17 @@ export class PushSchemaPipeline {
               fields: aggregatedFields,
               dialect,
               clearing: dispatchResult.clearing,
+              // Each of its statements recorded as it runs, as the executor's are: a failure counts
+              // only the ones that ran (`statementsKept`).
+              statements: {
+                starting: schema => {
+                  nextIsSchema = schema;
+                },
+                finished: schema => {
+                  finishedThisTry.push(schema);
+                  nextIsSchema = false;
+                },
+              },
             });
           } catch (err) {
             // PromptCancelledError from abort is not a DDL failure — let it
