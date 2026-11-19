@@ -320,18 +320,20 @@ function changesOfKept(
 }
 
 /**
- * The changes of the built-in rows (a collection's title and slug) from `saved`, the rows as
- * loaded or last saved: their Unique setting is the one thing of them a person changes, so a row
- * whose Unique differs from its saved one is a change of its settings. Matched by name, the
- * built-in rows' identity. The user fields' changes are `pendingChanges`', which leaves built-in
- * rows out.
+ * The changes of the built-in rows (a collection's title) from `saved`, the rows as loaded or last
+ * saved: their Unique setting is the one thing of them a person changes, so a row whose Unique
+ * differs from its saved one is a change of its settings. Only a row a save sends counts
+ * (`saves`, the save's own test), so a toggle no save would carry is never offered as one. Matched
+ * by name, the built-in rows' identity. The user fields' changes are `pendingChanges`', which
+ * leaves built-in rows out.
  */
 export function builtInChanges(
   saved: readonly BuilderField[],
-  current: readonly BuilderField[]
+  current: readonly BuilderField[],
+  saves: (field: BuilderField) => boolean
 ): PendingChange[] {
   return current.flatMap(field => {
-    if (!field.isSystem) return [];
+    if (!field.isSystem || !saves(field)) return [];
     const was = saved.find(row => row.isSystem && row.name === field.name);
     if (was === undefined) return [];
     return (was.advanced?.unique === true) === (field.advanced?.unique === true)

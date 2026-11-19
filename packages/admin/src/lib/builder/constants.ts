@@ -42,9 +42,7 @@ export const SYSTEM_FIELD_NAMES: string[] = DEFAULT_SYSTEM_FIELDS.map(
  * or `slug` is its own, shown, edited and saved as any other. The one table the Builder's loader,
  * its save and the template check all read, so no kind's own field is taken for a built-in one.
  */
-function builtInFieldsOf(
-  kind: SchemaTemplateKind
-): readonly BuilderField[] {
+function builtInFieldsOf(kind: SchemaTemplateKind): readonly BuilderField[] {
   return kind === "fieldGroup" ? [] : DEFAULT_SYSTEM_FIELDS;
 }
 
@@ -67,8 +65,15 @@ export function isAlwaysUniqueBuiltIn(
   return onCollection && field.isSystem === true && field.name === "slug";
 }
 
-/** Whether `field` is a built-in row of `kind` whose Unique the person chooses. */
-function choosesUnique(kind: SchemaTemplateKind, field: BuilderField): boolean {
+/**
+ * Whether `field` is a built-in row of `kind` whose Unique the person chooses: the one test the
+ * save (`builtInFieldsToSave`) and the pending changes both ask, so a toggle is counted as a change
+ * exactly where a save sends it.
+ */
+export function choosesBuiltInUnique(
+  kind: SchemaTemplateKind,
+  field: BuilderField
+): boolean {
   return (
     kind === "collection" &&
     field.isSystem === true &&
@@ -77,21 +82,35 @@ function choosesUnique(kind: SchemaTemplateKind, field: BuilderField): boolean {
 }
 
 /**
- * The built-in rows of `kind` as the entity stored them: one whose Unique the person chooses shows
- * it on where the entity stored that field unique. A save sends such a row back
- * (`builtInFieldsToSave`), so the setting survives a reload, and turning it off sends that.
+ * The built-in rows of `kind` as the entity stored them. One whose Unique the person chooses, where
+ * the entity stored a field of its name, is that stored field (`fromStored` converts it), every
+ * option of it kept, in the built-in row's place: a save that sends it back
+ * (`builtInFieldsToSave`) changes nothing of it but its Unique. Its Unique is shown on where stored
+ * on, and left unset otherwise, so a title never made unique is not sent.
  */
-export function builtInFieldsAsStored(
+export function builtInFieldsAsStored<
+  F extends { name?: string; unique?: boolean },
+>(
   kind: SchemaTemplateKind,
-  stored: readonly { name?: string; unique?: boolean }[]
+  stored: readonly F[],
+  fromStored: (field: F) => BuilderField
 ): readonly BuilderField[] {
   return builtInFieldsOf(kind).map(row => {
-    const storedUnique =
-      choosesUnique(kind, row) &&
-      stored.some(field => field.name === row.name && field.unique === true);
-    return storedUnique
-      ? { ...row, advanced: { ...row.advanced, unique: true } }
-      : row;
+    const declared = choosesBuiltInUnique(kind, row)
+      ? stored.find(field => field.name === row.name)
+      : undefined;
+    if (declared === undefined) return row;
+    const built = fromStored(declared);
+    // Unique is set below from what was stored: on, or left unset.
+    const advanced = { ...built.advanced };
+    delete advanced.unique;
+    return {
+      ...built,
+      id: row.id,
+      isSystem: true,
+      advanced:
+        declared.unique === true ? { ...advanced, unique: true } : advanced,
+    };
   });
 }
 
@@ -106,7 +125,8 @@ export function builtInFieldsToSave(
   fields: readonly BuilderField[]
 ): BuilderField[] {
   return fields.filter(
-    field => choosesUnique(kind, field) && field.advanced?.unique !== undefined
+    field =>
+      choosesBuiltInUnique(kind, field) && field.advanced?.unique !== undefined
   );
 }
 

@@ -22,7 +22,10 @@ import type {
   BuilderFieldsApi,
 } from "@admin/components/features/schema-builder/types";
 import { convertToBuilderField } from "@admin/lib/builder";
-import { builtInFieldsAsStored } from "@admin/lib/builder/constants";
+import {
+  builtInFieldsAsStored,
+  choosesBuiltInUnique,
+} from "@admin/lib/builder/constants";
 import { collectFieldIds } from "@admin/lib/builder/field-placement";
 import {
   builtInChanges,
@@ -224,7 +227,9 @@ export function useBuilderEntityState<TEntity>({
     // field group's own `title` or `slug` is shown, and saved, as any other field.
     // Each built-in row as stored: a title saved unique reloads with its Unique on.
     const stored = toFields(entity);
-    const builtIn = builtInFieldsAsStored(kind, stored);
+    const builtIn = builtInFieldsAsStored(kind, stored, field =>
+      convertToBuilderField(field, field.name)
+    );
     const builtInNames = builtIn.map(field => field.name);
     const userFields = stored.filter(f => !builtInNames.includes(f.name));
     const allFields = [
@@ -274,6 +279,10 @@ export function useBuilderEntityState<TEntity>({
     builder,
     originalFields,
     savedBuiltIns,
+    useCallback(
+      (field: BuilderField) => choosesBuiltInUnique(kind, field),
+      [kind]
+    ),
     originalSettings,
     changedSettings
   );
@@ -376,6 +385,8 @@ function useFieldPendingChanges(
   saved: readonly BuilderField[] | null,
   /** The built-in rows as loaded or last saved (`builtInChanges`). */
   savedBuiltIns: readonly BuilderField[],
+  /** Whether a save sends a built-in row: only those count as changes. */
+  savesBuiltIn: (field: BuilderField) => boolean,
   savedSettings: BuilderSettingsValues | null,
   changedSettings: readonly SettingChange[]
 ): BuilderPendingChanges {
@@ -386,11 +397,11 @@ function useFieldPendingChanges(
     () =>
       saved
         ? [
-            ...builtInChanges(savedBuiltIns, fields),
+            ...builtInChanges(savedBuiltIns, fields, savesBuiltIn),
             ...pendingChanges(saved, fields),
           ]
         : [],
-    [saved, savedBuiltIns, fields]
+    [saved, savedBuiltIns, savesBuiltIn, fields]
   );
   const marks = useMemo(
     () =>

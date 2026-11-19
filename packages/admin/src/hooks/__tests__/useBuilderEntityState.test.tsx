@@ -445,6 +445,57 @@ describe("a collection's title Unique", () => {
     expect(result.current.unsavedCount).toBe(0);
   });
 
+  it("keeps a stored title's own settings, changing only its Unique", () => {
+    // A title stored with settings of its own (a label, required): the row is that title, so a
+    // save that sends it back changes nothing of it but its Unique.
+    const storedTitle = {
+      ...definition("title"),
+      label: "Headline",
+      required: true,
+      unique: true,
+    };
+    const entity = {
+      slug: "posts",
+      name: "Post",
+      fields: [storedTitle, definition("body")],
+    };
+    const { result, builder, rerender } = setup(entity);
+    expect(titleOf(builder.api.fields)).toMatchObject({
+      label: "Headline",
+      isSystem: true,
+      advanced: { unique: true },
+    });
+    expect(result.current.unsavedCount).toBe(0);
+
+    act(() =>
+      builder.api.setFields(withUnique(builder.api.fields, "title", false))
+    );
+    rerender({ e: entity });
+
+    const saved = renderHook(() =>
+      useBuilderFieldActions(builder.api, "collection")
+    ).result.current.getValidatedFields();
+    expect(saved?.[0]).toMatchObject({
+      name: "title",
+      label: "Headline",
+      required: true,
+      unique: false,
+    });
+  });
+
+  it("counts no change for a Single's built-in Unique, which no save sends", () => {
+    const entity = { slug: "home", name: "Home", fields: [definition("body")] };
+    const { result, builder, rerender } = setup(entity, { kind: "single" });
+
+    act(() =>
+      builder.api.setFields(withUnique(builder.api.fields, "title", true))
+    );
+    rerender({ e: entity });
+
+    expect(result.current.unsavedCount).toBe(0);
+    expect(result.current.pending.changes).toEqual([]);
+  });
+
   it("never sends the slug, nor a Single's title", () => {
     const entity = {
       slug: "posts",
