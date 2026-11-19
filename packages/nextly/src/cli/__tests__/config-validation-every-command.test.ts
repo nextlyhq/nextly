@@ -62,6 +62,11 @@ const READ_ENTITIES: ReadonlyArray<readonly string[]> = [
   ["i18n:restore", "--collection", "notes"],
   ["workflow:stranded"],
   ["media", "reindex-usage"],
+  ["repair-columns"],
+  ["generate:types", "--check"],
+  ["db:sync", "--demote", "notes"],
+  ["plugins", "install", "@acme/seo"],
+  ["plugins", "uninstall", "@acme/seo"],
 ];
 
 /** Three problems in two collections: a slug with a space, a field named twice, a type nothing offers. */
@@ -217,6 +222,14 @@ describe("a project with no configuration file", () => {
     expect(ran.stderr).not.toContain("CONFIG_MISSING");
     expect(ran.status, ran.stderr).toBe(0);
   });
+
+  // A plugin's own rollback reads its migrations and no app entity, so it goes on without one; it
+  // ends for its own reason (no such plugin), never for the missing configuration.
+  it("is no reason for migrate:down --plugin to refuse", async () => {
+    const ran = await run(["migrate:down", "--plugin", "@acme/seo"]);
+
+    expect(ran.stderr).not.toContain("CONFIG_MISSING");
+  });
 });
 
 describe("an invalid configuration, saved while the development server runs", () => {
@@ -308,5 +321,92 @@ describe("a Builder entity the definition file lost, which a plugin extends", ()
       expect(ran.stderr, name).toContain("collection 'cases'");
       expect(ran.stderr, name).not.toContain("EXTEND_TARGET_UNKNOWN");
     }
+  }, 300_000);
+});
+
+describe("a Builder entity the definition file lost, which a code relationship names", () => {
+  // With no plugin configured, nothing resolves relation targets at load; a code relationship
+  // naming the lost entity is still that loss.
+  it("is refused as lost with no plugin configured", async () => {
+    writeFileSync(join(dir, "nextly.config.ts"), "export default {};\n");
+    const definitions = join(dir, "ui-schema.json");
+    writeFileSync(
+      definitions,
+      JSON.stringify({
+        collections: [
+          { slug: "cases", fields: [{ name: "rating", type: "number" }] },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+    exported.config = { db: { migrationsDir: "./migrations" } };
+    const first = await run(["migrate:create", "--name", "cases"]);
+    expect(first.status, first.stderr).toBe(0);
+
+    writeFileSync(
+      definitions,
+      JSON.stringify({ collections: [], singles: [], components: [] })
+    );
+    exported.config = {
+      db: { migrationsDir: "./migrations" },
+      collections: [
+        {
+          slug: "notes",
+          fields: [
+            { name: "body", type: "text" },
+            { name: "matter", type: "relationship", relationTo: "cases" },
+          ],
+        },
+      ],
+    };
+
+    const ran = await run(["generate:types"]);
+
+    expect(ran.status, ran.stderr).toBe(1);
+    expect(ran.stderr).toContain("BUILDER_DEFINITION_MISSING");
+    expect(ran.stderr).toContain("collection 'cases'");
+  }, 300_000);
+
+  // A definition file that cannot be read says nothing about what it holds: its own failure is
+  // the migrate commands' to report, and no entity is called lost for it.
+  it("is not called lost where the definition file cannot be read", async () => {
+    writeFileSync(join(dir, "nextly.config.ts"), "export default {};\n");
+    const definitions = join(dir, "ui-schema.json");
+    writeFileSync(
+      definitions,
+      JSON.stringify({
+        collections: [
+          { slug: "cases", fields: [{ name: "rating", type: "number" }] },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+    exported.config = { db: { migrationsDir: "./migrations" } };
+    const first = await run(["migrate:create", "--name", "cases"]);
+    expect(first.status, first.stderr).toBe(0);
+
+    writeFileSync(definitions, "{ not json");
+    exported.config = {
+      db: { migrationsDir: "./migrations" },
+      plugins: [
+        {
+          name: "@acme/seo",
+          version: "1.0.0",
+          nextly: "*",
+          contributes: {
+            extend: [
+              { target: "cases", fields: [{ name: "seoTitle", type: "text" }] },
+            ],
+          },
+        },
+      ],
+    };
+
+    const ran = await run(["generate:types"]);
+
+    expect(ran.status, ran.stderr).toBe(1);
+    expect(ran.stderr).not.toContain("BUILDER_DEFINITION_MISSING");
   }, 300_000);
 });

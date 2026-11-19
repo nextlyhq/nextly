@@ -97,9 +97,16 @@ import { consoleLogger } from "../../shared/types";
 import { bundleAndRequire } from "./config-bundler";
 
 /**
+ * What `readBuilderEntities` gives for a definition file it could not read: no entities, and,
+ * being this one object, told apart from a file that declares none, so nothing is called lost
+ * for a file whose content is unknown.
+ */
+const UNREAD_BUILDER_ENTITIES: BuilderEntities = Object.freeze({});
+
+/**
  * The Builder's entities from the app's ui-schema file, empty when there is none. A malformed file
  * is surfaced by migrate:create and migrate:check, which load it again; loading the configuration
- * for any other command does not fail on it.
+ * for any other command does not fail on it, and gets `UNREAD_BUILDER_ENTITIES`.
  */
 async function readBuilderEntities(
   projectRoot: string,
@@ -110,7 +117,7 @@ async function readBuilderEntities(
       await loadUiSchema({ projectRoot, uiSchemaFile })
     );
   } catch {
-    return {};
+    return UNREAD_BUILDER_ENTITIES;
   }
 }
 
@@ -119,13 +126,15 @@ async function readBuilderEntities(
  * newest snapshot records a Builder entity that neither the configuration nor the definition file
  * declares now. Asked where a plugin's extend or a relationship names a target nothing declares:
  * that target may be the entity the file lost, and restoring the file is then the fix. Returns
- * where nothing was lost, or where the snapshot cannot be read, which those commands report.
+ * where nothing was lost, or where the definition file or the snapshot cannot be read, which
+ * those commands report as what they are.
  */
 async function refuseLostBuilderDefinitions(
   projectRoot: string,
   config: SanitizedNextlyConfig,
   builderEntities: BuilderEntities
 ): Promise<void> {
+  if (builderEntities === UNREAD_BUILDER_ENTITIES) return;
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
     latest = await loadLatestSnapshot(
@@ -894,6 +903,25 @@ async function loadConfigInternal(
       // whose last plugin was removed holds nothing back, and its fields stop
       // being kept by the schema changes that read this (`kept-scope-fields`).
       publishWithheldScopeFields(new Map());
+
+      // Nor does a fold resolve relation targets. A code relationship naming a target that
+      // neither the configuration nor the Builder declares may name an entity the definition
+      // file lost, which is refused as that loss, as it is where a plugin is configured.
+      const builderEntities = await readBuilderEntities(
+        cwd,
+        config.db?.uiSchemaFile
+      );
+      const builderSlugs = new Set(builderCollectionSlugs(builderEntities));
+      const unknownTarget = collectUnresolvedRelationTargets(
+        config as unknown as NextlyServiceConfig
+      ).some(relation => !builderSlugs.has(relation.target));
+      if (unknownTarget) {
+        await refuseLostBuilderDefinitions(cwd, config, builderEntities);
+      }
+      builderFieldGroups = {
+        stored: builderEntities.components ?? [],
+        registered: builderEntities.components ?? [],
+      };
     }
 
     // Where each collection opens its entries, and each Single, judged as the
@@ -1048,13 +1076,25 @@ function publishConfiguredPostgresSchema(config: {
  * });
  * ```
  */
+/** The configuration file `options` names or the search finds, as `loadConfigInternal` resolves it. */
+function configFileFor(options: LoadConfigOptions): string | undefined {
+  const cwd = resolve(options.cwd ?? process.cwd());
+  return options.configPath
+    ? resolve(cwd, options.configPath)
+    : findConfigFile(cwd);
+}
+
 export async function loadConfig(
   options: LoadConfigOptions = {}
 ): Promise<LoadConfigResult> {
   // A cached default, given where no configuration file was found, is no answer to a caller that
   // refuses to act without one: it is asked again, and refused.
+  // Nor is one from another project, or from a file since removed: the file this call would
+  // read must be the one the cache holds.
   const cachedDefaultRefused =
-    options.missing === "refuse" && cachedConfig?.configPath === undefined;
+    options.missing === "refuse" &&
+    (cachedConfig?.configPath === undefined ||
+      cachedConfig.configPath !== configFileFor(options));
   if (cachedConfig && !options.watch && !cachedDefaultRefused) {
     debugLog(options, "Returning cached config");
     return cachedConfig;
