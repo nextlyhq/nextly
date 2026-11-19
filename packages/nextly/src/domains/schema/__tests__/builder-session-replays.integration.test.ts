@@ -70,10 +70,14 @@ async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
     vi.stubEnv("DB_DIALECT", "sqlite");
     _resetEnvCache();
     const dir = await mkdtemp(join(tmpdir(), "nextly-session-replay-"));
+    // The directory goes with an adapter that could not be made.
     const adapter = (await createAdapter({
       type: "sqlite",
       url: `file:${join(dir, "test.db")}`,
-    } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
+    } as Parameters<typeof createAdapter>[0]).catch(async (error: unknown) => {
+      await rm(dir, { recursive: true, force: true });
+      throw error;
+    })) as unknown as DrizzleAdapter;
     return {
       adapter,
       async close() {
@@ -89,15 +93,28 @@ async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
   vi.stubEnv("DB_DIALECT", dialect);
   _resetEnvCache();
   const server = await createAdapter({ type: dialect, url: serverUrl });
-  await server.executeQuery(createDatabaseStatement(dialect, name));
-  const url = new URL(serverUrl);
-  url.pathname = `/${name}`;
-  vi.stubEnv("DATABASE_URL", url.toString());
-  _resetEnvCache();
-  const adapter = (await createAdapter({
-    type: dialect,
-    url: url.toString(),
-  })) as unknown as DrizzleAdapter;
+  let adapter: DrizzleAdapter;
+  try {
+    await server.executeQuery(createDatabaseStatement(dialect, name));
+    const url = new URL(serverUrl);
+    url.pathname = `/${name}`;
+    vi.stubEnv("DATABASE_URL", url.toString());
+    _resetEnvCache();
+    adapter = (await createAdapter({
+      type: dialect,
+      url: url.toString(),
+    }).catch(async (error: unknown) => {
+      // The database made for a connection that failed is dropped with it.
+      await server
+        .executeQuery(dropDatabaseStatement(dialect, name))
+        .catch(() => {});
+      throw error;
+    })) as unknown as DrizzleAdapter;
+  } catch (error) {
+    // The server connection is released whatever step of the setup failed.
+    await server.disconnect().catch(() => {});
+    throw error;
+  }
   return {
     adapter,
     async close() {
@@ -204,8 +221,14 @@ interface SessionTools {
 
 for (const dialect of getConfiguredTestDialects()) {
   describe(`a Builder session's migrations replayed on an empty database — ${dialect}`, () => {
-    let database: CaseDatabase;
+    let database: CaseDatabase | undefined;
     let projectRoot: string;
+
+    /** This case's database, once its setup has made it. */
+    const source = (): CaseDatabase => {
+      if (database === undefined) throw new Error("no database for this case");
+      return database;
+    };
 
     beforeEach(async () => {
       projectRoot = await mkdtemp(join(tmpdir(), "nextly-session-app-"));
@@ -215,13 +238,18 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     afterEach(async () => {
-      clearServices();
-      clearCachedSnapshot();
-      await database.close();
-      vi.restoreAllMocks();
-      await rm(projectRoot, { recursive: true, force: true });
-      vi.unstubAllEnvs();
-      _resetEnvCache();
+      // The process is put back even where closing the database fails.
+      try {
+        clearServices();
+        clearCachedSnapshot();
+        await database?.close();
+      } finally {
+        database = undefined;
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+        _resetEnvCache();
+        await rm(projectRoot, { recursive: true, force: true });
+      }
     });
 
     /**
@@ -233,9 +261,13 @@ for (const dialect of getConfiguredTestDialects()) {
       consent: DataLossConsent,
       session: (tools: SessionTools) => Promise<void>
     ): Promise<void> {
+      const database = source();
       clearServices();
       _resetApplyDesiredSchemaForTests();
-      await createTestNextly({ adapter: database.adapter as never, ...boot });
+      const sessionNextly = await createTestNextly({
+        adapter: database.adapter as never,
+        ...boot,
+      });
       const { migrationsDir } = container.get<{ migrationsDir: string }>(
         "builderSaveSetup"
       );
@@ -307,11 +339,19 @@ for (const dialect of getConfiguredTestDialects()) {
       // Copied while the session's instance still owns the folder: the next boot replaces it.
       const folder = await mkdtemp(join(tmpdir(), "nextly-session-files-"));
       await cp(migrationsDir, folder, { recursive: true });
+      // The session's instance drains its work and lets its database go before the replay boots.
+      await sessionNextly.destroy();
       const replay = await openDatabase(dialect);
+      let replayNextly:
+        | Awaited<ReturnType<typeof createTestNextly>>
+        | undefined;
       try {
         clearServices();
         _resetApplyDesiredSchemaForTests();
-        await createTestNextly({ adapter: replay.adapter as never, ...boot });
+        replayNextly = await createTestNextly({
+          adapter: replay.adapter as never,
+          ...boot,
+        });
         const result = (await migrateCore({
           extensionSchema: undefined,
           dialect,
@@ -339,12 +379,19 @@ for (const dialect of getConfiguredTestDialects()) {
         ).toEqual([]);
         expect(await registryRows(replay.adapter)).toEqual(registry);
       } finally {
-        await replay.close();
-        await rm(folder, { recursive: true, force: true });
+        try {
+          await replayNextly?.destroy();
+        } finally {
+          await replay.close();
+          await rm(folder, { recursive: true, force: true });
+        }
       }
     }
 
-    /** A save of settings alone writes one file, naming `setting` of `slug`, and changes no table. */
+    /**
+     * A save of settings alone writes one file, naming `setting` of `slug`, whose UP writes the
+     * registry row and nothing else: no table changed, and no entry written.
+     */
     function expectSettingsOnly(
       written: WrittenFile[],
       slug: string,
@@ -353,9 +400,17 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(written.map(file => file.name)).toHaveLength(1);
       const [file] = written;
       expect(file?.text).toContain(`-- Settings: ${slug}: ${setting}`);
-      expect(
-        file?.statements.filter(line => /^\s*(CREATE|ALTER|DROP)\s/i.test(line))
-      ).toEqual([]);
+      const statements =
+        file?.statements.join("\n").split(/;\s*(?:\n|$)/) ?? [];
+      const writes = statements
+        .map(statement => statement.trim())
+        .filter(Boolean);
+      expect(writes.length, file?.text).toBeGreaterThan(0);
+      for (const statement of writes) {
+        expect(statement.slice(0, 120)).toMatch(
+          /^INSERT INTO [`"]?(dynamic_collections|dynamic_singles|dynamic_components)[`"]?[\s(]/i
+        );
+      }
     }
 
     it("replays creates, edits, a rename, settings saves and deletes of every kind to the same tables and registry rows", async () => {
@@ -808,6 +863,11 @@ for (const dialect of getConfiguredTestDialects()) {
             }
           )
         );
+        // The row already there holds the value given for it, not another one or none.
+        const [filled] = await db.adapter.executeQuery<{ tagline: unknown }>(
+          `SELECT ${q("tagline")} AS ${q("tagline")} FROM ${q("dc_posts")} WHERE ${q("id")} = 'p1'`
+        );
+        expect(filled?.tagline).toBe("Filled");
         const update = (body: unknown) =>
           save(() =>
             collections("updateCollection", { collectionName: "posts" }, body)
