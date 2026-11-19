@@ -957,6 +957,54 @@ describe.each(getConfiguredTestDialects())(
         return () => overtaken;
       }
 
+      // Its generation published the migration file and was then refused as overtaken, before
+      // naming the file to the save: the file is in the folder, so the record stays with it.
+      it("a save overtaken once its migration file was put in place keeps its record, the file left", async () => {
+        const restoreBounds = setWriterHoldBounds({
+          waitMs: 30_000,
+          leaseSeconds: 1,
+          renewMs: 600_000,
+        });
+        try {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const definitionBefore = definitionText();
+          const sqlBefore = filesBelow(join(basePath, HISTORY)).filter(f =>
+            f.endsWith(".sql")
+          );
+          // The save's migration file, just put in place.
+          const stalled = overtakeAt(
+            point =>
+              point.startsWith(`renamed:${join(basePath, HISTORY)}`) &&
+              point.endsWith(".sql")
+          );
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha")])
+            .catch((error: unknown) => error);
+          kill.stall = undefined;
+          expect(
+            stalled(),
+            "the save never stalled on its migration file"
+          ).toBe(true);
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+          expect(definitionText(), "the definition").toBe(definitionBefore);
+          expect(
+            filesBelow(join(basePath, HISTORY)).filter(
+              f => f.endsWith(".sql") && !sqlBefore.includes(f)
+            ),
+            "the save's migration file, left in place"
+          ).toHaveLength(1);
+          expect(await recordRow(t, path), "the record's row").toBeDefined();
+          expect(recordMarker(path), "the record's marker").toBeDefined();
+        } finally {
+          restoreBounds();
+        }
+      }, 300_000);
+
       it("a save overtaken before it put any file in place withdraws its record, with nothing written", async () => {
         const restoreBounds = setWriterHoldBounds({
           waitMs: 30_000,
