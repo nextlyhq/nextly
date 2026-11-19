@@ -450,6 +450,13 @@ function planClasses(
 /**
  * Variables: reused when identical, else added, renamed or pointed at one
  * here. Each new one's value names the others as the import writes them.
+ *
+ * A value is compared as the import would write it, which depends on where
+ * the variables it names land: a shadow naming a colour the import renames
+ * is not the shadow here naming this site's colour. So the variables are
+ * settled again against where the last round put each one, until no round
+ * moves any, and for no more rounds than there are variables: each round
+ * can only follow a rename the last one made.
  */
 function planTokens(
   listed: readonly SiteToken[],
@@ -457,31 +464,84 @@ function planTokens(
   ledger: Ledger,
   prefixes: Pick<TokenRemap, "from" | "to">
 ): ImportPlan["tokens"] {
+  const identities = listed.map(tokenIdentity);
+  const remapBy = (ids: ReadonlyMap<string, string>): TokenRemap => ({
+    ids,
+    identities,
+    ...prefixes,
+  });
+  // First as if every variable kept its own identity: its `var()`s under
+  // this site's prefix only.
+  let against: ReadonlyMap<string, string> = new Map();
+  let settled = settleTokens(listed, own, ledger, remapBy(against));
+  for (
+    let round = 0;
+    round < listed.length && !sameLandings(identities, settled.map, against);
+    round += 1
+  ) {
+    against = settled.map;
+    settled = settleTokens(listed, own, ledger, remapBy(against));
+  }
+  ledger.added.push(...settled.ledger.added);
+  ledger.reused.push(...settled.ledger.reused);
+  ledger.conflicts.push(...settled.ledger.conflicts);
+  const remap = remapBy(settled.map);
+  return {
+    remap,
+    // Their values point at the variables they name as those land here.
+    create: settled.create.map(token => ({
+      ...token,
+      values: remapTokenReferences(token.values, remap),
+    })),
+  };
+}
+
+/** Whether two maps land every identity at the same place. */
+function sameLandings(
+  identities: readonly string[],
+  left: ReadonlyMap<string, string>,
+  right: ReadonlyMap<string, string>
+): boolean {
+  return identities.every(
+    identity =>
+      (left.get(identity) ?? identity) === (right.get(identity) ?? identity)
+  );
+}
+
+/**
+ * One round of {@link planTokens}: each variable settled with its value
+ * compared as `compared` writes it, into a ledger of its own.
+ */
+function settleTokens(
+  listed: readonly SiteToken[],
+  own: readonly SiteToken[],
+  ledger: Ledger,
+  compared: TokenRemap
+): {
+  map: Map<string, string>;
+  create: SiteToken[];
+  ledger: Ledger;
+} {
+  const round: Ledger = {
+    added: [],
+    reused: [],
+    conflicts: [],
+    problems: [],
+    choiceOf: ledger.choiceOf,
+  };
   const map = new Map<string, string>();
   const create: SiteToken[] = [];
   const identities = new Set(own.map(tokenIdentity));
-  const listedIdentities = listed.map(tokenIdentity);
-  // A value as this site would write it, before any rename is known: its
-  // `var()`s under this site's prefix. Compared so, a shadow naming its
-  // colour is the same variable on two sites with different prefixes.
-  const underThisPrefix: TokenRemap = {
-    ids: new Map(),
-    identities: listedIdentities,
-    ...prefixes,
-  };
   for (const token of listed) {
     const identity = tokenIdentity(token);
     const clash = own.find(mine => tokenIdentity(mine) === identity);
     if (
       clash !== undefined &&
       clash.kind === token.kind &&
-      sameJsonValue(
-        clash.values,
-        remapTokenReferences(token.values, underThisPrefix)
-      )
+      sameJsonValue(clash.values, remapTokenReferences(token.values, compared))
     ) {
       map.set(identity, identity);
-      ledger.reused.push({
+      round.reused.push({
         kind: "token",
         fileId: identity,
         name: tokenDisplayLabel(token),
@@ -494,7 +554,7 @@ function planTokens(
       map.set(identity, identity);
       identities.add(identity);
       create.push(token);
-      ledger.added.push({
+      round.added.push({
         kind: "token",
         fileId: identity,
         name: tokenDisplayLabel(token),
@@ -507,7 +567,7 @@ function planTokens(
     const existing = { id: identity, name: tokenDisplayLabel(clash) };
     if (
       settle(
-        ledger,
+        round,
         "token",
         identity,
         tokenDisplayLabel(token),
@@ -525,15 +585,7 @@ function planTokens(
     delete (copy as { id?: string }).id;
     create.push(copy);
   }
-  const remap: TokenRemap = { ids: map, identities: listedIdentities, ...prefixes };
-  return {
-    remap,
-    // Their values point at the variables they name as those land here.
-    create: create.map(token => ({
-      ...token,
-      values: remapTokenReferences(token.values, remap),
-    })),
-  };
+  return { map, create, ledger: round };
 }
 
 /** Media: reused when identical, else uploaded, renamed or pointed at one here. */

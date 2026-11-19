@@ -14,14 +14,29 @@ import { tokenCustomProperty } from "./declarations";
 import { onlySiteProperties } from "./document-token-usage";
 
 /**
- * How a `var()` reference is matched in CSS text: its opening, spaces
- * allowed before the name, and the end of a whole name (a space, a
- * fallback's comma or the closing parenthesis). One grammar for finding the
- * properties CSS text names and for pointing them elsewhere, so a file
- * carries exactly the variables an import points.
+ * Text in which `var(` is no reference, so a match steps over it whole: a
+ * quoted string (closed, or running to the end of the text), a comment, and
+ * an unquoted `url()`, whose contents are a URL. A quoted `url("…")` is
+ * stepped over as its string.
  */
-const VAR_OPEN = "(var\\(\\s*)";
-const NAME_END = "(?=[\\s,)])";
+const LITERAL = [
+  String.raw`"(?:[^"\\]|\\[\s\S])*(?:"|$)`,
+  String.raw`'(?:[^'\\]|\\[\s\S])*(?:'|$)`,
+  String.raw`/\*[\s\S]*?(?:\*/|$)`,
+  String.raw`(?<![\w-])[uU][rR][lL]\(\s*[^\s)"'][^)]*\)`,
+].join("|");
+
+/**
+ * How a `var()` reference is matched in CSS text: outside a literal, its
+ * opening, spaces allowed before the name, and the end of a whole name (a
+ * space, a fallback's comma or the closing parenthesis). One grammar for
+ * finding the properties CSS text names and for pointing them elsewhere, so
+ * a file carries exactly the variables an import points. Group 1 is a
+ * literal stepped over, 2 the opening and 3 the name.
+ */
+function varPattern(names: string): RegExp {
+  return new RegExp(`(${LITERAL})|(var\\(\\s*)(${names})(?=[\\s,)])`, "g");
+}
 
 /**
  * The custom properties CSS text (a page's or a block's custom CSS) reads
@@ -31,9 +46,8 @@ const NAME_END = "(?=[\\s,)])";
 export function cssTextProperties(text: string): Set<string> {
   const found = new Set<string>();
   if (!text.includes("var(")) return found;
-  const pattern = new RegExp(`${VAR_OPEN}(--[a-z0-9-]+)${NAME_END}`, "g");
-  for (const match of text.matchAll(pattern)) {
-    if (match[2] !== undefined) found.add(match[2]);
+  for (const match of text.matchAll(varPattern("--[a-z0-9-]+"))) {
+    if (match[1] === undefined && match[3] !== undefined) found.add(match[3]);
   }
   return onlySiteProperties(found);
 }
@@ -98,17 +112,22 @@ function walkFor(remap: TokenRemap): (value: unknown) => unknown {
     .sort((left, right) => right.length - left.length)
     .map(escapeRegExp);
   const pattern =
-    names.length === 0
-      ? undefined
-      : new RegExp(`${VAR_OPEN}(${names.join("|")})${NAME_END}`, "g");
+    names.length === 0 ? undefined : varPattern(names.join("|"));
   const walk = (node: unknown): unknown => {
     if (typeof node === "string") {
-      return pattern === undefined
+      return pattern === undefined || !node.includes("var(")
         ? node
         : node.replace(
             pattern,
-            (_match, open: string, name: string) =>
-              `${open}${table.get(name) ?? name}`
+            (
+              match: string,
+              literal: string | undefined,
+              open: string,
+              name: string
+            ) =>
+              literal === undefined
+                ? `${open}${table.get(name) ?? name}`
+                : match
           );
     }
     if (Array.isArray(node)) return node.map(walk);

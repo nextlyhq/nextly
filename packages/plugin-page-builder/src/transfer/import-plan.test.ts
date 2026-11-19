@@ -297,6 +297,59 @@ describe("planImport", () => {
       ]);
     });
 
+    it("doesn't reuse a variable whose var() names one the import renames", () => {
+      const plan = planImport(
+        file({
+          tokenPrefix: "--acme-",
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#111111" } },
+            shadow("--acme-", "color-a"),
+          ],
+        }),
+        site({
+          // Another colour under the same name, and a shadow naming it: the
+          // file's shadow names the file's colour, renamed on the way in.
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#999999" } },
+            shadow("--site-", "color-a"),
+          ],
+        })
+      );
+      expect(plan.preview.reused).toEqual([]);
+      expect(
+        plan.preview.conflicts.map(entry => [entry.key, entry.renamedTo])
+      ).toEqual([
+        ["token:color.a", "color.a-2"],
+        ["token:shadow.card", "shadow.card-2"],
+      ]);
+      expect(
+        plan.tokens.create.map(token => [token.name, token.values.light])
+      ).toEqual([
+        ["color.a-2", "#111111"],
+        ["shadow.card-2", "0 0 4px var(--site-color-a-2)"],
+      ]);
+      // Pointed at this site's colour instead, the shadow is the same one.
+      const pointed = planImport(
+        file({
+          tokenPrefix: "--acme-",
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#111111" } },
+            shadow("--acme-", "color-a"),
+          ],
+        }),
+        site({
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#999999" } },
+            shadow("--site-", "color-a"),
+          ],
+        }),
+        { conflicts: { "token:color.a": "existing" } }
+      );
+      expect(pointed.preview.reused.map(entry => entry.fileId)).toEqual([
+        "shadow.card",
+      ]);
+    });
+
     it("writes a new variable's var() under this site's prefix, at the id each lands on", () => {
       const plan = planImport(
         file({

@@ -49,6 +49,31 @@ describe("remapTokenReferences", () => {
     expect(remapTokenReferences(text, acme)).toBe(text);
   });
 
+  it("leaves quoted strings, comments and an unquoted url() as written", () => {
+    const literals = [
+      'selector::after { content: "var(--acme-color-brand)"; }',
+      "selector::after { content: 'say var(--acme-space-m)'; }",
+      'selector { background: url("/i/var(--acme-color-brand).svg"); }',
+      "selector { background: url(/i/var(--acme-color-brand).svg); }",
+      "selector { background: URL(/i/var(--acme-color-brand).svg); }",
+      "/* was var(--acme-color-brand) */ selector { color: red; }",
+      'selector { content: "an \\"escaped var(--acme-space-m)" }',
+    ];
+    for (const text of literals) {
+      expect(remapTokenReferences(text, acme), text).toBe(text);
+      expect(cssTextProperties(text).size, text).toBe(0);
+    }
+    // A reference after a literal still is one.
+    expect(
+      remapTokenReferences(
+        '/* a */ selector { content: "x"; color: var(--acme-color-brand); }',
+        acme
+      )
+    ).toBe(
+      '/* a */ selector { content: "x"; color: var(--site-color-brand-2); }'
+    );
+  });
+
   it("points each reference once, never along a chain of renames", () => {
     const swap: TokenRemap = {
       ids: new Map([
