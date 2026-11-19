@@ -221,6 +221,18 @@ describe.each(LOCK_DIALECTS)(
         value: "b",
         archivedAt: now,
       });
+      await adapter.insert("nextly_translation_provenance", {
+        id: randomUUID(),
+        scopeKind: kind,
+        scopeSlug: slug,
+        entryId: "e1",
+        locale: "fr",
+        partState: "live",
+        fieldPath: "title",
+        valueFingerprint: "f",
+        origin: "machine",
+        writtenAt: now,
+      });
       await adapter.insert("permissions", {
         id: randomUUID(),
         name: `Read ${slug}`,
@@ -514,6 +526,9 @@ describe.each(LOCK_DIALECTS)(
       );
       expect(listing).toContain(
         `rows of Single "home" in nextly_i18n_archive (1 row): its archived translations`
+      );
+      expect(listing).toContain(
+        `rows of collection "posts" in nextly_translation_provenance (1 row): the record of where its translations came from`
       );
       expect(listing).not.toContain(`"pages"`);
     }, 180_000);

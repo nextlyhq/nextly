@@ -3,10 +3,10 @@
  * it from tables every entity shares, listed before the consent is asked.
  *
  * Deleting an entity removes its rows from each shared table: its field-group
- * values, its archived translations, its history rows (autosaves, version pins
- * and readers' "seen" markers), its readers' dashboard pins, the record of the
- * media its documents use, and its documents' review state where workflows
- * keep one. Each is listed as that entity's rows in that table, belonging to
+ * values, its archived translations and the record of where its translations
+ * came from, its history rows (autosaves, version pins and readers' "seen"
+ * markers), its readers' dashboard pins, the record of the media its documents
+ * use, and its documents' review state where workflows keep one. Each is listed as that entity's rows in that table, belonging to
  * its main table, so a consent naming the main table covers them and naming
  * the shared table still covers every deletion in it. The record of content
  * events is not among them: a deletion leaves those events in place.
@@ -70,6 +70,13 @@ const SHARED_TABLES: readonly SharedTable[] = [
     reason: "its archived translations",
     kindColumn: "entity_kind",
     slugColumn: "collection",
+  },
+  {
+    // Purged with the archive when the entity's translations are torn down.
+    table: "nextly_translation_provenance",
+    reason: "the record of where its translations came from",
+    kindColumn: "scope_kind",
+    slugColumn: "scope_slug",
   },
   {
     table: "nextly_versions",

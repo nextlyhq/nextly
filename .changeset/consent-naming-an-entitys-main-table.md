@@ -34,7 +34,8 @@ consent that names a collection's or Single's main table, the table its
 registry entry names, as covering the rest of that entity too. That means the
 other tables it owns (its translation table and its junction tables) and its
 rows in tables every entity shares: its field-group values, its archived
-translations, its autosaves, version pins and "seen" markers, its readers'
+translations and the record of where its translations came from, its
+autosaves, version pins and "seen" markers, its readers'
 dashboard pins, the record of the media its documents use, and its documents'
 review state. `--accept-data-loss=dc_posts` is enough for a migration that
 drops `dc_posts`, `dc_posts_locales` and its junction tables. Naming a shared
