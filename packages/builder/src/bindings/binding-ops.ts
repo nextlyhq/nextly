@@ -18,7 +18,7 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
-import type { BuilderOp } from "./op-vocabulary";
+import type { BuilderOp } from "../op-vocabulary";
 
 /** A node's bindings, as a fresh record; none when it has none. */
 function bindingsOf(node: {

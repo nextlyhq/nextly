@@ -7,6 +7,13 @@
  */
 import { NextlyError } from "../../../errors/nextly-error";
 import { upgradeWorkMoved } from "../../commands/upgrade";
+import {
+  cannotStart,
+  installFailed,
+  notRestored,
+  packagesCannotMove,
+  releaseUnknown,
+} from "../../commands/upgrade-packages/upgrade-refusals";
 import { CliError } from "../../errors";
 
 import type { ErrorCases } from "./types";
@@ -25,6 +32,45 @@ export const UPGRADE_CASES = {
       what: "Refusing to upgrade without a confirmed backup.",
       why: "No terminal is attached to ask whether the database is backed up, and `--confirm-backed-up` was not passed. Nothing was changed.",
       next: "Re-run with `--confirm-backed-up` (CI/non-TTY) after backing up your database.",
+    }),
+  // As `readProject` in `cli/commands/upgrade-packages/upgrade-packages.ts` refuses a folder with no manifest.
+  UPGRADE_CANNOT_START: () =>
+    cannotStart(
+      "No `package.json` could be read in /srv/app.",
+      "Run `nextly upgrade` in the project's folder, or name it with `--cwd`."
+    ),
+  // As `upgradePackages` refuses a release that is not published.
+  UPGRADE_RELEASE_UNKNOWN: () =>
+    releaseUnknown({
+      kind: "refused",
+      why: { reason: "not-published", given: "0.0.2-beta.9" },
+      wouldChoose: "0.0.2-alpha.79",
+      tags: [
+        { tag: "alpha", version: "0.0.2-alpha.79" },
+        { tag: "latest", version: "0.0.2-alpha.78" },
+      ],
+    }),
+  // As `assertEveryPackageCanMove` in the same module refuses before anything changes.
+  UPGRADE_PACKAGE_CANNOT_MOVE: () =>
+    packagesCannotMove("0.0.2-alpha.79", [
+      "@nextlyhq/plugin-seo is declared as `workspace:*`, which is not a version of the registry.",
+    ]),
+  // As `restoreAndFail` in the same module ends a run it put back.
+  UPGRADE_INSTALL_FAILED: () =>
+    installFailed({
+      manager: "pnpm",
+      version: "0.0.2-alpha.79",
+      output:
+        "ERR_PNPM_FETCH_500 GET https://registry.npmjs.org/@nextlyhq/admin: Internal Server Error",
+    }),
+  // As the same function ends a run whose second install did not put the packages back.
+  UPGRADE_NOT_RESTORED: () =>
+    notRestored({
+      manager: "pnpm",
+      version: "0.0.2-alpha.79",
+      output:
+        "ERR_PNPM_META_FETCH_FAIL GET https://registry.npmjs.org/nextly: getaddrinfo ENOTFOUND",
+      differing: ["nextly: 0.0.2-alpha.78 → 0.0.2-alpha.79"],
     }),
   // As `upgradeAction` ends a run for the database work the command used to do.
   UPGRADE_WORK_MOVED: () => upgradeWorkMoved(),

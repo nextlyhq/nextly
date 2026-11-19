@@ -39,6 +39,9 @@ export type ServiceType =
   | "schema"
   // A subject's content events read by subject; its handler owns its auth.
   | "contentEvents"
+  // A user's own external identities, listed and unlinked; gated by the
+  // user-management permissions the route gate asks.
+  | "identities"
   // What the roles screen shows for each collection and Single; its handler
   // owns its auth.
   | "rolesScreen";

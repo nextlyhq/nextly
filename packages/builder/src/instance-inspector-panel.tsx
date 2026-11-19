@@ -67,9 +67,9 @@ import {
 import type { LucideIcon } from "lucide-react";
 import * as React from "react";
 
-import { BindableField } from "./binding-controls";
-import { unbindOp } from "./binding-ops";
-import type { UnbindPlanAnswer } from "./binding-services";
+import { BindableField } from "./bindings/binding-controls";
+import { unbindOp } from "./bindings/binding-ops";
+import type { UnbindPlanAnswer } from "./bindings/binding-services";
 import { BlockCard, type CardVerbs } from "./block-card";
 import { CanvasPassageContext } from "./canvas/canvas-passage";
 import { markExposedParts } from "./canvas/exposed-outline";
