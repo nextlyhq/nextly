@@ -858,6 +858,63 @@ describe.each(getConfiguredTestDialects())(
         expect(definitionText()).toBe(definitionBefore);
       }, 300_000);
 
+      // A save stalled past its lease once its files are written, with another writer taking the
+      // folder meanwhile, no longer owns it: its definition is not written, and its files stay,
+      // since a migration file in the folder may already be applied.
+      it("a save overtaken before its definition leaves its files and the definition as they were", async () => {
+        const restoreBounds = setWriterHoldBounds({
+          waitMs: 30_000,
+          leaseSeconds: 1,
+          // Never inside the case: the stalled save is not renewing.
+          renewMs: 600_000,
+        });
+        try {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const definitionBefore = definitionText();
+          const sqlBefore = filesBelow(join(basePath, HISTORY)).filter(f =>
+            f.endsWith(".sql")
+          );
+          let overtaken = false;
+          kill.stall = async written => {
+            if (overtaken || !written.startsWith(join(basePath, DEFINITION))) {
+              return;
+            }
+            overtaken = true;
+            await new Promise(resolve => setTimeout(resolve, 1_200));
+            const other = await acquireWriterHold({
+              migrationsDir: join(basePath, HISTORY),
+              command: "migrate:create",
+              whenHeld: "wait",
+            });
+            await other.release();
+          };
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha")])
+            .catch((error: unknown) => error);
+          kill.stall = undefined;
+          expect(
+            overtaken,
+            "the save never stalled before its definition"
+          ).toBe(true);
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+          expect(definitionText(), "the definition").toBe(definitionBefore);
+          const left = filesBelow(join(basePath, HISTORY)).filter(
+            f => f.endsWith(".sql") && !sqlBefore.includes(f)
+          );
+          expect(left, "the save's migration file, left in place").toHaveLength(
+            1
+          );
+          expect(await recordRow(t, path), "the record's row").toBeDefined();
+        } finally {
+          restoreBounds();
+        }
+      }, 300_000);
+
       // A migration file put in place whose writing then fails, which its generation takes back
       // no further, is in the folder though the save never named it: the record stays.
       it("a failed write that leaves a migration file behind keeps the record", async () => {
