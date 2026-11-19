@@ -339,10 +339,11 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toBe(true);
 
-      // Offline, the history and the config agree, naming no legacy table.
+      // Offline, the history and the config agree: no drift, though the first file's own DOWN
+      // still names the legacy table it created.
       const checked = await check();
       expect(checked.exit, checked.said).toBeUndefined();
-      expect(checked.said).not.toMatch(/comp_fh_card/);
+      expect(checked.said).toMatch(/no drift/);
 
       // A code-first edit after the move is planned against the current names.
       loaded.config = configOf(WITH_SUBTITLE);
