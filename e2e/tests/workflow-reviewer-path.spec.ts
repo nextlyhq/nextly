@@ -14,6 +14,7 @@ import {
   expectEditorAccessible,
   expectStage,
   leading,
+  leaveNote,
   NOTES,
   openNote,
   publishControl,
@@ -151,7 +152,9 @@ test("a reviewer opens a submitted note at its changes and approves what they re
       "Published · Changes approved"
     );
 
-    // Approved, the publisher's Publish is no longer held.
+    // The reviewer leaves, so the publisher finds the note free; approved,
+    // the publisher's Publish is no longer held.
+    await leaveNote(reviewer, page, id);
     await openNote(publisher.page, id);
     const publish = publishControl(publisher.page);
     await expect(publish).toBeVisible();
