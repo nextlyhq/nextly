@@ -3969,6 +3969,20 @@ async function readAppHistory(args: AppHistoryArgs): Promise<
 }
 
 /**
+ * Those of `adopted`, the indexes a file adopts, that are on a table
+ * `before`, the snapshot before the file, holds: the ones the comparison of
+ * the database with the file's sides leaves out. One on a table the file
+ * itself creates stays in it.
+ */
+function adoptedOnTablesOf<T extends { table: string }>(
+  before: NextlySchemaSnapshot,
+  adopted: readonly T[]
+): T[] {
+  const held = new Set(before.tables.map(table => table.name.toLowerCase()));
+  return adopted.filter(index => held.has(index.table));
+}
+
+/**
  * Refuses a forked history of the app's migrations (`history-line.ts`),
  * read-only: the folder's snapshots, and the migrations the ledger records
  * applied where the database has a ledger.
@@ -5105,11 +5119,7 @@ export async function runFileMigrations(args: {
         // creates a table an earlier one of the merge made.
         live: withoutAdoptedIndexes(
           await introspectLiveSnapshot(db, dialect, managed),
-          adoption.adopted.filter(index =>
-            before.tables.some(
-              table => table.name.toLowerCase() === index.table
-            )
-          )
+          adoptedOnTablesOf(before, adoption.adopted)
         ),
         contributions: mergeContributions(
           beforeContributions,
