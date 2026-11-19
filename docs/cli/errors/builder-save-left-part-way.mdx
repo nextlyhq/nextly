@@ -1,0 +1,30 @@
+---
+title: BUILDER_SAVE_LEFT_PART_WAY
+description: "A Builder save was left part-way, so the command refused: the project's migrations do not describe the database until the save is settled."
+---
+
+## Cause
+
+A Builder save was left part-way, so the command refused: the project's migrations do not describe the database until the save is settled.
+
+A Schema Builder save records that it is in progress before its first write, and clears that record once its outcome is recorded. A save whose process stopped partway through (killed, crashed, or stopped at a step it could not finish) leaves the record standing. Its definition, migration files and database may then disagree.
+
+While such a record stands, the commands that act on the migrations refuse rather than run from a state the save may have left half-written:
+
+- `nextly migrate` refuses on the record kept in the database.
+- `nextly migrate:check` and `nextly migrate:create`, which connect to no database, refuse on the record's file in the project's `.nextly/` folder, written on this machine for this database.
+
+A record written on another machine, or for another database, gives one line of notice instead of refusing.
+
+## Fix
+
+Start the app in development (`next dev`) on the project where the save was made. Its start settles the save from the database as it stands, then clears the record. Run the command again afterwards.
+
+## Example
+
+```text
+✗ A Builder save was left part-way, so the database does not match its migrations yet.
+  Why:  Left part-way: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio.
+  Next: To settle it, start the app in development (`next dev`) on this project: its start settles the save.
+  Docs: https://nextlyhq.com/docs/cli/errors/builder-save-left-part-way  (BUILDER_SAVE_LEFT_PART_WAY)
+```
