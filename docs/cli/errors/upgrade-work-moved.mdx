@@ -12,6 +12,7 @@ Earlier releases used `nextly upgrade` to bring an existing database up to date.
 ## Fix
 
 - Replace `nextly upgrade` in your deploy with `nextly migrate`. Where no terminal is attached, pass `--backup-confirmed` once the database is backed up; the flag is ignored when there is nothing to change.
+- A development database with no migrations gets the same work from `nextly db:sync`.
 - If a start or `nextly migrate` names a date column with a time zone, run `nextly i18n:convert-zoned-dates` once the release serves every instance.
 
 ## Example
