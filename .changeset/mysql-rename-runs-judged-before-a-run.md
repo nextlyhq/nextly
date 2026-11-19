@@ -29,5 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-
 On MySQL, `nextly migrate` now reads a column rename that `migrate:create` wrote as a prepared run as the rename it is. A rename onto a column the table already has is refused before any statement of the run. A unique index after such a rename is checked against the column's values before the rename runs.

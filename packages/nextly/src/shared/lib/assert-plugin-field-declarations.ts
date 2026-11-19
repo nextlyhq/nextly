@@ -78,10 +78,15 @@ export function fieldDeclarationIssues(
   config: SchemaLikeConfig,
   entityPath: EntityPath = bySlug,
   /**
-   * Whether a registered type's own option rules are asked too. A reader that also runs each
-   * entity's validator, which asks them, leaves them out so one problem is reported once.
+   * What is judged besides a type nothing offers. `options`: a registered type's own option
+   * rules. `missingType`: a field whose type is absent or empty. A reader that also runs each
+   * entity's validator, which judges both (`FIELD_TYPE_REQUIRED` for the second), leaves them out
+   * so one problem is reported once.
    */
-  judge: { options: boolean } = { options: true }
+  judge: { options: boolean; missingType?: boolean } = {
+    options: true,
+    missingType: true,
+  }
 ): FieldDeclarationIssue[] {
   const errors: FieldDeclarationIssue[] = [];
 
@@ -96,6 +101,9 @@ export function fieldDeclarationIssues(
       };
       const at =
         typeof named.name === "string" ? `${basePath}.${named.name}` : basePath;
+
+      // No type at all is the entity's own rule's to name, where the reader runs it.
+      if (!named.type && judge.missingType === false) continue;
 
       // The `define*` validators cannot answer this: they run while the config
       // bundle is evaluated, before `contributes.fieldTypes`, so every
