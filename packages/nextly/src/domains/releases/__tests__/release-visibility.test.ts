@@ -10,11 +10,73 @@ import {
   NO_RELEASE_VISIBILITY,
   createReleaseVisibility,
 } from "../release-visibility";
+import type { DrainMemberRow, ReleaseRow } from "../releases-repository";
 
 const QUERY = {
   scopeKind: "collection" as const,
   scopeSlug: "posts",
   now: new Date("2026-01-01T00:00:00.000Z"),
+};
+const PAST = new Date("2025-12-01T00:00:00.000Z");
+
+/** A release due before the query's instant. */
+function release(id: string): ReleaseRow {
+  return {
+    id,
+    title: id,
+    description: null,
+    scheduledAt: PAST,
+    timezone: "UTC",
+    state: "scheduled",
+    kind: "release",
+    publishedAt: null,
+    createdBy: "owner",
+    createdAt: PAST,
+    updatedAt: PAST,
+    revision: 0,
+  };
+}
+
+/** A member of `releaseId` acting on a post. */
+function member(
+  releaseId: string,
+  entryId: string,
+  action: "publish" | "unpublish"
+): DrainMemberRow {
+  return {
+    id: `${releaseId}-${entryId}`,
+    releaseId,
+    scopeKind: "collection",
+    scopeSlug: "posts",
+    entryId,
+    locale: null,
+    action,
+    memberKey: `${releaseId}-${entryId}`,
+    singleSlot: null,
+    appliedRevision: null,
+    createdBy: "author",
+    createdAt: PAST,
+  };
+}
+
+/** Nothing due to plan: what the first cases' reads never reach. */
+const NOTHING_DUE = {
+  findDueReleases: async () => [],
+  listMembersOf: async () => [],
+};
+
+/**
+ * Two due releases: r1 publishes e1; r2 publishes e2 and takes e3 down. Each is a component of
+ * its own, sharing no document.
+ */
+const TWO_RELEASES = {
+  findDueDecisions: async () => ({ reveal: ["e1", "e2"], hide: ["e3"] }),
+  findDueReleases: async () => [release("r1"), release("r2")],
+  listMembersOf: async () => [
+    member("r1", "e1", "publish"),
+    member("r2", "e2", "publish"),
+    member("r2", "e3", "unpublish"),
+  ],
 };
 
 describe("createReleaseVisibility", () => {
@@ -28,7 +90,7 @@ describe("createReleaseVisibility", () => {
     }));
     const visibility = createReleaseVisibility({
       cache: { mayHaveDue: async () => false },
-      repository: { findDueDecisions },
+      repository: { findDueDecisions, ...NOTHING_DUE },
     });
 
     expect(await visibility.decisions(QUERY)).toEqual(NO_DECISIONS);
@@ -44,7 +106,7 @@ describe("createReleaseVisibility", () => {
     }));
     const visibility = createReleaseVisibility({
       cache: { mayHaveDue: async () => true },
-      repository: { findDueDecisions },
+      repository: { findDueDecisions, ...NOTHING_DUE },
     });
 
     // BOTH directions reach the caller. A seam that forwarded only `reveal`
@@ -59,9 +121,9 @@ describe("createReleaseVisibility", () => {
 });
 
 describe("createReleaseVisibility with a hold on going live", () => {
-  it("leaves out a document it would reveal that is held back, and asks only about those", async () => {
-    // A reader in the window between a release's moment and its run must not be shown what the
-    // run will refuse to publish.
+  it("leaves out every decision of a release whose publish is held, as the run refuses it whole", async () => {
+    // A reader in the window between a release's moment and its run must be shown neither what
+    // the run will refuse to publish nor the takedown it refuses beside it.
     const held = vi.fn(
       async (documents: readonly { id: string; entryId: string }[]) =>
         new Set(
@@ -70,19 +132,39 @@ describe("createReleaseVisibility with a hold on going live", () => {
     );
     const visibility = createReleaseVisibility({
       cache: { mayHaveDue: async () => true },
-      repository: {
-        findDueDecisions: async () => ({ reveal: ["e1", "e2"], hide: ["e3"] }),
-      },
+      repository: TWO_RELEASES,
       hold: () => ({ held }),
     });
 
     expect(await visibility.decisions(QUERY)).toEqual({
       reveal: ["e1"],
-      hide: ["e3"],
+      hide: [],
     });
-    expect(held.mock.calls.map(call => call[0].map(d => d.entryId))).toEqual([
-      ["e1", "e2"],
-    ]);
+    // Each release's publishes asked once, a takedown never.
+    expect(
+      held.mock.calls.map(call => call[0].map(d => d.entryId)).sort()
+    ).toEqual([["e1"], ["e2"]]);
+  });
+
+  it("projects nothing of a release whose question fails, and fails no read", async () => {
+    // The run writes nothing of it and asks again; a read shows it as it stands meanwhile.
+    const visibility = createReleaseVisibility({
+      cache: { mayHaveDue: async () => true },
+      repository: TWO_RELEASES,
+      hold: () => ({
+        held: async documents => {
+          if (documents.some(d => d.entryId === "e2")) {
+            throw new Error("connection reset");
+          }
+          return new Set<string>();
+        },
+      }),
+    });
+
+    expect(await visibility.decisions(QUERY)).toEqual({
+      reveal: ["e1"],
+      hide: [],
+    });
   });
 
   it("never asks while nothing would be revealed, so a takedown is never held", async () => {
@@ -91,6 +173,8 @@ describe("createReleaseVisibility with a hold on going live", () => {
       cache: { mayHaveDue: async () => true },
       repository: {
         findDueDecisions: async () => ({ reveal: [], hide: ["e3"] }),
+        findDueReleases: async () => [release("r2")],
+        listMembersOf: async () => [member("r2", "e3", "unpublish")],
       },
       hold: () => ({ held }),
     });

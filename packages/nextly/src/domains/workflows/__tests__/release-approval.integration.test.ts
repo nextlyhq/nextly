@@ -484,6 +484,25 @@ describe.each(getConfiguredTestDialects())(
       expect(await visiblePages(t)).not.toContain(page);
     });
 
+    it("shows a reader none of a due release one of whose members is held, as its run writes none of it", async () => {
+      const t = await boot(dialect);
+      const kept = await doc(t, "pages");
+      const withdrawn = await doc(t, "pages");
+      await approve(t, "pages", kept);
+      await approve(t, "pages", withdrawn);
+      await arrange(t, [publishPage(kept), publishPage(withdrawn)], PAST);
+      // Due and approved: the read shows both before the run writes them.
+      expect(await visiblePages(t)).toEqual(
+        expect.arrayContaining([kept, withdrawn])
+      );
+
+      await withdrawSilently(t, "pages", withdrawn);
+
+      const visible = await visiblePages(t);
+      expect(visible).not.toContain(withdrawn);
+      expect(visible).not.toContain(kept);
+    });
+
     it("refuses Publish now for an unapproved member, even to a person who may publish without review", async () => {
       const t = await boot(dialect);
       const page = await doc(t, "pages");

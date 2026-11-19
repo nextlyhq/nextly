@@ -26,7 +26,9 @@
 
 import type { VersionScopeKind } from "../../schemas/versions/types";
 
+import { actionsByComponent, componentHold } from "./component-hold";
 import { goingLiveHold, type GoingLiveHold } from "./going-live-hold";
+import { planReleaseMaterialisation } from "./plan-release-materialisation";
 import type { DueCheck } from "./release-read";
 import { NO_DECISIONS } from "./release-scope";
 import type { ReleaseDecisions } from "./release-scope";
@@ -53,6 +55,9 @@ export interface ReleaseVisibility {
 /** The lookup half, satisfied by `ReleasesRepository`. */
 export interface RevealSource {
   findDueDecisions(input: RevealQuery): Promise<ReleaseDecisions>;
+  /** The due releases and their members, as the run reads them to plan (see `withoutHeld`). */
+  findDueReleases: ReleasesRepository["findDueReleases"];
+  listMembersOf: ReleasesRepository["listMembersOf"];
 }
 
 /**
@@ -85,35 +90,63 @@ export function createReleaseVisibility(deps: {
       // against the members table on every read of every collection.
       if (!(await deps.cache.mayHaveDue(query.now))) return NO_DECISIONS;
       const due = await deps.repository.findDueDecisions(query);
-      return withoutHeld(due, query, hold());
+      return withoutHeld(due, query, hold(), deps.repository);
     },
   };
 }
 
 /**
- * `due` without the documents it would reveal that are held back from going live now: the run
- * refuses to publish those (`notApproved` in `apply-due-releases`), so a read in the window
- * between the release's moment and its run must not show them either. Asked only of what would be
- * revealed; a withdrawal is never held, as a document coming down is never blocked.
+ * `due` without the documents of a component the run refuses whole. The run writes a component
+ * of due releases all or nothing, and refuses all of it when a document it would publish is held
+ * back from going live (`componentHold`), so a read in the window between the moment and the run
+ * must project none of that component either: neither the publishes nor the takedowns beside
+ * the held document, which the run will not make.
+ *
+ * Planned as the run plans (`planReleaseMaterialisation`) and asked as the run asks, so the two
+ * cannot disagree. Read only when this scope has a decision to make, and only while something is
+ * due, which the cheap check above already established.
  */
 async function withoutHeld(
   due: ReleaseDecisions,
   query: RevealQuery,
-  hold: GoingLiveHold
+  hold: GoingLiveHold,
+  repository: RevealSource
 ): Promise<ReleaseDecisions> {
-  if (due.reveal.length === 0) return due;
-  const held = await hold.held(
-    due.reveal.map(entryId => ({
-      id: entryId,
-      scopeKind: query.scopeKind,
-      scopeSlug: query.scopeSlug,
-      entryId,
-    }))
-  );
-  if (held.size === 0) return due;
+  if (due.reveal.length === 0 && due.hide.length === 0) return due;
+  const releases = await repository.findDueReleases(query.now);
+  if (releases.length === 0) return due;
+  const plan = planReleaseMaterialisation({
+    releases: releases.map(release => ({
+      id: release.id,
+      // Due releases always carry an instant; the run narrows the same way.
+      scheduledAt: release.scheduledAt ?? query.now,
+      revision: release.revision,
+    })),
+    members: await repository.listMembersOf(
+      releases.map(release => release.id)
+    ),
+    now: query.now,
+  });
+  const decided = new Set([...due.reveal, ...due.hide]);
+  const withheld = new Set<string>();
+  for (const actions of actionsByComponent(plan)) {
+    const here = actions.filter(
+      action =>
+        action.ref.scopeKind === query.scopeKind &&
+        action.ref.scopeSlug === query.scopeSlug &&
+        decided.has(action.ref.entryId)
+    );
+    if (here.length === 0) continue;
+    if (
+      (await componentHold(documents => hold.held(documents), actions)) !== null
+    ) {
+      for (const action of here) withheld.add(action.ref.entryId);
+    }
+  }
+  if (withheld.size === 0) return due;
   return {
-    reveal: due.reveal.filter(entryId => !held.has(entryId)),
-    hide: due.hide,
+    reveal: due.reveal.filter(entryId => !withheld.has(entryId)),
+    hide: due.hide.filter(entryId => !withheld.has(entryId)),
   };
 }
 

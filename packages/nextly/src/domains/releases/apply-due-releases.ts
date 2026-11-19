@@ -66,6 +66,11 @@ import { getNextlyLogger } from "../../observability/logger";
 import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
 
+import {
+  actionsByComponent,
+  componentHold,
+  type ComponentHold,
+} from "./component-hold";
 import { asReleaseRun } from "./early-stop";
 import { goingLiveHold, type GoingLiveDocument } from "./going-live-hold";
 import {
@@ -317,7 +322,7 @@ async function stopHopelessReleases(
   outcomes: readonly MaterialisationOutcome[],
   plannedInstants: ReadonlyMap<string, Date>
 ): Promise<number> {
-  const permanent = permanentlyBrokenReleases(outcomes);
+  const permanent = permanentlyBrokenReleases(outcomes, begunReleases(plan));
   if (permanent.size === 0) return 0;
 
   // ONE CALL PER COMPONENT, and the component is the unit of atomicity. The
@@ -379,15 +384,42 @@ async function withinComponent(
   }
 }
 
-/** The releases this pass proved can never be applied as they stand. */
+/**
+ * The releases this pass proved can never be applied as they stand.
+ *
+ * A hold (`NOT_APPROVED`) on a component an earlier pass already began is the
+ * exception: that pass was cut off after writing some of it, those documents
+ * are live, and stopping the release would leave it so for good. Retried
+ * instead, the release stays scheduled, a read projects nothing more of it, and
+ * the next pass after the approval returns writes the rest.
+ */
 function permanentlyBrokenReleases(
-  outcomes: readonly MaterialisationOutcome[]
+  outcomes: readonly MaterialisationOutcome[],
+  begun: ReadonlySet<string>
 ): Set<string> {
   return new Set(
     outcomes
-      .filter(o => o.failure !== null && !RETRY_COULD_HELP[o.failure])
+      .filter(
+        o =>
+          o.failure !== null &&
+          !RETRY_COULD_HELP[o.failure] &&
+          !(o.failure === "NOT_APPROVED" && begun.has(o.releaseId))
+      )
       .map(o => o.releaseId)
   );
+}
+
+/** The releases of each component an earlier pass already wrote part of. */
+function begunReleases(
+  plan: ReturnType<typeof planReleaseMaterialisation>
+): Set<string> {
+  const begun = new Set<string>();
+  for (const [index, actions] of actionsByComponent(plan).entries()) {
+    if (actions.some(action => action.applied)) {
+      for (const id of plan.overlappingReleases[index] ?? []) begun.add(id);
+    }
+  }
+  return begun;
 }
 
 export interface MaterialisationOutcome {
@@ -619,49 +651,13 @@ async function applyOne(
 }
 
 /**
- * Why a component may not go live now: some of the documents it would publish are held back by
- * what governs publishing beyond the release's own checks (`notApproved`), or asking failed.
+ * What the run asks of the documents a component would publish (`notApproved`): the registered
+ * hold when left out, the one a read's projection of a due release asks too.
  */
-type ComponentHold =
-  | { failure: "NOT_APPROVED"; held: ReadonlySet<string> }
-  | { failure: "APPROVAL_CHECK_FAILED"; detail: string };
-
-/**
- * Whether a component may go live, asked once for every document it would publish and before
- * any of it is written; null when none is held. Asked per component rather than per action
- * because a component is applied whole: a hold found on its third document after the first two
- * were written would stop the release with those two live and the rest never applied.
- *
- * Only a publish not yet applied is asked; a document coming down is never held. Never a
- * rejection, for the reason {@link scheduleRefusal} gives: a question that fails is recorded on
- * each action and retried by the next pass rather than ending this one.
- */
-async function componentHold(
-  deps: ApplyDueReleasesDeps,
-  actions: readonly MaterialisationAction[]
-): Promise<ComponentHold | null> {
-  const going = actions.filter(
-    action => action.effect === "publish" && !action.applied
-  );
-  if (going.length === 0) return null;
-  const ask =
-    deps.notApproved ?? (documents => goingLiveHold().held(documents));
-  try {
-    const answered = await ask(
-      going.map(action => ({
-        id: action.memberId,
-        scopeKind: action.ref.scopeKind,
-        scopeSlug: action.ref.scopeSlug,
-        entryId: action.ref.entryId,
-      }))
-    );
-    const held = new Set(
-      going.map(action => action.memberId).filter(id => answered.has(id))
-    );
-    return held.size === 0 ? null : { failure: "NOT_APPROVED", held };
-  } catch (error) {
-    return { failure: "APPROVAL_CHECK_FAILED", detail: messageOf(error) };
-  }
+function askHeld(
+  deps: ApplyDueReleasesDeps
+): (documents: readonly GoingLiveDocument[]) => Promise<ReadonlySet<string>> {
+  return deps.notApproved ?? (documents => goingLiveHold().held(documents));
 }
 
 /**
@@ -924,6 +920,7 @@ async function applyWithinBudget(
     (a, b) => rank(a.releaseId) - rank(b.releaseId)
   );
   const startedComponents = new Set<number>();
+  const byComponent = actionsByComponent(plan);
   // Each started component's hold, asked before its first write (`componentHold`).
   const holds = new Map<number, ComponentHold | null>();
   const applied = new Set<string>();
@@ -947,12 +944,7 @@ async function applyWithinBudget(
       startedComponents.add(component);
       holds.set(
         component,
-        await componentHold(
-          deps,
-          ordered.filter(
-            other => (componentOf.get(other.releaseId) ?? -1) === component
-          )
-        )
+        await componentHold(askHeld(deps), byComponent[component] ?? [])
       );
     }
     applied.add(action.releaseId);
