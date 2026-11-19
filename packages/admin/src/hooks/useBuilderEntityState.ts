@@ -279,10 +279,7 @@ export function useBuilderEntityState<TEntity>({
     builder,
     originalFields,
     savedBuiltIns,
-    useCallback(
-      (field: BuilderField) => choosesBuiltInUnique(kind, field),
-      [kind]
-    ),
+    kind,
     originalSettings,
     changedSettings
   );
@@ -385,8 +382,8 @@ function useFieldPendingChanges(
   saved: readonly BuilderField[] | null,
   /** The built-in rows as loaded or last saved (`builtInChanges`). */
   savedBuiltIns: readonly BuilderField[],
-  /** Whether a save sends a built-in row: only those count as changes. */
-  savesBuiltIn: (field: BuilderField) => boolean,
+  /** The entity's kind, which decides which built-in rows a save sends: only those count. */
+  kind: SchemaTemplateKind,
   savedSettings: BuilderSettingsValues | null,
   changedSettings: readonly SettingChange[]
 ): BuilderPendingChanges {
@@ -397,11 +394,13 @@ function useFieldPendingChanges(
     () =>
       saved
         ? [
-            ...builtInChanges(savedBuiltIns, fields, savesBuiltIn),
+            ...builtInChanges(savedBuiltIns, fields, field =>
+              choosesBuiltInUnique(kind, field)
+            ),
             ...pendingChanges(saved, fields),
           ]
         : [],
-    [saved, savedBuiltIns, savesBuiltIn, fields]
+    [saved, savedBuiltIns, kind, fields]
   );
   const marks = useMemo(
     () =>
