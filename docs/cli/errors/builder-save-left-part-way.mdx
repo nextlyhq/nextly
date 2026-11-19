@@ -9,7 +9,7 @@ A Builder save was left part-way, so the command refused: the project's migratio
 
 A Schema Builder save records that it is in progress before its first write, and clears that record once its outcome is recorded. A save whose process stopped partway through (killed, crashed, or stopped at a step it could not finish) leaves the record standing. Its definition, migration files and database may then disagree.
 
-While such a record stands, the commands that act on the migrations refuse rather than run from a state the save may have left half-written:
+A command that checks for such a record refuses rather than run from a state the save may have left half-written:
 
 - `nextly migrate` refuses on the record kept in the database.
 - `nextly migrate:check` and `nextly migrate:create`, which connect to no database, refuse on the record's file in the project's `.nextly/` folder, written on this machine for this database.
@@ -18,7 +18,14 @@ A record written on another machine, or for another database, gives one line of 
 
 ## Fix
 
-Start the app in development (`next dev`) on the project where the save was made. Its start settles the save from the database as it stands, then clears the record. Run the command again afterwards.
+First check that no Builder save is running. Then check that the project's definition (`ui-schema.json`) and its migration files describe the database as it stands, and settle any difference by hand. Then remove the record in both places it is kept:
+
+- the row `builder-save-in-progress:<kind>:<slug>` in the database's `nextly_meta` table;
+- the file `.nextly/save-in-progress/<kind>-<slug>-<id>.json` in the project.
+
+Here `<kind>` is `collection`, `single` or `fieldGroup`, and `<slug>` is the slug of the entity the save was for. Run the command again afterwards.
+
+A later release settles such a save automatically when the app starts in development.
 
 ## Example
 
