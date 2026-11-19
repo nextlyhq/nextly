@@ -405,7 +405,7 @@ export async function writeCollectionSave(
      * partly run, and recorded applied nowhere, so the next `nextly migrate`
      * names them rather than the database holding a change no file records.
      */
-    appliedBy?: () => Promise<void | "partly-applied">;
+    appliedBy?: () => Promise<void | "partly-applied" | "unchanged">;
     /**
      * Outside development, the change made here once its files are written,
      * as a field group's or a Single's own DDL makes it (a collection's
@@ -486,11 +486,18 @@ async function writeCollectionSaveOnce(
           deps.adapter.getDrizzle()
         );
         const applied = await options.appliedBy();
-        pushed = true;
+        // `"unchanged"`: nothing was pushed (an update of settings alone), so a failure recording
+        // the files leaves nothing applied, and they are withdrawn as before any change.
+        pushed = applied !== "unchanged";
         if (applied === "partly-applied") {
           return await afterPartWayPush(deps, save, written, options.onSettled);
         }
-        await recordWhatWasPushed(deps, written, options.inLastTransaction);
+        await recordWhatWasPushed(
+          deps,
+          written,
+          options.inLastTransaction,
+          pushed
+        );
       } else if (deps.applies) {
         // A translated entity's file archives the languages it takes out of translation into
         // `nextly_i18n_archive`, which a database `nextly migrate` has not prepared lacks. Made
@@ -3457,7 +3464,9 @@ function withoutKeptTranslatedColumns(
 async function recordWhatWasPushed(
   deps: CollectionSaveDeps,
   written: WrittenSave,
-  inLastTransaction?: () => Promise<void>
+  inLastTransaction: (() => Promise<void>) | undefined,
+  /** Whether the push changed the database; false for one that pushed nothing. */
+  changed: boolean
 ): Promise<void> {
   const units = await verifiedUnits(deps, written.files, written.table);
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -3471,6 +3480,8 @@ async function recordWhatWasPushed(
       await inLastTransaction?.();
     });
   } catch (error) {
+    // Nothing was pushed: the caller withdraws the files, as for a failure before any change.
+    if (!changed) throw error;
     // The push committed before this: the database holds the change, and nothing records it, so
     // the files stay, named with the steps that finish it.
     written.started.left();

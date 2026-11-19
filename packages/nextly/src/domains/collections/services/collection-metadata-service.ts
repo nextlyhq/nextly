@@ -570,7 +570,16 @@ export class CollectionMetadataService extends BaseService {
   ): Promise<MetadataServiceResult | undefined> {
     // A push that fails after changing the database keeps the update's files, recorded applied
     // nowhere, and its failure tells the admin so; one that fails before withdraws them.
+    // An update with no push (settings only) changes no table, so a failure recording it leaves
+    // nothing applied: the writer withdraws its files as before any change (`"unchanged"`).
     const pushed = partWayPush(push ?? (() => Promise.resolve()));
+    const appliedBy =
+      push === undefined
+        ? async () => {
+            await pushed.appliedBy();
+            return "unchanged" as const;
+          }
+        : pushed.appliedBy;
     try {
       const definition = await loadUiSchema({
         projectRoot: deps.projectRoot,
@@ -604,7 +613,7 @@ export class CollectionMetadataService extends BaseService {
           junctions: relations.junctions,
           keys: relations.keys,
         },
-        { appliedBy: pushed.appliedBy, inLastTransaction: writeRow }
+        { appliedBy, inLastTransaction: writeRow }
       );
       pushed.throwIfFailed(written.files, written.checked);
       return undefined;
@@ -1429,12 +1438,14 @@ export class CollectionMetadataService extends BaseService {
               return errorToMetadataResult(
                 new NextlyError({
                   code: "NEXTLY_MIGRATION_APPLY_FAILED",
+                  // The table's name stays in the log, as storage details do.
                   publicMessage: writtenInSave
-                    ? `Table "${existingCollection.tableName}" was not found after the schema change, though its migration and the collection's record were saved.`
-                    : `Table "${existingCollection.tableName}" was not found after the schema change, so the collection's record was left as it was.`,
+                    ? "The collection's table was not found after the schema change, though its migration and its record were saved."
+                    : "The collection's table was not found after the schema change, so its record was left as it was.",
                   logContext: {
                     reason: "table-missing-after-update",
                     slug: params.collectionName,
+                    tableName: existingCollection.tableName,
                   },
                 }),
                 {
