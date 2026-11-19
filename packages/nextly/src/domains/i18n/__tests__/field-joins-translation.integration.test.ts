@@ -450,11 +450,12 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(row?.heading).toBe("Hello");
   });
 
-  it("keeps the value on main when moving it fails, so the drop never runs, and moves it on the next try", async () => {
+  it("keeps the value on main when moving it fails, so the drop never runs, and judges the next try by what the failure left", async () => {
     // The apply moves the value before it drops the main column, so a move that fails stops the
     // apply with the column, and its value, still in place: the drop is never let through on a
-    // move that did not happen. MySQL commits each schema statement, so the companion may keep a
-    // new, empty column; the next apply takes it as it is.
+    // move that did not happen. PostgreSQL takes the whole apply back; SQLite and MySQL keep the
+    // companion's new, empty column, which the history does not record, so the next save is
+    // judged as drift before its push runs and refused with the recovery steps.
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
@@ -475,9 +476,29 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(String(failed)).toMatch(/injected copy failure/);
     expect(await mainHeading("dc_posts", id)).toBe("Hello");
     expect(await readCollection(id)).toBe("Hello");
+    const leftColumn = dialect !== "postgresql";
+    expect(await columnsOf("dc_posts_locales")).toEqual(
+      leftColumn
+        ? expect.arrayContaining(["heading"])
+        : expect.not.arrayContaining(["heading"])
+    );
 
-    await dialog.change(TRANSLATED);
+    const retried = await dialog.change(TRANSLATED).then(
+      () => undefined,
+      (error: unknown) => error
+    );
 
+    if (leftColumn) {
+      const told = `${retried instanceof Error ? retried.message : String(retried)} ${String(
+        (retried as { publicMessage?: unknown } | undefined)?.publicMessage
+      )}`;
+      expect(told).toContain("schema drift detected");
+      expect(told).toContain("pnpm nextly db:sync");
+      expect(told).toContain("pnpm nextly migrate:resolve --applied");
+      expect(await mainHeading("dc_posts", id)).toBe("Hello");
+      return;
+    }
+    expect(retried).toBeUndefined();
     expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
     expect(await readCollection(id)).toBe("Hello");
   });
