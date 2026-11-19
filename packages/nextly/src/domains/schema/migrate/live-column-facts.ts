@@ -34,6 +34,8 @@ import type { SupportedDialect } from "../../../database/schema-registry";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../pipeline/pg-visible-relation";
 
+import { cursorOf } from "./statement-cursor";
+
 /** The column facts a proof asks for. Names are compared without regard to case. */
 export interface LiveColumnFacts {
   /**
@@ -381,35 +383,59 @@ async function gatherSqliteIndexes(
 
 /**
  * Whether one SQLite table's AUTOINCREMENT counter covers its rows (`counterCovers`). The counter
- * and the highest key are read only for a table whose stored text says AUTOINCREMENT, in a
- * database that has `sqlite_sequence` (it exists only once such a table does), and never for a
- * `WITHOUT ROWID` table, which has no rowid to read and cannot be AUTOINCREMENT.
+ * and the highest key are read only for a table whose stored definition declares its key
+ * AUTOINCREMENT (`declaresAutoincrement`), in a database that has `sqlite_sequence` (it exists
+ * only once such a table does). The highest key is read from the key column itself.
  */
 async function sqliteCounterCovers(
   db: SqliteReader,
   table: string
 ): Promise<boolean> {
-  const [declared] = await sqliteRows(
+  const [stored] = await sqliteRows(
     db,
-    sql`SELECT (instr(upper(sql), 'AUTOINCREMENT') > 0
-                AND instr(upper(sql), 'WITHOUT ROWID') = 0
-                AND EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence')
-               ) AS declared
-        FROM sqlite_master WHERE type = 'table' AND name = ${table}`
+    sql`SELECT m.sql AS text,
+               (SELECT p.name FROM pragma_table_info(m.name) p WHERE p.pk = 1) AS key_column,
+               EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence') AS counters
+        FROM sqlite_master m WHERE m.type = 'table' AND m.name = ${table}`
   );
-  if (!yes(declared?.declared)) return false;
+  const key = stored?.key_column;
+  if (
+    typeof key !== "string" ||
+    !yes(stored?.counters) ||
+    !declaresAutoincrement(stored?.text)
+  ) {
+    return false;
+  }
   const [counter] = await sqliteRows(
     db,
     sql`SELECT seq FROM sqlite_sequence WHERE name = ${table}`
   );
+  // Read from the key column by name: `rowid` reads a column of that name where a table has one.
   const [top] = await sqliteRows(
     db,
-    sql`SELECT MAX(rowid) AS top FROM ${sql.identifier(table)}`
+    sql`SELECT MAX(${sql.identifier(key)}) AS top FROM ${sql.identifier(table)}`
   );
   const highest = top?.top;
   // No counter yet: SQLite makes it at the first insert, so the table must hold no row.
   if (counter === undefined) return highest === null || highest === undefined;
   return Number(counter.seq) >= Number(highest ?? 0);
+}
+
+/**
+ * Whether a table's stored `CREATE TABLE` declares its key `PRIMARY KEY [ASC | DESC]
+ * AUTOINCREMENT`, read as words: the word in a string, a quoted name or an expression declares
+ * nothing.
+ */
+function declaresAutoincrement(createSql: unknown): boolean {
+  if (typeof createSql !== "string") return false;
+  const words = cursorOf(createSql, "sqlite").rest();
+  return words.some(
+    (word, at) =>
+      word === "AUTOINCREMENT" &&
+      [words[at - 1], words[at - 2]].includes("KEY") &&
+      (words[at - 1] === "KEY" ||
+        ["ASC", "DESC"].includes(String(words[at - 1])))
+  );
 }
 
 /** SQLite's indexes and counters of the tables, one table at a time. */

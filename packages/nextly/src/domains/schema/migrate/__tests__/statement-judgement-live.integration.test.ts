@@ -419,6 +419,34 @@ describe.each(LOCK_DIALECTS)(
           `DELETE FROM sqlite_sequence WHERE name = '${counted}'`
         );
         expect(await covers()).toBe(false);
+        // The word in a default's text declares nothing: an empty table with no counter is not
+        // taken for an AUTOINCREMENT one that has yet to be written.
+        const worded = `${P}_worded`;
+        await adapter.executeQuery(
+          `CREATE TABLE ${worded} (id INTEGER PRIMARY KEY, note text DEFAULT 'no AUTOINCREMENT here')`
+        );
+        expect(
+          (
+            await readLiveSchema(adapter.getDrizzle(), dialect, [
+              `CREATE TABLE ${worded} (id integer)`,
+            ])
+          ).counterCovers(worded)
+        ).toBe(false);
+        // A column named rowid hides the table's own: the highest key is read from the key column.
+        const shadowed = `${P}_shadowed`;
+        await adapter.executeQuery(
+          `CREATE TABLE ${shadowed} (id INTEGER PRIMARY KEY AUTOINCREMENT, rowid text)`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${shadowed} (rowid) VALUES ('100'), ('200')`
+        );
+        expect(
+          (
+            await readLiveSchema(adapter.getDrizzle(), dialect, [
+              `CREATE TABLE ${shadowed} (id integer)`,
+            ])
+          ).counterCovers(shadowed)
+        ).toBe(true);
         // A table not declared AUTOINCREMENT has no counter to cover it.
         expect(
           (
