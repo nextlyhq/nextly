@@ -10,7 +10,12 @@ import { tableBusyError } from "../../busy-table/report";
 import type { BusyTableOutcome, BusyTableStop } from "../../busy-table/types";
 import type { PipelineResult } from "../../pipeline/pushschema-pipeline";
 import { NextlyError } from "../../../../errors/nextly-error";
-import { FirstQuestionWatch, landingPush, partWayPush } from "../landing-push";
+import {
+  FirstQuestionWatch,
+  landingPush,
+  nextSteps,
+  partWayPush,
+} from "../landing-push";
 
 const answered = (success: boolean) => (): Promise<PipelineResult> =>
   Promise.resolve({ success, statementsExecuted: 0, renamesApplied: 0 });
@@ -352,5 +357,29 @@ describe("landingPush, a run whose apply completed", () => {
     );
     await expect(tracked.push()).rejects.toThrow("refused");
     expect(tracked.landed()).toBe(false);
+  });
+});
+
+// Only a file with a snapshot can be checked against the database; a translations table's file,
+// which may come after it, has none, so it is recorded without the check, whatever its place.
+describe("nextSteps, the file checked against the database", () => {
+  it("checks the last file where none is named", () => {
+    expect(nextSteps(["0002_a.sql", "0003_b.sql"])).toContain(
+      "`nextly migrate:resolve --applied 0002_a.sql --skip-verify`, then " +
+        "`nextly migrate:resolve --applied 0003_b.sql`, which checks the database against the last"
+    );
+  });
+
+  it("checks the named file and records each other one without the check, in run order", () => {
+    expect(
+      nextSteps(["0002_main.sql", "0003_locales.sql"], "0002_main.sql")
+    ).toBe(
+      "Finish the change by hand, record the files in order: " +
+        "`nextly migrate:resolve --applied 0002_main.sql`, then " +
+        "`nextly migrate:resolve --applied 0003_locales.sql --skip-verify`; " +
+        "the one without `--skip-verify` is checked against the database. " +
+        "Then run `nextly migrate`, which brings the registry in step with the recorded files. " +
+        "Or reverse what of it ran and run `nextly migrate`, which runs them from the start."
+    );
   });
 });
