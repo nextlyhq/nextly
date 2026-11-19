@@ -8,6 +8,11 @@
  * `update-site-style` permission, nothing for a class without fluid sizes,
  * nothing on a save that leaves the range alone, and nothing at all when a
  * locked text style follows the range.
+ *
+ * A text style the site's CODE makes fluid follows the range too, with
+ * nothing stored: the merge makes it again across the range the site stores,
+ * on the published page, and a save of the class list stores no override of
+ * it. Locked, it follows all the same, since nothing the site stores moves.
  */
 
 // Set before the harness boots: the routes verify the session with it.
@@ -15,7 +20,10 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { fluidValue } from "@nextlyhq/blocks-engine";
+import { fluidValue, type NamedClass } from "@nextlyhq/blocks-engine";
+import { createBlockResolver } from "@nextlyhq/blocks-react";
+import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { createPublicBlocksPage } from "@nextlyhq/blocks-react/next";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -25,11 +33,20 @@ import {
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
+import type { ReactElement } from "react";
+import { renderToReadableStream } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { pageBuilder } from "../plugin";
-import { classOverrideOf } from "../site-style";
+import {
+  classOverrideOf,
+  configuredClassesAt,
+  resolveSiteStyle,
+  type SiteStyleData,
+} from "../site-style";
+import { loadSiteStyle } from "../site-style-load";
 import { mergeSiteStyleSection } from "../site-style-merge";
+import { readSiteStyleRecord } from "../site-style-record";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 
 const ORIGIN = "http://localhost";
@@ -80,6 +97,26 @@ const PLAIN = {
   role: "text",
   styles: { base: { base: { fontSize: "18px", lineHeight: 1.4 } } },
 };
+
+/** The sizes the code's text style was made fluid from. */
+const CODE_SIZES = { small: 20, large: 40 };
+
+/** A text style the site's code supplies, its Desktop size made fluid across the code's range. */
+const CODE_FLUID = {
+  id: "t-code-fluid",
+  slug: "code-fluid",
+  label: "Code fluid",
+  orderIndex: 3,
+  role: "text",
+  styles: { base: { base: { fontSize: fluidValue(CODE_SIZES, OLD) } } },
+  fluidSizes: { base: CODE_SIZES },
+} as NamedClass;
+
+/** A host's code: its breakpoints and the code's fluid text style. */
+const codeSite = (style: NamedClass = CODE_FLUID): SiteStyleData => ({
+  breakpoints: { viewport: [{ id: "base", label: "Desktop" }], container: [] },
+  classes: [style],
+});
 
 describe.each(getConfiguredTestDialects())(
   "a text style's fluid size and the site's fluid range (%s)",
@@ -530,6 +567,184 @@ describe.each(getConfiguredTestDialects())(
       expect(entryOf(after.classes, "t-lead")).toMatchObject({
         fluidSizes: { base: SIZES },
       });
+    });
+
+    /** A published page whose heading wears the code's fluid text style. */
+    async function publishCodeStyledPage(t: TestNextly): Promise<void> {
+      await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Fluid",
+          slug: "fluid",
+          content: {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "fluid-h",
+                type: "core/heading",
+                version: 1,
+                props: { text: "Fluid heading", level: "h2" },
+                classes: [CODE_FLUID.id],
+              },
+            ],
+          },
+          status: "published",
+        },
+        overrideAccess: true,
+      });
+    }
+
+    /** The CSS of the published page, as a visitor is served it. */
+    async function publishedCss(
+      t: TestNextly,
+      defaults: SiteStyleData
+    ): Promise<string> {
+      const route = createPublicBlocksPage({
+        collections: ["pages"],
+        field: "content",
+        nextly: t.nextly as never,
+        blocks: createBlockResolver(coreBlocks),
+        styleContext: { breakpoints: defaults.breakpoints },
+        siteStyles: {
+          read: () => loadSiteStyle({ nextly: t.nextly, defaults }),
+          singles: [SITE_STYLE_SLUG],
+        },
+      });
+      const element = (await route.ContentPage({
+        params: { slug: ["fluid"] },
+      })) as ReactElement;
+      const stream = await renderToReadableStream(element, {
+        onError(error) {
+          throw error;
+        },
+      });
+      await stream.allReady;
+      const html = await new Response(stream).text();
+      return [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)]
+        .map(match => match[1])
+        .join("\n");
+    }
+
+    /** The code style's Desktop size in the site style the published route loads. */
+    async function loadedCodeSize(
+      t: TestNextly,
+      defaults: SiteStyleData
+    ): Promise<unknown> {
+      const style = await loadSiteStyle({ nextly: t.nextly, defaults });
+      return sizeOf(
+        (style.classes ?? []) as unknown as Record<string, unknown>[],
+        CODE_FLUID.id
+      );
+    }
+
+    it("makes a text style the code made fluid follow a range change on the published page, storing nothing for it", async () => {
+      const code = codeSite();
+      const t = await boot(LEAD, { siteStyle: code });
+      const designer = await holding(t, ...DESIGN);
+      await publishCodeStyledPage(t);
+      expect(await publishedCss(t, code)).toContain(
+        fluidValue(CODE_SIZES, OLD)
+      );
+      const before = await stored(t);
+
+      const saved = await patch(designer, {
+        tokens: tokensAcross(NEW),
+        _overwrite: true,
+      });
+      expect(saved.status).toBe(200);
+
+      const after = await stored(t);
+      // Nothing of the code's style is stored: the stored classes are the
+      // site's own two, as before.
+      expect(entryOf(after.classes, CODE_FLUID.id)).toBeUndefined();
+      expect(after.classes.map(entry => entry.id)).toEqual(
+        before.classes.map(entry => entry.id)
+      );
+      // The page draws it across the new range, and no longer the old.
+      expect(await loadedCodeSize(t, code)).toBe(fluidValue(CODE_SIZES, NEW));
+      const css = await publishedCss(t, code);
+      expect(css).toContain(fluidValue(CODE_SIZES, NEW));
+      expect(css).not.toContain(fluidValue(CODE_SIZES, OLD));
+    });
+
+    it("stores no override of the code's fluid text style when the class list is next saved", async () => {
+      const code = codeSite();
+      const t = await boot(LEAD, { siteStyle: code });
+      const designer = await holding(t, ...DESIGN);
+      expect(
+        (await patch(designer, { tokens: tokensAcross(NEW), _overwrite: true }))
+          .status
+      ).toBe(200);
+      // The editor's next class-list save: a new style made beside the
+      // library it draws, the code's style across the new range in it, and
+      // only what differs from the code stored.
+      const doc = await t.nextly.findSingle({
+        slug: SITE_STYLE_SLUG,
+        overrideAccess: true,
+      });
+      const drawn = resolveSiteStyle(code, readSiteStyleRecord(doc));
+      const next = [
+        ...(drawn.classes ?? []),
+        { ...PLAIN, id: "t-new", slug: "new", label: "New", orderIndex: 4 },
+      ] as NamedClass[];
+      // Compared with the code's own clamp, the drawn style would read as
+      // the site's edit: the case the derived code classes exist for.
+      expect(
+        classOverrideOf(code.classes, next).map(entry => entry.id)
+      ).toContain(CODE_FLUID.id);
+      const tier = classOverrideOf(
+        configuredClassesAt(code, drawn.tokens),
+        next
+      );
+      expect(
+        (await patch(designer, { classes: tier, _overwrite: true })).status
+      ).toBe(200);
+      const after = await stored(t);
+      expect(entryOf(after.classes, CODE_FLUID.id)).toBeUndefined();
+      expect(entryOf(after.classes, "t-new")).toBeDefined();
+      expect(await loadedCodeSize(t, code)).toBe(fluidValue(CODE_SIZES, NEW));
+    });
+
+    it("lets the range change when a locked text style the code made fluid follows it", async () => {
+      const code = codeSite({ ...CODE_FLUID, locked: true } as NamedClass);
+      const t = await boot(LEAD, { siteStyle: code });
+      const designer = await holding(t, ...DESIGN);
+      const before = await stored(t);
+      const saved = await patch(designer, {
+        tokens: tokensAcross(NEW),
+        _overwrite: true,
+      });
+      // Not refused: the lock guards the site's edits, and nothing the site
+      // stores moves for the code's style.
+      expect(saved.status).toBe(200);
+      const after = await stored(t);
+      expect(Number(after.rev)).toBe(Number(before.rev) + 1);
+      expect(entryOf(after.classes, CODE_FLUID.id)).toBeUndefined();
+      expect(await loadedCodeSize(t, code)).toBe(fluidValue(CODE_SIZES, NEW));
+      // And the next class-list save, which stores no override of it, is
+      // not refused by the lock: a locked entry written outside the lock's
+      // route would be.
+      const drawn = resolveSiteStyle(
+        code,
+        readSiteStyleRecord(
+          await t.nextly.findSingle({
+            slug: SITE_STYLE_SLUG,
+            overrideAccess: true,
+          })
+        )
+      );
+      const next = (drawn.classes ?? []).map(entry =>
+        entry.id === "t-plain" ? { ...entry, label: "Plain text" } : entry
+      );
+      const tier = classOverrideOf(
+        configuredClassesAt(code, drawn.tokens),
+        next
+      );
+      expect(
+        (await patch(designer, { classes: tier, _overwrite: true })).status
+      ).toBe(200);
+      expect(entryOf((await stored(t)).classes, CODE_FLUID.id)).toBeUndefined();
     });
   }
 );

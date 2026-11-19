@@ -819,6 +819,9 @@ export type {
   TokensPanelProps,
   VariablesHeader,
 } from "./tokens-panel";
+// What a host's variables write made at once answers it stored, so an import
+// can say a save the site took only in part as exactly that.
+export type { VariablesStored } from "./variables-transfer";
 // Which variable groups each Design tab lists, and the one variable search,
 // so a tab's count and the rows it lists come from the same rule.
 export {

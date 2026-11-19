@@ -41,6 +41,8 @@ import type {
   PartsLanguageOutcome,
   PublishPartsDirection,
 } from "@admin/services/publishParts";
+import type { ReleaseDocumentRef } from "@admin/types/releases";
+import type { PartReview } from "@admin/types/workflows";
 
 import type { LanguageLabel } from "../publishAllOutcomes";
 
@@ -53,6 +55,19 @@ import {
   withLanguage,
   type PartsChoice,
 } from "./publish-parts-choice";
+import { readyProblems } from "./ready-to-publish";
+import { ReadyToPublish, WithoutReviewReason } from "./ReadyToPublish";
+
+/**
+ * The workflow governing the document, as the dialog reads it: its review state part by part,
+ * and whether this person may publish past it. Absent where no workflow is attached.
+ */
+export interface PublishReview {
+  document: ReleaseDocumentRef;
+  parts: readonly PartReview[];
+  /** Whether the person may publish past the workflow, as the server judges it. */
+  mayPublishWithoutReview: boolean;
+}
 
 export interface PublishPartsDialogProps {
   open: boolean;
@@ -68,6 +83,8 @@ export interface PublishPartsDialogProps {
   shown?: () => ShownCopy | undefined;
   /** Told what was done, once it is done. */
   onDone?: (summary: string) => void;
+  /** The workflow governing the document, where one is attached. */
+  review?: PublishReview;
 }
 
 const TITLE: Record<PublishPartsDirection, string> = {
@@ -105,8 +122,11 @@ export function PublishPartsDialog({
   initialChoice,
   shown,
   onDone,
+  review,
 }: PublishPartsDialogProps): JSX.Element {
   const [choice, setChoice] = useState<PartsChoice>(initialChoice);
+  // The reason being written to publish without review; null while not asked.
+  const [reason, setReason] = useState<string | null>(null);
   const sharedId = useId();
   const description = usePublishPartsDescription({
     target,
@@ -119,7 +139,25 @@ export function PublishPartsDialog({
   // description, which is refused for the same reasons the move would be.
   const refusal = move.error ?? description.error ?? null;
   const refused = refusalsByPart(refusal, [...languages, SHARED_PATH]);
-  const general = refused.get("") ?? [];
+  // What holds Publish where a workflow governs the document, each with its fix. A field it
+  // lists is said there, and not again among the general refusals.
+  const problems =
+    review === undefined || direction !== "publish"
+      ? []
+      : readyProblems({
+          choice,
+          parts: review.parts,
+          refusal,
+          translated: languages.length > 0,
+          labelOf,
+        });
+  const general = (refused.get("") ?? []).filter(
+    message => !problems.some(problem => problem.text === message)
+  );
+  // Offered only to a person who may, and only while a chosen part waits for approval.
+  const offersWithoutReview =
+    review?.mayPublishWithoutReview === true &&
+    problems.some(problem => problem.unapproved);
   const outcomes = new Map(
     (description.data?.languages ?? []).map(language => [
       language.locale,
@@ -127,11 +165,14 @@ export function PublishPartsDialog({
     ])
   );
 
-  const confirm = async (): Promise<void> => {
+  const confirm = async (withoutReview?: string): Promise<void> => {
     try {
       const done = await move.mutateAsync({
         locales: choice.locales,
         shared: choice.shared,
+        ...(withoutReview === undefined
+          ? {}
+          : { withoutReview: { reason: withoutReview } }),
       });
       onDone?.(
         doneSummary(
@@ -143,8 +184,21 @@ export function PublishPartsDialog({
       );
       onOpenChange(false);
     } catch {
-      // Shown in the dialog beside the parts it names; the dialog stays open.
+      // Shown in the dialog beside the parts it names; the dialog stays open, back on the parts.
+      setReason(null);
     }
+  };
+
+  // Asked again of the parts chosen now: a selection changed while the reason was written may no
+  // longer need the bypass, and then it is left and the publish made as usual, never sent past a
+  // review it does not need. Anything else still holding Publish keeps it held.
+  const confirmWithoutReview = async (why: string): Promise<void> => {
+    if (offersWithoutReview) {
+      await confirm(why);
+      return;
+    }
+    setReason(null);
+    if (problems.length === 0) await confirm();
   };
 
   const changedSince = refusal !== null && refusedAsChangedSince(refusal);
@@ -209,6 +263,17 @@ export function PublishPartsDialog({
           </ul>
         </fieldset>
 
+        {review === undefined ? null : (
+          <ReadyToPublish document={review.document} problems={problems} />
+        )}
+        {reason === null ? null : (
+          <WithoutReviewReason
+            value={reason}
+            onChange={setReason}
+            disabled={move.isPending}
+          />
+        )}
+
         {description.isFetching ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -232,26 +297,67 @@ export function PublishPartsDialog({
           </p>
         ) : null}
 
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant={direction === "unpublish" ? "destructive" : "default"}
-            disabled={!choosesAnything(choice) || move.isPending}
-            onClick={() => void confirm()}
-          >
-            {move.isPending ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        {reason !== null ? (
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={move.isPending}
+              onClick={() => setReason(null)}
+            >
+              Back
+            </Button>
+            <Button
+              type="button"
+              disabled={
+                !choosesAnything(choice) ||
+                move.isPending ||
+                reason.trim() === ""
+              }
+              onClick={() => void confirmWithoutReview(reason.trim())}
+            >
+              {move.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              Publish without review
+            </Button>
+          </DialogFooter>
+        ) : (
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            {offersWithoutReview ? (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!choosesAnything(choice) || move.isPending}
+                onClick={() => setReason("")}
+              >
+                Publish without review…
+              </Button>
             ) : null}
-            {ACTION[direction]}
-          </Button>
-        </DialogFooter>
+            <Button
+              type="button"
+              variant={direction === "unpublish" ? "destructive" : "default"}
+              disabled={
+                !choosesAnything(choice) ||
+                move.isPending ||
+                problems.length > 0
+              }
+              onClick={() => void confirm()}
+            >
+              {move.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              {ACTION[direction]}
+            </Button>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -105,6 +105,7 @@ import {
   type AppMigrationInputsArgs,
   type HeldEntity,
 } from "../migrate-create/app-migration-inputs";
+import { declaredPermissionsOf } from "../migrate-create/declared-permissions";
 import {
   buildDesiredSnapshotFromConfig,
   generateMigration,
@@ -157,7 +158,7 @@ import {
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
 
-import { partlyAppliedChange } from "./landing-push";
+import { nextSteps, partlyAppliedChange } from "./landing-push";
 import {
   openSaveRecords,
   recordSaveStarted,
@@ -324,6 +325,12 @@ export interface CollectionSaveResult {
   files: string[];
   /** Whether they were run and recorded applied here. */
   applied: boolean;
+  /**
+   * Where they were kept, recorded applied nowhere (`applied` false): the one a
+   * `migrate:resolve` checks against the database (`checkedFileOf`), or null where none has a
+   * snapshot.
+   */
+  checked?: string | null;
 }
 
 /**
@@ -397,7 +404,7 @@ export async function writeCollectionSave(
         if (applied === "partly-applied") {
           // Kept recorded applied nowhere: nothing says what committed, so the record stays.
           written.started.left();
-          return { files: [...written.names], applied: false };
+          return keptResult(deps, written);
         }
         await recordWhatWasPushed(deps, written.files, written.table);
       } else if (deps.applies) {
@@ -422,7 +429,7 @@ export async function writeCollectionSave(
         pushed = true;
         if (applied === "partly-applied") written.started.left();
       }
-      return { files: [...written.names], applied: deps.applies };
+      return finishedResult(deps, written);
     } catch (error) {
       if (!pushed) {
         await undoThenThrow(error, [
@@ -1865,6 +1872,14 @@ async function generateFor(
     components: inputs.components,
     // The starting point the inputs were checked against, read once.
     previous: inputs.latest,
+    // Every permission the config declares, by owner, from the same entities and by the same
+    // function `migrate:create` records them with. Left out, the snapshot carried the previous
+    // one's record forward, without the permissions of an entity this save made or removed, and
+    // the next `migrate:create` wrote a migration of that difference alone.
+    permissions: declaredPermissionsOf(deps.config, {
+      collections: inputs.collections,
+      singles: inputs.singles,
+    }),
     metadataUpserts: inputs.metadataUpserts,
     previousMetadataUpserts: inputs.previousMetadataUpserts,
     appStream: inputs.appStream,
@@ -2202,7 +2217,8 @@ async function runWritten(
       // after it are kept, recorded nowhere, and the failure says so with what to run next, as a
       // push that failed part way says it.
       if (applied.length > 0) {
-        throw partlyAppliedChange(error, ordered.slice(applied.length));
+        const kept = ordered.slice(applied.length);
+        throw partlyAppliedChange(error, kept, await checkedFileOf(deps, kept));
       }
       throw error;
     }
@@ -2537,21 +2553,23 @@ async function recordWhatWasPushed(
     });
   }
   // The table after the push is what the change's newest file with a
-  // snapshot records: the adoption describes it before the push, and a
-  // translations-table file, which may come after, has no snapshot. Compared
-  // before anything is recorded, so a mismatch records no file.
-  const verified = [...units]
-    .reverse()
-    .find(u => u.filename !== files.adopt && u.target !== null);
+  // snapshot records (`checkedFileOf`). Compared before anything is
+  // recorded, so a mismatch records no file.
+  const checked = await checkedFileOf(deps, files.change);
+  const verified = units.find(u => u.filename === checked);
   if (verified?.target != null) {
     const live = await liveTable(deps, table);
     const expected = onlyTable(verified.target, table);
     if (!snapshotsEquivalent(live, expected)) {
       throw new NextlyError({
         code: "NEXTLY_MIGRATION_DRIFT",
-        publicMessage: `The database does not stand as ${verified.filename} says after the save's change was applied, so the save's files were not recorded applied. Compare the table with the file, then record it with \`nextly migrate:resolve --applied ${verified.filename}\` once they match.`,
+        // The change landed, so its files are kept: the steps that finish it are a part-way
+        // push's (`nextSteps`), checking the file compared here, the registry brought in step by
+        // the `nextly migrate` after them.
+        publicMessage: `The database does not stand as ${verified.filename} says after the save's change was applied, so the save's ${ordered.length === 1 ? "file" : "files"} ${ordered.join(", ")} ${ordered.length === 1 ? "was" : "were"} kept and not recorded applied. Compare the table with ${verified.filename}. ${nextSteps(ordered, verified.filename)}`,
         logContext: {
           file: verified.filename,
+          keptFiles: [...ordered],
           differences: diffSnapshots(expected, live).length,
         },
       });
@@ -2560,6 +2578,49 @@ async function recordWhatWasPushed(
   for (const { filename, file } of units) {
     await recordAlreadyApplied({ filename, sha256: file.sha256 }, repo);
   }
+}
+
+/**
+ * A save's result where its files were kept, recorded applied nowhere: the files, and the one a
+ * `migrate:resolve` checks against the database (`checkedFileOf`).
+ */
+async function keptResult(
+  deps: CollectionSaveDeps,
+  written: { names: readonly string[]; files: SaveFiles }
+): Promise<CollectionSaveResult> {
+  return {
+    files: [...written.names],
+    applied: false,
+    checked: await checkedFileOf(deps, written.files.change),
+  };
+}
+
+/**
+ * A save's result once its change was made: its files recorded applied in development, and
+ * elsewhere kept, recorded nowhere, and named as a part-way failure names them (`keptResult`).
+ */
+async function finishedResult(
+  deps: CollectionSaveDeps,
+  written: { names: readonly string[]; files: SaveFiles }
+): Promise<CollectionSaveResult> {
+  if (!deps.applies) return keptResult(deps, written);
+  return { files: [...written.names], applied: true };
+}
+
+/**
+ * Of a save's change files, in run order, the one a `migrate:resolve` checks against the database:
+ * the newest with a snapshot, which describes the table as the change leaves it. A translations
+ * table's file, which may come after it, has none, and the adoption describes the table before the
+ * change, so neither is it. Null where none has a snapshot.
+ */
+async function checkedFileOf(
+  deps: CollectionSaveDeps,
+  files: readonly string[]
+): Promise<string | null> {
+  for (const filename of [...files].reverse()) {
+    if ((await snapshotOf(deps, filename)) !== null) return filename;
+  }
+  return null;
 }
 
 /** A written file as the runner takes it. */

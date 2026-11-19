@@ -40,12 +40,50 @@ interface SchemaLikeConfig {
   fieldGroups?: FieldBearingEntity[];
 }
 
+/** One field declaration a field's own type rejects, at its path. */
+export interface FieldDeclarationIssue {
+  path: string;
+  code: string;
+  message: string;
+}
+
+/** How an entity is named at the start of an issue's path: `collections.posts` by default. */
+type EntityPath = (
+  kind: "collections" | "singles" | "fieldGroups",
+  index: number,
+  entity: FieldBearingEntity
+) => string;
+
+const bySlug: EntityPath = (kind, _index, entity) =>
+  `${kind}.${entity.slug ?? "unknown"}`;
+
 /**
  * Throw `NextlyError.validation` if any field's own type rejects its
- * declaration, naming the entity and the option at fault.
+ * declaration, naming the entity and the option at fault
+ * (`fieldDeclarationIssues`).
  */
 export function assertPluginFieldDeclarations(config: SchemaLikeConfig): void {
-  const errors: Array<{ path: string; code: string; message: string }> = [];
+  const errors = fieldDeclarationIssues(config);
+  if (errors.length > 0) {
+    throw NextlyError.validation({ errors });
+  }
+}
+
+/**
+ * Every field declaration in `config` its own type rejects, each at its path, the entity named
+ * by `entityPath`. The check `assertPluginFieldDeclarations` makes, for a reader that reports
+ * every problem in a configuration rather than stopping at these.
+ */
+export function fieldDeclarationIssues(
+  config: SchemaLikeConfig,
+  entityPath: EntityPath = bySlug,
+  /**
+   * Whether a registered type's own option rules are asked too. A reader that also runs each
+   * entity's validator, which asks them, leaves them out so one problem is reported once.
+   */
+  judge: { options: boolean } = { options: true }
+): FieldDeclarationIssue[] {
+  const errors: FieldDeclarationIssue[] = [];
 
   const walk = (fields: unknown, basePath: string): void => {
     if (!Array.isArray(fields)) return;
@@ -85,7 +123,7 @@ export function assertPluginFieldDeclarations(config: SchemaLikeConfig): void {
         continue;
       }
 
-      for (const issue of pluginFieldOptionIssues(field)) {
+      for (const issue of judge.options ? pluginFieldOptionIssues(field) : []) {
         errors.push({
           path: issue.path ? `${at}.${issue.path}` : at,
           code: "FIELD_TYPE_INVALID",
@@ -102,21 +140,24 @@ export function assertPluginFieldDeclarations(config: SchemaLikeConfig): void {
     }
   };
 
-  const entities: Array<[string, FieldBearingEntity[] | undefined]> = [
+  const entities: Array<
+    [
+      "collections" | "singles" | "fieldGroups",
+      FieldBearingEntity[] | undefined,
+    ]
+  > = [
     ["collections", config.collections],
     ["singles", config.singles],
     ["fieldGroups", config.fieldGroups],
   ];
 
   for (const [kind, list] of entities) {
-    for (const entity of list ?? []) {
-      walk(entity.fields, `${kind}.${entity.slug ?? "unknown"}`);
-    }
+    (list ?? []).forEach((entity, index) => {
+      walk(entity.fields, entityPath(kind, index, entity));
+    });
   }
 
-  if (errors.length > 0) {
-    throw NextlyError.validation({ errors });
-  }
+  return errors;
 }
 
 /**

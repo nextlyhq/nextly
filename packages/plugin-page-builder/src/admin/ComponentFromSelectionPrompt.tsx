@@ -55,6 +55,7 @@ import * as React from "react";
 import type {
   ComponentFromSelectionAction,
   ComponentFromSelectionResult,
+  CopySourceAddress,
 } from "../library-contract";
 
 import {
@@ -105,6 +106,11 @@ export interface ComponentFromSelectionPromptProps {
    * the request would make a component binding a setting never made.
    */
   readonly currentDocument?: () => BlockDocument;
+  /**
+   * The stored entry the document is, where it is one, named with the
+   * create so the custom CSS it already holds is no change to the component.
+   */
+  readonly source?: CopySourceAddress;
 }
 
 /** How long a convert waits for the canvas to hold the new definition. */
@@ -350,6 +356,7 @@ function ComponentForm(
       document: asked.document,
       selectedIds: asked.selectedIds,
       fields: fieldsOf(metadata),
+      ...(props.source === undefined ? {} : { source: props.source }),
       exposure: {
         properties: exposed.map(entry => ({
           ...entry,

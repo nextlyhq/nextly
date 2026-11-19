@@ -38,7 +38,6 @@ import {
   openRemovalFor,
   type OpenRemovalReader,
 } from "../breakpoint-removal/lock-acceptance";
-import { formsChangedBy } from "../component-cycle-guard";
 import { pageCodeOf } from "../site-code/page-code";
 import { siteBreakpoints } from "../site-style";
 
@@ -63,7 +62,6 @@ import {
   withLockIssues,
 } from "./layers-lock-judgement";
 import { newConditionIssues, newListQueryIssues } from "./list-query-judgement";
-import { readStoredForms } from "./lock-baselines";
 import {
   changedFormsBaseline,
   pageCodeIssues,
@@ -184,7 +182,12 @@ function judgedByRules(
       // The set this factory was built with; the empty set otherwise,
       // which the engine treats permissively (a breakpoint reference warns).
       breakpoints ?? siteBreakpoints(),
-      stored
+      stored,
+      // The caps the site's pages are drawn under, as the other checks of
+      // this write read them. Read without waiting, so a value judged with
+      // no site set up is still answered at once, under the engine's
+      // defaults.
+      composition?.()?.limits
     );
   // Composed only once the document is well formed: the composition walks
   // the tree the rules above vouched for, and a malformed one would report
@@ -215,13 +218,8 @@ function judgedByRules(
   ) {
     return issues;
   }
-  const status = (args.data as { status?: unknown } | undefined)?.status;
-  return readStoredForms(
-    args.write,
-    args.path,
-    formsChangedBy(typeof status === "string" ? status : undefined),
-    (args.field as { localized?: unknown }).localized === true
-  ).then(async stored => {
+  // The forms the write changes, read once for the whole judgement.
+  return changedFormsBaseline(args)().then(async stored => {
     const again = await judgedAgainstStored(
       judge,
       issues,
@@ -594,9 +592,15 @@ export function blocksFieldType(
  */
 export const BLOCKS_FIELD_TYPE: PluginFieldType = blocksFieldType();
 
-/** Whether a blocks value holds custom CSS, its own or any block's. */
-function holdsCustomCss(value: unknown): boolean {
-  const held = customCssHeldBy(value);
+/**
+ * Whether a blocks value holds custom CSS, its own or any block's, read
+ * within the site's node cap where the site is set up.
+ */
+function holdsCustomCss(
+  value: unknown,
+  limits: CompositionSetup["limits"] | undefined
+): boolean {
+  const held = customCssHeldBy(value, limits);
   return held.document !== null || held.blocks.length > 0;
 }
 
@@ -620,11 +624,14 @@ function withPageCodeJudged(
     // value, code and CSS are refused as from nobody.
     validate: (value, args) => {
       const answered = judged(value, args);
+      // The caps the site's pages are drawn under, so the CSS of every block
+      // a page draws is read; the engine's defaults where it is not set up.
+      const limits = composition?.()?.limits;
       // No write, and neither code nor CSS: nothing of either to judge.
       if (
         args.write === undefined &&
         pageCodeOf(value) === null &&
-        !holdsCustomCss(value)
+        !holdsCustomCss(value, limits)
       ) {
         return answered;
       }
@@ -644,7 +651,8 @@ function withPageCodeJudged(
           {
             patterns: composition?.()?.patterns,
             components: composition?.()?.store,
-          }
+          },
+          limits
         );
         return withLockIssues(verdict, [...code, ...css], args.path);
       });

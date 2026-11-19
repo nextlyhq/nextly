@@ -64,9 +64,16 @@ import { holdInBuilderChange } from "./writer-hold";
  * running app's plugin-transformed config, which a Schema Builder save reads,
  * is one too.
  */
+// `permissions`: the app's own custom permissions, which every snapshot records beside the
+// plugins' (`declaredPermissionsOf`), so a Builder save records the ones `migrate:create` does.
 export type AppMigrationConfig = Pick<
   SanitizedNextlyConfig,
-  "collections" | "singles" | "fieldGroups" | "plugins" | "localization"
+  | "collections"
+  | "singles"
+  | "fieldGroups"
+  | "plugins"
+  | "localization"
+  | "permissions"
 > & {
   db: Pick<SanitizedNextlyConfig["db"], "uiSchemaFile" | "migrationsDir">;
 };

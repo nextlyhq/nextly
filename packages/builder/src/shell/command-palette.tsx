@@ -580,14 +580,23 @@ function PaletteList({
     .map(statusShown)
     .filter(status => status !== undefined)
     .join(" ");
+  const empty = nothing
+    ? typeof emptyMessage === "function"
+      ? emptyMessage(query)
+      : emptyMessage
+    : null;
   return (
     <>
       <CommandList>
+        {/* Drawn in the list, and hidden from a screen reader, which hears it
+            from the status line below: a listbox may hold only options and
+            their groups, and one holding only words fails as a list. */}
         {nothing ? (
-          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            {typeof emptyMessage === "function"
-              ? emptyMessage(query)
-              : emptyMessage}
+          <div
+            aria-hidden="true"
+            className="px-4 py-8 text-center text-sm text-muted-foreground"
+          >
+            {empty}
           </div>
         ) : null}
         {groups.map((shown, index) => (
@@ -609,11 +618,11 @@ function PaletteList({
           </React.Fragment>
         ))}
       </CommandList>
-      {/* What a group's search is doing, said outside the list, where a
-          status may be; mounted before it has anything to say, so the first
-          words are announced. */}
+      {/* What a group's search is doing, or that nothing was found, said
+          outside the list, where a status may be; mounted before it has
+          anything to say, so the first words are announced. */}
       <p role="status" className="sr-only">
-        {statuses}
+        {nothing ? empty : statuses}
       </p>
       {nothing ? null : <PaletteFooter verbs={verbs} />}
     </>
