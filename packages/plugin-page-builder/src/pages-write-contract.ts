@@ -97,6 +97,14 @@ export interface NewPageStarter {
   readonly label: string;
   readonly description: string;
   readonly document: BlockDocument;
+  /**
+   * Set when this site can't hold the starter: a block, variable or shared
+   * style it uses that the site doesn't have, or more depth, blocks or bytes
+   * than the site's page limits allow. Listed rather than left out, so an
+   * author sees it and why, and a page made from it is refused with the same
+   * words. Absent for a starter the site can use.
+   */
+  readonly unavailable?: { readonly reason: string };
 }
 
 /** @experimental A collection a new page can be made in. */
