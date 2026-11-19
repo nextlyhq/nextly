@@ -41,6 +41,7 @@ import { leadingReviewStep } from "../EntryForm/document-actions";
 import { PanelSection } from "../EntryForm/panels/PanelSection";
 
 import { waitingForWords } from "./review-words";
+import { StepRefusalNote } from "./StepRefusalNote";
 import { useStepTaker, type StepTaker } from "./useStepTaker";
 
 export interface ReviewSectionProps {
@@ -87,6 +88,7 @@ export function ReviewSection({
           />
         ))}
       </div>
+      <StepRefusalNote refusal={taker.refusal} onDismiss={taker.clearRefusal} />
       {taker.dialog}
     </PanelSection>
   );

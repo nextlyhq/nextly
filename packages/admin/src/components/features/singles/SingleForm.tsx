@@ -124,6 +124,7 @@ import { isRemovedFromCode } from "@admin/components/features/entries/removed-fr
 import { storedStampOf } from "@admin/components/features/entries/review/review-words";
 import { ReviewChanges } from "@admin/components/features/entries/review/ReviewChanges";
 import { ReviewStatusLine } from "@admin/components/features/entries/review/ReviewStatusLine";
+import { StepRefusalNote } from "@admin/components/features/entries/review/StepRefusalNote";
 import { useEditorReview } from "@admin/components/features/entries/review/useEditorReview";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
@@ -2105,6 +2106,11 @@ export function SingleForm({
                                       }
                                       part={review.part}
                                       parts={review.parts}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                    />
+                                    <StepRefusalNote
+                                      refusal={review.refusal}
+                                      onDismiss={review.clearRefusal}
                                       className={DOCUMENT_COLUMN_INSET}
                                     />
                                     <ReviewChanges

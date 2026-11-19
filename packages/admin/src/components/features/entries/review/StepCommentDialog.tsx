@@ -26,6 +26,8 @@ import { useId, useState, type JSX } from "react";
 
 import { Loader2 } from "@admin/components/icons";
 
+import { StepRefusalNote } from "./StepRefusalNote";
+
 /**
  * The longest comment a step keeps, as the server's step refuses a longer one
  * (its `MAX_STEP_COMMENT_LENGTH`, the content events' note limit). The admin
@@ -43,6 +45,8 @@ export interface StepCommentDialogProps {
   asksForChanges: boolean;
   onSend: (comment: string) => void;
   onCancel: () => void;
+  /** Why the step sent from here was refused, shown in the dialog; null for none. */
+  refusal?: string | null;
 }
 
 export function StepCommentDialog({
@@ -52,6 +56,7 @@ export function StepCommentDialog({
   asksForChanges,
   onSend,
   onCancel,
+  refusal = null,
 }: StepCommentDialogProps): JSX.Element {
   const [comment, setComment] = useState("");
   const fieldId = useId();
@@ -84,6 +89,7 @@ export function StepCommentDialog({
             onChange={event => setComment(event.target.value)}
           />
         </div>
+        <StepRefusalNote refusal={refusal} />
         <DialogFooter>
           <Button
             type="button"

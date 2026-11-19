@@ -36,7 +36,6 @@ import {
 import { toast } from "@admin/components/ui";
 import { useTakeStep } from "@admin/hooks/queries/useReviewState";
 import { versionKeys } from "@admin/hooks/queries/useVersions";
-import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { VersionScope } from "@admin/services/versionApi";
 import type { PartReview } from "@admin/types/workflows";
 
@@ -55,6 +54,7 @@ import {
   usePartName,
   usePartPair,
 } from "./part-changes";
+import { stepRefusalWords } from "./step-refusal";
 
 export interface ApproveAllDialogProps {
   open: boolean;
@@ -105,7 +105,7 @@ export function ApproveAllDialog({
     } catch (reason) {
       const moved = staleParts(reason);
       if (moved === undefined) {
-        setRefusal(apiErrorMessage(reason, `${label} didn't go through.`));
+        setRefusal(stepRefusalWords(reason, approval.step.label));
         return;
       }
       // The review state is read again by the step itself; the versions

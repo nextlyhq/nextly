@@ -20,6 +20,7 @@ import type {
   PartReview,
   ReviewStep,
   TakeStepPayload,
+  TakeStepResult,
 } from "@admin/types/workflows";
 
 import { waitingForWords } from "./review-words";
@@ -139,7 +140,7 @@ export function leftWords(
 }
 
 /** The parts a step's answer says it left, read off its `item`; none where it names none. */
-export function leftOf(item: unknown): LeftPart[] {
+export function leftOf(item: unknown): TakeStepResult["left"] {
   if (typeof item !== "object" || item === null || !("left" in item)) {
     return [];
   }

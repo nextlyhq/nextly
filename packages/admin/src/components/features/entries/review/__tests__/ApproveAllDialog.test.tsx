@@ -307,4 +307,32 @@ describe("Approve all languages", () => {
       ],
     });
   });
+
+  it("says in the dialog why the approval was refused, and who could approve", async () => {
+    stepSpy.mockRejectedValueOnce(
+      Object.assign(
+        new Error("You don't have permission to perform this action."),
+        {
+          status: 403,
+          code: "FORBIDDEN",
+          data: {
+            reason: "field-hidden",
+            fields: ["price"],
+            approvers: [{ kind: "user", id: "u-rita", name: "Rita" }],
+          },
+        }
+      )
+    );
+    const { dialog } = await openDialog([inReview("en"), inReview("es")]);
+
+    await userEvent.click(
+      within(dialog).getByRole("button", {
+        name: "Approve English and Spanish",
+      })
+    );
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "You can't approve this: it changes a field you can't read (price). It can be approved by Rita."
+    );
+  });
 });

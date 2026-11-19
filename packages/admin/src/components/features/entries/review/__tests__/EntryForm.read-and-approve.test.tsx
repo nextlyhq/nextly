@@ -254,4 +254,35 @@ describe("a person who may read and approve, but not edit", () => {
       })
     );
   });
+
+  it("is told in place why an approval was refused, and who could approve", async () => {
+    hooks.takeWorkflowStep.mockRejectedValue(
+      Object.assign(
+        new Error("You don't have permission to perform this action."),
+        {
+          status: 403,
+          code: "FORBIDDEN",
+          data: {
+            reason: "field-hidden",
+            fields: ["price"],
+            approvers: [{ kind: "user", id: "u-rita", name: "Rita" }],
+          },
+        }
+      )
+    );
+    renderAs(true);
+
+    await userEvent.click(await headerApprove());
+
+    // On the document, under its status line: not only in a toast.
+    const note = await screen.findByText(
+      "You can't approve this: it changes a field you can't read (price). It can be approved by Rita."
+    );
+    expect(note.closest("[role=alert]")).not.toBeNull();
+    expect(
+      within(await screen.findByTestId("document-bar")).queryByText(
+        /You can't approve this/
+      )
+    ).toBeNull();
+  });
 });

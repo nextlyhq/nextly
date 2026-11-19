@@ -83,6 +83,7 @@ import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
 import { storedStampOf } from "../review/review-words";
 import { ReviewChanges } from "../review/ReviewChanges";
 import { ReviewStatusLine } from "../review/ReviewStatusLine";
+import { StepRefusalNote } from "../review/StepRefusalNote";
 import { useEditorReview } from "../review/useEditorReview";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
@@ -1846,6 +1847,11 @@ export function EntryForm({
                                         }
                                         part={review.part}
                                         parts={review.parts}
+                                        className={DOCUMENT_COLUMN_INSET}
+                                      />
+                                      <StepRefusalNote
+                                        refusal={review.refusal}
+                                        onDismiss={review.clearRefusal}
                                         className={DOCUMENT_COLUMN_INSET}
                                       />
                                       {savedEntryId === "" ? null : (

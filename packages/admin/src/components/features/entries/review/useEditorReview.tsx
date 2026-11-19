@@ -74,6 +74,10 @@ export interface EditorReview {
   onScreen: readonly PartReview[];
   /** Every part of the document the caller may read, whatever its stage. */
   parts: readonly PartReview[];
+  /** Why the last step taken from the header was refused; null otherwise. */
+  refusal: string | null;
+  /** Forgets that refusal. */
+  clearRefusal: () => void;
   /** The dialog a step needing a comment asks with. */
   dialog: ReactNode;
 }
@@ -115,6 +119,8 @@ export function useEditorReview({
       part: undefined,
       onScreen: [],
       parts,
+      refusal: null,
+      clearRefusal: taker.clearRefusal,
       dialog: null,
     };
   }
@@ -149,6 +155,8 @@ export function useEditorReview({
     part,
     onScreen,
     parts,
+    refusal: taker.refusal,
+    clearRefusal: taker.clearRefusal,
     dialog: taker.dialog,
   };
 }
