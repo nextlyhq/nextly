@@ -39,12 +39,15 @@ export function chipShowsBlank(
   data: unknown,
   list?: string
 ): boolean {
+  const [head, ...rest] = chip.variable.split(".");
+  const inItem = list !== undefined && head === "item";
+  const items = inItem ? valueAt(data, list.split(".")) : undefined;
+  // A list with no items never reaches its blocks: nothing there shows,
+  // whatever fallback a chip has.
+  if (inItem && (!Array.isArray(items) || items.length === 0)) return true;
   // An empty fallback is no fallback: it shows nothing either.
   if (chip.fallback !== undefined && chip.fallback !== "") return false;
-  const [head, ...rest] = chip.variable.split(".");
-  if (list !== undefined && head === "item") {
-    const items = valueAt(data, list.split("."));
-    if (!Array.isArray(items) || items.length === 0) return true;
+  if (Array.isArray(items)) {
     return items.some(item => isBlank(valueAt(item, rest)));
   }
   return isBlank(valueAt(data, [head, ...rest]));

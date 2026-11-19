@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { TemplateFormVariable } from "../../schema";
-import { chipNamer, itemPaths } from "../chip-names";
+import { chipNamer, itemPaths, listPaths } from "../chip-names";
 
 const variables: TemplateFormVariable[] = [
   {
@@ -116,6 +116,31 @@ describe("a chip's friendly name", () => {
       "item.title",
       "item.qty",
     ]);
-    expect(itemPaths(variables, "resetUrl")).toEqual([]);
+    // A list of plain values has no fields: its item is the value itself.
+    expect(itemPaths(variables, "resetUrl")).toEqual(["item"]);
+    expect(chipNamer(variables, "resetUrl")("item")).toBe("Item");
+  });
+
+  it("shows a part's own name when its label is empty", () => {
+    const blank: TemplateFormVariable[] = [
+      {
+        name: "customer",
+        description: "",
+        required: true,
+        presentation: { label: "", fields: [{ name: "email", label: "" }] },
+      },
+    ];
+    expect(chipNamer(blank)("customer.email")).toBe("customer › email");
+  });
+
+  it("offers declared lists and the lists inside objects to repeat over, then the rest", () => {
+    expect(listPaths(variables)).toEqual([
+      // `order` is an object holding the list `lines`.
+      "order.lines",
+      "customer",
+      "order",
+      "item",
+      "resetUrl",
+    ]);
   });
 });

@@ -73,7 +73,7 @@ import {
   type BlockKind,
   type BlockPath,
 } from "./block-model";
-import { chipNamer, itemPaths } from "./chip-names";
+import { chipNamer, itemPaths, listPaths } from "./chip-names";
 import { chipShowsBlank } from "./chip-values";
 import { ChipButton, ChipViewContext, type ChipView } from "./ChipLabel";
 import { RunEditor } from "./RunEditor";
@@ -113,20 +113,6 @@ const SPACER_SIZES: ReadonlyArray<[string, number]> = [
   ["Medium", 24],
   ["Large", 48],
 ];
-
-/**
- * The declared variables a list block can repeat over: those declared as a
- * list first, then the rest, since a variable declared without a type may
- * still hold one.
- */
-function listVariablesOf(variables: readonly TemplateFormVariable[]): string[] {
-  const isList = (variable: TemplateFormVariable) =>
-    variable.presentation?.type === "list";
-  return [
-    ...variables.filter(isList),
-    ...variables.filter(variable => !isList(variable)),
-  ].map(variable => variable.name);
-}
 
 /**
  * How chips read in the email, or inside the list at `list`: by friendly
@@ -303,6 +289,7 @@ function ImageFields({
               variable={block.src.chip.variable}
               fallback={block.src.chip.fallback}
               editable={!edit.readOnly}
+              address="image"
               onFallback={fallback => {
                 if (!("chip" in block.src)) return;
                 const { variable } = block.src.chip;
@@ -449,7 +436,7 @@ function BlockFields({
               }
             >
               <option value="">Choose a list</option>
-              {listVariablesOf(edit.variables).map(name => (
+              {listPaths(edit.variables).map(name => (
                 <option key={name} value={name}>
                   {chipNamer(edit.variables)(name)}
                 </option>

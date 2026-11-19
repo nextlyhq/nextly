@@ -520,10 +520,21 @@ describe("a written email's blocks", () => {
       screen.getByRole("button", { name: "Logo address, shows nothing" })
     );
     const dialog = await screen.findByRole("dialog");
-    await user.type(
-      within(dialog).getByLabelText("Fallback"),
-      "https://cdn.example/logo.png"
-    );
+    // An image's fallback is an address, as the server requires.
+    const field = within(dialog).getByLabelText("Fallback");
+    await user.type(field, "there");
+    expect(
+      within(dialog).getByText("Use a complete https or http image address.")
+    ).toBeDefined();
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Save fallback",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    await user.clear(field);
+    await user.type(field, "https://cdn.example/logo.png");
     await user.click(
       within(dialog).getByRole("button", { name: "Save fallback" })
     );

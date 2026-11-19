@@ -159,6 +159,46 @@ describe("a written block's text editor", () => {
     expect(last()).toEqual([{ type: "text", text: "See order" }]);
   });
 
+  it("keeps a variable link's fallback address when it is saved unchanged", async () => {
+    const user = userEvent.setup();
+    const link = {
+      chip: { variable: "orderUrl", fallback: "https://shop.example" },
+    };
+    const { select, last } = mountText([
+      { type: "text", text: "See " },
+      { type: "text", text: "order", link },
+    ]);
+    select(0, 5);
+    await user.click(screen.getByRole("button", { name: "Link" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit link" });
+    expect(
+      (within(dialog).getByLabelText(/Fallback address/) as HTMLInputElement)
+        .value
+    ).toBe("https://shop.example");
+    await user.click(within(dialog).getByRole("button", { name: "Save link" }));
+    // The whole selection now has the link, fallback and all.
+    expect(last()).toEqual([{ type: "text", text: "See order", link }]);
+  });
+
+  it("saves only a complete address", async () => {
+    const user = userEvent.setup();
+    const { select } = mountText([{ type: "text", text: "Track it" }]);
+    select(6, 8);
+    await user.click(screen.getByRole("button", { name: "Link" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add link" });
+    await user.type(within(dialog).getByLabelText("Address"), "shop.example");
+    expect(
+      within(dialog).getByText("Use a complete https, http or mailto address.")
+    ).toBeDefined();
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Save link",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+  });
+
   it("says to select text first when nothing is selected", async () => {
     const user = userEvent.setup();
     const { select } = mountText([{ type: "text", text: "Hi" }]);

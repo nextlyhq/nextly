@@ -1,7 +1,7 @@
 /**
  * The link on the selected text: a fixed address, or a variable that holds
- * one, chosen by its friendly name. A link already there can be changed or
- * removed.
+ * one, chosen by its friendly name, with the address to use when the variable
+ * has none. A link already there can be changed or removed.
  *
  * @module components/features/settings/EmailTemplateForm/written/LinkDialog
  */
@@ -18,22 +18,55 @@ import {
 } from "@nextlyhq/ui";
 import { useEffect, useId, useState, type JSX } from "react";
 
+import { addressProblem } from "./addresses";
 import type { WrittenLink } from "./runs";
 
-/** Where a link points: an address typed in, or a variable's value. */
-type Target = "address" | "variable";
+/** What the dialog holds while the person edits it. */
+interface Draft {
+  /** Where the link points: an address typed in, or a variable's value. */
+  target: "address" | "variable";
+  address: string;
+  variable: string;
+  /** The address a variable link uses when the variable has none. */
+  fallback: string;
+}
 
-/** The link the dialog would save, or undefined while it has none to save. */
-function linkOf(
-  target: Target,
-  address: string,
-  variable: string
-): WrittenLink | undefined {
-  if (target === "address") {
-    const url = address.trim();
-    return url ? { url } : undefined;
+/** The dialog's starting point: the selection's link as it is now. */
+function draftOf(link: WrittenLink | undefined): Draft {
+  if (link && "chip" in link) {
+    return {
+      target: "variable",
+      address: "",
+      variable: link.chip.variable,
+      fallback: link.chip.fallback ?? "",
+    };
   }
-  return variable ? { chip: { variable } } : undefined;
+  return {
+    target: "address",
+    address: link?.url ?? "",
+    variable: "",
+    fallback: "",
+  };
+}
+
+/**
+ * The link the draft would save, or why it cannot be saved yet. An address,
+ * typed or as a fallback, must be one the server accepts.
+ */
+function linkOf(draft: Draft): { link?: WrittenLink; problem?: string } {
+  if (draft.target === "address") {
+    const url = draft.address.trim();
+    if (!url) return {};
+    const problem = addressProblem(url, "link");
+    return problem ? { problem } : { link: { url } };
+  }
+  if (!draft.variable) return {};
+  const fallback = draft.fallback.trim();
+  if (!fallback) return { link: { chip: { variable: draft.variable } } };
+  const problem = addressProblem(fallback, "link");
+  return problem
+    ? { problem }
+    : { link: { chip: { variable: draft.variable, fallback } } };
 }
 
 export function LinkDialog({
@@ -53,18 +86,17 @@ export function LinkDialog({
   onSave: (link: WrittenLink | undefined) => void;
 }): JSX.Element {
   const id = useId();
-  const [target, setTarget] = useState<Target>("address");
-  const [address, setAddress] = useState("");
-  const [variable, setVariable] = useState("");
-  // Each opening starts from the selection's link as it is now.
+  const [draft, setDraft] = useState<Draft>(() => draftOf(link));
+  // Each opening starts from the selection's link as it is now, fallback
+  // included, so saving it unchanged changes nothing.
   useEffect(() => {
-    if (!open) return;
-    setTarget(link && "chip" in link ? "variable" : "address");
-    setAddress(link && "url" in link ? link.url : "");
-    setVariable(link && "chip" in link ? link.chip.variable : "");
+    if (open) setDraft(draftOf(link));
   }, [open, link]);
-  const next = linkOf(target, address, variable);
+  const edit = (change: Partial<Draft>) =>
+    setDraft(current => ({ ...current, ...change }));
+  const { link: next, problem } = linkOf(draft);
   const close = () => onOpenChange(false);
+  const problemId = `${id}-problem`;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -90,8 +122,8 @@ export function LinkDialog({
               <input
                 type="radio"
                 name={`${id}-target`}
-                checked={target === "address"}
-                onChange={() => setTarget("address")}
+                checked={draft.target === "address"}
+                onChange={() => edit({ target: "address" })}
               />
               An address
             </label>
@@ -99,42 +131,65 @@ export function LinkDialog({
               <input
                 type="radio"
                 name={`${id}-target`}
-                checked={target === "variable"}
+                checked={draft.target === "variable"}
                 disabled={choices.length === 0}
-                onChange={() => setTarget("variable")}
+                onChange={() => edit({ target: "variable" })}
               />
               A variable
             </label>
           </fieldset>
-          {target === "address" ? (
+          {draft.target === "address" ? (
             <div className="grid gap-1.5">
               <Label htmlFor={`${id}-address`}>Address</Label>
               <Input
                 id={`${id}-address`}
                 inputMode="url"
                 placeholder="https://"
-                value={address}
-                onChange={event => setAddress(event.target.value)}
+                value={draft.address}
+                aria-invalid={problem ? true : undefined}
+                aria-describedby={problem ? problemId : undefined}
+                onChange={event => edit({ address: event.target.value })}
               />
             </div>
           ) : (
-            <div className="grid gap-1.5">
-              <Label htmlFor={`${id}-variable`}>Variable</Label>
-              <select
-                id={`${id}-variable`}
-                className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-                value={variable}
-                onChange={event => setVariable(event.target.value)}
-              >
-                <option value="">Choose a variable</option>
-                {choices.map(choice => (
-                  <option key={choice.path} value={choice.path}>
-                    {choice.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <>
+              <div className="grid gap-1.5">
+                <Label htmlFor={`${id}-variable`}>Variable</Label>
+                <select
+                  id={`${id}-variable`}
+                  className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                  value={draft.variable}
+                  onChange={event => edit({ variable: event.target.value })}
+                >
+                  <option value="">Choose a variable</option>
+                  {choices.map(choice => (
+                    <option key={choice.path} value={choice.path}>
+                      {choice.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor={`${id}-fallback`}>
+                  Fallback address (optional)
+                </Label>
+                <Input
+                  id={`${id}-fallback`}
+                  inputMode="url"
+                  placeholder="https://"
+                  value={draft.fallback}
+                  aria-invalid={problem ? true : undefined}
+                  aria-describedby={problem ? problemId : undefined}
+                  onChange={event => edit({ fallback: event.target.value })}
+                />
+              </div>
+            </>
           )}
+          {problem ? (
+            <p id={problemId} className="text-xs text-destructive">
+              {problem}
+            </p>
+          ) : null}
           <DialogFooter className="gap-2">
             {link ? (
               <Button

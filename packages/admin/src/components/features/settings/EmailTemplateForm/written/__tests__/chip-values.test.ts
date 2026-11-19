@@ -55,6 +55,22 @@ describe("whether a chip shows blank", () => {
     expect(chipShowsBlank({ variable: "item.title" }, data, "order.none")).toBe(
       true
     );
+    // A list with no items never reaches its blocks: a fallback shows nothing.
+    expect(
+      chipShowsBlank(
+        { variable: "item.title", fallback: "Something" },
+        data,
+        "order.none"
+      )
+    ).toBe(true);
+    // With items, the fallback stands in for the one that lacks the value.
+    expect(
+      chipShowsBlank(
+        { variable: "item.note", fallback: "None" },
+        data,
+        "order.lines"
+      )
+    ).toBe(false);
   });
 
   it("reads `item` as a variable outside a list", () => {

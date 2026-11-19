@@ -11,6 +11,7 @@ import { createContext, useContext, useState, type JSX } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
 
+import type { AddressKind } from "./addresses";
 import type { ChipNamer } from "./chip-names";
 import { ChipFallbackDialog } from "./ChipFallbackDialog";
 
@@ -53,7 +54,12 @@ export function ChipButton({
   fallback,
   onFallback,
   editable,
-}: ChipProps & { editable: boolean }): JSX.Element {
+  address,
+}: ChipProps & {
+  editable: boolean;
+  /** Set when the chip stands for an address, which its fallback must be too. */
+  address?: AddressKind;
+}): JSX.Element {
   const view = useContext(ChipViewContext);
   const [open, setOpen] = useState(false);
   const name = view.name(variable);
@@ -79,6 +85,7 @@ export function ChipButton({
         name={name}
         fallback={fallback}
         hasTestValue={!view.blank({ variable })}
+        address={address}
         onSave={onFallback}
       />
     </>

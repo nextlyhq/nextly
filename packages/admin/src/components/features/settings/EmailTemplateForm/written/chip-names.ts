@@ -89,13 +89,49 @@ export function chipNamer(
           }
         : startOf(variables, words);
     let part = start.part;
-    const names = [part?.label ?? start.first];
+    const names = [shown(part?.label, start.first)];
     for (const name of start.rest) {
       part = part?.fields?.find(f => f.name === name);
-      names.push(part?.label ?? name);
+      names.push(shown(part?.label, name));
     }
     return names.join(" › ");
   };
+}
+
+/** A part's label, or its own name when the label is absent or empty. */
+function shown(label: string | undefined, name: string): string {
+  return label ? label : name;
+}
+
+/**
+ * The paths a list block can repeat over: each variable declared as a list
+ * and each list field inside a declared object, then the other variables,
+ * since one declared without a type may still hold a list. Inside a list
+ * field nothing is offered, as a list block cannot hold another.
+ */
+export function listPaths(
+  variables: readonly TemplateFormVariable[]
+): string[] {
+  const lists = (
+    fields: readonly EmailTemplateVariableField[],
+    prefix: string
+  ): string[] =>
+    fields.flatMap(field => {
+      const path = `${prefix}.${field.name}`;
+      if (field.type === "list") return [path];
+      return field.fields ? lists(field.fields, path) : [];
+    });
+  const declared = variables.filter(variable => variable.name);
+  const isList = (variable: TemplateFormVariable) =>
+    variable.presentation?.type === "list";
+  return [
+    ...declared.flatMap(variable =>
+      isList(variable)
+        ? [variable.name]
+        : lists(variable.presentation?.fields ?? [], variable.name)
+    ),
+    ...declared.filter(v => !isList(v)).map(v => v.name),
+  ];
 }
 
 /**
@@ -116,10 +152,14 @@ function fieldPaths(
   });
 }
 
-/** The paths a list's current item offers as chips: `item.<field>`. */
+/**
+ * The paths a list's current item offers as chips: `item.<field>`, or `item`
+ * itself for a list of plain values, which has no fields to offer.
+ */
 export function itemPaths(
   variables: readonly TemplateFormVariable[],
   list: string
 ): string[] {
-  return fieldPaths(partAt(variables, list)?.fields ?? [], "item");
+  const fields = partAt(variables, list)?.fields ?? [];
+  return fields.length > 0 ? fieldPaths(fields, "item") : ["item"];
 }

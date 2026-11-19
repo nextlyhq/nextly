@@ -19,12 +19,15 @@ import { useEffect, useId, useState, type JSX } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
 
+import { addressProblem, type AddressKind } from "./addresses";
+
 export function ChipFallbackDialog({
   open,
   onOpenChange,
   name,
   fallback,
   hasTestValue,
+  address,
   onSave,
 }: {
   open: boolean;
@@ -34,6 +37,8 @@ export function ChipFallbackDialog({
   fallback: string | undefined;
   /** Whether the test data gives the variable a value. */
   hasTestValue: boolean;
+  /** Set when the chip stands for an address, which its fallback must be too. */
+  address?: AddressKind;
   /** The new fallback, or undefined to have none. */
   onSave: (fallback: string | undefined) => void;
 }): JSX.Element {
@@ -44,6 +49,9 @@ export function ChipFallbackDialog({
     if (open) setDraft(fallback ?? "");
   }, [open, fallback]);
   const showsNothing = !hasTestValue && draft === "";
+  // The server refuses an address fallback that is not a complete address.
+  const problem =
+    address && draft !== "" ? addressProblem(draft, address) : null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -58,6 +66,7 @@ export function ChipFallbackDialog({
           className="grid gap-3"
           onSubmit={event => {
             event.preventDefault();
+            if (problem) return;
             onSave(draft === "" ? undefined : draft);
             onOpenChange(false);
           }}
@@ -68,9 +77,16 @@ export function ChipFallbackDialog({
               id={id}
               value={draft}
               maxLength={500}
-              placeholder="For example: there"
+              placeholder={address ? "https://" : "For example: there"}
+              aria-invalid={problem ? true : undefined}
+              aria-describedby={problem ? `${id}-problem` : undefined}
               onChange={event => setDraft(event.target.value)}
             />
+            {problem ? (
+              <p id={`${id}-problem`} className="text-xs text-destructive">
+                {problem}
+              </p>
+            ) : null}
           </div>
           {showsNothing ? (
             <p
@@ -90,7 +106,9 @@ export function ChipFallbackDialog({
             >
               Cancel
             </Button>
-            <Button type="submit">Save fallback</Button>
+            <Button type="submit" disabled={problem !== null}>
+              Save fallback
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
