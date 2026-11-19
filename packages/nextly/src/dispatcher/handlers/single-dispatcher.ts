@@ -91,7 +91,10 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
-import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
+import type {
+  SingleMetadataService,
+  UpdateSingleSchemaResult,
+} from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
 import {
@@ -245,6 +248,31 @@ const SINGLE_SLUG_FIELD: SingleField = {
     message: "Slug must be lowercase with hyphens only (e.g., my-entry-slug)",
   },
 };
+
+/**
+ * What a Single's schema save answers: thrown where its leaving settings were refused or its
+ * migration failed past its main change (its row written either way), else the toast's copy.
+ */
+function schemaSaveAnswer(
+  slug: string,
+  saved: Pick<
+    UpdateSingleSchemaResult,
+    "migrationStatus" | "refusedSettings" | "failure"
+  >
+): string {
+  // Leaving settings the database refused: the admin is told which setting on which field.
+  refuseRefusedLeavingSettings(slug, saved.refusedSettings);
+  // This save's migration failed past its main change: told as a failure, never as pending.
+  if (saved.failure) throw failedSingleMigration(slug, saved.failure);
+  // The status drives the toast copy, so admins see "applied" vs "pending" at once. A save asking
+  // nothing of the schema keeps the status the last migration reached.
+  if (saved.migrationStatus === "applied") {
+    return `Single "${slug}" schema updated and migration applied successfully`;
+  }
+  return saved.migrationStatus === "failed"
+    ? `Single "${slug}" updated. Its last schema change is still recorded as failed.`
+    : `Single "${slug}" schema updated. Migration pending - run migrations to apply changes.`;
+}
 
 /**
  * A Single's schema save whose migration failed past its main change: its row was written, so a
@@ -1318,12 +1346,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The schema change and the registry row are written by one service call, because a lock has
       // to cover both and cannot do that from here: the DDL would already have run by the time a
       // lock taken inside the registry service was acquired.
-      const {
-        record: updated,
-        migrationStatus,
-        refusedSettings,
-        failure,
-      } = await svc.metadata.updateSingleSchema({
+      const saved = await svc.metadata.updateSingleSchema({
         slug,
         existing,
         updateData,
@@ -1342,21 +1365,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         statusRequested: b.status !== undefined,
       });
 
-      // Leaving settings the database refused: the admin is told which setting on which field.
-      refuseRefusedLeavingSettings(slug, refusedSettings);
-
-      // This save's migration failed past its main change: told as a failure, never as pending.
-      if (failure) throw failedSingleMigration(slug, failure);
-
-      // Migration status drives the toast copy so admins see "applied" vs "pending" immediately. A
-      // save asking nothing of the schema keeps the status the last migration reached.
-      const message =
-        migrationStatus === "applied"
-          ? `Single "${slug}" schema updated and migration applied successfully`
-          : migrationStatus === "failed"
-            ? `Single "${slug}" updated. Its last schema change is still recorded as failed.`
-            : `Single "${slug}" schema updated. Migration pending - run migrations to apply changes.`;
-      return respondMutation(message, updated);
+      return respondMutation(schemaSaveAnswer(slug, saved), saved.record);
     },
   },
 

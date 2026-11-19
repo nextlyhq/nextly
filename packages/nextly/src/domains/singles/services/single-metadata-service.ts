@@ -297,6 +297,19 @@ function recordedRowOf(
 }
 
 /**
+ * A migration that failed past its main change in development: the writer kept its files,
+ * recorded applied nowhere, and `result` names them, so the admin is told which.
+ */
+function noteKeptFiles(
+  result: UpdateSingleSchemaResult | undefined,
+  written: { files: readonly string[]; applied: boolean } | undefined
+): void {
+  if (result?.failure && written?.applied === false) {
+    result.failure.keptFiles = [...written.files];
+  }
+}
+
+/**
  * The schema work an update has to do, decided before any statement runs.
  *
  * One plan covers both shapes of update. A field change renders statements; a save that only flips
@@ -1121,11 +1134,7 @@ export class SingleMetadataService {
       throw error;
     }
     if ("rowError" in ran) throw ran.rowError;
-    // A migration that failed past its main change in development: the writer kept its files,
-    // recorded applied nowhere, and the admin is told which.
-    if (ran.result?.failure && deps.applies && written?.applied === false) {
-      ran.result.failure.keptFiles = [...written.files];
-    }
+    if (deps.applies) noteKeptFiles(ran.result, written);
     if (plan && leaving.length > 0 && ran.outcome?.status !== "failed") {
       const outcome = ran.outcome;
       const refused = await this.applyLeavingStep(
