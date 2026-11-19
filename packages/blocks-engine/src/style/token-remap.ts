@@ -10,44 +10,22 @@
  *
  * @module token-remap
  */
+import { customPropertyReferences } from "./css-value-check";
 import { tokenCustomProperty } from "./declarations";
 import { onlySiteProperties } from "./document-token-usage";
 
 /**
- * Text in which `var(` is no reference, so a match steps over it whole: a
- * quoted string (closed, or running to the end of the text), a comment, and
- * an unquoted `url()`, whose contents are a URL. A quoted `url("…")` is
- * stepped over as its string.
- */
-const LITERAL = [
-  String.raw`"(?:[^"\\]|\\[\s\S])*(?:"|$)`,
-  String.raw`'(?:[^'\\]|\\[\s\S])*(?:'|$)`,
-  String.raw`/\*[\s\S]*?(?:\*/|$)`,
-  String.raw`(?<![\w-])[uU][rR][lL]\(\s*[^\s)"'][^)]*\)`,
-].join("|");
-
-/**
- * How a `var()` reference is matched in CSS text: outside a literal, its
- * opening, spaces allowed before the name, and the end of a whole name (a
- * space, a fallback's comma or the closing parenthesis). One grammar for
- * finding the properties CSS text names and for pointing them elsewhere, so
- * a file carries exactly the variables an import points. Group 1 is a
- * literal stepped over, 2 the opening and 3 the name.
- */
-function varPattern(names: string): RegExp {
-  return new RegExp(`(${LITERAL})|(var\\(\\s*)(${names})(?=[\\s,)])`, "g");
-}
-
-/**
  * The custom properties CSS text (a page's or a block's custom CSS) reads
- * through `var()` that a site variable could be written under, matched as
- * {@link remapTokenReferences} points them.
+ * through `var()` that a site variable could be written under: the engine's
+ * one reading of a reference, which {@link remapTokenReferences} points, so a
+ * file carries exactly the variables an import points. Text with no `(`
+ * holds no function, so it is not parsed.
  */
 export function cssTextProperties(text: string): Set<string> {
   const found = new Set<string>();
-  if (!text.includes("var(")) return found;
-  for (const match of text.matchAll(varPattern("--[a-z0-9-]+"))) {
-    if (match[1] === undefined && match[3] !== undefined) found.add(match[3]);
+  if (!text.includes("(")) return found;
+  for (const reference of customPropertyReferences(text) ?? []) {
+    found.add(reference.name);
   }
   return onlySiteProperties(found);
 }
@@ -72,12 +50,14 @@ export interface TokenRemap {
  * `$token` key's identity through `remap.ids`, and inside any string, each
  * `var()` of one of the file's variables' custom properties.
  *
- * A property is matched as a whole name inside `var()`, ended by a space, a
- * fallback's comma or the closing parenthesis, so a longer property it
- * begins is left alone; and in one pass over the text as written, so a
- * property already pointed elsewhere is never pointed again. A `var()` of a
- * property no variable in the file is written under is CSS the author typed,
- * and stays as it is.
+ * A reference is read as a browser reads it, by the engine's one reading
+ * ({@link customPropertyReferences}): a whole name, decoded, so a longer
+ * property one begins is left alone, an escaped spelling of one is pointed,
+ * and a quoted string, a comment or a URL is never read as one. Each is
+ * pointed once, in place, over the text as written, so a property already
+ * pointed elsewhere is never pointed again. A `var()` of a property no
+ * variable in the file is written under is CSS the author typed, and stays
+ * as it is.
  *
  * The walk is built once per `remap` object, however many values it is
  * asked of, so an import passes one object for all its values.
@@ -108,27 +88,12 @@ function walkFor(remap: TokenRemap): (value: unknown) => unknown {
     if (from !== to && !table.has(from)) table.set(from, to);
   }
   if (table.size === 0 && remap.ids.size === 0) return value => value;
-  const names = [...table.keys()]
-    .sort((left, right) => right.length - left.length)
-    .map(escapeRegExp);
-  const pattern =
-    names.length === 0 ? undefined : varPattern(names.join("|"));
   const walk = (node: unknown): unknown => {
     if (typeof node === "string") {
-      return pattern === undefined || !node.includes("var(")
+      // Text with no `(` holds no function, so no reference to point.
+      return table.size === 0 || !node.includes("(")
         ? node
-        : node.replace(
-            pattern,
-            (
-              match: string,
-              literal: string | undefined,
-              open: string,
-              name: string
-            ) =>
-              literal === undefined
-                ? `${open}${table.get(name) ?? name}`
-                : match
-          );
+        : pointedIn(node, table);
     }
     if (Array.isArray(node)) return node.map(walk);
     if (node === null || typeof node !== "object") return node;
@@ -144,7 +109,23 @@ function walkFor(remap: TokenRemap): (value: unknown) => unknown {
   return walk;
 }
 
-/** `text` as a regular expression matching it literally. */
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * `text` with each `var()` reference `table` names written as the property
+ * it maps to, in place, and every other character as it was. A reference
+ * whose place doesn't hold a spelling of its name is left alone rather than
+ * spliced blind. Text that can't be read whole is left as written.
+ */
+function pointedIn(text: string, table: ReadonlyMap<string, string>): string {
+  const references = customPropertyReferences(text);
+  if (references === undefined) return text;
+  let out = "";
+  let from = 0;
+  for (const reference of [...references].sort((a, b) => a.start - b.start)) {
+    const to = table.get(reference.name);
+    if (to === undefined || reference.start < from) continue;
+    if (!text.slice(reference.start, reference.end).startsWith("--")) continue;
+    out += text.slice(from, reference.start) + to;
+    from = reference.end;
+  }
+  return from === 0 ? text : out + text.slice(from);
 }

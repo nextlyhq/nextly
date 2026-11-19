@@ -74,6 +74,27 @@ describe("remapTokenReferences", () => {
     );
   });
 
+  it("reads a name, and var itself, as CSS reads them: escapes decoded", () => {
+    // `\72` is "r": the browser reads `--acme-color-brand` here, so the
+    // reference is pointed, written plainly under this site's name.
+    expect(
+      remapTokenReferences(
+        String.raw`selector { color: var(--acme-colo\72-brand) }`,
+        acme
+      )
+    ).toBe("selector { color: var(--site-color-brand-2) }");
+    expect(
+      remapTokenReferences(String.raw`0 0 4px v\61 r(--acme-space-m)`, acme)
+    ).toBe(String.raw`0 0 4px v\61 r(--site-space-m)`);
+    // A fallback is read too, as the browser substitutes it.
+    expect(
+      remapTokenReferences(
+        String.raw`var(--other, var(--acme-sp\61 ce-m))`,
+        acme
+      )
+    ).toBe("var(--other, var(--site-space-m))");
+  });
+
   it("points each reference once, never along a chain of renames", () => {
     const swap: TokenRemap = {
       ids: new Map([
@@ -98,6 +119,14 @@ describe("cssTextProperties", () => {
     expect([
       ...cssTextProperties(
         "selector { color: var(--site-color-brand); margin: var( --site-space-m, 4px) } .x { gap: var(--Other) }"
+      ),
+    ]).toEqual(["--site-color-brand", "--site-space-m"]);
+  });
+
+  it("names a property by its decoded name, as the remap points it", () => {
+    expect([
+      ...cssTextProperties(
+        String.raw`selector { color: var(--site-colo\72-brand) } .x { margin: v\61 r(--site-space-m) }`
       ),
     ]).toEqual(["--site-color-brand", "--site-space-m"]);
   });
