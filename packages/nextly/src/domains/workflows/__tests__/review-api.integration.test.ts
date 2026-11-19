@@ -721,6 +721,38 @@ describe.each(getConfiguredTestDialects())(
         }
       );
 
+      it.runIf(door.name === "REST")(
+        "names a Single's workflow in its schema read, and never to a visitor",
+        async () => {
+          current = await bootSteps(dialect);
+          await person(app(), "dana", [["read", "banner"]]);
+
+          const read = await rest("GET", ["singles", "banner", "schema"], {
+            kind: "person",
+            id: "dana",
+          });
+
+          expect(read.workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+
+          // A visitor is refused the read, so the workflow is never named to one.
+          const anonymous = await createDynamicHandlers().GET(
+            new Request("http://localhost/api/singles/banner/schema", {
+              headers: { origin: "http://localhost" },
+            }),
+            {
+              params: Promise.resolve({
+                params: ["singles", "banner", "schema"],
+              }),
+            }
+          );
+          expect(anonymous.status).toBe(401);
+          expect(await anonymous.text()).not.toContain("editorial");
+        }
+      );
+
       it("answers a document of a collection with no workflow as no workflow and no parts", async () => {
         current = await bootSteps(dialect, undefined, {
           collections: [plain],

@@ -232,6 +232,11 @@ export interface SingleSchema extends RemovedFromCodeMark {
    * cannot offer an affordance the engine will not honour.
    */
   draftsEnabled?: boolean;
+  /**
+   * The workflow that holds this Single's publishing, from the schema read;
+   * `null` (or absent from an older server) where none is attached.
+   */
+  workflow?: { slug: string; label: string } | null;
 }
 
 /**
@@ -1806,6 +1811,11 @@ export function SingleForm({
     // the review's steps outside the header as the header holds its own.
     held:
       viewingVersion !== null ? HISTORY_REASON : busy ? "Saving…" : undefined,
+    // Known from the schema read: a Single with no workflow publishes
+    // without waiting for a review state. Absent (an older server), it waits.
+    ...(schema.workflow === undefined
+      ? {}
+      : { workflowExpected: schema.workflow !== null }),
   });
 
   const documentActionsInput: DocumentActionBindingsInput = {

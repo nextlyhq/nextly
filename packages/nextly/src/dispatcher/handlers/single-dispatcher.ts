@@ -103,6 +103,7 @@ import {
   schemaDraftSplit,
 } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
+import { attachedWorkflowSummary } from "../../domains/workflows/registry";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
@@ -1265,6 +1266,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             enrichedData as unknown as SingleWithFields
           ),
           ...draftSplitResponseFields(draftSplit),
+          // The workflow that holds this Single's publishing, so the editor
+          // knows whether a review state is coming before it reads one: one
+          // with none publishes without waiting. `null` where none is
+          // attached; read by signed-in callers only, as the route is.
+          workflow: attachedWorkflowSummary(
+            "single",
+            String((single as { slug?: string }).slug ?? "")
+          ),
         } as Record<string, unknown>,
       ]);
       // As the Builder's editor reads it: a relationship the earlier Builder stored gets the
