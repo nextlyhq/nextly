@@ -21,7 +21,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { rowKeyText } from "../../repair-columns/clearing";
 import { fieldsByColumnOf } from "../../required-column-registries";
-import type { ColumnOrigin } from "../../services/field-column-descriptor";
+import {
+  fieldsStoredOnRow,
+  type ColumnOrigin,
+} from "../../services/field-column-descriptor";
 import { compareAsFor } from "../../value-conversion/compare-as";
 import {
   AFFECTED_ROWS_BOUND,
@@ -133,7 +136,11 @@ function fieldOf(
 ): FieldDefinition | undefined {
   const owner = ownerOf(schema, table);
   if (owner === undefined) return undefined;
-  const fields = owner.e.fields as readonly FieldDefinition[];
+  // Every field whose column is on the row: a group with no name only lays its fields out, so
+  // the fields inside it are found as the ones beside it are (`fieldsStoredOnRow`).
+  const fields = fieldsStoredOnRow(
+    owner.e.fields as readonly FieldDefinition[]
+  );
   const name = fieldsByColumnOf(
     fields,
     dialect,
@@ -230,7 +237,15 @@ async function fieldVerdict(
     next: readings.next,
     dialect,
     ...at,
-  }).filter(change => change.to.name === readings.field);
+  })
+    .filter(change => change.to.name === readings.field)
+    // A column the schema makes unique by a declared index is unique to the judge as one made so
+    // by its field: it then counts two values the new type reads as one, which block the change.
+    .map(change =>
+      readings.unique === true
+        ? { ...change, to: { ...change.to, unique: true } }
+        : change
+    );
   const [judged] = await judgeFieldTypeChanges({
     db,
     dialect,

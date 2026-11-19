@@ -34,9 +34,17 @@ import type { JudgedTypeChange, TypeChangeJudge } from "../judge-type-change";
 
 const TABLE = "dc_jts_items";
 
+/**
+ * Whether the cases' `value` field sits inside a group with no name, which only lays fields out:
+ * the field's column is on the entry's row either way.
+ */
+let inNamelessGroup = false;
+
 const fieldsOf = (value: Record<string, unknown>) => [
   { name: "title", type: "text" },
-  { name: "value", ...value },
+  inNamelessGroup
+    ? { type: "group", fields: [{ name: "value", ...value }] }
+    : { name: "value", ...value },
 ];
 
 /** The collection as code declares it: never the Schema Builder's. */
@@ -68,6 +76,7 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
   let db: ReturnType<typeof drizzle>;
 
   beforeEach(async () => {
+    inNamelessGroup = false;
     clearCachedSnapshot();
     sqlite?.close();
     sqlite = new Database(":memory:");
@@ -211,6 +220,15 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
     expect(change.cleared).toEqual([]);
   });
 
+  it("reads a field inside a group with no name as it reads one beside it", async () => {
+    // The group holds no value: the field's column is on the row, and is judged like any other.
+    inNamelessGroup = true;
+    await create({ type: "text" }, { r1: null, r2: "maybe" });
+    const change = await judged({ type: "checkbox" }, { type: "text" });
+    expect(change.judgement.class).toBe("lossy");
+    expect(rowsOf(change)).toEqual([["not-a-boolean", "lossy", ["r2"]]]);
+  });
+
   it("judges by the column rule alone where the registry recorded no field before the apply", async () => {
     // Nothing says what the values were written as, so nothing is refused on a guess.
     await create(
@@ -254,6 +272,20 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
     expect(rowsOf(change)).toEqual([
       ["not-a-boolean", "lossy", ["r1", "r2", "r3"]],
       ["repeated", "blocked", ["r1", "r2"]],
+    ]);
+  });
+
+  it("blocks two values the new type reads as one where the column is unique by the collection's index", async () => {
+    // Nothing is cleared here: both texts are numbers. The index would hold the number 1 twice.
+    await create({ type: "text" }, { r1: "1", r2: "1", r3: "2" });
+    const change = await judged({ type: "number" }, { type: "text" }, [
+      { fields: ["value"], unique: true },
+    ]);
+    expect(change.judgement.class).toBe("blocked");
+    expect(rowsOf(change)).toContainEqual([
+      "repeated",
+      "blocked",
+      ["r1", "r2"],
     ]);
   });
 
