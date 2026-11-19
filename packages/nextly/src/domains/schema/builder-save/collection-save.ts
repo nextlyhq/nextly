@@ -564,10 +564,7 @@ async function settleStoppedSave(
     return undefined;
   }
   if (judged === undefined) return undefined;
-  const definitionPath = resolve(
-    deps.projectRoot,
-    deps.config.db.uiSchemaFile
-  );
+  const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   // What the save left, read before anything of it is replaced, to be put back where the
   // replacement cannot be recorded.
   const left = {
@@ -737,18 +734,45 @@ function judgeableStop(
 ): { previous: UiSchemaEntity; entity: UiSchemaEntity } | undefined {
   const { previous, entity } = save;
   if (previous === null || entity === null) return undefined;
+  const oneFile = files.adopt === undefined && files.change.length === 1;
+  if (!oneFile || carriesItsOwnRows(save) || pastItsTable(previous, entity)) {
+    return undefined;
+  }
+  return { previous, entity };
+}
+
+/**
+ * Whether a save carries statements of its own beyond the generator's: junction tables, keys,
+ * fills or deletes of rows.
+ */
+function carriesItsOwnRows(save: CollectionSave): boolean {
+  const statements = [
+    ...(save.junctions?.up ?? []),
+    ...(save.junctions?.down ?? []),
+    ...(save.resolutions ?? []),
+    ...(save.rowFills ?? []),
+  ];
+  const keysChange =
+    save.keys !== undefined &&
+    JSON.stringify(save.keys.before) !== JSON.stringify(save.keys.after);
+  return statements.length > 0 || keysChange;
+}
+
+/**
+ * Whether a save reaches past what the judgement reads of the entity's main table: a translated
+ * entity's translations table, or the fields a field with no name keeps on the row.
+ */
+function pastItsTable(
+  previous: UiSchemaEntity,
+  entity: UiSchemaEntity
+): boolean {
   const unnamed = (e: UiSchemaEntity) =>
     JSON.stringify(e.fields.filter(f => f.name === undefined));
-  const outOfReach = [
-    files.adopt !== undefined || files.change.length !== 1,
-    previous.localized === true || entity.localized === true,
-    (save.junctions?.up.length ?? 0) + (save.junctions?.down.length ?? 0) > 0,
-    save.keys !== undefined &&
-      JSON.stringify(save.keys.before) !== JSON.stringify(save.keys.after),
-    (save.resolutions?.length ?? 0) + (save.rowFills?.length ?? 0) > 0,
-    unnamed(previous) !== unnamed(entity),
-  ];
-  return outOfReach.some(Boolean) ? undefined : { previous, entity };
+  return (
+    previous.localized === true ||
+    entity.localized === true ||
+    unnamed(previous) !== unnamed(entity)
+  );
 }
 
 /**

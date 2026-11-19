@@ -304,24 +304,23 @@ function only(
   name: string,
   names: PartNames
 ): TableSpec {
-  const kept = <P extends { name: string }>(
-    part: Part,
-    list: readonly P[] | undefined
-  ): P[] | undefined =>
-    list === undefined
-      ? undefined
-      : list.filter(p => names.get(part)?.has(p.name) === true);
-  const indexes = kept("indexes", table?.indexes);
-  const checks = kept("checks", table?.checks);
-  const foreignKeys = kept("foreignKeys", table?.foreignKeys);
-  return {
+  const kept = <P extends { name: string }>(part: Part, list: readonly P[]) =>
+    list.filter(p => names.get(part)?.has(p.name) === true);
+  const shape: TableSpec = {
     name,
-    columns: kept("columns", table?.columns ?? []) ?? [],
-    ...(indexes === undefined ? {} : { indexes }),
-    ...(checks === undefined ? {} : { checks }),
-    ...(foreignKeys === undefined ? {} : { foreignKeys }),
+    columns: kept("columns", table?.columns ?? []),
   };
+  for (const part of TRACKED_PARTS) {
+    const list = table?.[part];
+    if (list !== undefined) {
+      Object.assign(shape, { [part]: kept<{ name: string }>(part, list) });
+    }
+  }
+  return shape;
 }
+
+/** The kinds of part a table may leave untracked (`TableSpec`). */
+const TRACKED_PARTS = ["indexes", "checks", "foreignKeys"] as const;
 
 /** Whether two shapes of one table are the same to the snapshot diff. */
 function equivalent(a: TableSpec, b: TableSpec): boolean {
