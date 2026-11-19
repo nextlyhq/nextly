@@ -284,10 +284,13 @@ describe("the editor's search", () => {
     expect(headings.indexOf("Pages")).toBeGreaterThan(
       headings.indexOf("On this page")
     );
+    // Drawn in the group's place, and said by the palette's status line,
+    // outside the list, where a listbox lets a status be.
     const pages = screen.getByRole("group", { name: "Pages" });
-    expect(within(pages).getByRole("status").textContent).toBe(
-      "Searching pages…"
-    );
+    expect(pages.textContent).toContain("Searching pages…");
+    expect(
+      within(screen.getByRole("dialog")).getByRole("status").textContent
+    ).toBe("Searching pages…");
   });
 });
 
