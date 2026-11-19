@@ -784,5 +784,32 @@ describe("a field group's registry and table, under either storage naming", () =
         e => e.table
       )
     ).toEqual(["comp_seo"]);
+    // A table the field group named itself keeps that name, even where another group, made after
+    // the storage migration, owns the `fg_` spelling of it.
+    const custom = {
+      ...record,
+      fieldGroups: {
+        special: {
+          source: "code",
+          settings: { slug: "special", dbName: "comp_custom" },
+        },
+      },
+    };
+    expect(
+      coveredEntitiesOf(
+        args,
+        custom as never,
+        new Set(["comp_custom", "fg_custom"])
+      ).map(e => e.table)
+    ).toEqual(["comp_custom"]);
+    // And where the snapshot holds both spellings of a name the slug gives, the one the storage
+    // migration left under the old naming is this group's.
+    expect(
+      coveredEntitiesOf(
+        args,
+        record as never,
+        new Set(["comp_seo", "fg_seo"])
+      ).map(e => e.table)
+    ).toEqual(["comp_seo"]);
   });
 });

@@ -4113,9 +4113,15 @@ export function coveredEntitiesOf(
       args.components,
       recorded?.fieldGroups,
       (slug, dbName) => {
-        const legacy = dbName ?? resolveComponentTableName(slug);
+        // A table an earlier release let the field group name keeps that name through the
+        // storage migration.
+        if (dbName !== undefined) return dbName;
+        const legacy = resolveComponentTableName(slug);
         const current = underNaming("current", legacy);
-        return recordedTables?.has(current) === true ? current : legacy;
+        return recordedTables?.has(legacy) !== true &&
+          recordedTables?.has(current) === true
+          ? current
+          : legacy;
       }
     ),
   ];

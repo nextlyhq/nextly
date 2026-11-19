@@ -517,9 +517,9 @@ describe.each(getConfiguredTestDialects())(
       expect(await otherLeft(deployed)).toEqual(other);
     }, 240_000);
 
-    it.each(AFTER_THE_FILE.map(({ at }) => at))(
-      "finishes, with nothing pending, a run that failed once the file was recorded, at %s",
-      async at => {
+    it.each(AFTER_THE_FILE)(
+      "finishes, with nothing pending, a run that failed once the file was recorded, at $at",
+      async ({ at, registryRow }) => {
         const { deployed, other } = await readyToDelete();
         const stopped = await withStopPoints(
           point => {
@@ -527,9 +527,13 @@ describe.each(getConfiguredTestDialects())(
           },
           () => migrate()
         );
-        // The run fails and the file stays recorded, its tables gone.
+        // The run fails and the file stays recorded, its tables gone, and stops where it stands:
+        // the registry row stays until the registry write commits.
         expect(stopped.code, stopped.said).not.toBeUndefined();
         expect(await deployed.tableExists(NOTES_TABLE)).toBe(false);
+        expect((await notesLeft(deployed)).registryRow, stopped.said).toBe(
+          registryRow
+        );
         const ledger = await ledgerOf(deployed, dialect);
 
         const finished = await migrate();

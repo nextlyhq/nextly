@@ -3225,6 +3225,9 @@ export async function migrateCore(
           markOrphans
         ));
       } catch (error) {
+        // A test's stop at a point ends the run where it stands
+        // (`stop-points.ts`): nothing after the point may run.
+        if (isStoppedAtPoint(error)) throw error;
         // A file failed after earlier ones applied: their registry rows are
         // still written, from the newest snapshot that did apply, before the
         // failure ends the run.
