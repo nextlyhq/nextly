@@ -84,6 +84,8 @@ const leftovers = vi.hoisted(() => ({
   labelling: false,
   /** A collection whose registry row the next registry write leaves unwritten, as a row that failed. */
   unwritten: undefined as string | undefined,
+  /** Loses the schema lock once, in the translation rows' removal, as a run whose lease lapsed. */
+  lockLost: false,
 }));
 // `unwritten` writes every registry row the newest applied snapshot records but that collection's,
 // once: the rest of the write, the removal of dropped entities' rows included, is as it was.
@@ -160,6 +162,13 @@ vi.mock(
         if (leftovers.stop) {
           leftovers.stop = false;
           return Promise.reject(new Error("stopped in the translation rows"));
+        }
+        if (leftovers.lockLost) {
+          leftovers.lockLost = false;
+          return import("../../pipeline/schema-lock").then(
+            ({ lostLockError }) =>
+              Promise.reject(lostLockError("nextly migrate"))
+          );
         }
         return actual.removeEntityTranslationRows(...args);
       },
@@ -303,6 +312,7 @@ afterEach(async () => {
   leftovers.stop = false;
   leftovers.labelling = false;
   leftovers.unwritten = undefined;
+  leftovers.lockLost = false;
   setNonInteractive(false);
   await shutdownServices().catch(() => {});
   for (const close of closers.splice(0)) await close();
@@ -1323,6 +1333,25 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(later.said).not.toContain("Database is up to date");
       expect(later.said).toContain("No migration files to apply.");
+    }, 180_000);
+
+    // A run that loses the schema lock while removing what a deleted collection left stops there:
+    // it may change nothing further, so it is never passed over as one entity's failure.
+    it("stops the run when it loses the schema lock while removing what a deleted collection left", async () => {
+      await deleteNotesOnTheDeployedDatabase(() => {
+        leftovers.earlier = true;
+      });
+      leftovers.earlier = false;
+      leftovers.lockLost = true;
+
+      const later = await migrate();
+
+      expect(leftovers.lockLost, "the lock loss was reached").toBe(false);
+      expect(later.code, later.said).not.toBeUndefined();
+      expect(later.said).toContain("lost the schema lock");
+      expect(later.said).not.toContain(
+        `Could not remove what the deleted collection "${NOTES}" left`
+      );
     }, 180_000);
 
     it("removes none of its rows in a run stopped part-way through them, and all of them in the next", async () => {
