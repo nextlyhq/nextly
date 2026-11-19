@@ -78,6 +78,12 @@ export interface ComponentVariantsHost {
    * whose canvas has no variant of it to preview.
    */
   readonly editedInOwnView?: boolean;
+  /**
+   * Opens the component's own view, where its variants are edited: offered
+   * beside the line saying so while `editedInOwnView`. Absent where the host
+   * cannot open it, and the line then stands alone.
+   */
+  readonly onOpenOwnView?: () => void;
 }
 
 /** The open variant, as the host holds it for the canvas to preview. */

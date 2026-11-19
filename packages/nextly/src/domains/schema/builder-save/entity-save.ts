@@ -83,6 +83,11 @@ export async function writeEntitySave(
      * `apply` still runs once they are written.
      */
     runsFile?: boolean;
+    /**
+     * With `runsFile`, work done inside the last file's transaction, after its ledger row (the
+     * writer's `inLastTransaction`): a registry write that commits or rolls back with the file.
+     */
+    inLastTransaction?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult | undefined> {
   if (deps === undefined) {
@@ -90,7 +95,12 @@ export async function writeEntitySave(
     return undefined;
   }
   if (deps.applies && options.runsFile === true) {
-    return writeCollectionSave(deps, save, { historyChecked: true });
+    return writeCollectionSave(deps, save, {
+      historyChecked: true,
+      ...(options.inLastTransaction === undefined
+        ? {}
+        : { inLastTransaction: options.inLastTransaction }),
+    });
   }
   // Only a part-way failure is the writer's to know; anything else `apply`
   // answers is the caller's.
@@ -123,17 +133,33 @@ export async function writeEntityDelete(
     junctions?: NonNullable<CollectionSave["junctions"]>;
     keys?: NonNullable<CollectionSave["keys"]>;
   },
-  apply: () => Promise<unknown>
+  /**
+   * Removes the entity. Where it runs in one transaction (`rollsBackWhole`),
+   * it calls `committed` once that transaction has committed, before any work
+   * that follows it.
+   */
+  apply: (committed: () => void) => Promise<unknown>,
+  options: {
+    /**
+     * Whether `apply` runs in one transaction that a failure undoes whole, as
+     * a Single's or a field group's delete does on PostgreSQL and SQLite: a
+     * failure before its commit changed nothing, so the files are withdrawn
+     * as a refused save's are, rather than kept for a delete that never ran.
+     * A failure after its commit (`committed`) comes after a delete the
+     * database holds: the files are recorded applied, and the failure thrown.
+     */
+    rollsBackWhole?: boolean;
+  } = {}
 ): Promise<void> {
   if (deps === undefined) {
-    await apply();
+    await apply(() => undefined);
     return;
   }
-  // A delete tears down in steps that cannot be rolled back (MySQL commits
-  // each drop, and the teardowns before the drop are not reversible), so a
-  // failure may come after some of them ran: its files are kept, recorded
-  // applied nowhere, and the failure is still thrown. The next `nextly migrate`
-  // finishes the delete from them, as a retried delete would.
+  // Otherwise a delete tears down in steps that cannot be rolled back (MySQL
+  // commits each drop, and what ran before it), so a failure may come after
+  // some of them ran: its files are kept, recorded applied nowhere, and the
+  // failure is still thrown. The next `nextly migrate` finishes the delete
+  // from them, as a retried delete would.
   const failed: { error?: unknown } = {};
   await writeEntitySave(
     deps,
@@ -154,8 +180,24 @@ export async function writeEntityDelete(
       ...(removed.keys === undefined ? {} : { keys: removed.keys }),
     },
     async () => {
+      if (options.rollsBackWhole === true) {
+        let committed = false;
+        try {
+          await apply(() => {
+            committed = true;
+          });
+        } catch (error) {
+          // Before the commit it undid everything, so it is thrown through and
+          // the writer withdraws the files.
+          if (!committed) throw error;
+          // After it, the delete stands: its files are recorded applied as
+          // any applied save's, and the failure is thrown once they are.
+          failed.error = error;
+        }
+        return undefined;
+      }
       try {
-        await apply();
+        await apply(() => undefined);
         return undefined;
       } catch (error) {
         failed.error = error;

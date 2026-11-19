@@ -109,12 +109,20 @@ export function usePagesPanel(
   currentSetId?: string
 ): PagesPanelMount {
   const identity = useDocumentIdentity();
-  const currentPage: PageReference | null =
-    editingPage &&
-    identity?.kind === "collection" &&
-    identity.documentId !== undefined
-      ? { collection: identity.slug, id: identity.documentId }
-      : null;
+  const collection =
+    editingPage && identity?.kind === "collection" ? identity.slug : undefined;
+  const documentId =
+    collection === undefined ? undefined : identity?.documentId;
+  // One object while it names the same page: the page checks, the provided
+  // checks and the doubled-header notice are each read again when it changes,
+  // and a new one each render ran every page check on every click and key.
+  const currentPage = React.useMemo(
+    (): PageReference | null =>
+      collection !== undefined && documentId !== undefined
+        ? { collection, id: documentId }
+        : null,
+    [collection, documentId]
+  );
   const [settingsRequest, setSettingsRequest] = React.useState<
     { readonly count: number } | undefined
   >(() => (arrivedForSettings() ? { count: 1 } : undefined));

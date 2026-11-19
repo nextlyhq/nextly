@@ -198,6 +198,12 @@ export interface FormatArgs {
    */
   changesNoTable?: boolean;
   /**
+   * Whether this run's companion files make the table changes this file's snapshot records (a
+   * disable puts a table's columns back before this file runs). A file that then changes no table
+   * itself still has to let a rollback through to them.
+   */
+  tableChangesInCompanionFiles?: boolean;
+  /**
    * What the migration deletes (`plannedDeletions`). A file with any carries
    * the destructive mark: a `-- Destructive:` line naming the consent `nextly
    * migrate` needs, and one `-- Deletes:` line per deletion. Counts are left
@@ -207,6 +213,34 @@ export interface FormatArgs {
   deletions?: readonly Deletion[];
   /** Override generated-at timestamp for tests; default = `new Date()`. */
   now?: Date;
+}
+
+/**
+ * The DOWN section's statements. A file that changes settings alone has no table statement to
+ * undo, which is a different fact from a table change nobody wrote the reverse of: `migrate:down`
+ * refuses a DOWN with no statement as irreversible, and this file must not stop a rollback reaching
+ * the migrations before it. So its DOWN is one statement that changes nothing, valid on every
+ * dialect. The same holds for a file whose table changes its companion files make: they undo them
+ * in their own DOWN, which runs after this one.
+ */
+function downBodyOf(args: FormatArgs): string {
+  if (args.downSqlStatements.length > 0) {
+    return args.downSqlStatements.map(s => `${s};`).join("\n\n");
+  }
+  if (args.changesNoTable !== true) {
+    return "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
+  }
+  const settingsOnly =
+    (args.settingsChanges ?? []).length +
+      (args.permissionChanges ?? []).length >
+    0;
+  if (settingsOnly) {
+    return "-- No table statements to undo: this migration changes settings or permissions only.\nSELECT 1;";
+  }
+  if (args.tableChangesInCompanionFiles === true) {
+    return "-- No table statements to undo here: its companion files change the tables, and undo them in their own DOWN.\nSELECT 1;";
+  }
+  return "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
 }
 
 export function formatMigrationFile(args: FormatArgs): string {
@@ -236,22 +270,7 @@ export function formatMigrationFile(args: FormatArgs): string {
   // Each statement gets a trailing `;`. splitSqlStatements in migrate.ts
   // splits on `;` so statements MUST be terminated.
   const body = args.sqlStatements.map(s => `${s};`).join("\n\n");
-  // A file that changes settings alone has no table statement to undo, which
-  // is a different fact from a table change nobody wrote the reverse of:
-  // `migrate:down` refuses a DOWN with no statement as irreversible, and this
-  // file must not stop a rollback reaching the migrations before it. So its
-  // DOWN is one statement that changes nothing, valid on every dialect.
-  const settingsOnly =
-    args.changesNoTable === true &&
-    (args.settingsChanges ?? []).length +
-      (args.permissionChanges ?? []).length >
-      0;
-  const downBody =
-    args.downSqlStatements.length > 0
-      ? args.downSqlStatements.map(s => `${s};`).join("\n\n")
-      : settingsOnly
-        ? "-- No table statements to undo: this migration changes settings or permissions only.\nSELECT 1;"
-        : "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
+  const downBody = downBodyOf(args);
 
   return `-- Migration: ${args.name}
 ${destructiveLines(args.deletions ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}-- Generated at: ${now}

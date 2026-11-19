@@ -144,6 +144,13 @@ import {
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
 
+import {
+  openSaveRecords,
+  recordSaveStarted,
+  withSaveRecords,
+  type StartedSave,
+} from "./save-in-progress";
+
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
   adapter: DrizzleAdapter;
@@ -154,6 +161,12 @@ export interface CollectionSaveDeps {
   projectRoot: string;
   /** Absolute path to `db.migrationsDir`. */
   migrationsDir: string;
+  /**
+   * The database the app's saves write to, as a save's record that it is in progress names it
+   * (`savedDatabase`). Unknown where not given, which the commands reading the record take as
+   * this machine's database.
+   */
+  database?: string;
   /** Whether a save runs its migration here: in development. */
   applies: boolean;
   logger: {
@@ -334,54 +347,76 @@ export async function writeCollectionSave(
      * that was refused; `"partly-applied"` keeps them, recorded nowhere.
      */
     appliedAfter?: () => Promise<void | "partly-applied">;
+    /**
+     * In development, where the file runs, work done inside the last file's own transaction, after
+     * its ledger row: a caller's registry write, so the change, its ledger row and the registry row
+     * commit or roll back together, and a failed write is withdrawn as a failed statement is
+     * (`undoUnapplied`). It joins that transaction through the adapter, as `nextly migrate`'s
+     * registry rows do (`writesInFileTransaction`); a file run outside a transaction has none to
+     * join, and the work then runs on its own after the file.
+     */
+    inLastTransaction?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult> {
-  const bounds = boundsFor(deps);
-  const written = await writeSave(deps, save, {
-    ...options,
-    // The file runs here, planned from the history: a translations table
-    // the history does not describe would meet statements written for
-    // another one.
-    runsFile: deps.applies && options.appliedBy === undefined,
-  });
-  // Once a push has run, the database changed outside the files: they stay.
-  let pushed = false;
-  try {
-    if (deps.applies && options.appliedBy !== undefined) {
-      // Judged before the push, as the file road's reconcile judges a file before its statements:
-      // a push over a table the history does not describe would change it and leave the files
-      // unrecordable.
-      await refuseDriftBeforePush(deps, written.files, written.table);
-      const applied = await options.appliedBy();
-      pushed = true;
-      if (applied === "partly-applied") {
-        return { files: [...written.names], applied: false };
-      }
-      await recordWhatWasPushed(deps, written.files, written.table);
-    } else if (deps.applies) {
-      // A translated entity's file archives the languages it takes out of translation into
-      // `nextly_i18n_archive`, which a database `nextly migrate` has not prepared lacks. Made
-      // ready here, under the schema lock the file's statements run under.
-      if (save.previous?.localized === true) {
-        await ensureI18nArchive(
-          deps.adapter,
-          deps.adapter.getCapabilities().dialect
+  // The save's record that it is in progress is cleared when this scope ends, or the caller's
+  // where one is open around it (`withSaveRecords`), as its outcome allows.
+  return withSaveRecords(async () => {
+    const bounds = boundsFor(deps);
+    const written = await writeSave(deps, save, {
+      ...options,
+      // The file runs here, planned from the history: a translations table
+      // the history does not describe would meet statements written for
+      // another one.
+      runsFile: deps.applies && options.appliedBy === undefined,
+    });
+    // Once a push has run, the database changed outside the files: they stay.
+    let pushed = false;
+    try {
+      if (deps.applies && options.appliedBy !== undefined) {
+        // Judged before the push, as the file road's reconcile judges a file before its statements:
+        // a push over a table the history does not describe would change it and leave the files
+        // unrecordable.
+        await refuseDriftBeforePush(deps, written.files, written.table);
+        const applied = await options.appliedBy();
+        pushed = true;
+        if (applied === "partly-applied") {
+          // Kept recorded applied nowhere: nothing says what committed, so the record stays.
+          written.started.left();
+          return { files: [...written.names], applied: false };
+        }
+        await recordWhatWasPushed(deps, written.files, written.table);
+      } else if (deps.applies) {
+        // A translated entity's file archives the languages it takes out of translation into
+        // `nextly_i18n_archive`, which a database `nextly migrate` has not prepared lacks. Made
+        // ready here, under the schema lock the file's statements run under.
+        if (save.previous?.localized === true) {
+          await ensureI18nArchive(
+            deps.adapter,
+            deps.adapter.getCapabilities().dialect
+          );
+        }
+        await runWritten(
+          deps,
+          written.files,
+          written.table,
+          bounds,
+          options.inLastTransaction
         );
+      } else if (options.appliedAfter !== undefined) {
+        const applied = await options.appliedAfter();
+        pushed = true;
+        if (applied === "partly-applied") written.started.left();
       }
-      await runWritten(deps, written.files, written.table, bounds);
-    } else if (options.appliedAfter !== undefined) {
-      await options.appliedAfter();
-      pushed = true;
+      return { files: [...written.names], applied: deps.applies };
+    } catch (error) {
+      if (!pushed) {
+        await undoThenThrow(error, [
+          { files: written.names, undo: () => written.undo(error) },
+        ]);
+      }
+      throw error;
     }
-    return { files: [...written.names], applied: deps.applies };
-  } catch (error) {
-    if (!pushed) {
-      await undoThenThrow(error, [
-        { files: written.names, undo: () => written.undo(error) },
-      ]);
-    }
-    throw error;
-  }
+  }, deps.logger);
 }
 
 /**
@@ -446,15 +481,28 @@ export async function prepareCollectionSave(
   // Read before anything is written, and so before the caller's own work between the two (a
   // delete's teardown): a bound out of range refuses the save while it still changes nothing.
   const bounds = boundsFor(deps);
-  const written = await writeSave(deps, save, options);
+  // The save ends after this returns, once the caller runs or withdraws it: its record is
+  // cleared then, or by the caller's scope where one is open around it.
+  const records = openSaveRecords(deps.logger);
+  let written: Awaited<ReturnType<typeof writeSave>>;
+  try {
+    written = await records.run(() => writeSave(deps, save, options));
+  } catch (error) {
+    await records.end(false);
+    throw error;
+  }
   return {
     files: [...written.names],
     run: async () => {
       if (deps.applies) {
         await runWritten(deps, written.files, written.table, bounds);
       }
+      await records.end(true);
     },
-    withdraw: () => written.undo(undefined),
+    withdraw: async () => {
+      await written.undo(undefined);
+      await records.end(false);
+    },
   };
 }
 
@@ -473,6 +521,8 @@ async function writeSave(
   names: readonly string[];
   table: string;
   undo(error: unknown): Promise<void>;
+  /** The save's record that it is in progress, told how the save ended. */
+  started: StartedSave;
 }> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
@@ -488,16 +538,50 @@ async function writeSave(
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
-  await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+  // Recorded before the first write, so a process stopped at any write after it leaves a record
+  // of the save and of the definition it started from.
+  const started = await recordSaveStarted({
+    adapter: deps.adapter,
+    projectRoot: deps.projectRoot,
+    kind: kindOf(save).kind,
+    slug: save.slug,
+    definitionFile: definitionPath,
+    definitionBefore: before,
+    database: deps.database,
+    notify: line => deps.logger.warn(line),
+  });
+  // The migration files there before the save: one the save left that is not among them, and not
+  // named as written (a file its generation could not take back), keeps the record. Read before
+  // the definition is replaced, so a read that fails has changed nothing.
+  let sqlBefore: string[];
+  try {
+    sqlBefore = await sqlFiles(deps.migrationsDir);
+    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
+  } catch (error) {
+    // A failed read or replace leaves the definition whole and nothing else of the save is
+    // written yet: there is nothing to settle, so the record clears with the save's failure.
+    started.withdrawn();
+    throw error;
+  }
 
   const names: string[] = [];
-  const undo = (error: unknown) =>
-    undoUnapplied(deps, names, before, definitionPath, error);
+  const undo = async (error: unknown) => {
+    // Only a save that withdrew everything it wrote has nothing left to settle.
+    if (
+      (await undoUnapplied(deps, names, before, definitionPath, error)) ===
+        "withdrawn" &&
+      (await sqlFiles(deps.migrationsDir)).every(file =>
+        sqlBefore.includes(file)
+      )
+    ) {
+      started.withdrawn();
+    }
+  };
   try {
     const files = await writeFiles(deps, save, plan, written =>
       names.push(...written)
     );
-    return { files, names, table: plan.table, undo };
+    return { files, names, table: plan.table, undo, started };
   } catch (error) {
     return undoThenThrow(error, [{ files: names, undo: () => undo(error) }]);
   }
@@ -524,6 +608,8 @@ async function refuseSaveTypeChanges(
   const renamed = new Map(
     (save.renamedFields ?? []).map(r => [r.from, r.to] as const)
   );
+  // A field group keeps its fields on its component rows, where a many-to-many has a column.
+  const componentRow = kind.kind === "fieldGroup" ? { componentRow: true } : {};
   // Asked only of a save that changes a field's type, so no other save reads its folder.
   const changes = fieldTypeChangesOf({
     previous,
@@ -531,6 +617,7 @@ async function refuseSaveTypeChanges(
     renamed,
     dialect,
     builtBy: kind.builtBy,
+    ...componentRow,
   });
   if (changes.length === 0) return;
   await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
@@ -544,6 +631,7 @@ async function refuseSaveTypeChanges(
     // No consent is taken here: a lossy type change is refused until the save clears the
     // consented values before it converts the column.
     builtBy: kind.builtBy,
+    ...componentRow,
   });
 }
 
@@ -1997,7 +2085,8 @@ async function runWritten(
   deps: CollectionSaveDeps,
   files: SaveFiles,
   table: string,
-  boundsRead: BusyTableBounds | undefined
+  boundsRead: BusyTableBounds | undefined,
+  inLastTransaction?: () => Promise<void>
 ): Promise<void> {
   const db = deps.adapter.getDrizzle();
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -2006,6 +2095,8 @@ async function runWritten(
   // The record of a file a busy table stopped waits for the ledger table one try at most.
   const recordStopped = boundedStopRecord(deps.adapter, bounds.tryMs);
   const applied: string[] = [];
+  // The file being run, so the last one's transaction also takes `inLastTransaction`.
+  let running: string | undefined;
   const executeSql = (
     sql: string,
     unit: { source: string; transaction: boolean },
@@ -2015,7 +2106,12 @@ async function runWritten(
       deps.adapter,
       splitSqlStatements(sql, dialect, unit),
       unit,
-      after,
+      inLastTransaction !== undefined && running === ordered.at(-1)
+        ? async (handle: unknown, statementsExecuted: number) => {
+            await after(handle, statementsExecuted);
+            await inLastTransaction();
+          }
+        : after,
       {
         bounds,
         notify: line => deps.logger.warn(line),
@@ -2040,6 +2136,7 @@ async function runWritten(
     // as part-way, and a refusal that ran nothing was reported as a failure
     // whose statements stayed applied, its files kept for `migrate:resolve`.
     await refuseBeforeAnyStatement(filename);
+    running = filename;
     await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
     applied.push(filename);
   }
@@ -2362,12 +2459,12 @@ async function undoUnapplied(
   definition: string | undefined,
   definitionPath: string,
   error: unknown
-): Promise<void> {
+): Promise<"withdrawn" | "kept"> {
   if (partlyApplied(error)) {
     deps.logger.error(
       "The save's migration failed part-way, so its files stay for `nextly migrate:resolve`."
     );
-    return;
+    return "kept";
   }
   const repo = new SchemaEventsRepository(
     deps.adapter.getDrizzle(),
@@ -2388,7 +2485,7 @@ async function undoUnapplied(
     deps.logger.error(
       `${applied.join(", ")} applied before the save failed, so the save's files and its definition stay: \`nextly migrate\` runs the rest once the cause is fixed.`
     );
-    return;
+    return "kept";
   }
   for (const filename of written) {
     await settleAttempts(deps, repo, filename);
@@ -2404,6 +2501,7 @@ async function undoUnapplied(
   }
   if (definition === undefined) await rm(definitionPath, { force: true });
   else await writeAtomically(definitionPath, definition);
+  return "withdrawn";
 }
 
 /**
