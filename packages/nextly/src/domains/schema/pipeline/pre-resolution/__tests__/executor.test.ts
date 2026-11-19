@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type {
+  ChangeColumnTypeOp,
   DropColumnOp,
   DropIndexOp,
   DropTableOp,
@@ -408,19 +409,61 @@ describe("executePreResolutionOps - each finished statement told as it finishes"
       { type: "drop_table", tableName: "dc_a" } satisfies DropTableOp,
       { type: "drop_table", tableName: "dc_b" } satisfies DropTableOp,
     ];
-    let told = 0;
+    const finished: string[] = [];
     await expect(
       executePreResolutionOps(
         tx,
         ops,
         "mysql",
         ["ALTER TABLE x DROP CHECK c"],
-        () => {
-          told += 1;
+        {
+          starting: () => undefined,
+          finished: statement => {
+            finished.push(statement);
+          },
         }
       )
     ).rejects.toThrow("lock wait timeout");
     // The leading statement and the first drop finished; the second drop failed.
-    expect(told).toBe(2);
+    expect(finished).toHaveLength(2);
+  });
+
+  // An operation can run several statements: on MySQL a reference-list conversion is three (the
+  // column made text, its values rewritten, the column made the list type). Each commits as it
+  // runs, so each is told as it finishes, not the operation once.
+  it("tells each statement of an operation that runs several, and none after the one that fails", async () => {
+    let sent = 0;
+    const tx = {
+      execute: vi.fn(async () => {
+        sent += 1;
+        if (sent === 2) throw new Error("refused by a trigger");
+        return { rows: [] };
+      }),
+    };
+    const conversion: ChangeColumnTypeOp = {
+      type: "change_column_type",
+      tableName: "dc_posts",
+      columnName: "author",
+      fromType: "varchar(36)",
+      toType: "json",
+      conversion: "referenceList",
+    };
+    const started: string[] = [];
+    const finished: string[] = [];
+    await expect(
+      executePreResolutionOps(tx, [conversion], "mysql", [], {
+        starting: statement => {
+          started.push(statement);
+        },
+        finished: statement => {
+          finished.push(statement);
+        },
+      })
+    ).rejects.toThrow("refused by a trigger");
+    // Positive control: the operation reached its second statement, which failed.
+    expect(started).toHaveLength(2);
+    // The first, the column made text, finished and stays.
+    expect(finished).toEqual([started[0]]);
+    expect(finished[0]).toMatch(/MODIFY COLUMN `author` text/);
   });
 });

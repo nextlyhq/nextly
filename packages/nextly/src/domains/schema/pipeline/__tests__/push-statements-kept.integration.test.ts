@@ -379,8 +379,8 @@ describe.skipIf(!MYSQL_URL)("a failed apply's kept statements (mysql)", () => {
 
   // A relationship switched from one entry to many is one operation of three statements on MySQL:
   // the column made text, its values rewritten as lists, the column made the list type. The first
-  // commits as it runs, so where the second is refused, one statement stays. Its key is dropped
-  // first, so no lifted key runs before it and counts.
+  // commits as it runs, so where the second is refused, one statement stays. Its key and index are
+  // dropped first, so no statement runs before the conversion and counts.
   it("counts each statement of an operation that runs several, where a later one fails", async () => {
     const postsTable = `${MYSQL.prefix}_kept_posts`;
     const authorsTable = `${MYSQL.prefix}_kept_authors`;
@@ -412,6 +412,19 @@ describe.skipIf(!MYSQL_URL)("a failed apply's kept statements (mysql)", () => {
         await pool
           .promise()
           .query(`ALTER TABLE \`${postsTable}\` DROP FOREIGN KEY \`${name}\``);
+      }
+      // And its index: MySQL will not retype an indexed column to json, so the apply would drop
+      // the index first, a statement before the conversion.
+      const [indexes] = await pool
+        .promise()
+        .query(
+          `SELECT DISTINCT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'author' AND INDEX_NAME <> 'PRIMARY'`,
+          [postsTable]
+        );
+      for (const { name } of indexes as { name: string }[]) {
+        await pool
+          .promise()
+          .query(`ALTER TABLE \`${postsTable}\` DROP INDEX \`${name}\``);
       }
       const run = (statement: string) => pool.promise().query(statement);
       await insertRowWithoutTotal("mysql", db, postsTable, run);
