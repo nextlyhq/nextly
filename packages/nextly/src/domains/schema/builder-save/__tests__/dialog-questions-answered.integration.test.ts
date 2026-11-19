@@ -453,6 +453,7 @@ for (const dialect of getConfiguredTestDialects()) {
     const related = {
       name: "related",
       type: "relationship",
+      relationTo: "tags",
       hasMany: true,
       options: { relationType: "manyToMany", target: "tags" },
     };
@@ -552,6 +553,7 @@ for (const dialect of getConfiguredTestDialects()) {
           text("heading"),
           {
             ...related,
+            relationTo: "categories",
             options: { relationType: "manyToMany", target: "categories" },
           },
           pick,
@@ -614,6 +616,7 @@ for (const dialect of getConfiguredTestDialects()) {
         text("heading"),
         {
           ...related,
+          relationTo: "categories",
           options: { relationType: "manyToMany", target: "categories" },
         },
         pick,
