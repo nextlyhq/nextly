@@ -123,6 +123,26 @@ export interface VariablesTransfer {
 }
 
 /**
+ * What a host's variables write made at once stored: all of it, some of it
+ * (the site refused some variables and the host stored the rest), with the
+ * reason the rest was refused, or none of it.
+ */
+export type VariablesStored =
+  | { readonly stored: "all" }
+  | { readonly stored: "part"; readonly why?: string | undefined }
+  | { readonly stored: "none" };
+
+/**
+ * A host's answer as a {@link VariablesStored}: a host answering a boolean
+ * says all or nothing.
+ */
+function asStored(answer: boolean | VariablesStored): VariablesStored {
+  if (answer === true) return { stored: "all" };
+  if (answer === false) return { stored: "none" };
+  return answer;
+}
+
+/**
  * The transfer controls and their state.
  *
  * `currentTokens` is asked at the moment a set is needed rather than captured,
@@ -151,12 +171,16 @@ export function useVariablesTransfer({
   onEditClasses?: EditClasses;
   /**
    * The host's variables write made at once rather than at the author's
-   * pause, answering whether it was stored. An import's text styles name
-   * its variables, and the site refuses a text style naming a variable it
-   * doesn't hold yet, so those are stored first through this. Absent, like
-   * `onEditClasses`: an import brings in no text styles.
+   * pause, answering what it stored: `true` or `false` for all or none, or a
+   * {@link VariablesStored} where the host can say it stored only some. An
+   * import's text styles name its variables, and the site refuses a text
+   * style naming a variable it doesn't hold yet, so those are stored first
+   * through this. Absent, like `onEditClasses`: an import brings in no text
+   * styles.
    */
-  storeTokensNow?: (tokens: SiteTokenSet) => Promise<boolean>;
+  storeTokensNow?: (
+    tokens: SiteTokenSet
+  ) => Promise<boolean | VariablesStored>;
   /** The Google Fonts catalogue, which a missing font is added from. */
   catalogue?: ImportCatalogue;
   /**
@@ -301,7 +325,8 @@ export function useVariablesTransfer({
       writers: { storeNow, edit, onChange: latest.current.onChange },
       refuse,
     }).then(stored => {
-      if (stored !== "nothing") {
+      // "some" and "nothing" were said by the step that stopped.
+      if (stored === "all" || stored === "variables") {
         done(stored === "all" ? (result.textStyles ?? 0) : 0);
       }
     });
@@ -662,7 +687,8 @@ function ImportPreview({
  * text styles; then the Site text rows, which may follow them. Undo takes
  * them back in the opposite order, which the site accepts at each step: it
  * refuses to remove a text style while a row still follows it. Answers what
- * was stored.
+ * was stored: everything, the variables only, some of the variables (the
+ * text styles then wait, since they may name one refused), or nothing.
  */
 async function importInSteps(steps: {
   /** The import's variables, with the site's own Site text kept. */
@@ -671,17 +697,29 @@ async function importInSteps(steps: {
   /** The import whole, laid over the variables as they are then. */
   rows: () => SiteTokenSet | undefined;
   writers: {
-    storeNow: (tokens: SiteTokenSet) => Promise<boolean>;
+    storeNow: (tokens: SiteTokenSet) => Promise<boolean | VariablesStored>;
     edit: EditClasses;
     onChange: (tokens: SiteTokenSet) => void;
   };
   refuse: (headline: string, detail?: readonly string[]) => void;
-}): Promise<"all" | "variables" | "nothing"> {
+}): Promise<"all" | "variables" | "some" | "nothing"> {
   const { writers, refuse } = steps;
-  const stored = await writers.storeNow(steps.variables).catch(() => false);
-  if (!stored) {
+  const stored = asStored(
+    await writers.storeNow(steps.variables).catch(() => false)
+  );
+  if (stored.stored === "none") {
     refuse("The variables weren't saved, so nothing was imported.");
     return "nothing";
+  }
+  if (stored.stored === "part") {
+    // Some variables are stored, so "nothing was imported" would be untrue.
+    // The text styles may name a refused one, so they and the Site text
+    // following them wait for the author to fix it and import again.
+    refuse(
+      "Only some of the variables were saved, so the text styles and Site text weren't imported.",
+      stored.why === undefined ? [] : [stored.why]
+    );
+    return "some";
   }
   const refusal = await writers
     .edit(steps.classes)
@@ -743,7 +781,7 @@ function importContext(
   host: {
     readonly onEditClasses?: EditClasses | undefined;
     readonly storeTokensNow?:
-      | ((tokens: SiteTokenSet) => Promise<boolean>)
+      | ((tokens: SiteTokenSet) => Promise<boolean | VariablesStored>)
       | undefined;
     readonly currentClasses?:
       | (() => readonly NamedClass[] | undefined)
