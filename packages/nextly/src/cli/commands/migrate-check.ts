@@ -65,6 +65,10 @@ import {
   fileDeletions,
   functionsDefinedBy,
 } from "../../domains/schema/migrate/file-deletions";
+import {
+  forkedHistoryError,
+  unrecordedMerges,
+} from "../../domains/schema/migrate/history-line";
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
@@ -275,6 +279,19 @@ export async function runMigrateCheck(
 }
 
 /**
+ * Ends the check, in the CLI's error shape, where the folder's history holds
+ * migrations written without each other that no migration records together
+ * (`history-line.ts`).
+ */
+async function failOnUnrecordedMerge(
+  migrationsDir: string,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const forked = forkedHistoryError(await unrecordedMerges(migrationsDir));
+  if (forked !== undefined) exitWithError(logger, forked);
+}
+
+/**
  * F11 PR 4: pure-input check pipeline. Extracted so unit tests can call
  * it with a tmp `migrationsDir` + a hand-built desired snapshot, without
  * spinning up the loadConfig + validateDatabaseEnv plumbing.
@@ -406,6 +423,12 @@ export async function runChecks(args: {
       );
     }
   }
+
+  // One line of history: migrations written without each other, by two
+  // writers at once or on two branches merged since, fail the check with
+  // each named until a migration records the merge, as `nextly migrate`
+  // refuses them.
+  await failOnUnrecordedMerge(migrationsDir, logger);
 
   // Statements a run would refuse, judged by the check the run makes, so CI
   // shows them before a deploy meets them. Warned rather than failed: this

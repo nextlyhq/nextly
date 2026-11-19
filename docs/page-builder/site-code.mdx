@@ -89,6 +89,11 @@ site's declared policy would block only where the author acknowledged exactly th
 findings. Each committed change writes an audit row with the page, the field, and the
 code's hashes, sizes and counts, never the code.
 
+Duplicating a page keeps its page code, for someone without the permission and for an API
+key, when the code is a byte-for-byte copy of what the source holds in a version the person
+copying could read. Code the source doesn't hold, or one changed on the way, is still
+refused to them.
+
 The permission guards **changing** page code, not reading it. Anyone who may edit the page
 can read its code: the draft's, the published version's and every version in its history,
 through the API and in the document the builder loads, even though the builder only shows

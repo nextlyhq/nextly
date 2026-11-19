@@ -25,7 +25,6 @@ import {
 } from "@admin/hooks/queries/useEmailActivity";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 
-import { notStoredLabel } from "./activity-choices";
 import {
   attemptText,
   detailState,
@@ -33,7 +32,12 @@ import {
   failureKindOf,
   versionText,
 } from "./activity-detail-model";
-import { RECIPIENT_KIND_LABELS, dueText, isUnsettled } from "./activity-model";
+import {
+  RECIPIENT_KIND_LABELS,
+  dueText,
+  isUnsettled,
+  providerLabel,
+} from "./activity-model";
 import type { ActivityNames } from "./ActivityList";
 
 export interface ActivityDetailSheetProps {
@@ -131,7 +135,13 @@ function StateBox({ data }: { data: ActivityDetail }): JSX.Element {
 }
 
 /** Every attempt, oldest first, with each provider's structured answer. */
-function Timeline({ data }: { data: ActivityDetail }): JSX.Element {
+function Timeline({
+  data,
+  names,
+}: {
+  data: ActivityDetail;
+  names: ActivityNames;
+}): JSX.Element {
   const { timeline, timelineTruncated } = data.detail;
   // The server answers up to ten thousand attempts for an email sent to many
   // people; the newest are drawn, and the rest are counted, so opening the
@@ -157,7 +167,12 @@ function Timeline({ data }: { data: ActivityDetail }): JSX.Element {
       ) : (
         <ol className="space-y-3 border-l border-border pl-4">
           {shown.map(attempt => {
-            const text = attemptText(attempt);
+            // Each attempt names its provider as the details do: by name
+            // while stored, else by type and where it came from.
+            const text = attemptText(
+              attempt,
+              providerLabel(attempt.provider, names.provider)
+            );
             return (
               <li key={attempt.id} className="space-y-0.5">
                 <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -202,9 +217,7 @@ function DeliveryDetails({
   names: ActivityNames;
 }): JSX.Element {
   const d = data.detail;
-  const provider = d.provider.id
-    ? (names.provider(d.provider.id) ?? d.provider.type)
-    : notStoredLabel(d.provider.type);
+  const provider = providerLabel(d.provider, names.provider);
   const person = d.erased
     ? "Erased since"
     : d.namedPerson
@@ -383,7 +396,7 @@ export function ActivityDetailSheet({
                 </Button>
               )}
               <Details data={data} names={names} now={now} />
-              <Timeline data={data} />
+              <Timeline data={data} names={names} />
             </>
           )}
         </div>

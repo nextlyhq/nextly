@@ -219,7 +219,7 @@
   margin: 0;
   font-size: var(--text-xs, 0.75rem);
   line-height: 1.4;
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 /*

@@ -1576,19 +1576,11 @@ export class PostgresAdapter extends DrizzleAdapter {
 
       ...this.createTransactionForwarders(txDb),
 
-      savepoint: async (name: string): Promise<void> => {
-        await client.query(`SAVEPOINT ${this.escapeIdentifier(name)}`);
-      },
-
-      rollbackToSavepoint: async (name: string): Promise<void> => {
-        await client.query(
-          `ROLLBACK TO SAVEPOINT ${this.escapeIdentifier(name)}`
-        );
-      },
-
-      releaseSavepoint: async (name: string): Promise<void> => {
-        await client.query(`RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`);
-      },
+      // Savepoints on this transaction's connection, the effects held for the
+      // transaction scoped to each (`contextSavepointMethods`).
+      ...this.contextSavepointMethods(async statement => {
+        await client.query(statement);
+      }),
     };
   }
 

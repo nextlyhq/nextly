@@ -23,7 +23,7 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { isIFrame } from "./dom-kind";
+import { isIFrame } from "./canvas/dom-kind";
 
 /** How far a tooltip keeps from the edges of what holds it, in pixels. */
 const COLLISION_PADDING = 8;

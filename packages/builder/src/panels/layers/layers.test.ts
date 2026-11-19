@@ -27,6 +27,8 @@ import {
   pathTo,
   regionsTo,
   slotRowsIn,
+  type ComponentTitleOf,
+  type LayersDevice,
 } from "./layers";
 
 const base = {
@@ -383,6 +385,102 @@ describe("pathTo and ancestorIds", () => {
     // — selecting a container should reveal where it sits, not its contents.
     expect(ancestorIds(nested(), "leaf")).toEqual(["outer", "inner"]);
     expect(ancestorIds(nested(), "outer")).toEqual([]);
+  });
+});
+
+/*
+ * The breadcrumb and the selected block's toolbar and keyboard verbs each ask
+ * for the path to the selection on every click. A path is read off the whole
+ * tree, so the tree is built once per document and asked again after that.
+ * Builds are counted through the title lookup, which a build asks once per
+ * placement on the page.
+ */
+describe("the tree a document's paths are read from", () => {
+  function counted() {
+    register();
+    const asked = { count: 0 };
+    const titles: ComponentTitleOf = () => {
+      asked.count += 1;
+      return "Hero banner";
+    };
+    const document = documentOf([
+      node("box", "core/box", {
+        slots: {
+          children: [
+            node("a", "nextly/component-instance", {
+              props: { componentId: "cmp-hero" },
+            }),
+            node("b", "core/heading"),
+          ],
+        },
+      }),
+    ]);
+    return { asked, titles, document };
+  }
+
+  it("is built once for one document, however many paths are asked", () => {
+    const { asked, titles, document } = counted();
+    expect(pathTo(document, "a", titles).map(row => row.label)).toEqual([
+      "Box",
+      "Hero banner",
+    ]);
+    // The control: building the tree asks the lookup.
+    expect(asked.count).toBe(1);
+    pathTo(document, "b", titles);
+    pathTo(document, "a", titles);
+    blockNameOf(document, "a", titles);
+    expect(asked.count).toBe(1);
+    // The untitled tree is its own, built once too.
+    expect(pathTo(document, "a").map(row => row.label)).toEqual([
+      "Box",
+      "Component",
+    ]);
+    expect(pathTo(document, "a")).toEqual(pathTo(document, "a"));
+    expect(pathTo(document, "a")[0]).toBe(pathTo(document, "b")[0]);
+  });
+
+  it("is built again for an edited document, another lookup or a block registered", () => {
+    const { asked, titles, document } = counted();
+    pathTo(document, "a", titles);
+    // An edit makes a new document, which is read afresh.
+    const edited = documentOf([
+      node("box", "core/box", {
+        name: "Hero area",
+        slots: document.nodes[0]?.slots ?? {},
+      }),
+    ]);
+    expect(pathTo(edited, "a", titles)[0]?.label).toBe("Hero area");
+    expect(asked.count).toBe(2);
+    // Another lookup names the placement its own way.
+    expect(pathTo(document, "a", () => "Footer")[1]?.label).toBe("Footer");
+    // A block registered later names its rows from then on.
+    expect(pathTo(document, "b")[1]?.label).toBe("Heading");
+    clearBlocks();
+    registerBlocks(
+      [
+        { ...base, name: "core/heading", editor: { label: "Title" } },
+        {
+          ...base,
+          name: "core/box",
+          editor: { label: "Group" },
+          slots: { children: {} },
+        },
+      ] as never,
+      { source: "layers-test" }
+    );
+    expect(pathTo(document, "b").map(row => row.label)).toEqual([
+      "Group",
+      "Title",
+    ]);
+    expect(blockNameOf(document, "b")).toBe("Title");
+  });
+
+  it("is not kept for a device, whose rows say where blocks are hidden", () => {
+    const { asked, titles, document } = counted();
+    const device: LayersDevice = { breakpoints: undefined, id: "desktop" };
+    layersOf(document, titles, device);
+    layersOf(document, titles, device);
+    expect(asked.count).toBe(2);
   });
 });
 

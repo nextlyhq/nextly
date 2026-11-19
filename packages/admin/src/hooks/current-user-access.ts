@@ -8,7 +8,14 @@
  *
  * @module hooks/current-user-access
  */
-import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import {
+  matchQuery,
+  useQueryClient,
+  type Query,
+  type QueryCache,
+  type QueryCacheNotifyEvent,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { useCallback, useSyncExternalStore } from "react";
 
 import type {
@@ -53,6 +60,50 @@ function isKnownSingle(queryClient: QueryClient, slug: string): boolean {
     .some(([, answer]) => answer?.entities[slug]?.kind === "single");
 }
 
+/** Whether a query is one of the capabilities answers {@link isKnownSingle} reads. */
+function isCapabilitiesQuery(query: Query): boolean {
+  // The same filter the read scans by, so the two cannot disagree.
+  return matchQuery({ queryKey: CURRENT_USER_CAPABILITIES_KEY }, query);
+}
+
+/**
+ * Whether a cache event can change a capabilities answer {@link isKnownSingle}
+ * reads: one added, removed, or updated (its data set, fetched or failed).
+ * An observer of the query mounting, unmounting or rendering changes no
+ * answer, and the page builder mounts and renders many on every click.
+ */
+function changesCapabilities(event: QueryCacheNotifyEvent): boolean {
+  return (
+    (event.type === "added" ||
+      event.type === "removed" ||
+      event.type === "updated") &&
+    isCapabilitiesQuery(event.query)
+  );
+}
+
+/**
+ * {@link isKnownSingle}'s answers by slug, per query cache, kept until a
+ * capabilities answer changes. The cache notifies every subscriber of every
+ * query's events, and a page builder renders many readers on each click, so
+ * a scan of the whole cache per read cost a scan per reader per event.
+ *
+ * Emptied by a listener of its own, taken when the cache is first read, so an
+ * answer that changes while no reader is mounted is not kept past it.
+ */
+const KNOWN_SINGLES = new WeakMap<QueryCache, Map<string, boolean>>();
+
+function knownSinglesOf(queryClient: QueryClient): Map<string, boolean> {
+  const cache = queryClient.getQueryCache();
+  const kept = KNOWN_SINGLES.get(cache);
+  if (kept !== undefined) return kept;
+  const answers = new Map<string, boolean>();
+  cache.subscribe(event => {
+    if (changesCapabilities(event)) answers.clear();
+  });
+  KNOWN_SINGLES.set(cache, answers);
+  return answers;
+}
+
 /**
  * {@link isKnownSingle}, kept current: the caller renders again when a
  * capabilities answer arrives or changes. A read that asked before the answer
@@ -61,10 +112,27 @@ function isKnownSingle(queryClient: QueryClient, slug: string): boolean {
 export function useIsKnownSingle(slug: string): boolean {
   const queryClient = useQueryClient();
   const subscribe = useCallback(
-    (onChange: () => void) => queryClient.getQueryCache().subscribe(onChange),
+    (onChange: () => void) => {
+      const answers = knownSinglesOf(queryClient);
+      return queryClient.getQueryCache().subscribe(event => {
+        // Only a change to a capabilities answer can change what this reads.
+        // Emptied here too, since this listener can run before the one that
+        // empties it.
+        if (!changesCapabilities(event)) return;
+        answers.clear();
+        onChange();
+      });
+    },
     [queryClient]
   );
-  const read = () => isKnownSingle(queryClient, slug);
+  const read = () => {
+    const answers = knownSinglesOf(queryClient);
+    const kept = answers.get(slug);
+    if (kept !== undefined) return kept;
+    const known = isKnownSingle(queryClient, slug);
+    answers.set(slug, known);
+    return known;
+  };
   return useSyncExternalStore(subscribe, read, read);
 }
 

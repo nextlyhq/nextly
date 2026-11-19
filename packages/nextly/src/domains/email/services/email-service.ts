@@ -231,7 +231,8 @@ type SendOutcome = EmailSendOutcome;
 /**
  * A template's fields as the editor holds them, saved or not: what a test of
  * the on-screen version sends instead of the stored ones. An absent field is
- * the stored one.
+ * the stored one. A written email's format and blocks are among them, and
+ * its HTML is written from the blocks on screen when it renders.
  */
 export type TemplateTestDraft = Partial<
   Pick<
@@ -246,6 +247,8 @@ export type TemplateTestDraft = Partial<
     | "replyTo"
     | "providerId"
     | "attachments"
+    | "format"
+    | "blocks"
   >
 >;
 

@@ -50,6 +50,7 @@ export type {
   TimeseriesArgs,
   BulkDeleteArgs,
   DuplicateArgs,
+  CreateFromSourceArgs,
   CountResult,
   GroupResult,
   TimeseriesResult,
@@ -89,6 +90,8 @@ export type {
   CreateUserArgs,
   UpdateUserArgs,
   DeleteUserArgs,
+  ListUserIdentitiesArgs,
+  UnlinkIdentityArgs,
 } from "./users";
 
 export type {
