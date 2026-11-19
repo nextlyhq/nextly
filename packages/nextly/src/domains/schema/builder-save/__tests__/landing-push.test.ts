@@ -56,15 +56,24 @@ describe("landingPush", () => {
     expect(tracked.landed()).toBe(true);
   });
 
-  it("counts a refused push as nothing applied on PostgreSQL, whose push runs in one transaction", async () => {
-    const tracked = landingPush(answered(false), "postgresql");
-    await tracked.push();
-    expect(tracked.landed()).toBe(false);
-  });
+  it.each(["postgresql", "sqlite"] as const)(
+    "counts a refused or thrown push as nothing applied on %s, whose push runs in one transaction",
+    async dialect => {
+      const refused = landingPush(answered(false), dialect);
+      await refused.push();
+      expect(refused.landed()).toBe(false);
 
-  // MySQL commits each schema statement as it runs, and SQLite's push keeps the statements that
-  // ran before one that fails: a refused push on either may have changed the database.
-  it.each(["mysql", "sqlite"] as const)(
+      const thrown = landingPush(
+        () => Promise.reject(new Error("the statement failed")),
+        dialect
+      );
+      await expect(thrown.push()).rejects.toThrow("the statement failed");
+      expect(thrown.landed()).toBe(false);
+    }
+  );
+
+  // MySQL commits each schema statement as it runs: a refused push may have changed the database.
+  it.each(["mysql"] as const)(
     "counts a refused push on %s as possibly part applied",
     async dialect => {
       const refused = landingPush(answered(false), dialect);
@@ -273,14 +282,18 @@ describe("landingPush, a push refused at its first question", () => {
     }
   );
 
-  it.each(["mysql", "sqlite"] as const)(
-    "counts a failed push on %s that went past its first question as landed",
-    async dialect => {
-      const refused = landingPush(answered(false), dialect, watch(false));
-      await refused.push();
-      expect(refused.landed()).toBe(true);
-    }
-  );
+  it("counts a failed push on mysql that went past its first question as landed", async () => {
+    const refused = landingPush(answered(false), "mysql", watch(false));
+    await refused.push();
+    expect(refused.landed()).toBe(true);
+  });
+
+  // SQLite's push runs in one transaction: past its first question, a failure still leaves nothing.
+  it("counts a failed push on sqlite that went past its first question as nothing applied", async () => {
+    const refused = landingPush(answered(false), "sqlite", watch(false));
+    await refused.push();
+    expect(refused.landed()).toBe(false);
+  });
 
   it("counts a push that succeeded as landed whatever the watch says", async () => {
     const pushed = landingPush(answered(true), "sqlite", watch(true));

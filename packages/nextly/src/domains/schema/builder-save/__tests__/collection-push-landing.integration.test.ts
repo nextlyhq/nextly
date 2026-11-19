@@ -5,10 +5,10 @@
  * - A refusal before the push runs, a refusal inside it before any statement ran, or a busy
  *   table's stop that says nothing ran, leaves nothing: no file, no snapshot, no change to the
  *   definition, the table or the registry row.
- * - On MySQL, which commits each schema statement as it runs, and on SQLite, whose push keeps the
- *   statements before the one that fails, a push that fails after a statement ran keeps its
- *   files, recorded applied nowhere, and the admin is told the database holds part of the change
- *   and what to run next. PostgreSQL's push, run in one transaction, leaves nothing.
+ * - On MySQL, which commits each schema statement as it runs, a push that fails after a statement
+ *   ran keeps its files, recorded applied nowhere, and the admin is told the database holds part
+ *   of the change and what to run next. PostgreSQL's push and SQLite's, each run in one
+ *   transaction, leave nothing.
  *
  * Each save switches a relationship from one entry to many (`reachesRelationStorage`), a change
  * the push applies on every dialect.
@@ -417,7 +417,7 @@ for (const dialect of getConfiguredTestDialects()) {
       ["the schema dialog", save],
       ["an update", (fields: Field[]) => update([...fields, text("summary")])],
     ] as const) {
-      it.runIf(dialect === "mysql" || dialect === "sqlite")(
+      it.runIf(dialect === "mysql")(
         `keeps the files of a push through ${road} whose second statement failed after its first committed, and says so`,
         async () => {
           const filesBefore = Object.keys(filesIn(migrationsDir(), ".sql"));
@@ -455,13 +455,45 @@ for (const dialect of getConfiguredTestDialects()) {
         },
         60_000
       );
+
+      // SQLite runs the push in one transaction: the first statement is taken back with the second.
+      it.runIf(dialect === "sqlite")(
+        `takes back the whole of a push through ${road} whose second statement failed, and keeps no file`,
+        async () => {
+          const filesBefore = Object.keys(filesIn(migrationsDir(), ".sql"));
+          const tableBefore = await definitionOf();
+          const failing = failSecondStatement();
+
+          const failure = await change(SWITCHED).then(
+            () => undefined,
+            (error: unknown) => error
+          );
+          failing.restore();
+
+          expect(failing.sent.length, failing.sent.join("\n")).toBeGreaterThan(
+            1
+          );
+          expect(failure, "the failed push was reported as applied").toBeDefined();
+          // The first statement ran and was rolled back with the one that failed.
+          expect(await definitionOf()).toEqual(tableBefore);
+          expect(
+            Object.keys(filesIn(migrationsDir(), ".sql")).filter(
+              name => !filesBefore.includes(name)
+            )
+          ).toEqual([]);
+          expect(
+            (failure as { publicMessage?: string } | undefined)?.publicMessage
+          ).not.toContain("The database now holds part of this change");
+        },
+        60_000
+      );
     }
 
     // On SQLite a relation switched from one entry to many keeps its text column and has only its
-    // values rewritten, before the statements that change the table's shape. A push that fails at
-    // the first of those has changed rows and no shape: its files stay all the same.
+    // values rewritten, before the statements that change the table's shape. The push runs in one
+    // transaction, so one that fails at the first of those takes the rewritten values back too.
     it.runIf(dialect === "sqlite")(
-      "keeps the files of a push that rewrote values and then failed before changing the table's shape",
+      "takes back a push that rewrote values and then failed before changing the table's shape, keeping no file",
       async () => {
         const writer = await t.nextly.create({
           collection: "authors",
@@ -497,21 +529,20 @@ for (const dialect of getConfiguredTestDialects()) {
         );
         failing.mockRestore();
 
-        // The case reaches its mechanism: the rows changed and the table's shape did not.
-        expect(await rows()).not.toEqual(rowsBefore);
+        // The rewritten values were taken back with the statement that failed, and the shape
+        // never changed.
+        expect(failure, "the failed push was reported as applied").toBeDefined();
+        expect(await rows()).toEqual(rowsBefore);
         expect(await definitionOf()).toEqual(tableBefore);
-        const kept = Object.keys(filesIn(migrationsDir(), ".sql")).filter(
-          name => !filesBefore.includes(name)
-        );
-        expect(kept).not.toEqual([]);
-        const applied = (await ledger().listFileApplies())
-          .filter(entry => entry.status === "applied")
-          .map(entry => String(entry.filename));
-        for (const file of kept) expect(applied).not.toContain(file);
+        expect(
+          Object.keys(filesIn(migrationsDir(), ".sql")).filter(
+            name => !filesBefore.includes(name)
+          )
+        ).toEqual([]);
         expect(
           (failure as { publicMessage?: string } | undefined)?.publicMessage,
           String(failure)
-        ).toContain("The database now holds part of this change");
+        ).not.toContain("The database now holds part of this change");
       },
       60_000
     );

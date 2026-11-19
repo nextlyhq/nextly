@@ -12,12 +12,10 @@
  * text, after an earlier statement of the same change has committed; each case first checks that
  * the earlier one did.
  *
- * On PostgreSQL and SQLite the file runs in one transaction, and so does PostgreSQL's push, so the
+ * On PostgreSQL and SQLite the file runs in one transaction, and so does each one's push, so the
  * same failure leaves nothing applied and no file: those legs guard that settling never records a
- * step that rolled back. SQLite's push keeps the statements before the one that fails and so
- * settles as MySQL's does, until it runs in one transaction as the spec asks:
- * `SQLITE_PUSH_KEEPS_PART_WAY` says which, and moves its cases between the two. A save that rolled
- * back whole never reaches the judgement of what applied at all.
+ * step that rolled back. A save that rolled back whole never reaches the judgement of what applied
+ * at all.
  *
  * A collection's update through the push does not hand the writer its registry write yet (the
  * collection metadata service writes the row after the writer returns), so its stop keeps its files
@@ -156,18 +154,12 @@ async function versionOf(
 }
 
 /**
- * Whether SQLite's push keeps the statements that ran before one that fails, as it does today,
- * rather than running in one transaction as the spec asks. Undecided: this one value follows the
- * ruling, and each case below then runs on the side it belongs to.
+ * Whether a save on `dialect` keeps the steps that ran before a failing one: MySQL's alone, which
+ * commits each schema statement as it runs. PostgreSQL and SQLite run a save's file, and its push,
+ * in one transaction.
  */
-const SQLITE_PUSH_KEEPS_PART_WAY = true;
-
-/** Whether `path`'s save on `dialect` keeps the steps that ran before a failing one. */
-function keepsPartWay(dialect: TestDialect, path: SavePath): boolean {
-  if (dialect === "mysql") return true;
-  return (
-    dialect === "sqlite" && path.push === true && SQLITE_PUSH_KEEPS_PART_WAY
-  );
+function keepsPartWay(dialect: TestDialect): boolean {
+  return dialect === "mysql";
 }
 
 const PATHS: readonly SavePath[] = [
@@ -613,7 +605,7 @@ describe.each(getConfiguredTestDialects())(
       // writer has no registry write to settle it with: it keeps its files, as before.
       const settles = path.push === true ? it.fails : it;
 
-      (keepsPartWay(dialect, path) ? settles : it.skip)(
+      (keepsPartWay(dialect) ? settles : it.skip)(
         "stopped at its second addition, keeps the first: one file for it, recorded applied, the definition and the registry at that shape",
         async () => {
           const t = await boot();
@@ -713,7 +705,7 @@ describe.each(getConfiguredTestDialects())(
 
       // The push drops a column holding data only on the dialog's answer for it, which these
       // saves do not send: on the push its drops are judged by the push's own tests.
-      it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
+      it.runIf(keepsPartWay(dialect) && path.push !== true)(
         "stopped at an addition after a drop committed, stops naming the dropped field and keeps reading the rest",
         async () => {
           const t = await boot();
@@ -767,7 +759,7 @@ describe.each(getConfiguredTestDialects())(
       );
 
       // As above: the push drops a column holding data only on the dialog's answer for it.
-      it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
+      it.runIf(keepsPartWay(dialect) && path.push !== true)(
         "whose second drop fails after the first committed, names that column again with its values readable",
         async () => {
           const t = await boot();
@@ -834,7 +826,7 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      it.runIf(!keepsPartWay(dialect, path))(
+      it.runIf(!keepsPartWay(dialect))(
         "stopped at its second addition, rolls back whole and records no step",
         async () => {
           const t = await boot();
@@ -866,7 +858,7 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      (keepsPartWay(dialect, path) && path.push !== true ? it : it.skip)(
+      (keepsPartWay(dialect) && path.push !== true ? it : it.skip)(
         "whose settle fails at its ledger write, is put back as it stopped, recorded in progress, and reports the stop first",
         async () => {
           const t = await boot();
