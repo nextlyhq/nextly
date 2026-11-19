@@ -62,6 +62,7 @@
  * @module domains/releases/apply-due-releases
  */
 
+import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
 import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
@@ -789,7 +790,11 @@ async function writeAndConfirm(
     // loses it silently.
     const landed = await confirmApplied(deps, action, false);
     if (landed) return { ...base, failure: null, detail: messageOf(error) };
-    return { ...base, failure: "WRITE_FAILED", detail: messageOf(error) };
+    return {
+      ...base,
+      failure: refusedForApproval(error) ? "NOT_APPROVED" : "WRITE_FAILED",
+      detail: messageOf(error),
+    };
   }
 
   // A resolved promise is not proof the action was APPLIED. A
@@ -813,6 +818,32 @@ async function writeAndConfirm(
   }
 
   return { ...base, failure: null };
+}
+
+/**
+ * Whether a write was refused by the publish gate for approval alone: a validation refusal every
+ * issue of which is `NOT_APPROVED`, as the gate words a part held back. An approval withdrawn
+ * after the component's question and before this write is met by the write's own gate; that is
+ * the hold the question asks about, recorded as one rather than retried as a failed write.
+ */
+function refusedForApproval(error: unknown): boolean {
+  if (!NextlyError.isCode(error, "VALIDATION_ERROR")) return false;
+  const data: unknown = error.publicData;
+  const issues =
+    typeof data === "object" && data !== null && "errors" in data
+      ? data.errors
+      : undefined;
+  return (
+    Array.isArray(issues) &&
+    issues.length > 0 &&
+    issues.every(
+      (issue: unknown) =>
+        typeof issue === "object" &&
+        issue !== null &&
+        "code" in issue &&
+        issue.code === "NOT_APPROVED"
+    )
+  );
 }
 
 /**

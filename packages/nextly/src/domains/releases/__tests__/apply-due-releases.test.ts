@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import {
   getNextlyLogger,
   setNextlyLogger,
@@ -289,6 +290,44 @@ describe("applyDueReleases", () => {
     expect(result.outcomes.find(o => o.ref.entryId === "e1")?.failure).toBe(
       "WRITE_FAILED"
     );
+  });
+
+  it("records a write the publish gate refuses for approval as held, not as a failed write", async () => {
+    // The approval went between the component's question and this document's write, and the
+    // write's own gate refused it: the hold the question asks about, so not retried as a write.
+    const publish = vi.fn(async () => {
+      throw NextlyError.validation({
+        errors: [
+          { path: "shared", code: "NOT_APPROVED", message: "Not approved." },
+        ],
+      });
+    });
+    const result = await applyDueReleases(
+      deps({ members: [member({ entryId: "e1" })], mutations: { publish } })
+    );
+
+    expect(result.outcomes.map(outcome => outcome.failure)).toEqual([
+      "NOT_APPROVED",
+    ]);
+  });
+
+  it("keeps a gate refusal for anything besides approval a failed write", async () => {
+    // The control: a refusal naming another code is still a write that failed, retried.
+    const publish = vi.fn(async () => {
+      throw NextlyError.validation({
+        errors: [
+          { path: "shared", code: "NOT_APPROVED", message: "Not approved." },
+          { path: "es", code: "REQUIRED", message: "Required." },
+        ],
+      });
+    });
+    const result = await applyDueReleases(
+      deps({ members: [member({ entryId: "e1" })], mutations: { publish } })
+    );
+
+    expect(result.outcomes.map(outcome => outcome.failure)).toEqual([
+      "WRITE_FAILED",
+    ]);
   });
 
   it("REFUSES to write for a release cancelled after the pass began", async () => {
