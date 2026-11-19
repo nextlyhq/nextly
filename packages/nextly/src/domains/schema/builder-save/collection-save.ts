@@ -175,7 +175,6 @@ import {
   entityLabel,
   fieldTypeChangesOf,
   judgeEntityTypeChanges,
-  type JudgedFieldTypeChange,
   perLanguageBefore,
   throwTypeChangeRefusals,
 } from "../value-conversion/type-change/field-type-changes";
@@ -210,6 +209,7 @@ import {
   type ConfirmedClear,
   refuseChangedClearCounts,
 } from "./type-change-clears";
+import { type TypeConversion, typeConversionOf } from "./type-conversion";
 
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
@@ -498,6 +498,9 @@ async function writeCollectionSaveOnce(
         await deletionHoldOfSave(deps, save, written.table)?.compare(
           deps.adapter.getDrizzle()
         );
+        // The values a type change converts, written just before the push that changes the column,
+        // which then finds them converted.
+        await written.conversion?.run(deps.adapter.getDrizzle());
         const applied = await options.appliedBy();
         pushed = true;
         if (applied === "partly-applied") {
@@ -520,7 +523,8 @@ async function writeCollectionSaveOnce(
           written.table,
           bounds,
           options.inLastTransaction,
-          deletionHoldOfSave(deps, save, written.table)
+          deletionHoldOfSave(deps, save, written.table),
+          written.conversion
         );
       } else if (options.appliedAfter !== undefined) {
         // The counts the person confirmed, compared just before the change is made here, as before
@@ -1124,12 +1128,14 @@ async function writeSave(
   undo(error: unknown): Promise<void>;
   /** The save's record that it is in progress, told how the save ended. */
   started: StartedSave;
+  /** The save's type changes written value by value, where it converts any (`typeConversionOf`). */
+  conversion?: TypeConversion;
 }> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
   // Each field whose type the save changes is judged over the values its column holds, before any
   // file is written: a blocked change, or a lossy one not consented to, refuses the save.
-  await refuseSaveTypeChanges(deps, save, plan.table);
+  const conversion = await refuseSaveTypeChanges(deps, save, plan.table);
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
@@ -1213,7 +1219,14 @@ async function writeSave(
       throw error;
     }
     definitionReplaced = true;
-    return { files, names, table: plan.table, undo, started };
+    return {
+      files,
+      names,
+      table: plan.table,
+      undo,
+      started,
+      ...(conversion === undefined ? {} : { conversion }),
+    };
   } catch (error) {
     if (isWriterOvertaken(error)) {
       // Another writer took the folder: what the save put there stays, since a migration file in
@@ -1324,8 +1337,8 @@ async function refuseSaveTypeChanges(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string
-): Promise<JudgedFieldTypeChange[]> {
-  if (save.previous === null || save.entity === null) return [];
+): Promise<TypeConversion | undefined> {
+  if (save.previous === null || save.entity === null) return undefined;
   const kind = kindOf(save);
   const dialect = deps.adapter.getCapabilities().dialect;
   const previous = save.previous.fields as unknown as FieldDefinition[];
@@ -1344,15 +1357,16 @@ async function refuseSaveTypeChanges(
     builtBy: kind.builtBy,
     ...componentRow,
   });
-  if (changes.length === 0) return [];
+  if (changes.length === 0) return undefined;
   const label = entityLabel(kind.kind, save.slug);
+  const translations = perLanguageBefore(save.previous, table, previous);
   const { refusals, judged } = await judgeEntityTypeChanges(
     deps.adapter.getDrizzle(),
     dialect,
     {
       label,
       table,
-      ...perLanguageBefore(save.previous, table, previous),
+      ...translations,
       previous,
       next,
       renamed,
@@ -1360,13 +1374,24 @@ async function refuseSaveTypeChanges(
       // A lossy change goes ahead only for a field whose clear the person confirmed, with the
       // count of values it clears still holding (`refuseChangedClearCounts`).
       acknowledged: clearedFieldsOf(save.confirmedClears),
+      // The save writes each value of a pair it converts as the new type reads it, in the file
+      // or just before the push that changes the column (`typeConversionOf`).
+      rewrites: true,
       builtBy: kind.builtBy,
       ...componentRow,
     }
   );
   throwTypeChangeRefusals(label, refusals);
   refuseChangedClearCounts(judged, save.confirmedClears);
-  return judged;
+  return typeConversionOf({
+    dialect,
+    judged,
+    builtBy: kind.builtBy,
+    ...componentRow,
+    ...(translations.translationsTable === undefined
+      ? {}
+      : { translationsTable: translations.translationsTable }),
+  });
 }
 
 /**
@@ -3218,7 +3243,9 @@ async function runWritten(
   boundsRead: BusyTableBounds | undefined,
   inLastTransaction?: () => Promise<void>,
   /** The count of what the save deletes, checked in the file that deletes it (`deletionHoldOf`). */
-  hold?: DeletionHold
+  hold?: DeletionHold,
+  /** The type changes the save writes value by value, in the file that first changes each table. */
+  conversion?: TypeConversion
 ): Promise<void> {
   const db = deps.adapter.getDrizzle();
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -3250,7 +3277,11 @@ async function runWritten(
         appliedBefore: () => [...applied],
         // In each file that deletes removed fields' values, for the values in the tables it is
         // the last to change: before its first statement and inside its transaction, on every try.
-        ...beforeOf(holdIn.get(unit.source)),
+        // The values a type change converts are written in the file that first changes their
+        // table, the same way, so its own type statement finds them converted.
+        ...beforeOf(
+          bothChecks(holdIn.get(unit.source), convertIn.get(unit.source))
+        ),
       }
     );
   const ordered =
@@ -3268,6 +3299,10 @@ async function runWritten(
     hold === undefined
       ? new Map<string, (db: unknown) => Promise<void>>()
       : await deletingFilesOf(deps, ordered, hold);
+  const convertIn =
+    conversion === undefined
+      ? new Map<string, (db: unknown) => Promise<void>>()
+      : await convertingFilesOf(deps, ordered, conversion);
   let before = await scopedSnapshotBefore(deps, ordered[0], table);
   if (await ranAsOneUnit()) return;
   for (const filename of ordered) {
@@ -3373,7 +3408,7 @@ async function runWritten(
           notify: line => deps.logger.warn(line),
           appliedBefore: () => [],
           // Every file runs in this one transaction, the deleting one among them.
-          ...beforeOf(hold?.check),
+          ...beforeOf(bothChecks(hold?.check, conversion?.run)),
         }
       );
     } catch (error) {
@@ -3767,6 +3802,58 @@ function beforeOf(check: ((db: unknown) => Promise<void>) | undefined): {
   before?: (db: unknown) => Promise<void>;
 } {
   return check === undefined ? {} : { before: check };
+}
+
+/**
+ * Both of a file's checks before its first statement, the count first, so a count that changed is
+ * refused before any value is written; either alone where only one is given.
+ */
+function bothChecks(
+  count: ((db: unknown) => Promise<void>) | undefined,
+  convert: ((db: unknown) => Promise<void>) | undefined
+): ((db: unknown) => Promise<void>) | undefined {
+  if (count === undefined) return convert;
+  if (convert === undefined) return count;
+  return async db => {
+    await count(db);
+    await convert(db);
+  };
+}
+
+/**
+ * The conversion each file of `ordered` runs: for each converted table, the first file whose
+ * statements name it, before the statement that changes its column's type. A file whose tables
+ * cannot be named may change any, and takes a table no earlier file names.
+ */
+async function convertingFilesOf(
+  deps: CollectionSaveDeps,
+  ordered: readonly string[],
+  conversion: TypeConversion
+): Promise<Map<string, (db: unknown) => Promise<void>>> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const firstFile = new Map<string, string>();
+  for (const filename of ordered) {
+    const changed = tablesChangedBy(await unitOf(deps, filename), dialect);
+    const lower = new Set((changed ?? []).map(t => t.toLowerCase()));
+    for (const table of conversion.tables) {
+      if (firstFile.has(table)) continue;
+      if (changed === undefined || lower.has(table.toLowerCase())) {
+        firstFile.set(table, filename);
+      }
+    }
+  }
+  const tablesByFile = new Map<string, string[]>();
+  for (const table of conversion.tables) {
+    const filename = firstFile.get(table) ?? ordered[0];
+    if (filename === undefined) continue;
+    tablesByFile.set(filename, [...(tablesByFile.get(filename) ?? []), table]);
+  }
+  const runs = new Map<string, (db: unknown) => Promise<void>>();
+  for (const [filename, tables] of tablesByFile) {
+    const run = conversion.runIn(tables);
+    if (run !== undefined) runs.set(filename, run);
+  }
+  return runs;
 }
 
 /**
