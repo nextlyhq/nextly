@@ -32,14 +32,9 @@
  * ```
  */
 
-import { assertNoFieldGroupCycleInCode } from "../../domains/field-groups/field-group-cycles";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { validateLanguageAddressRule } from "../../domains/i18n/language-addresses";
-import { assertConfiguredPublicAddresses } from "../../domains/public-addresses/distinct-public-addresses";
-import { declaredPublicAddressProblem } from "../../domains/public-addresses/public-address-template";
-import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { workflowAttachmentsOf } from "../../domains/workflows/attachments";
-import { NextlyError } from "../../errors";
 import type {
   DeclaredWidgetsRecord,
   WidgetsOfPlugins,
@@ -86,178 +81,12 @@ export { sanitizeConfig } from "../../shared/types/config";
  * field groups placed in a cycle (at any depth), and user-field constraints.
  * Returns nothing — throws on validation failure.
  */
-/**
- * An entity's slug as the uniqueness checks compare it, or undefined when it has no slug that is a
- * string: that is its own problem, which the configuration's load and start report with every
- * other, so it is not tripped over here.
- */
-function slugKey(entity: { slug?: unknown }): string | undefined {
-  return typeof entity.slug === "string"
-    ? entity.slug.toLowerCase()
-    : undefined;
-}
-
-/** Whether an entity's own public address, if it has one, passes the address rule. */
-function addressAccepted(
-  type: { publicAddress?: unknown; fields?: unknown },
-  kind: "collection" | "single"
-): boolean {
-  return (
-    declaredPublicAddressProblem(
-      type.publicAddress,
-      kind,
-      (Array.isArray(type.fields) ? type.fields : []) as Parameters<
-        typeof declaredPublicAddressProblem
-      >[2]
-    ) === null
-  );
-}
-
-/**
- * The collections' and Singles' slugs, each refused where it repeats one before it. A slug that
- * is missing or not a string is left to the entity's own rules, which report it with the rest.
- */
-function distinctEntitySlugs(
-  collections: NonNullable<NextlyConfig["collections"]>,
-  singles: NonNullable<NextlyConfig["singles"]>
-): Set<string> {
-  const slugs = new Set<string>();
-
-  for (const collection of collections) {
-    const slug = slugKey(collection);
-    if (slug === undefined) continue;
-
-    if (slugs.has(slug)) {
-      throw new Error(
-        `Duplicate collection slug: '${collection.slug}'. ` +
-          `Each collection must have a unique slug.`
-      );
-    }
-
-    slugs.add(slug);
-  }
-
-  for (const single of singles) {
-    const slug = slugKey(single);
-    if (slug === undefined) continue;
-
-    if (slugs.has(slug)) {
-      const isCollectionConflict = collections.some(c => slugKey(c) === slug);
-
-      if (isCollectionConflict) {
-        throw new Error(
-          `Single slug '${single.slug}' conflicts with a Collection slug. ` +
-            `Singles and Collections must have unique slugs.`
-        );
-      } else {
-        throw new Error(
-          `Duplicate Single slug: '${single.slug}'. ` +
-            `Each Single must have a unique slug.`
-        );
-      }
-    }
-
-    slugs.add(slug);
-  }
-
-  return slugs;
-}
-
-/**
- * Each field group's slug, refused where it repeats a collection's, a Single's or another field
- * group's (`slugs` holds the first two, and gains each group's), and its table, refused where two
- * distinct slugs derive the same one.
- */
-function assertDistinctFieldGroups(
-  components: NonNullable<NextlyConfig["fieldGroups"]>,
-  slugs: Set<string>,
-  collections: NonNullable<NextlyConfig["collections"]>,
-  singles: NonNullable<NextlyConfig["singles"]>
-): void {
-  const componentTables = new Map<string, string>();
-
-  for (const comp of components) {
-    const slug = slugKey(comp);
-    if (slug === undefined) continue;
-
-    if (slugs.has(slug)) {
-      const isCollectionConflict = collections.some(c => slugKey(c) === slug);
-      const isSingleConflict = singles.some(s => slugKey(s) === slug);
-
-      if (isCollectionConflict) {
-        throw new Error(
-          `Component slug '${comp.slug}' conflicts with a Collection slug. ` +
-            `Components, Collections, and Singles must have unique slugs.`
-        );
-      } else if (isSingleConflict) {
-        throw new Error(
-          `Component slug '${comp.slug}' conflicts with a Single slug. ` +
-            `Components, Collections, and Singles must have unique slugs.`
-        );
-      } else {
-        throw new Error(
-          `Duplicate Component slug: '${comp.slug}'. ` +
-            `Each Component must have a unique slug.`
-        );
-      }
-    }
-
-    slugs.add(slug);
-
-    // Distinct slugs can still derive one table: the resolver collapses
-    // separator runs, so `foo-bar` and `foo--bar` both become `comp_foo_bar`.
-    // Caught here rather than at the unique index on `dynamic_components`,
-    // which would surface as an opaque database error on the second write.
-    const tableName = resolveComponentTableName(comp.slug);
-    const collidingSlug = componentTables.get(tableName);
-    if (collidingSlug !== undefined) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "fieldGroups",
-            code: "COMPONENT_TABLE_COLLISION",
-            message:
-              `Component slugs '${collidingSlug}' and '${comp.slug}' both resolve ` +
-              `to the table '${tableName}'. Choose slugs that differ by more ` +
-              `than their separators.`,
-          },
-        ],
-        logContext: {
-          reason: "component-table-collision",
-          slugs: [collidingSlug, comp.slug],
-          tableName,
-        },
-      });
-    }
-    componentTables.set(tableName, comp.slug);
-  }
-}
-
 function validateNextlyConfig(config: NextlyConfig): void {
-  const collections = config.collections ?? [];
-  const singles = config.singles ?? [];
-  const slugs = distinctEntitySlugs(collections, singles);
-
-  // Each Single is one page at one address, so two at the same address are
-  // refused here, naming both, as the boot refuses them once plugins join.
-  // Only the addresses each entity's own rule accepts: one it refuses is that entity's problem,
-  // reported with every other one where the configuration is loaded or started, rather than
-  // stopping the load before them. Two Singles at one address are still refused here.
-  assertConfiguredPublicAddresses({
-    collections: collections.filter(type =>
-      addressAccepted(type, "collection")
-    ),
-    singles: singles.filter(type => addressAccepted(type, "single")),
-  });
-
+  // The rules across entities (one slug each, one table per field group, one Single per address,
+  // no cycle among field groups) are judged with every other problem where the configuration is
+  // loaded or started (`crossEntityProblems`), not here: a throw here, while the configuration
+  // file is imported, would stop before them.
   assertNoLegacyFieldGroupKey(config, "defineConfig");
-
-  const components = config.fieldGroups ?? [];
-  assertDistinctFieldGroups(components, slugs, collections, singles);
-
-  if (components.length > 0) {
-    assertNoFieldGroupCycleInCode(components);
-  }
 
   if (config.users) {
     // Plugin field types this config declares for the users surface, with the

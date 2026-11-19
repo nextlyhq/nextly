@@ -11,6 +11,7 @@
  *
  * @module shared/lib/config-problems
  */
+import { crossEntityProblems } from "../../collections/config/cross-entity-problems";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../collections/config/validate-config";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
@@ -33,6 +34,12 @@ export interface ConfigProblem {
    * which the start never judged before.
    */
   declaredByDefine: boolean;
+  /**
+   * Whether it breaks a rule across entities (`crossEntityProblems`): one slug each, one table
+   * per field group, one Single per address, no cycle among field groups. `defineConfig` refused
+   * these at import, whatever declared the entities, so a start refuses them still.
+   */
+  crossEntity?: boolean;
 }
 
 /** The configuration's entities, as far as finding their problems reads them. */
@@ -271,6 +278,14 @@ export function configurationProblems(
         }
       }
     });
+  }
+  // The rules across entities, judged over the entities as the commands use them.
+  for (const problem of crossEntityProblems({
+    collections,
+    singles,
+    fieldGroups,
+  })) {
+    problems.push({ ...problem, declaredByDefine: false, crossEntity: true });
   }
   return problems;
 }

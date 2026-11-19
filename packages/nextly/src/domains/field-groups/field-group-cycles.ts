@@ -123,16 +123,18 @@ function describeCycle(cycle: readonly string[]): string {
   return cycle.join(" → ");
 }
 
+/** The sentence naming `cycle`, for a developer to act on. */
+export function fieldGroupCycleMessage(cycle: readonly string[]): string {
+  return (
+    `Field groups place each other in a cycle: ${describeCycle(cycle)}. ` +
+    `A field group cannot be placed inside itself, directly or through other field groups.`
+  );
+}
+
 function cycleRefusal(cycle: readonly string[], path: string): NextlyError {
   return NextlyError.validation({
     errors: [
-      {
-        path,
-        code: FIELD_GROUP_CYCLE,
-        message:
-          `Field groups place each other in a cycle: ${describeCycle(cycle)}. ` +
-          `A field group cannot be placed inside itself, directly or through other field groups.`,
-      },
+      { path, code: FIELD_GROUP_CYCLE, message: fieldGroupCycleMessage(cycle) },
     ],
     logContext: { reason: "field-group-cycle", cycle },
   });
@@ -145,16 +147,23 @@ function cycleRefusal(cycle: readonly string[], path: string): NextlyError {
 export function assertNoFieldGroupCycleInCode(
   definitions: readonly FieldGroupDefinition[]
 ): void {
+  const cycle = fieldGroupCycleInCode(definitions);
+  if (cycle !== null) throw cycleRefusal(cycle, "fieldGroups");
+}
+
+/**
+ * The first cycle among the field groups a configuration defines in code, each slug as written,
+ * or null where they place each other in none.
+ */
+export function fieldGroupCycleInCode(
+  definitions: readonly FieldGroupDefinition[]
+): string[] | null {
   const { edges, written } = placementGraph(definitions);
   for (const key of edges.keys()) {
     const cycle = shortestWay(edges, key, key);
-    if (cycle !== null) {
-      throw cycleRefusal(
-        cycle.map(k => written.get(k) ?? k),
-        "fieldGroups"
-      );
-    }
+    if (cycle !== null) return cycle.map(k => written.get(k) ?? k);
   }
+  return null;
 }
 
 /** Slugs as their definitions write them. */

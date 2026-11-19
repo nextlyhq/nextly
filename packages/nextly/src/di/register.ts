@@ -1859,7 +1859,13 @@ function validateBootContributions(
   // site serving one is told of each problem, with where and what to do, and starts as it did;
   // every command refuses it. A plugin's contributions keep the checks of their own type below.
   const problems = configurationProblems(declaredConfig, transformedConfig);
-  if (problems.some(problem => problem.declaredByDefine)) {
+  // Refused for an entity declared through `define*`, and for any rule across entities, which
+  // `defineConfig` refused at import before.
+  if (
+    problems.some(
+      problem => problem.declaredByDefine || problem.crossEntity === true
+    )
+  ) {
     throw NextlyError.validation({
       errors: problems.map(({ path, code, message }) => ({
         path,
