@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, waitFor } from "@admin/__tests__/utils";
 
 // Who holds the Single, as the reader reads it without claiming it: nobody.
 const { lockHolder } = vi.hoisted(() => ({ lockHolder: vi.fn() }));
@@ -69,7 +69,7 @@ beforeEach(() => {
 });
 
 describe("Publish on a Single, by whether its schema names a workflow", () => {
-  it("is offered at once where the schema says no workflow holds it", () => {
+  it("is offered without a review state where the schema says no workflow holds it", async () => {
     render(
       <SingleForm
         schema={schemaWith(null)}
@@ -78,10 +78,12 @@ describe("Publish on a Single, by whether its schema names a workflow", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "Publish" })).toBeEnabled();
+    // Once the Single's claim is read; the review state never is.
+    const publish = screen.getByRole("button", { name: "Publish" });
+    await waitFor(() => expect(publish).toBeEnabled());
   });
 
-  it("waits for the review state where a workflow holds it, which is the control", () => {
+  it("waits for the review state where a workflow holds it, which is the control", async () => {
     render(
       <SingleForm
         schema={schemaWith({ slug: "review", label: "Review" })}
@@ -90,6 +92,11 @@ describe("Publish on a Single, by whether its schema names a workflow", () => {
       />
     );
 
-    expect(screen.getByRole("button", { name: "Publish" })).toBeDisabled();
+    // Held for the review state, not for the claim: it says so.
+    const publish = screen.getByRole("button", { name: "Publish" });
+    await waitFor(() =>
+      expect(publish).toHaveAttribute("title", "Checking the review…")
+    );
+    expect(publish).toBeDisabled();
   });
 });
