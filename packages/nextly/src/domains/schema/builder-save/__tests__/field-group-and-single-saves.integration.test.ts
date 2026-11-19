@@ -562,20 +562,24 @@ describe.each(getConfiguredTestDialects())(
       );
 
       companionFails.single = true;
-      const result = await bodyOf(
-        await dispatchSingles(
-          "updateSingleSchema",
-          { slug: "notice" },
-          {
-            fields: [
-              { name: "heading", type: "text" },
-              { name: "body", type: "text" },
-            ],
-          }
-        )
+      const thrown = await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "notice" },
+        {
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "body", type: "text" },
+          ],
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
       );
 
-      expect(JSON.stringify(result)).toContain("failed");
+      // Its file is recorded applied, so the save tried again is what finishes it.
+      expect(String((thrown as Error | undefined)?.message)).toBe(
+        'Single "notice" was saved, but its migration failed: its translations table did not follow the change. Save it again to retry.'
+      );
       const update = migrationFiles(t).find(f =>
         /_notice_update\.sql$/.test(f)
       );
@@ -619,12 +623,18 @@ describe.each(getConfiguredTestDialects())(
       const save = await changeColumnType(t);
 
       companionFails.single = true;
-      const result = await bodyOf(await save());
+      const thrown = await save().then(
+        () => undefined,
+        (error: unknown) => error
+      );
 
-      expect(JSON.stringify(result)).toContain("failed");
       const update = updateFile(t);
       expect(update).toBeDefined();
       expect(await appliedFiles(t)).not.toContain(update);
+      // The failure names the file it kept and the steps that finish the change.
+      expect(String((thrown as Error | undefined)?.message)).toContain(
+        `its translations table did not follow the change. Its migration file ${update} was kept and not recorded applied.`
+      );
     });
 
     it("records a value-carrying Single update's files applied only once its row is written", async () => {
