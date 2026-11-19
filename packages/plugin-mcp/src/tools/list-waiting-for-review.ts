@@ -13,7 +13,7 @@ import { z } from "zod";
 import { answered, forCaller, type ToolCaller } from "./answer";
 
 /** The name an agent calls it by. */
-export const LIST_WAITING_TOOL = "list_waiting_for_review";
+const LIST_WAITING_TOOL = "list_waiting_for_review";
 
 /** The prose of every answer: a constant, so nothing stored can reach it. */
 const ANSWER =

@@ -18,7 +18,7 @@ import { answered, forCaller, type ToolCaller } from "./answer";
 import { DocumentRef, Part, SeenPart } from "./inputs";
 
 /** The name an agent calls it by. */
-export const SUBMIT_FOR_REVIEW_TOOL = "submit_for_review";
+const SUBMIT_FOR_REVIEW_TOOL = "submit_for_review";
 
 /** The prose of every answer: a constant, so neither the comment nor a label can reach it. */
 const ANSWER =

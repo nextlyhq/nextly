@@ -17,7 +17,7 @@ import { answered, forCaller, type ToolCaller } from "./answer";
 import { DocumentRef } from "./inputs";
 
 /** The name an agent calls it by. */
-export const GET_REVIEW_STATE_TOOL = "get_review_state";
+const GET_REVIEW_STATE_TOOL = "get_review_state";
 
 /** The prose of every answer: a constant, so nothing stored can reach it. */
 const ANSWER =

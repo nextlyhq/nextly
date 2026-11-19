@@ -69,7 +69,7 @@ export function answered<T extends object>(
  * A refusal for whatever `error` is: the public JSON of a `NextlyError`, or one constant sentence
  * for anything else, logged with the id the answer names so an operator can find it.
  */
-export function refused(caller: ToolCaller, error: unknown): CallToolResult {
+function refused(caller: ToolCaller, error: unknown): CallToolResult {
   const requestId = randomUUID();
   if (NextlyError.is(error)) {
     return {

@@ -15,7 +15,7 @@ import { z } from "zod";
 import { answered, forCaller, type ToolCaller } from "./answer";
 
 /** The name an agent calls it by. */
-export const GET_WORKFLOW_TOOL = "get_workflow";
+const GET_WORKFLOW_TOOL = "get_workflow";
 
 /** The prose of every answer: a constant, so nothing stored can reach it. */
 const ANSWER =
