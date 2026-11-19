@@ -606,32 +606,6 @@ interface SaveIssues {
 }
 
 /**
- * `value` with every plain object and array in it copied, and every other
- * value kept as it is: the values a save was judged on, kept apart from the
- * write's own data, which hashing, extraction and serialisation change in
- * place before the save is judged again under its row lock. Never throws,
- * as a structured clone does on a value it can't copy.
- */
-function detachedContainers<T>(value: T): T {
-  if (Array.isArray(value)) {
-    return value.map(item => detachedContainers(item)) as T;
-  }
-  if (
-    value !== null &&
-    typeof value === "object" &&
-    Object.getPrototypeOf(value) === Object.prototype
-  ) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        key,
-        detachedContainers(item),
-      ])
-    ) as T;
-  }
-  return value;
-}
-
-/**
  * SingleMutationService
  *
  * Handles the write-path for Single documents. The get-style helpers
@@ -3283,7 +3257,7 @@ export class SingleMutationService extends BaseService {
       // judgement is of the values as sent, as the first was.
       const saveJudgement: SaveJudgement = {
         slug,
-        data: detachedContainers(currentData),
+        data: detachData(currentData),
         fieldConfigs,
         localizedFieldNames,
         enforceLocalizedRequired,
