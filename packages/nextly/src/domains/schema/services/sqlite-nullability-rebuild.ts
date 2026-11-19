@@ -120,23 +120,24 @@ export async function rebuildSqliteNullability(
 }
 
 /**
- * Whether SQLite stores a column of this declared type by numeric affinity (its own rules: an
- * `INT` is INTEGER; `CHAR`, `CLOB` or `TEXT` is TEXT; `BLOB` or no type is BLOB; anything else,
- * `REAL`, `DOUBLE` and `NUMERIC` among them, is numeric).
+ * The storage classes a column of this declared type holds once its values are converted, by
+ * SQLite's affinity rules: an `INT` holds integers (a fraction it keeps as REAL, which it does not
+ * hold); `REAL`, `DOUBLE`, `NUMERIC` and anything else not textual hold integers and reals.
+ * Undefined for a textual or BLOB column, which keeps whatever it is given.
  */
-function numericAffinity(type: string): boolean {
+function convertedClasses(type: string): readonly string[] | undefined {
   const declared = type.toUpperCase();
-  if (declared.includes("INT")) return true;
+  if (declared.includes("INT")) return ["integer"];
   if (/CHAR|CLOB|TEXT|BLOB/.test(declared) || declared.trim() === "") {
-    return false;
+    return undefined;
   }
-  return true;
+  return ["integer", "real"];
 }
 
 /**
  * Refuses, inside the rebuild's transaction so nothing of it commits, a column whose type changed
- * to a numeric one but holds a value SQLite could not convert: SQLite keeps such a value as it was
- * (`"abc"` stays text in an integer column) rather than refusing it. The values are judged before a
+ * to a numeric one but holds a value its type does not hold once converted: SQLite keeps such a
+ * value rather than refusing it (`"abc"` stays text, `"1.5"` becomes REAL, in an integer column). The values are judged before a
  * save plans the change; this holds where one was written in between.
  */
 async function refuseValuesTheTypesCannotTake(
@@ -146,12 +147,16 @@ async function refuseValuesTheTypesCannotTake(
 ): Promise<void> {
   const reader = db as { all(query: unknown): unknown };
   for (const [column, type] of types) {
-    if (!numericAffinity(type)) continue;
+    const classes = convertedClasses(type);
+    if (classes === undefined) continue;
     const rows: unknown = await Promise.resolve(
       reader.all(
         sql`SELECT COUNT(*) AS "unconverted" FROM ${sql.identifier(tableName)}
             WHERE ${sql.identifier(column)} IS NOT NULL
-              AND typeof(${sql.identifier(column)}) NOT IN ('integer', 'real')`
+              AND typeof(${sql.identifier(column)}) NOT IN (${sql.join(
+                classes.map(held => sql`${held}`),
+                sql`, `
+              )})`
       )
     );
     const [row] = Array.isArray(rows)
