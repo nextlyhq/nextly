@@ -96,6 +96,17 @@ const WRITERS: {
     writes: source => source.includes("/make-default"),
   },
   {
+    lock: "reviewWorkflow",
+    what: "works the review workflow",
+    // Its settings written directly, or anything through the workflow
+    // helpers, which sign in people holding its steps and reset its settings.
+    writes: source =>
+      (source.includes("/settings") &&
+        source.includes("workflows/") &&
+        /\.patch\(/.test(source)) ||
+      /from\s+["'][./]*support\/workflow["']/.test(source),
+  },
+  {
     lock: "siteStyle",
     what: "writes the site style",
     // The Single's own update, or the Settings route the site's breakpoints
@@ -230,6 +241,22 @@ test("recognises each kind of write it is there for", () => {
       "await storeSiteBreakpoints(page.request, null);"
     )
   ).toBe(true);
+  expect(
+    WRITERS.find(w => w.lock === "reviewWorkflow")?.writes(
+      'import { reviewedNote, step } from "./support/workflow";'
+    )
+  ).toBe(true);
+  expect(
+    WRITERS.find(w => w.lock === "reviewWorkflow")?.writes(
+      'await page.request.patch("/admin/api/workflows/review/settings", { data });'
+    )
+  ).toBe(true);
+  // Another support module whose name starts the same is not the workflow's.
+  expect(
+    WRITERS.find(w => w.lock === "reviewWorkflow")?.writes(
+      'import { thing } from "./support/workflow-other";'
+    )
+  ).toBe(false);
   // Reading the site style is not writing it.
   expect(
     WRITERS.find(w => w.lock === "siteStyle")?.writes(
