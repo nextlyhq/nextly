@@ -462,6 +462,65 @@ describe("importing a file with text styles and the site's design data", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it("says a file with no text styles was saved in part when the host stored only some", async () => {
+    const onChange = vi.fn();
+    const storeNow = vi.fn(
+      async (): Promise<VariablesStored> => ({
+        stored: "part",
+        why: "Card shadow: the value isn't a shadow.",
+      })
+    );
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        onChange={onChange}
+        storeNow={storeNow}
+      />
+    );
+    await chooseFile(
+      "variables.tokens.json",
+      exportDtcgWithTheme(SOURCE, [])[0]?.text ?? ""
+    );
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    expect(
+      await screen.findByText("Only some of the variables were saved.")
+    ).toBeDefined();
+    expect(
+      screen.getByText("Card shadow: the value isn't a shadow.")
+    ).toBeDefined();
+    // Stored through the write that answers what it stored, never the
+    // edit at the author's pause, whose answer nobody reads.
+    expect(storeNow).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByText(/^Imported /)).toBeNull();
+  });
+
+  it("counts a file with no text styles once the host says it stored all", async () => {
+    const onChange = vi.fn();
+    const storeNow = vi.fn(async () => true);
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        onChange={onChange}
+        storeNow={storeNow}
+      />
+    );
+    await chooseFile(
+      "variables.tokens.json",
+      exportDtcgWithTheme(SOURCE, [])[0]?.text ?? ""
+    );
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    expect(await screen.findByText("Imported 3 variables.")).toBeDefined();
+    expect(storeNow).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("lists the fonts the site lacks, offering Google Fonts for one the catalogue has", async () => {
     const add = vi.fn<FontCatalogue["add"]>(async () => undefined);
     const catalogue: FontCatalogue = {
