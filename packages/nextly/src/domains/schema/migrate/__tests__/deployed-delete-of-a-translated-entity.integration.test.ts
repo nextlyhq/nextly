@@ -978,6 +978,28 @@ describe.each(getConfiguredTestDialects())(
     );
 
     it.skipIf(dialect !== "postgresql")(
+      "leaves a table named as its translations table but not made as one",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        // In its place, a table of the same name without a translations table's key.
+        await deployed.adapter.executeQuery(
+          `DROP TABLE "${notes.table}_locales"`
+        );
+        await deployed.adapter.executeQuery(
+          `CREATE TABLE "${notes.table}_locales" ("id" integer PRIMARY KEY, "note" text)`
+        );
+
+        const later = await migrate();
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(later.said).not.toContain(`- table ${notes.table}_locales`);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+      },
+      180_000
+    );
+
+    it.skipIf(dialect !== "postgresql")(
       "refuses the run, keeping it, where no consent covers it",
       async () => {
         const { deployed } =
