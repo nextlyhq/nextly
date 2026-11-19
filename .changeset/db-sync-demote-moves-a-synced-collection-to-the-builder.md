@@ -31,4 +31,4 @@
 
 `nextly db:sync --demote <slug>` now moves a code-first collection that has already been synced to the Schema Builder. It was refused with "This collection is defined in code, so it can't be changed here". The collection's registry record becomes the Builder's and is unlocked in one write, so it can be edited in the Builder and `nextly prune` does not list it as an orphan once its code entry is removed. `--dry-run` prints the record the demote would set.
 
-A collection a plugin contributes is still refused. And while a demoted collection is still declared in `nextly.config.ts`, the code-first sync leaves its record alone and warns once that the entry is no longer applied and should be removed.
+A collection a plugin contributes is still refused. And while a demoted collection is still declared in `nextly.config.ts`, the code-first sync leaves its registry record to the Builder and warns once: the collection's table still follows the configuration's entry until that entry is removed.
