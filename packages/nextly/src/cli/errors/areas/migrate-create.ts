@@ -220,7 +220,9 @@ export function fieldGroupNamesOptionInvalid(value: string): CliError {
     what:
       value === "current"
         ? "`--field-group-names` can't be combined with `--blank`, `--plugin` or `--record-snapshot`."
-        : ``--field-group-names` takes `current`, and was given `${value}`.`,
+        : "`--field-group-names` takes `current`, and was given `" +
+          value +
+          "`.",
     why: "It writes the one migration that moves the app's history to the current field-group names (dynamic_field_groups, fg_<slug>), and there is no other naming to move it to.",
     next: "Run `nextly migrate:create --field-group-names=current` on its own.",
   });

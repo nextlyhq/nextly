@@ -13,6 +13,7 @@
  */
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import {
   underNaming,
@@ -22,7 +23,6 @@ import type {
   ContributedElements,
   NextlySchemaSnapshot,
 } from "../pipeline/diff/types";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 
 import { snapshotFieldGroupNaming, type SnapshotFile } from "./snapshot-io";
 

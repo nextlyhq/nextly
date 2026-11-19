@@ -2,24 +2,28 @@
 
 /**
  * The editor's top bar: the page's title and state with its history at the
- * start, the devices in the centre, and search, Preview and the document's
- * actions at the end.
+ * start, the devices and the light and dark preview in the centre, and
+ * search, Preview, the document's actions and its ⋯ menu at the end.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/editor-top-bar
  */
-import { BreakpointSwitcher } from "@nextlyhq/builder/shell";
+import type { PageCheck, PageFacts } from "@nextlyhq/builder";
+import { BreakpointSwitcher, PageChecksChip } from "@nextlyhq/builder/shell";
 import { DocumentSaveAndPublish } from "@nextlyhq/plugin-sdk/admin";
 
 import { BindingsToFixChip } from "../bindings-report/BindingsToFixChip";
 import { DocumentStatusPill } from "../DocumentStatusPill";
 import { OwnDesignsChip } from "../TemplateOwnDesigns";
 
+import { CanvasModeSwitch } from "./canvas-preview-mode";
+import { EditorMoreMenu } from "./editor-more-menu";
 import { SearchButton } from "./editor-search";
 import type { EditorView } from "./editor-view";
 import { HistoryButtons } from "./history-buttons";
 import { PageReadMeter, type PageDataCount } from "./page-read-meter";
 import { PageTitleSwitcher } from "./page-title-switcher";
 import { PreviewButton, type VisitorPreview } from "./preview-button";
+import { RegionSaveAndPublish } from "./region-done-dialog";
 import { siteStyleStatus } from "./site-style-studios";
 
 /**
@@ -61,7 +65,8 @@ export function editorTopBar(
    * address, where that field sits in words when below the top level, and
    * the canvas, which a binding's Select brings its block into view in,
    * and "Preview as visitor", which Preview's menu holds, and the page's
-   * data count, which the bar shows only near the limit.
+   * data count, which the bar shows only near the limit, and the way to the
+   * document's form, which the ⋯ menu offers.
    */
   page: {
     title: string | undefined;
@@ -70,6 +75,13 @@ export function editorTopBar(
     canvas: HTMLElement | null;
     visitor: VisitorPreview;
     pageData: PageDataCount | null;
+    openAsForm: (() => void) | undefined;
+    /** The checks the Page checks count runs: the builder's and plugins'. */
+    pageChecks: readonly PageCheck[];
+    /** What those checks read of the page beyond its document. */
+    pageFacts: PageFacts;
+    /** Opens Page settings at a tab, for a plugin's fix found there. */
+    openSettingsTab: (tab: string) => void;
   }
 ): {
   topBar: React.JSX.Element;
@@ -82,6 +94,8 @@ export function editorTopBar(
     siteStyleError,
     editedBreakpoint,
     chooseDevice,
+    previewWidth,
+    setPreviewWidth,
     editor,
     inline,
   } = view;
@@ -102,6 +116,8 @@ export function editorTopBar(
                 }
           }
           userId={view.userId}
+          // "+ New page…" asks about it before leaving the page.
+          unsavedWork={view.documentDirty}
           onAllPages={() => view.requestPanel("pages")}
         />
         {page.location === undefined ? null : (
@@ -111,7 +127,7 @@ export function editorTopBar(
         {/* The page's bindings that no longer fit, beside its status: shown
             only when it has one. */}
         <BindingsToFixChip
-          editor={editor}
+          editor={view.page}
           field={page.field}
           canvas={page.canvas}
           requestPanel={view.requestPanel}
@@ -144,7 +160,14 @@ export function editorTopBar(
           selected={editedBreakpoint}
           onSelect={chooseDevice}
           status={siteStyleStatus(siteStylePending, siteStyleError)}
+          // A width previewed in place of the device's own: shown, typed
+          // and reset here, dragged at the canvas frame's edges.
+          previewWidth={previewWidth}
+          onPreviewWidth={setPreviewWidth}
         />
+        {/* Beside the devices: the whole site in its dark values, offered
+            while some variable has one. */}
+        <CanvasModeSwitch preview={view.previewMode} />
       </>
     ),
     topBarEnd: (
@@ -153,13 +176,52 @@ export function editorTopBar(
           blocks, the page, other pages and commands, also on ⌘K. */}
         <SearchButton onOpen={() => view.search.setOpen(true)} />
         <PreviewButton visitor={page.visitor} />
+        {/* Beside Publish, on a page: how many of the draft's checks need
+          attention, opening the list. Never a reason to hold Save or
+          Publish back, which read nothing of it. */}
+        {editor.document.kind === "page" ? (
+          <PageChecksChip
+            editor={editor}
+            canvas={page.canvas}
+            // The builder's checks and other plugins', in their own groups.
+            checks={page.pageChecks}
+            facts={page.pageFacts}
+            onOpenSettingsTab={page.openSettingsTab}
+            // The site's header and footer, read with the page, so their
+            // headings count in the page's order.
+            regions={view.canvasRegions}
+            // The components the canvas draws the page's placements with.
+            {...(canvasRender.definitions === undefined
+              ? {}
+              : { definitions: canvasRender.definitions })}
+            // The site's variables, light and dark, for the contrast check.
+            {...(view.siteTokens === undefined
+              ? {}
+              : { tokens: view.siteTokens })}
+            // The site's shared styles, its edits to block types' looks
+            // among them, which a block's colours are drawn with.
+            {...(canvasRender.styleContext.namedClasses === undefined
+              ? {}
+              : { namedClasses: canvasRender.styleContext.namedClasses })}
+          />
+        ) : null}
         {/* Last, at the bar's far end where the header kept them: Save and
           Publish, which say themselves whether the work is saved and
           whether the live page is behind, so nothing else in the bar says
           it again. Publish's arrow keeps the other ways to publish, which
           the builder's taking the window would otherwise leave reachable
           only from the keyboard. */}
-        <DocumentSaveAndPublish />
+        {/* While a header or footer is edited in place, they act on it:
+          "Save header" and "Publish header". */}
+        {view.regionEditing.topBar === undefined ? (
+          <DocumentSaveAndPublish />
+        ) : (
+          <RegionSaveAndPublish bar={view.regionEditing.topBar} />
+        )}
+        {/* After them, as the entry page's own ⋯ follows its Publish: the
+          form and the pin, which a page that opens here would otherwise
+          leave out of reach. */}
+        <EditorMoreMenu onOpenAsForm={page.openAsForm} />
       </>
     ),
   };

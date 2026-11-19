@@ -211,7 +211,8 @@ function expandInstance(
   depth: number,
   presupplied?: Record<string, ResolvedBlockNode[]>,
   owner?: string,
-  relay?: ReadonlyMap<string, PropExposure>
+  relay?: ReadonlyMap<string, PropExposure>,
+  host?: InlineContext
 ): ResolvedBlockNode[] {
   // Asked before anything else, including whether the instance is even well
   // formed. A gated node is not served, so composing it is work nobody
@@ -261,6 +262,7 @@ function expandInstance(
       presupplied,
       owner,
       relay,
+      host,
     });
   } catch {
     // Everything that follows CONSUMES the definition — its nodes, their props,
@@ -304,7 +306,7 @@ function inlinedDefinition(
   componentId: string,
   placement: InstancePlacement
 ): ResolvedBlockNode[] | null {
-  const { run, scope, depth, presupplied, owner, relay } = placement;
+  const { run, scope, depth, presupplied, owner, relay, host } = placement;
   // The instance node is REPLACED, so its own slot under the cap is freed for
   // what replaces it. Credited before the clone rather than after, or a
   // definition that exactly fills the remaining room is refused for needing
@@ -319,7 +321,13 @@ function inlinedDefinition(
   const supplied = owned
     ? suppliedSlots(instance, definition, run)
     : presupplied;
-  const plans = planEdits(definition, instance, supplied, !owned);
+  const plans = planEdits(definition, instance, supplied, !owned, {
+    maxNodes: run.maxNodes,
+    maxDepth: run.maxDepth,
+    // Finding the followers reads the definition, so it is charged as the
+    // clone's reads are.
+    work: run.work,
+  });
   // The host placement's own exposures, and a nested instance's only where a
   // host exposure drives them: its fields are reached through the host
   // component's, so its nodes carry the HOST exposure's id or none.
@@ -331,6 +339,9 @@ function inlinedDefinition(
     scopeKey: instance.id,
     owner: owner ?? instance.id,
     domIds: new Map<string, string>(),
+    nodeIds: new Map<string, string>(),
+    pageBound: new Map<string, ReadonlySet<string>>(),
+    ...(host === undefined ? {} : { host }),
     plans,
     scope: {
       depth: scope.depth + 1,
@@ -466,7 +477,8 @@ function cloneDefinitionNode(
       depth,
       slots ?? {},
       ctx.owner,
-      relayOf(plan?.exposedProps)
+      relayOf(plan?.exposedProps),
+      ctx
     );
   }
   return [scoped];

@@ -238,6 +238,7 @@ export class FieldGroupMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `create field group "${request.slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         issuesDdl: true,
       },
       async () =>
@@ -275,10 +276,11 @@ export class FieldGroupMetadataService {
     // registration accepted would otherwise be built and stored against the new one, and every
     // later write to the field group would fail on options the active plugin rejects.
     await this.assertNewAddressAvailable(input.slug, input.tableName);
-    const { assertValidPluginFieldOptions } = await import(
-      "../../../api/fields-payload"
-    );
+    const { assertOptionValuesDistinct, assertValidPluginFieldOptions } =
+      await import("../../../api/fields-payload");
     assertValidPluginFieldOptions(input.fields);
+    // Nor two options sharing one value, which the stored value could not tell apart.
+    assertOptionValuesDistinct(input.fields);
     // A new field group holds no pair of sibling fields yet, so every pair it is created with is new.
     assertNoNewSiblingClashes(
       { kind: "fieldGroup", slug: input.slug },
@@ -422,6 +424,7 @@ export class FieldGroupMetadataService {
         adapter: this.adapter,
         logger: this.logger,
         label: `update field group "${input.slug}"`,
+        migrationsDir: this.builderSave?.migrationsDir,
         // 🔴 Derived from the request, CONSERVATIVELY, because claiming DDL is not free: the
         // exclusion may create and seed its lock table, and a deployment whose role holds DML but
         // not DDL then fails an otherwise valid metadata edit on that `CREATE TABLE`.
@@ -495,10 +498,11 @@ export class FieldGroupMetadataService {
       });
     }
     if (input.fields !== undefined) {
-      const { assertValidPluginFieldOptions } = await import(
-        "../../../api/fields-payload"
-      );
+      const { assertOptionValuesDistinct, assertValidPluginFieldOptions } =
+        await import("../../../api/fields-payload");
       assertValidPluginFieldOptions(input.fields);
+      // Nor two options sharing one value, which the stored value could not tell apart.
+      assertOptionValuesDistinct(input.fields);
       // Judged against the fields as stored now, so only a pair of sibling fields this save
       // creates is refused, and one the field group already holds keeps working.
       assertNoNewSiblingClashes(
@@ -1406,7 +1410,12 @@ export class FieldGroupMetadataService {
           typeof buildDesiredTableFromComponentFields
         >[1],
         dialect,
-        { localized: storesPerLanguage(input), builtBy: "fieldGroup" }
+        {
+          localized: storesPerLanguage(input),
+          builtBy: "fieldGroup",
+          // The discriminator the create's DDL wrote for a table under this name.
+          typeColumn: typeColumnForNewTable(input.tableName),
+        }
       )
     );
     return leftOut.length === 0 ? null : describeColumnsLeftOut(leftOut);

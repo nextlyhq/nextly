@@ -26,6 +26,7 @@ import {
   getBlock,
   isComponentInstance,
   isRichTextValue,
+  oneParagraphLines,
   registryBlockSource,
   type BlockDocument,
   type BlockNode,
@@ -139,7 +140,9 @@ export function composedTextAt(
       heldExposureId: exposureId,
     };
   }
-  if (exposureId === undefined || kind === null) {
+  // Bound to data, the prop shows the field whatever is typed, so it is
+  // changed through the binding in the panel.
+  if (exposureId === undefined || kind === null || isBound(node, prop)) {
     return { kind: "part-of", placementId: placement.id };
   }
   if (kind === "rich") {
@@ -150,9 +153,10 @@ export function composedTextAt(
   }
   // The text the page draws for this value, through the projection every
   // reader shares, so an untouched edit compares equal and writes nothing.
-  const shown = authoredText(
-    (node.props as Record<string, unknown> | undefined)?.[prop]
-  );
+  // A one-paragraph value is drawn with its marks and line breaks, and read
+  // back as the element's text, which holds its words and no breaks.
+  const own = (node.props as Record<string, unknown> | undefined)?.[prop];
+  const shown = kind === "line" ? oneParagraphLines(own) : authoredText(own);
   return {
     kind: "exposed",
     target: {
@@ -183,6 +187,16 @@ function placedNode(
   const placement = findNode(document.nodes, placementId);
   if (placement === undefined || !isComponentInstance(placement)) return null;
   return { node, placement };
+}
+
+/** Whether the composed node's prop is bound, as a placement's binding lands. */
+function isBound(node: ResolvedBlockNode, prop: string): boolean {
+  const bindings: unknown = node.bindings;
+  return (
+    typeof bindings === "object" &&
+    bindings !== null &&
+    Object.hasOwn(bindings, prop)
+  );
 }
 
 /**

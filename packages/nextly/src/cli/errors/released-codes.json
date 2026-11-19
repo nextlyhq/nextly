@@ -216,5 +216,14 @@
   "PLUGIN_OPTION_MISSING": "A plugin asks for options at install, and `nextly plugins add` was given none for some of them with no one at the terminal to ask.",
   "PLUGIN_OPTION_INVALID": "An option given to `nextly plugins add` is malformed, is not one the plugin asks for, or was refused by the plugin.",
   "PLUGIN_CONFIG_NOT_EDITABLE": "`nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was.",
-  "CREATE_BLOCKED_BY_LEFTOVER_TABLE": "A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them."
+  "CREATE_BLOCKED_BY_LEFTOVER_TABLE": "A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them.",
+  "MIGRATE_BACKUP_NOT_CONFIRMED": "`nextly migrate` found the migration records of an earlier Nextly release, and no backup was confirmed, with no terminal attached to ask.",
+  "MIGRATE_BACKUP_DECLINED": "`nextly migrate` found the migration records of an earlier Nextly release, and its backup question was answered no.",
+  "MIGRATE_LEDGER_UNREADABLE": "`nextly migrate` found a `nextly_migrations` table of an earlier Nextly release holding records it cannot read, so it moved none of them.",
+  "MIGRATE_EVENTS_TABLE_TAKEN": "A table of another shape already has the name `nextly migrate` moves the migration records of an earlier Nextly release into.",
+  "MIGRATIONS_WRITER_BUSY": "Another run is writing this project's migration files, so the command wrote nothing.",
+  "MIGRATIONS_WRITER_OVERTAKEN": "Another run wrote a migration for this project while the command was part-way, so the command wrote no migration and no snapshot.",
+  "UPGRADE_WORK_MOVED": "`nextly upgrade` was run for the database work it used to do, which `nextly migrate` and `nextly i18n:convert-zoned-dates` now do, so it changed nothing.",
+  "DATA_STEPS_BACKUP_NOT_CONFIRMED": "A command would change data an earlier Nextly release stored, and no backup was confirmed, with no terminal attached to ask.",
+  "DATA_STEPS_BACKUP_DECLINED": "A command would change data an earlier Nextly release stored, and its backup question was answered no."
 }

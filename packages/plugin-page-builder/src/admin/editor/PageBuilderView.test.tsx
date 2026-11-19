@@ -38,9 +38,11 @@ import {
   type FieldValues,
 } from "react-hook-form";
 import { ShortcutProvider, TooltipProvider } from "@nextlyhq/ui";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BlocksFieldConfig } from "../../fields/blocks-options";
+import { closedDocumentSession } from "../../__tests__/closed-document-session";
 
 /** Each document the editor was seeded with, in mount order. */
 const seeded: BlockDocument[] = [];
@@ -56,6 +58,12 @@ let lastStored: BlockDocument | undefined;
 
 /** Resets the host's form, as a save does to what the server stored. */
 let resetForm: ((next: FieldValues) => void) | undefined;
+
+/** Where the page's collection opens, and its list; null as outside one. */
+let opensIn: {
+  opensIn: string;
+  list: { label: string; address: string };
+} | null = null;
 
 // The editor asks the session's grants for shared styles; this file is not
 // about them, so the author holds the right to change the site's design.
@@ -81,10 +89,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
      */
     BuilderShell: ({
       onExit,
+      exitLabel,
+      topBarEnd,
       children,
       canvasStrip,
     }: {
       onExit?: () => void;
+      exitLabel?: string;
+      topBarEnd?: React.ReactNode;
       children?: React.ReactNode;
       canvasStrip?: React.ReactNode;
     }): React.JSX.Element => (
@@ -94,9 +106,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         <TooltipProvider>
           <div>
             <header aria-label="Editor actions">
+              {/* Named by the host's words for it where it gives some, as
+                  the real arrow is. */}
               <button type="button" onClick={onExit}>
-                Leave editor
+                {exitLabel ?? "Leave editor"}
               </button>
+              {/* The host's controls at the bar's end: the ⋯ menu. */}
+              {topBarEnd}
             </header>
             {/* The real shell's strip slot, above the canvas. */}
             {canvasStrip === undefined ? null : (
@@ -195,6 +211,9 @@ vi.mock("../site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The empty page's starter pages read, offering none: no case here starts
+  // a page from one.
+  readPluginRoute: async () => ({ items: [] }),
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -211,6 +230,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
+  // The media library's upload, which an Image's empty state offers: these
+  // cases upload nothing.
+  useUploadMedia: () => ({ mutateAsync: () => new Promise<never>(() => {}) }),
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   // No preview here: the surrounding editor offers none.
   useDocumentPreview: () => null,
@@ -225,6 +247,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
     documentId: "p1",
   }),
   navigateTo: vi.fn(),
+  // Where the page's collection opens, as each case sets it.
+  useDocumentOpensIn: () => opensIn,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   useDocumentLocale: () => null,
   /*
    * Every plugin read answers with nothing. A disabled read is modelled the
@@ -254,6 +279,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,
@@ -319,6 +346,12 @@ vi.mock("../template-preview-client", () => ({
 
 // Imported after the mocks, which is what makes them take effect.
 const { PageBuilderView } = await import("./PageBuilderView");
+const { navigateTo } = await import("@nextlyhq/plugin-sdk/admin");
+
+// What Radix's menu reaches for and jsdom lacks.
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};
 
 /*
  * The block's OWN version rather than a literal: the renderer drops a node
@@ -420,7 +453,9 @@ beforeEach(() => {
   values = undefined;
   lastStored = undefined;
   resetForm = undefined;
+  opensIn = null;
   exit.mockClear();
+  vi.mocked(navigateTo).mockClear();
 });
 
 afterEach(() => {
@@ -631,7 +666,102 @@ describe("the Previewing strip", () => {
   it("is not drawn for a page (the control)", () => {
     render(<Host />);
     expect(screen.getByRole("banner", { name: "Editor actions" })).toBeTruthy();
-    expect(screen.queryByTestId("canvas-strip")).toBeNull();
+    // The strip holds only the live region that announces editing a header
+    // in place, which says nothing until then: no row is drawn for a page.
+    expect(screen.queryByTestId("canvas-strip")?.textContent ?? "").toBe("");
     expect(screen.queryByText("Previewing")).toBeNull();
+  });
+});
+
+/** Picks "Open as form" in the top bar's ⋯ menu. */
+async function openAsForm(): Promise<void> {
+  await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Open as form" }));
+}
+
+describe("leaving a page whose collection opens in the builder", () => {
+  beforeEach(() => {
+    opensIn = {
+      opensIn: "builder",
+      list: { label: "Pages", address: "/admin/collections/pages" },
+    };
+  });
+
+  it("names the arrow for the list and goes there, not to the form", () => {
+    render(<Host />);
+    act(() => edit?.(EDITED));
+    fireEvent.click(screen.getByRole("button", { name: "Back to Pages" }));
+
+    // To the list, through the admin's navigation, whose leave guard asks
+    // about the unsaved edit; the form is never opened on the way.
+    expect(navigateTo).toHaveBeenCalledWith("/admin/collections/pages");
+    expect(exit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Leave editor" })).toBeNull();
+  });
+
+  it("opens the form from the ⋯ menu, carrying the unsaved edit into it", async () => {
+    render(<Host />);
+    act(() => edit?.(EDITED));
+    await openAsForm();
+
+    // The same hand-over as the exit to the form: the edit is in the form's
+    // values, unsaved, and the form is opened, so nothing asks.
+    expect(values?.content).toEqual(EDITED);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(navigateTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("leaving a Single that opens in the builder", () => {
+  beforeEach(() => {
+    // What the admin answers for a Homepage Single whose main field is a
+    // page layout: it opens here, and is found on the Content screen.
+    opensIn = {
+      opensIn: "builder",
+      list: { label: "content", address: "/admin/content" },
+    };
+  });
+
+  it("names the arrow Back to content and goes to the Content screen, with no Exit editor", () => {
+    render(<Host />);
+    act(() => edit?.(EDITED));
+    fireEvent.click(screen.getByRole("button", { name: "Back to content" }));
+
+    expect(navigateTo).toHaveBeenCalledWith("/admin/content");
+    expect(exit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Exit editor" })).toBeNull();
+  });
+});
+
+describe("leaving a page whose collection opens as a form", () => {
+  it("keeps the arrow going to the form, and Open as form in the menu", async () => {
+    // The control for the case above: the same page, with its collection
+    // opening elsewhere, names no list and leaves for the form.
+    opensIn = {
+      opensIn: "form",
+      list: { label: "Posts", address: "/admin/collections/posts" },
+    };
+    render(<Host />);
+    expect(screen.queryByRole("button", { name: "Back to Posts" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(navigateTo).not.toHaveBeenCalled();
+
+    // The menu's way to the form is offered here too, and goes there.
+    cleanup();
+    exit.mockClear();
+    render(<Host />);
+    await openAsForm();
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(navigateTo).not.toHaveBeenCalled();
+  });
+
+  it("goes to the form where the admin names no collection (a Single)", async () => {
+    opensIn = null;
+    render(<Host />);
+    act(() => edit?.(EDITED));
+    await openAsForm();
+    expect(values?.content).toEqual(EDITED);
+    expect(exit).toHaveBeenCalledTimes(1);
   });
 });

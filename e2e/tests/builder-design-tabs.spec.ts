@@ -57,8 +57,11 @@ async function switchTo(page: Page, name: string): Promise<void> {
 /** The first variable row's name and value columns, in the window. */
 async function firstRowColumns(page: Page) {
   // A variable's row, beside its ⋯: the fonts and site text rows a tab may
-  // list first are other lists, with no ⋯ of their own.
-  const row = page.locator(".nx-vars__line > .nx-vars__row").first();
+  // list first are other lists, with no ⋯ of their own, and run the whole
+  // width.
+  const row = page
+    .locator(".nx-vars__line:has(.nx-vars__more) > .nx-vars__row")
+    .first();
   await expect(row).toBeVisible();
   const body = await page
     .locator(".nx-vars__body")
@@ -100,23 +103,30 @@ test("names its four tabs in order, each holding its own kind", async ({
   await expect(panel.getByRole("tab")).toHaveText([...TABS]);
   // Colours: the colour variables.
   await expect(
-    panel.getByRole("button", { name: /^Colours, \d+$/ })
+    panel.getByRole("button", { name: /^Text and surfaces, \d+$/ })
   ).toBeVisible();
-  // Type: the site's fonts, then the type sizes.
+  // Type: the Body and Headings fonts and the way to the site's fonts, then
+  // the type sizes.
   await switchTo(page, "Type");
   await expect(
-    panel.getByRole("button", { name: /^Fonts, \d+$/ })
+    panel.getByRole("region", { name: "Body and headings fonts" })
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Manage fonts…" })
   ).toBeVisible();
   await expect(
     panel.getByRole("button", { name: /^Type scale, \d+$/ })
   ).toBeVisible();
-  // Spacing: spacing, radius and shadows.
+  // Spacing: spacing, radius, shadows and the content width, each its own
+  // group.
   await switchTo(page, "Spacing");
+  for (const heading of ["Spacing", "Radius", "Shadows", "Content width"]) {
+    await expect(
+      panel.getByRole("button", { name: new RegExp(`^${heading}, \\d+$`) })
+    ).toBeVisible();
+  }
   await expect(
-    panel.getByRole("button", { name: /^Spacing, radius & shadows, \d+$/ })
-  ).toBeVisible();
-  await expect(
-    panel.getByRole("button", { name: /^Colours, \d+$/ })
+    panel.getByRole("button", { name: /^Text and surfaces, \d+$/ })
   ).toHaveCount(0);
 });
 
@@ -128,16 +138,21 @@ test("keeps a folded group folded across a reload, and opens every group on a fr
   await openEditorWith(page, NODES, "tabs-text");
   await openDesign(page);
   const panel = page.getByRole("region", { name: "Design panel" });
-  const colours = panel.getByRole("button", { name: /^Colours, \d+$/ });
+  const colours = panel.getByRole("button", {
+    name: /^Text and surfaces, \d+$/,
+  });
   await expect(colours).toHaveAttribute("aria-expanded", "true");
   await colours.click();
   await expect(colours).toHaveAttribute("aria-expanded", "false");
-  await expect(panel.locator(".nx-vars__row")).toHaveCount(0);
+  // Its own rows are gone; the other named groups of colours keep theirs.
+  await expect(
+    panel.locator('[data-colour-group="Text and surfaces"] .nx-vars__row')
+  ).toHaveCount(0);
 
   await page.reload();
   await openDesign(page);
   await expect(
-    panel.getByRole("button", { name: /^Colours, \d+$/ })
+    panel.getByRole("button", { name: /^Text and surfaces, \d+$/ })
   ).toHaveAttribute("aria-expanded", "false");
 
   // A fresh profile: nothing remembered, every group open.
@@ -161,13 +176,13 @@ test("keeps a folded group folded across a reload, and opens every group on a fr
     await expect(
       other
         .getByRole("region", { name: "Design panel" })
-        .getByRole("button", { name: /^Colours, \d+$/ })
+        .getByRole("button", { name: /^Text and surfaces, \d+$/ })
     ).toHaveAttribute("aria-expanded", "true");
   } finally {
     await fresh.close();
   }
   // Put it back for the specs after this one.
-  await panel.getByRole("button", { name: /^Colours, \d+$/ }).click();
+  await panel.getByRole("button", { name: /^Text and surfaces, \d+$/ }).click();
 });
 
 test("keeps the rows' columns where they were across all four tabs, at the default width and the narrowest", async ({

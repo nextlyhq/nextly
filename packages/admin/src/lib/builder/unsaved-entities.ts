@@ -19,6 +19,8 @@ import type { BuilderSettingsValues } from "@admin/components/features/schema-bu
 import type { PendingAddress } from "@admin/services/addressCheckApi";
 import type { FieldDefinition } from "@admin/types/collection";
 
+import { toSnakeName } from "./field-transformers";
+
 /** An entity created in the dialog and not saved yet. */
 export interface UnsavedEntity {
   kind: BuilderKind;
@@ -36,6 +38,32 @@ export interface UnsavedEntity {
    * server's shape, as the editor loads a saved entity's.
    */
   fields: FieldDefinition[];
+  /**
+   * The entity whose field picker made it, for a field group made there: that
+   * entity's save creates it, and its Discard all lets it go. Absent for one
+   * made from its own create page, whose editor's first save creates it.
+   */
+  ownedBy?: { kind: BuilderKind; address: string };
+}
+
+/**
+ * A field group as the new-entity dialog set it, not saved yet: named by the
+ * dialog's address (or the name's snake_case form when the address is blank),
+ * with no fields, which are added in its editor.
+ */
+export function unsavedFieldGroupFrom(
+  values: BuilderSettingsValues,
+  ownedBy?: UnsavedEntity["ownedBy"]
+): Omit<UnsavedEntity, "token"> {
+  const singularName = values.singularName.trim();
+  const address = values.slug?.trim() || toSnakeName(singularName);
+  return {
+    kind: "field-group",
+    address,
+    settings: { ...values, singularName, slug: address },
+    fields: [],
+    ...(ownedBy ? { ownedBy } : {}),
+  };
 }
 
 /** The address check's name for each kind. */
@@ -71,17 +99,37 @@ function replace(next: ReadonlyMap<string, UnsavedEntity>): void {
 export function addUnsavedEntity(
   entity: Omit<UnsavedEntity, "token">
 ): boolean {
-  const key = keyOf(entity.kind, entity.address);
-  if (entities.has(key)) return false;
+  return addUnsavedEntities([entity]);
+}
+
+/**
+ * Holds several created entities at once, all or none: an entity with the
+ * ones it needs, made in one dialog. Returns false, adding none and keeping
+ * every one held, when any of them waits already under its kind and address,
+ * or two of them share one, so no entity is ever held without what it needs.
+ */
+export function addUnsavedEntities(
+  list: readonly Omit<UnsavedEntity, "token">[]
+): boolean {
+  const keys = list.map(entity => keyOf(entity.kind, entity.address));
+  if (
+    new Set(keys).size !== keys.length ||
+    keys.some(key => entities.has(key))
+  ) {
+    return false;
+  }
   const next = new Map(entities);
-  next.set(key, { ...entity, token: `unsaved-${nextToken++}` });
+  list.forEach((entity, at) => {
+    next.set(keys[at], { ...entity, token: `unsaved-${nextToken++}` });
+  });
   replace(next);
   return true;
 }
 
 /**
  * Moves an unsaved entity to a new address, its settings' address with it,
- * keeping its token. Returns false, changing nothing, when no entity of that
+ * keeping its token; the field groups its picker made name it as their owner
+ * under the new address. Returns false, changing nothing, when no entity of that
  * kind waits under `from` or one already waits under `to`: the settings check
  * the new address against every other unsaved entity first, so either is a
  * caller's mistake that must not lose an entity's work.
@@ -100,6 +148,13 @@ export function renameUnsavedEntity(
     address: to,
     settings: { ...held.settings, slug: to },
   });
+  // The field groups its picker made move with it: its save still creates them, and its
+  // Discard all still lets them go.
+  for (const [key, entity] of next) {
+    if (entity.ownedBy?.kind === kind && entity.ownedBy.address === from) {
+      next.set(key, { ...entity, ownedBy: { kind, address: to } });
+    }
+  }
   replace(next);
   return true;
 }
@@ -111,6 +166,33 @@ export function removeUnsavedEntity(kind: BuilderKind, address: string): void {
   if (!entities.has(key)) return;
   const next = new Map(entities);
   next.delete(key);
+  replace(next);
+}
+
+/**
+ * Clears `host` as the owner of the field groups its picker made, so each stays
+ * an unsaved field group of its own, as one made from its create page: its own
+ * editor's first save creates it. For a host left with its changes discarded,
+ * which no longer names them. Only field groups: another host's picker offers
+ * one on its own, where nothing offers an unsaved collection, so a collection
+ * the host made stays its own, for its leave to let go or its save to create.
+ */
+export function releaseUnsavedFieldGroupsOf(
+  host: NonNullable<UnsavedEntity["ownedBy"]>
+): void {
+  const owned = [...entities].filter(
+    ([, entity]) =>
+      entity.kind === "field-group" &&
+      entity.ownedBy?.kind === host.kind &&
+      entity.ownedBy.address === host.address
+  );
+  // Nothing of the host's is held, so readers are not told.
+  if (owned.length === 0) return;
+  const next = new Map(entities);
+  for (const [key, entity] of owned) {
+    const { ownedBy: _released, ...ownerless } = entity;
+    next.set(key, ownerless);
+  }
   replace(next);
 }
 
@@ -185,18 +267,34 @@ export function useUnsavedEntity(
 
 const NOTHING_HELD: ReadonlyMap<string, UnsavedEntity> = new Map();
 
-/**
- * Every unsaved entity's address, kept current, for the dialog's address
- * check. Derived from the store's own snapshot (a new Map on each change), so
- * the list is a new value exactly when the store changes.
- */
-export function useUnsavedAddresses(): readonly PendingAddress[] {
-  const held = useSyncExternalStore(
+/** The store's snapshot, kept current: a new Map exactly when the store changes. */
+function useHeld(): ReadonlyMap<string, UnsavedEntity> {
+  return useSyncExternalStore(
     subscribeUnsavedEntities,
     () => entities,
     () => NOTHING_HELD
   );
+}
+
+/**
+ * Every unsaved entity's address, kept current, for the dialog's address
+ * check. Derived from the store's own snapshot, so the list is a new value
+ * exactly when the store changes.
+ */
+export function useUnsavedAddresses(): readonly PendingAddress[] {
+  const held = useHeld();
   return useMemo(() => addressesOf(held), [held]);
+}
+
+/** Every unsaved entity of `kind`, in the order made, kept current. */
+export function useUnsavedEntitiesOf(
+  kind: BuilderKind
+): readonly UnsavedEntity[] {
+  const held = useHeld();
+  return useMemo(
+    () => [...held.values()].filter(entity => entity.kind === kind),
+    [held, kind]
+  );
 }
 
 /** `unsavedAddressesBesides`, kept current. */

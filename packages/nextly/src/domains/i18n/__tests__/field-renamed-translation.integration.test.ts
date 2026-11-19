@@ -20,7 +20,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../../services";
+import { applyCollectionSchemaChange } from "../../schema/services/collection-schema-apply";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { archiveFieldsLeavingTranslation } from "../migration/archive-preflight";
 import { restoreI18nArchive } from "../migration/restore-archive";
@@ -1044,6 +1046,120 @@ describeEachDialect("a translated field that is renamed", dialect => {
       en: "Hello",
       es: "Hola",
     });
+  });
+
+  /** `heading` renamed to `title2` and made a select whose only option is "a". */
+  const RETYPED = [
+    { name: "title2", type: "select", options: [{ label: "A", value: "a" }] },
+    { name: "views", type: "number" },
+  ];
+
+  it("refuses the schema dialog's rename of a translated field into a type its values do not fit, and changes nothing", async () => {
+    // Text and a select keep the same column, so the companion's rename would carry "Hello" and
+    // "Hola" into a select whose only option is "a": judged first, over each language's value.
+    const id = await seedCollection();
+
+    const refused = await dispatchCollections(
+      {} as ServiceContainer,
+      "applySchemaChanges",
+      { collectionName: "posts" },
+      {
+        fields: RETYPED,
+        confirmed: true,
+        localized: true,
+        renameResolutions: renamedOnCompanion("dc_posts"),
+        schemaVersion: await schemaVersionOf("dynamic_collections", "posts"),
+      }
+    ).then(
+      result => result,
+      (error: unknown) => error
+    );
+
+    expect(JSON.stringify(refused)).toMatch(/TYPE_CHANGE_LOSES_VALUES/);
+    expect(await companionValues("dc_posts", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  }, 120_000);
+
+  it("refuses the same change on the collection apply that runs without the save writer", async () => {
+    // The apply is a road of its own (the development push with no writer configured). A rename is
+    // only offered between fields of one type and one storage, so this pair is not one: the
+    // translated field's removal beside the added one is refused, or, were it paired, its type
+    // change, and every language is kept.
+    const id = await seedCollection();
+    const [row] = await query<{ fields: unknown }>(
+      `SELECT ${quote(dialect, "fields")} AS fields FROM ${quote(dialect, "dynamic_collections")} WHERE ${quote(dialect, "slug")} = 'posts'`
+    );
+    const recorded = (
+      typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+    ) as FieldDefinition[];
+
+    const refused = await applyCollectionSchemaChange({
+      slug: "posts",
+      collection: { tableName: "dc_posts", fields: recorded },
+      fields: RETYPED as unknown as FieldDefinition[],
+      wasLocalized: true,
+      isLocalized: true,
+      status: false,
+      wasStatus: false,
+      renameResolutions: renamedOnCompanion("dc_posts"),
+      eventResolutions: [],
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(JSON.stringify(refused)).toMatch(
+      /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED|TYPE_CHANGE_LOSES_VALUES/
+    );
+    expect(await companionValues("dc_posts", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  }, 120_000);
+
+  it("refuses the builder's save of the same change, and changes nothing", async () => {
+    // The builder's save pairs no rename across two types: it refuses the translated field's
+    // removal beside the added one, or the type change, and keeps every language.
+    const id = await seedCollection();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: RETYPED }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(false);
+    expect(JSON.stringify(saved)).toMatch(
+      /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED|TYPE_CHANGE_LOSES_VALUES/
+    );
+    expect(await companionValues("dc_posts", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  }, 120_000);
+
+  it("keeps where each language's value came from under the renamed field", async () => {
+    // Each language's record of where its value came from is kept by field name. Renamed, the
+    // field keeps its records under the new name: left under the old one, every value would read
+    // as of unknown origin, and a translation could no longer be found out of date.
+    const id = await seedShortHeading();
+    const pathsOf = async () =>
+      (
+        await query<{ locale: string; field_path: string }>(
+          `SELECT ${quote(dialect, "locale")} AS locale, ${quote(dialect, "field_path")} AS field_path FROM ${quote(dialect, "nextly_translation_provenance")} WHERE ${quote(dialect, "scope_slug")} = 'posts' AND ${quote(dialect, "entry_id")} = '${id}'`
+        )
+      )
+        .map(row => `${row.locale}:${row.field_path}`)
+        .sort();
+    expect(await pathsOf()).toEqual(["en:heading", "es:heading"]);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [shortText("title2", 64)] }
+    );
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await pathsOf()).toEqual(["en:title2", "es:title2"]);
   });
 
   it("keeps every language through the rename and then the storage change, saved one after the other", async () => {

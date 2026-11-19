@@ -17,6 +17,7 @@
 import type { RequestActor } from "../../auth/request-actor";
 import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
+import { eventLanguage } from "../../hooks/hook-language";
 import { entryHeading } from "../../lib/entry-heading";
 import type {
   ActivityLogAction,
@@ -88,6 +89,11 @@ export interface RecordMutationActivityInput {
   data: Record<string, unknown>;
   /** Prior state for an update; null on create and delete. */
   previous?: Record<string, unknown> | null;
+  /**
+   * The schema's component row paths (`componentRowPaths`), whose own system
+   * stamps are not a change. Absent, every key counts.
+   */
+  componentRows?: readonly string[];
   actor?: RequestActor | null;
   /** What the write did to whether the entry is live, from a path that can publish. */
   publication?: PublicationFacts;
@@ -218,18 +224,38 @@ function updateMetadata(input: {
   /** Absent when the write could not assemble its documents: no fields are named. */
   data?: Record<string, unknown>;
   previous?: Record<string, unknown> | null;
+  componentRows?: readonly string[];
   publication?: PublicationFacts;
 }): Record<string, unknown> | undefined {
   if (input.action !== "update") return undefined;
   const changed =
     input.previous && input.data
-      ? computeChangedFields(input.previous, input.data)
+      ? computeChangedFields(input.previous, input.data, input.componentRows)
       : [];
   const marks = publicationMarks(input.publication);
   if (changed.length === 0 && marks === undefined) return undefined;
   return {
     ...(changed.length > 0 ? { changedFields: changed } : {}),
     ...marks,
+  };
+}
+
+/**
+ * A row's metadata: what an update says about the write ({@link
+ * updateMetadata}), and, on a site with languages, every language the change
+ * involved and whether it moved the shared part, as its hooks and its outbox
+ * event are told (`eventLanguage`). `undefined` when there is nothing to say.
+ */
+function rowMetadata(
+  input: Parameters<typeof updateMetadata>[0]
+): Record<string, unknown> | undefined {
+  const update = updateMetadata(input);
+  const language = eventLanguage();
+  if (language === undefined) return update;
+  return {
+    ...update,
+    locales: [...language.locales],
+    ...(language.shared === undefined ? {} : { shared: language.shared }),
   };
 }
 
@@ -277,7 +303,7 @@ export async function recordMutationActivity(
   const service = registeredActivityLogService();
   if (!service) return;
 
-  const metadata = updateMetadata(input);
+  const metadata = rowMetadata(input);
   // No name or email is passed: the write resolves both from the account under
   // the same lock that decides whether it still exists. The alternative — the
   // session's copy, carried down from the request — is a snapshot taken before
@@ -340,6 +366,8 @@ export interface RecordSingleActivityInput {
    */
   data?: Record<string, unknown>;
   previous?: Record<string, unknown> | null;
+  /** As an entry's: the component row paths whose own stamps are not a change. */
+  componentRows?: readonly string[];
   /** What the save did to whether the Single is live. */
   publication?: PublicationFacts;
 }
@@ -384,10 +412,11 @@ export async function recordSingleActivity(
   if (!actor) return;
   const service = registeredActivityLogService();
   if (!service) return;
-  const metadata = updateMetadata({
+  const metadata = rowMetadata({
     action: "update",
     data: input.data,
     previous: input.previous,
+    componentRows: input.componentRows,
     publication: input.publication,
   });
   await service.logActivityInTx(db(), {

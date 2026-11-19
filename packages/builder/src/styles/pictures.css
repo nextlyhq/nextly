@@ -1,0 +1,65 @@
+/*
+ * A small picture of a document: a saved section in the Add panel, a header &
+ * footer set in a menu (`shared/document-miniature.tsx`).
+ *
+ * The box is the container's width at a fixed 16:10, so pictures in a list
+ * line up whatever each document's height; the document is scaled to the
+ * box's width and shown from its top, or centred when it is shorter.
+ *
+ * Its edge, its ground and its icon come from the `--nx-builder-picture-*`
+ * tokens (base partial), so they follow the admin's light and dark themes and
+ * hold their contrast in both. The drawn page itself takes the site's own
+ * colours: the ground behind it is the system canvas in the scheme the page is
+ * previewed in, never a colour of the editor's.
+ */
+.nx-picture {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border: 1px solid var(--nx-builder-picture-edge);
+  border-radius: 0.25rem;
+  background: var(--nx-builder-picture-ground);
+  color: var(--nx-builder-picture-icon);
+  /* Nothing inside is pressed: the row holding the picture is. */
+  pointer-events: none;
+}
+
+/* A drawn picture sits on the page's own ground, in the previewed scheme. */
+.nx-picture[data-drawn="true"] {
+  background: Canvas;
+}
+
+/*
+ * The drawn page, which states the previewed scheme for the ground above. It
+ * starts from a plain page's text, as the canvas's frame does, and not from
+ * the tile around it, which centres its label in small type: the site's own
+ * rules set what a section's text looks like from there.
+ */
+.nx-picture__page {
+  background: Canvas;
+  /* The site's ink, which the drawing names as the canvas root does (see
+     canvas-site-surface.ts), with the browser's default where the site states
+     none, and the canvas's plain base face: the site's Body font is the
+     drawn page's own rule on its root. */
+  color: var(--nx-canvas-site-ink, CanvasText);
+  font-family: system-ui, sans-serif;
+  text-align: start;
+  font-size: medium;
+  font-weight: normal;
+  font-style: normal;
+  line-height: normal;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-transform: none;
+  white-space: normal;
+}
+
+/* The icons stay their own colour in forced colours, on the system canvas. */
+@media (forced-colors: active) {
+  .nx-picture {
+    border-color: CanvasText;
+  }
+}

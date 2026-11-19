@@ -32,6 +32,7 @@ import {
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closedDocumentSession } from "../__tests__/closed-document-session";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 
@@ -63,6 +64,21 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   }: {
     children?: React.ReactNode;
   }): React.JSX.Element => <>{children}</>;
+  /*
+    The Design panel opened on its Fonts screen, keeping the view the panel
+    chooses as the shell does, so the screen's way back reaches the Type tab.
+  */
+  const DesignHost = ({
+    renderPanel,
+  }: {
+    renderPanel?: (
+      panel: string,
+      view: { current: string | null; choose: (view: string) => void }
+    ) => React.ReactNode;
+  }): React.JSX.Element => {
+    const [current, choose] = React.useState<string | null>("fonts-screen");
+    return <>{renderPanel?.("design", { current, choose })}</>;
+  };
   return {
     ...real,
     /*
@@ -93,7 +109,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
             : `${openPanelRequest.panel}:${openPanelRequest.view ?? ""}`}
         </div>
         <div data-testid="panel">
-          {renderPanel?.("design", { current: "type", choose: () => {} })}
+          <DesignHost renderPanel={renderPanel} />
         </div>
       </div>
     ),
@@ -132,6 +148,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -184,6 +204,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,
@@ -361,8 +383,9 @@ describe("the fonts panel reaching an author", () => {
       )
     );
     expect(scroll).toHaveBeenCalled();
-    // No panel is asked for: the variables are in the tab already open.
-    expect(screen.getByTestId("request").textContent).toBe("");
+    // No panel is asked for: the variables are in the tab already open. The
+    // one request is the empty page's own, opening Add when the editor did.
+    expect(screen.getByTestId("request").textContent).toBe("add:");
   });
 
   it("draws a read still in flight as loading rather than as a site with no fonts", async () => {

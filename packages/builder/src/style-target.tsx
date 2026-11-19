@@ -223,9 +223,10 @@ export function useLookTarget(
  * before the first is read back is a change to the field (and so a write)
  * rather than a match with the stale read. A new read replaces them. A
  * refused edit stays shown, with its refusal beside the field, as a refused
- * block edit keeps the author's draft, until the next read.
+ * block edit keeps the author's draft, until the next read. Design's text
+ * styles are edited through it too.
  */
-function useQueuedStyles(
+export function useQueuedStyles(
   read: SharedStyleRow | undefined,
   host: SharedStylesHost | undefined
 ):
@@ -349,6 +350,8 @@ export interface StyleTargetBarProps {
   readonly breakpoints?: BreakpointSet;
   readonly state: StyleState;
   readonly stateControl?: React.ReactNode;
+  /** Opens Design's Block styles at a block type, from under the tiles. */
+  readonly onEditBlockStyles?: ((blockType: string) => void) | undefined;
 }
 
 /**
@@ -429,7 +432,10 @@ function nameOf(worn: readonly SharedStyleRow[], id: string): string {
   return worn.find(row => row.id === id)?.name ?? "This shared style";
 }
 
-/** The "what you're editing" bar, over the target this tab holds. */
+/**
+ * The Block style section, then the "what you're editing" bar under it, over
+ * the target this tab holds.
+ */
 export function StyleTargetBar({
   editor,
   target,
@@ -442,6 +448,7 @@ export function StyleTargetBar({
   breakpoints,
   tokens,
   tokenMode,
+  onEditBlockStyles,
   // The device and the state, the canvas's own, handed to the bar whole.
   ...context
 }: StyleTargetBarProps): React.JSX.Element {
@@ -462,6 +469,7 @@ export function StyleTargetBar({
         tokens={tokens}
         mode={tokenMode}
         onRefused={report}
+        onEditBlockStyles={onEditBlockStyles}
       />
       <EditingBar
         {...context}
@@ -504,15 +512,19 @@ function barChips(
     node === undefined
       ? "block"
       : (getBlock(node.type)?.editor?.label ?? "block");
-  return worn.map(row => ({
-    id: row.id,
-    name: row.name,
-    className: row.className,
-    locked: row.locked,
-    ...(row.look === true
-      ? { hint: lookLineWords(row.name, label).everywhere }
-      : {}),
-  }));
+  // A text style is chosen and changed from the Text section's picker, so
+  // it is no target here: its values are typography alone.
+  return worn
+    .filter(row => row.text !== true)
+    .map(row => ({
+      id: row.id,
+      name: row.name,
+      className: row.className,
+      locked: row.locked,
+      ...(row.look === true
+        ? { hint: lookLineWords(row.name, label).everywhere }
+        : {}),
+    }));
 }
 
 /** Why "Save as shared style…" is held where the host offers no save. */
@@ -551,7 +563,8 @@ function applyOffer({
   library: readonly NamedClass[] | undefined;
   libraryAbsence: "pending" | "failed" | undefined;
 }): ApplyOffer {
-  const wearing = worn.find(row => row.look !== true);
+  // A block style and a text style are worn beside a shared style.
+  const wearing = worn.find(row => row.look !== true && row.text !== true);
   if (nodeId === null) return { held: "Select a block first." };
   if (held !== undefined) return { held };
   if (wearing !== undefined) {

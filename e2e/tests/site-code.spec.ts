@@ -29,7 +29,12 @@ test.describe.configure({ lock: [LOCK.siteCode, LOCK.homepage] });
 
 const ROUTE = "/admin/api/plugins/@nextlyhq/plugin-page-builder/site/code";
 const PAGES = "/admin/api/collections/block-pages/entries";
-const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+const OPEN_BUILDER_ACTION = /^Open in builder$/;
+/**
+ * The Page Builder card on the form, whose way in is named as the document
+ * bar's is, so a lookup by that name is scoped to the card.
+ */
+const PAGE_BUILDER_CARD = '[data-slot="page-builder-card"]';
 
 /** What the saved code sets each time it runs. */
 const MARKER = "__nxSiteCodeRan";
@@ -143,7 +148,10 @@ test("site code runs on a public page, and never in the admin, the canvas or a p
     // The editor's canvas, a page of the site framed by the admin: never,
     // in the frame or the admin around it.
     await gotoAdmin(page, "/singles/homepage");
-    await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+    await page
+      .locator(PAGE_BUILDER_CARD)
+      .getByRole("link", { name: OPEN_BUILDER_ACTION })
+      .click();
     await expect(canvasFrame(page).locator(".nx-canvas")).toBeVisible({
       timeout: 30_000,
     });
@@ -172,7 +180,10 @@ test("adds site code from Settings, says what it is, and it runs on a public pag
   await saveSiteCode(page.request, "");
   try {
     await gotoAdmin(page, "/singles/homepage");
-    await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+    await page
+      .locator(PAGE_BUILDER_CARD)
+      .getByRole("link", { name: OPEN_BUILDER_ACTION })
+      .click();
     await expect(canvasFrame(page).locator(".nx-canvas")).toBeVisible({
       timeout: 30_000,
     });
@@ -180,8 +191,11 @@ test("adds site code from Settings, says what it is, and it runs on a public pag
       .getByRole("navigation", { name: "Editor panels" })
       .getByRole("button", { name: "Settings" })
       .click();
-    const dialog = page.getByRole("dialog", { name: "Settings" });
-    await dialog.getByRole("tab", { name: "Site" }).click();
+    await page
+      .getByRole("dialog", { name: /^Page settings · / })
+      .getByRole("button", { name: "Site settings" })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "Site settings" });
     const section = dialog.getByRole("region", { name: "Code" });
     await expect(section.getByText("Nothing yet")).toHaveCount(2);
     await section.getByRole("button", { name: "Add code" }).click();

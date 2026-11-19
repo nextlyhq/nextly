@@ -100,9 +100,9 @@ export function placeOf(
   let level = fields;
   const containers: FieldDefinition[] = [];
   for (const [at, segment] of path.entries()) {
-    const found = (addressableFields(level) as unknown as FieldDefinition[]).find(
-      field => nameOf(field) === segment
-    );
+    const found = (
+      addressableFields(level) as unknown as FieldDefinition[]
+    ).find(field => nameOf(field) === segment);
     if (!found) return null;
     if (at === path.length - 1) {
       const [outermost, ...inner] = [...containers, found];
@@ -110,7 +110,11 @@ export function placeOf(
       const place: StoragePlace =
         containers.length === 0
           ? { kind: "column", column }
-          : { kind: "json", column, keys: [...inner].map(each => nameOf(each) ?? "") };
+          : {
+              kind: "json",
+              column,
+              keys: [...inner].map(each => nameOf(each) ?? ""),
+            };
       return { field: found, containers, place };
     }
     containers.push(found);
@@ -216,10 +220,7 @@ export function checkMove(
 
 /** The refusal of a field whose storage changes with the move, or that has no column to move. */
 function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
-  if (
-    from.field.type !== to.field.type ||
-    !sameStorage(from.field, to.field)
-  ) {
+  if (from.field.type !== to.field.type || !sameStorage(from.field, to.field)) {
     return refuse(
       "type-changed",
       `${label(to.field)} is moved and changes type, or how its values are stored, in the same save. Move it and make that change in separate saves.`

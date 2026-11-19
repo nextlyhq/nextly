@@ -9,9 +9,9 @@ import {
 
 /*
  * The registry reload is observed through its OWN module rather than through
- * the container, because what this file is about is WHEN the production path
- * asks for a reload -- and the container would let a reload that never happened
- * look the same as one that found nothing to do.
+ * the container, so a reload this path no longer asks for is seen if it comes
+ * back: the container would let a reload look the same as one that found
+ * nothing to do.
  */
 const reloadDynamicTables = vi.fn(async () => undefined);
 vi.mock("../reload-dynamic-tables", () => ({
@@ -48,7 +48,9 @@ function args(over: Record<string, unknown> = {}) {
     adapter: {
       dialect: "postgresql" as const,
       getDrizzle: () => ({}),
-      tableExists: async () => true,
+      // No ledger and no registry: nothing for the reads before the run (the
+      // old Builder marks, the registry as it stood) to find.
+      tableExists: async () => false,
       executeQuery: async () => undefined,
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -57,7 +59,8 @@ function args(over: Record<string, unknown> = {}) {
       coreChanged: false,
       ran: true,
     })),
-    provisionUserFields: vi.fn(async () => {}),
+    served: {},
+    afterMigrations: vi.fn(async () => {}),
     ...over,
   };
 }
@@ -114,21 +117,52 @@ describe("runProdMigrationsIfEnabled", () => {
    * than returning `ran: false`, so a catch that rethrew only the refusal let
    * MySQL serve the unmigrated schema this change exists to prevent.
    */
-  it("refuses to start an older build that lacks a migration the database records applied", async () => {
+  it("starts an older build that lacks a migration the database records applied, warning", async () => {
+    // The stop comes before the run writes anything, so the newer build's
+    // state is as it left it; the start goes on and serves it (D8).
     process.env.NODE_ENV = "production";
     const missing = new NextlyError({
       code: "MIGRATION_MISSING",
       publicMessage:
-        "The ledger records 1 applied migration this build's migrations folder lacks.",
+        "The ledger records 1 applied migration this build's migrations folder lacks (`20261102_000002_added.sql`).",
+      logContext: { files: ["20261102_000002_added.sql"], unresolved: [] },
     });
+    const warnings: string[] = [];
     const a = args({
       migrateCore: vi.fn(async () => {
         throw missing;
       }),
     });
+    a.logger.warn = (m: string) => {
+      warnings.push(m);
+    };
 
-    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toBe(missing);
-    // The refusal stands: a later boot in this process refuses at once.
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+    expect(warnings.join("\n")).toContain("`20261102_000002_added.sql`");
+    expect(a.logger.error).not.toHaveBeenCalled();
+    // Nothing of `nextly migrate`'s work after the migrations: none applied.
+    expect(a.afterMigrations).not.toHaveBeenCalled();
+    // Serving is allowed, and no refusal stands for a later start.
+    await expect(awaitBootMigrations()).resolves.toBeUndefined();
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+  });
+
+  it("still refuses a missing migration with an unresolved attempt: the database may hold part of it", async () => {
+    process.env.NODE_ENV = "production";
+    const partly = new NextlyError({
+      code: "MIGRATION_MISSING",
+      publicMessage:
+        "1 migration this build's folder lacks has an unresolved attempt (`20261102_000002_added.sql`).",
+      logContext: { files: [], unresolved: ["20261102_000002_added.sql"] },
+    });
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw partly;
+      }),
+    });
+
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toBe(partly);
+    // The refusal stands for every later start in this process.
     await expect(runProdMigrationsIfEnabled(a as never)).rejects.toMatchObject({
       code: "MIGRATION_MISSING",
     });
@@ -296,6 +330,65 @@ describe("runProdMigrationsIfEnabled", () => {
     });
 
     await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+  });
+
+  it.each(["data-loss-needs-consent", "data-loss-not-covered"])(
+    "still starts when the consent refuses a migration (%s), handing the start the refusal",
+    async reason => {
+      const refused: unknown[] = [];
+      const a = args({
+        migrateCore: vi.fn(async () => {
+          throw NextlyError.invalidInput({
+            message:
+              "This would delete:\n  plugin:seo/002_drop_summary:\n    - column seo_pages.summary\nNothing was changed. To consent: --accept-data-loss=seo_pages.summary (or NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary).",
+            logContext: { files: ["plugin:seo/002_drop_summary"], reason },
+          });
+        }),
+        onDataLossRefusal: (refusal: unknown) => {
+          refused.push(refusal);
+        },
+      });
+      const errors: string[] = [];
+      a.logger.error = (line: string) => {
+        errors.push(line);
+      };
+
+      await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+      // In a start's words: the variable a start reads, then the command's flag.
+      expect(refused).toEqual([
+        {
+          message:
+            'This would delete:\n  plugin:seo/002_drop_summary:\n    - column seo_pages.summary\nNothing was changed. To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".',
+        },
+      ]);
+      // The log line ends on that same consent, not on a command the consent
+      // would refuse again.
+      expect(errors).toEqual([
+        '[Nextly] Boot migrations failed, and the app will continue: This would delete:\n  plugin:seo/002_drop_summary:\n    - column seo_pages.summary\nNothing was changed. To consent: start with NEXTLY_ACCEPT_DATA_LOSS=seo_pages.summary, or run "nextly migrate --accept-data-loss=seo_pages.summary".',
+      ]);
+    }
+  );
+
+  it("hands the start no consent refusal for a migration that failed any other way", async () => {
+    const onDataLossRefusal = vi.fn();
+    const failures = [
+      new Error("connection reset"),
+      NextlyError.invalidInput({
+        message: "Not a consent refusal.",
+        logContext: { reason: "something-else" },
+      }),
+    ];
+    for (const failure of failures) {
+      _resetBootMigrationsGateForTest();
+      const a = args({
+        migrateCore: vi.fn(async () => {
+          throw failure;
+        }),
+        onDataLossRefusal,
+      });
+      await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+    }
+    expect(onDataLossRefusal).not.toHaveBeenCalled();
   });
 
   it("still starts when an applied file was edited, logging the refusal", async () => {
@@ -469,117 +562,83 @@ describe("runProdMigrationsIfEnabled", () => {
 });
 
 /*
- * `registerServices` builds the runtime schema registry BEFORE this path runs,
- * so a migration that registers an entity leaves the process holding a registry
- * that predates it -- the collection is addressable in metadata and drawn on a
- * dashboard card while every query against it fails.
+ * The migrations at start run before `registerServices` reads anything of the
+ * registry, so the start registers what they wrote: nothing is reloaded. What
+ * `nextly migrate` does once its migrations have applied (the translation
+ * tables, the user fields) is done here instead, before the gate opens.
  */
-describe("the schema registry is reloaded before the gate opens", () => {
+describe("after the migrations, what nextly migrate does, before the gate opens", () => {
   beforeEach(() => {
     reloadDynamicTables.mockClear();
     _resetBootMigrationsGateForTest();
   });
 
-  it("reloads after migrations ran", async () => {
-    await runProdMigrationsIfEnabled(args() as never);
-    expect(reloadDynamicTables).toHaveBeenCalledTimes(1);
-  });
-
-  /*
-   * 🔴 The case that decides the CONDITION, and the reason it is not the
-   * registration counts. On a rolling deploy a second replica waits on the
-   * migrate lock, acquires it once the first has finished, and runs against a
-   * settled database: `ran` is true while `applied` and the registration counts
-   * are 0. Its registry is exactly as stale as the migrating replica's was.
-   * Gated on "did I register anything", this replica never reloads and serves
-   * entities it can see but cannot query.
-   */
-  it("reloads on a replica that applied and registered nothing", async () => {
-    await runProdMigrationsIfEnabled(
-      args({
-        migrateCore: vi.fn(async () => ({
-          applied: 0,
-          coreChanged: false,
-          ran: true,
-          collectionsRegistered: 0,
-          singlesRegistered: 0,
-        })),
-      }) as never
-    );
-    expect(reloadDynamicTables).toHaveBeenCalledTimes(1);
-  });
-
-  it("does NOT reload when migrations did not run", async () => {
-    // `ran: false` means the lock stayed held, and this path refuses to serve
-    // rather than reloading anything -- a registry refreshed for a process
-    // that is about to throw is work spent on a boot nobody will use.
-    await expect(
-      runProdMigrationsIfEnabled(
-        args({
-          migrateCore: vi.fn(async () => ({
-            applied: 0,
-            coreChanged: false,
-            ran: false,
-          })),
-        }) as never
-      )
-    ).rejects.toThrow();
+  it("does it after migrations ran, and reloads nothing", async () => {
+    const a = args();
+    await runProdMigrationsIfEnabled(a as never);
+    expect(a.afterMigrations).toHaveBeenCalledTimes(1);
     expect(reloadDynamicTables).not.toHaveBeenCalled();
   });
 
   /*
-   * 🔴 `runFileMigrations` commits and records each migration file
-   * independently before propagating a later file's error, so a batch that
-   * failed part-way has already written whatever metadata its earlier files
-   * carried. This path swallows that error and goes on to SERVE, so skipping
-   * the reload here served exactly those entities against the pre-migration
-   * registry -- the defect reached through the error branch rather than the
-   * happy one.
+   * On a rolling deploy a second replica waits on the migrate lock, acquires
+   * it once the first has finished, and runs against a settled database:
+   * `ran` is true while `applied` is 0. `nextly migrate` run then still
+   * provisions, so this does too.
    */
-  it("reloads when a partly-applied batch fails and the app continues", async () => {
-    await runProdMigrationsIfEnabled(
-      args({
-        migrateCore: vi.fn(async () => {
-          throw new Error("0003_later.sql failed after 0002 committed");
-        }),
-      }) as never
-    );
-    expect(reloadDynamicTables).toHaveBeenCalledTimes(1);
+  it("does it on a replica that applied nothing", async () => {
+    const a = args({
+      migrateCore: vi.fn(async () => ({
+        applied: 0,
+        coreChanged: false,
+        ran: true,
+      })),
+    });
+    await runProdMigrationsIfEnabled(a as never);
+    expect(a.afterMigrations).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT reload when the process refuses to serve", async () => {
-    // The control, and the distinction that makes the case above right: a
-    // refusal throws and the process wants restarting, so refreshing a registry
-    // nobody will read is work spent on a boot that is over.
-    await expect(
-      runProdMigrationsIfEnabled(
-        args({
-          migrateCore: vi.fn(async () => ({
-            applied: 0,
-            coreChanged: false,
-            ran: false,
-          })),
-        }) as never
-      )
-    ).rejects.toThrow();
+  it("does not do it when the process refuses to serve", async () => {
+    const a = args({
+      migrateCore: vi.fn(async () => ({
+        applied: 0,
+        coreChanged: false,
+        ran: false,
+      })),
+    });
+    await expect(runProdMigrationsIfEnabled(a as never)).rejects.toThrow();
+    expect(a.afterMigrations).not.toHaveBeenCalled();
+  });
+
+  /*
+   * A batch that failed part-way stops `nextly migrate` before this work, and
+   * the start registers what the committed files left when it reads the
+   * registry after this step, so nothing is reloaded on this path either.
+   */
+  it("does not do it, and reloads nothing, when a batch fails and the app continues", async () => {
+    const a = args({
+      migrateCore: vi.fn(async () => {
+        throw new Error("0003_later.sql failed after 0002 committed");
+      }),
+    });
+    await expect(runProdMigrationsIfEnabled(a as never)).resolves.toBe(false);
+    expect(a.afterMigrations).not.toHaveBeenCalled();
     expect(reloadDynamicTables).not.toHaveBeenCalled();
   });
 
-  it("does not reload outside production", async () => {
-    // The control for the three above: a rule that reloaded unconditionally
-    // would satisfy the first two while doing it on every dev boot as well.
+  it("does not do it outside production", async () => {
     process.env.NODE_ENV = "development";
-    await runProdMigrationsIfEnabled(args() as never);
-    expect(reloadDynamicTables).not.toHaveBeenCalled();
+    const a = args();
+    await runProdMigrationsIfEnabled(a as never);
+    expect(a.afterMigrations).not.toHaveBeenCalled();
   });
 
   /*
-   * 🔴 The reload runs BEFORE `allowBootMigrations`, so nothing waiting on that
-   * gate is released onto a registry this boot already knows is behind. The
-   * ordering is only safe because the reload cannot throw; asserted here so a
-   * later move of either line fails rather than silently reopening the window.
+   * 🔴 It runs BEFORE `allowBootMigrations`, so nothing waiting on that gate
+   * is released onto a database whose translation tables and user fields are
+   * not there yet.
    */
-  it("opens the boot gate only after the reload has finished", async () => {
+  it("opens the boot gate only after it has finished", async () => {
     // 🔴 The gate is OPENED first, because `awaitBootMigrations` resolves
     // immediately when nothing is pending -- so without this the assertion
     // below is satisfied by there being no gate at all rather than by the
@@ -587,7 +646,7 @@ describe("the schema registry is reloaded before the gate opens", () => {
     openBootMigrationsGate();
 
     // The control for exactly that: the gate must be genuinely pending before
-    // the run, or "not yet open during the reload" means nothing.
+    // the run, or "not yet open during the work" means nothing.
     let openedEarly = false;
     void awaitBootMigrations().then(() => {
       openedEarly = true;
@@ -595,16 +654,17 @@ describe("the schema registry is reloaded before the gate opens", () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(openedEarly).toBe(false);
 
-    let gateOpenDuringReload: boolean | undefined;
-    reloadDynamicTables.mockImplementationOnce(async () => {
-      await new Promise(resolve => setTimeout(resolve, 0));
-      gateOpenDuringReload = openedEarly;
-      return undefined;
+    let gateOpenDuringWork: boolean | undefined;
+    const a = args({
+      afterMigrations: vi.fn(async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        gateOpenDuringWork = openedEarly;
+      }),
     });
 
-    await runProdMigrationsIfEnabled(args() as never);
+    await runProdMigrationsIfEnabled(a as never);
 
-    expect(gateOpenDuringReload).toBe(false);
+    expect(gateOpenDuringWork).toBe(false);
     // And it DID open afterwards, or the assertion above would pass on a path
     // that simply never opens the gate.
     await expect(awaitBootMigrations()).resolves.toBeUndefined();

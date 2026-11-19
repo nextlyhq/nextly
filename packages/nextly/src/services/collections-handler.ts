@@ -87,6 +87,8 @@ type EveryLanguageLifecycleHandlerParams = {
   authenticatedScope?: AuthenticatedScope;
   /** Acting identity from the transport, forwarded to the recorded event. */
   actor?: RequestActor;
+  /** A publish made without review, with the caller's reason, told to the publish gate. */
+  withoutReview?: { reason: string };
   /**
    * Skip cache revalidation for this move (the outbox drain still runs), for a caller that owns
    * its cache strategy.

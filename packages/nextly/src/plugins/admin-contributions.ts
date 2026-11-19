@@ -490,6 +490,27 @@ export interface PluginDocumentView {
   component: ComponentPath;
   /** What the admin calls the view where it offers a way in. */
   label?: string;
+  /**
+   * @experimental The words of the way into this view that the admin offers
+   * where a document opens elsewhere: in a list row's menu and in the
+   * document bar beside History, as in "Open in builder". Without it the
+   * admin words the way in from `label`; a view with neither is not offered
+   * there. Refused at boot when it is not text with words in it.
+   */
+  openLabel?: string;
+  /**
+   * @experimental A component the admin opens in a dialog over a
+   * collection's list, in place of the create form, when "+ New" is pressed
+   * on a collection whose entries open in this view. The admin draws the
+   * dialog ("New <singular>"); the component draws its body, creates through
+   * its own route or the REST API, and is given the collection (its slug and
+   * labels) and `close(createdId?)`: with an id the admin opens the new entry
+   * where its collection opens it, and without one the list stays as it was.
+   * It opens only for a reader who may create the collection's entries and
+   * update them. The create form's address keeps working for everything
+   * else. Refused at boot when it names no component.
+   */
+  createDialog?: ComponentPath;
 }
 
 /**
@@ -512,9 +533,9 @@ export interface PluginFieldTypeDocumentView extends PluginDocumentView {
   /** The field type, one of this plugin's own `contributes.fieldTypes`. */
   fieldType: string;
   /**
-   * @experimental `"mainField"`: open a collection's entries in this view when
-   * the collection's main field is of this view's field type, unless the
-   * collection says where its entries open (`admin.opensIn`). The main field
+   * @experimental `"mainField"`: open a collection's entries, or a Single, in
+   * this view when its main field is of this view's field type, unless it
+   * says where it opens (`admin.opensIn`). The main field
    * is the first top-level field, reading into unnamed groups as the form lays
    * them out, that is not hidden, not the title and not `slug`.
    *

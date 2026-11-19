@@ -643,6 +643,58 @@ export interface PluginFieldWrite {
    * in a group kept per language is not.
    */
   readStored(target: PluginStoredValueTarget): Promise<PluginStoredValue>;
+  /**
+   * @experimental Read one stored field of several entries of one collection,
+   * by the rules of {@link readStored}: what it answers for each id, keyed by
+   * id, read in one query for the rows and one for their working drafts
+   * rather than a pair per entry. An id that names no stored entry is absent
+   * from the map. A refusal refuses the whole read, since the field, and
+   * whether it may be read, is the same for every entry.
+   */
+  readStoredOf(
+    target: PluginStoredValuesTarget
+  ): Promise<ReadonlyMap<string, PluginStoredValue>>;
+  /**
+   * @experimental Who is making the write, and what they may do: the caller
+   * the write itself is judged as, for a value only some callers may change
+   * (code that runs on a published page, say). Absent where the write path
+   * does not say, which a validator that needs it treats as a refusal.
+   */
+  readonly caller?: PluginFieldWriteCaller;
+  /**
+   * @experimental True where the value sits in a field-group instance, which
+   * is validated on its own, a level below the entry: {@link readStored}
+   * answers nothing stored for the instance's own fields, and removing the
+   * instance runs no validator of it. A validator that must see every change
+   * to its stored value, a removal included, refuses a value here.
+   */
+  readonly inFieldGroup?: boolean;
+}
+
+/**
+ * @experimental The caller an entry write is made as, as a field type's
+ * validator is told it. Derived from the same reader the write's own access
+ * is judged by, never rebuilt from the user alone.
+ */
+export interface PluginFieldWriteCaller {
+  /**
+   * - `user`: a staff user, signed in or acting through the Direct API
+   *   without `overrideAccess`;
+   * - `apiKey`: a request authenticated with an API key, judged on the key's
+   *   own scope;
+   * - `principal`: a plugin-defined signed-in person;
+   * - `visitor`: no one signed in;
+   * - `system`: trusted server code (`overrideAccess`), which every check
+   *   lets through, as the write's own access does.
+   */
+  readonly kind: "user" | "apiKey" | "principal" | "visitor" | "system";
+  /**
+   * Whether the caller may perform `action` on `resource`, as a plugin
+   * route's `ctx.caller.can` and a route's `requiredPermission` answer it:
+   * a key on its own scope, a user on their roles and permissions. Always
+   * yes for `system`, and no for a visitor or a person.
+   */
+  can(action: string, resource: string): Promise<boolean>;
 }
 
 /**
@@ -681,6 +733,17 @@ export interface PluginStoredEntryTarget extends PluginStoredFieldTarget {
   readonly collection: string;
   /** The entry's id. */
   readonly id: string;
+}
+
+/**
+ * @experimental One field of several entries of a collection, read by
+ * {@link PluginFieldWrite.readStoredOf}.
+ */
+export interface PluginStoredValuesTarget extends PluginStoredFieldTarget {
+  /** The collection's slug. */
+  readonly collection: string;
+  /** The entries' ids. */
+  readonly ids: readonly string[];
 }
 
 /** @experimental A field of a single, which has one document and no id. */

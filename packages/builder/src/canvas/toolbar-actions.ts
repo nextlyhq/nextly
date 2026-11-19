@@ -45,6 +45,8 @@ import {
   type BlockDocument,
   type BlockNode,
   type DefinitionsById,
+  type DocumentLimits,
+  type NamedClass,
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 
@@ -86,6 +88,13 @@ import {
   saveAsSharedStyleRefusal,
   type SharedStyleOffer,
 } from "../shared-style-target";
+import {
+  isUnwrappable,
+  planUnwrap,
+  planWrap,
+  WRAP_WORDS,
+} from "../selection-wrap";
+import { turnIntoOffers, type TurnIntoActionId } from "../turn-into-verb";
 
 import type { RefusalWording } from "./drag-refusal";
 
@@ -123,6 +132,12 @@ export type ToolbarActionId =
   | "move-up"
   | "move-down"
   | "duplicate"
+  | "copy"
+  | "cut"
+  | "paste"
+  | "copy-style"
+  | "paste-style"
+  | TurnIntoActionId
   | "save-as-pattern"
   | "save-as-shared-style"
   | "edit-component"
@@ -130,6 +145,8 @@ export type ToolbarActionId =
   | "detach-component"
   | "duplicate-component"
   | "update-pattern"
+  | "wrap-in-box"
+  | "unwrap"
   | "delete";
 
 /** One button's worth of decision. */
@@ -160,6 +177,46 @@ export interface ToolbarAction {
    * them, so the bar stays one short row however many verbs the host adds.
    */
   readonly inMenu?: true;
+  /**
+   * What the verb removes, said beside it before it is chosen: "Turn into
+   * Heading" removes bold and links. Visible text under the label, as a
+   * reason is.
+   */
+  readonly note?: string;
+}
+
+/**
+ * "Turn into Text", "Turn into Rich text" and "Turn into Heading" for one
+ * selected block that can become them, from the one offer every surface
+ * reads (`turnIntoOffers`); nothing for any other block. Menu verbs, kept in
+ * a group of their own, apart from "Turn into component…".
+ */
+function turnIntoActions(
+  document: BlockDocument,
+  selectedId: string,
+  nesting: NestingSource,
+  ask: LockQuestion | undefined,
+  planned: boolean,
+  library: readonly NamedClass[] | undefined,
+  limits: DocumentLimits | undefined
+): ToolbarAction[] {
+  // Judged by the placement rules the rest of the menu is, which are the
+  // ones the verb runs by, and under the editor's limits the verb runs with.
+  return turnIntoOffers(document, selectedId, {
+    ...(ask === undefined ? {} : { ask }),
+    planned,
+    nesting,
+    ...(limits === undefined ? {} : { limits }),
+    // The site's styles, so a block style that gives way is said here too.
+    ...(library === undefined ? {} : { library }),
+  }).map(offer => ({
+    id: offer.id,
+    label: offer.label,
+    enabled: offer.enabled,
+    inMenu: true,
+    ...(offer.reason === undefined ? {} : { reason: offer.reason }),
+    ...(offer.note === undefined ? {} : { note: offer.note }),
+  }));
 }
 
 /**
@@ -749,6 +806,21 @@ function manyBlockActions(
   const deleteLock = ids
     .map(id => ({ id, locked: lockBlockingDelete(document, id) }))
     .find(held => held.locked !== undefined);
+  const deleteItem: ToolbarAction =
+    deleteLock?.locked === undefined
+      ? heldByLock(
+          { id: "delete", label: "Delete", enabled: true },
+          ask,
+          opsOf(selectionDeletion(document, ids))
+        )
+      : {
+          id: "delete",
+          label: "Delete",
+          enabled: false,
+          // ONE lock refuses the whole delete, because the group is applied
+          // atomically and there is no half-done delete to fall back to.
+          reason: lockedBy(deleteLock.locked, deleteLock.id, "delete"),
+        };
 
   return [
     {
@@ -766,23 +838,12 @@ function manyBlockActions(
       ask,
       opsOf(selectionDuplication(document, ids))
     ),
+    ...clipboardActions(deleteItem, ids.length),
     saveAction(document, ids, nesting, mayCreate, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...compositionActions(document, ids, nesting, components, ask, planned),
-    deleteLock?.locked === undefined
-      ? heldByLock(
-          { id: "delete", label: "Delete", enabled: true },
-          ask,
-          opsOf(selectionDeletion(document, ids))
-        )
-      : {
-          id: "delete",
-          label: "Delete",
-          enabled: false,
-          // ONE lock refuses the whole delete, because the group is applied
-          // atomically and there is no half-done delete to fall back to.
-          reason: lockedBy(deleteLock.locked, deleteLock.id, "delete"),
-        },
+    ...wrapActions(document, ids, nesting, ask),
+    deleteItem,
   ];
 }
 
@@ -861,7 +922,13 @@ export function toolbarActions(
    * grant and Entry content still dim them, and a menu that opens, or the
    * verb when it runs, plans them and says why it refuses.
    */
-  planned: boolean = true
+  planned: boolean = true,
+  /**
+   * The editor's size limits, so a "Turn into" choice is judged on a page as
+   * large as the editor allows, as the verb that runs it is. Absent, the
+   * default limits.
+   */
+  limits?: DocumentLimits
 ): ToolbarAction[] {
   if (selectedId === null) return [];
 
@@ -888,6 +955,27 @@ export function toolbarActions(
   // a press does cannot disagree.
   const duplication = selectionDuplication(document, [selectedId]);
   const deletion = blockDeletion(document, selectedId);
+  const deleteItem: ToolbarAction =
+    deleteLock === undefined
+      ? heldByLock(
+          { id: "delete", label: "Delete", enabled: deletion !== null },
+          lockRefusalFor,
+          deletion === null
+            ? undefined
+            : [
+                {
+                  kind: "remove",
+                  id: deletion.id,
+                  dropSlotIfEmpty: deletion.dropSlotIfEmpty,
+                },
+              ]
+        )
+      : {
+          id: "delete",
+          label: "Delete",
+          enabled: false,
+          reason: lockedBy(deleteLock, selectedId, "delete"),
+        };
 
   return [
     {
@@ -925,6 +1013,16 @@ export function toolbarActions(
       lockRefusalFor,
       duplication?.ops
     ),
+    ...clipboardActions(deleteItem, 1),
+    ...turnIntoActions(
+      document,
+      selectedId,
+      rules,
+      lockRefusalFor,
+      planned,
+      sharedStyles?.library,
+      limits
+    ),
     saveAction(document, ids, rules, mayCreatePattern, planned),
     ...sharedStyleActions(document, ids, sharedStyles),
     ...editComponentAction(document, selectedId, offersEditComponent),
@@ -936,27 +1034,52 @@ export function toolbarActions(
       lockRefusalFor,
       planned
     ),
-    deleteLock === undefined
-      ? heldByLock(
-          { id: "delete", label: "Delete", enabled: deletion !== null },
-          lockRefusalFor,
-          deletion === null
-            ? undefined
-            : [
-                {
-                  kind: "remove",
-                  id: deletion.id,
-                  dropSlotIfEmpty: deletion.dropSlotIfEmpty,
-                },
-              ]
-        )
-      : {
-          id: "delete",
-          label: "Delete",
-          enabled: false,
-          reason: lockedBy(deleteLock, selectedId, "delete"),
-        },
+    ...wrapActions(document, ids, rules, lockRefusalFor),
+    deleteItem,
   ];
+}
+
+/**
+ * "Wrap in a box" for a selection side by side in one place, and "Unwrap
+ * (keep what's inside)" for one Box, Section, Column or Card, each from the
+ * menu. A result the placement rules forbid is offered dimmed with the
+ * reason, and a lock that holds a block it moves dims it too.
+ */
+function wrapActions(
+  document: BlockDocument,
+  ids: readonly string[],
+  nesting: NestingSource,
+  ask: LockQuestion | undefined
+): ToolbarAction[] {
+  const items: ToolbarAction[] = [];
+  const wrap = planWrap(document, ids, nesting);
+  if (wrap !== null) {
+    items.push(
+      isRefusal(wrap)
+        ? { id: "wrap-in-box", label: WRAP_WORDS.wrap, enabled: false, reason: wrap.reason, inMenu: true }
+        : heldByLock(
+            { id: "wrap-in-box", label: WRAP_WORDS.wrap, enabled: true, inMenu: true },
+            ask,
+            wrap.ops
+          )
+    );
+  }
+  const [only] = ids;
+  if (ids.length === 1 && only !== undefined && isUnwrappable(findNode(document.nodes, only))) {
+    const unwrap = planUnwrap(document, only, nesting);
+    if (unwrap !== null) {
+      items.push(
+        isRefusal(unwrap)
+          ? { id: "unwrap", label: WRAP_WORDS.unwrap, enabled: false, reason: unwrap.reason, inMenu: true }
+          : heldByLock(
+              { id: "unwrap", label: WRAP_WORDS.unwrap, enabled: true, inMenu: true },
+              ask,
+              unwrap.ops
+            )
+      );
+    }
+  }
+  return items;
 }
 
 /**
@@ -1211,6 +1334,51 @@ export function depthMoveActions(
           direction: move.direction,
         }
   );
+}
+
+/**
+ * Copy, Cut and Paste, kept in the menu so the bar stays one short row.
+ *
+ * Copy is always offered: copying changes nothing on the page, so no lock
+ * stands in its way. Cut removes what it copies, so it is Delete's item under
+ * another name: offered, or dimmed with the reason, exactly where Delete is,
+ * by every lock Delete asks. Paste is always offered, since what the
+ * clipboard holds is read only when it is pressed; a paste the page refuses
+ * says why then.
+ */
+function clipboardActions(
+  deleteItem: ToolbarAction,
+  count: number
+): ToolbarAction[] {
+  return [
+    { id: "copy", label: "Copy", enabled: true, inMenu: true },
+    { ...deleteItem, id: "cut", label: "Cut", inMenu: true },
+    { id: "paste", label: "Paste", enabled: true, inMenu: true },
+    ...styleClipboardActions(count),
+  ];
+}
+
+/**
+ * Copy style and Paste style, beside Copy and Paste in the same group.
+ *
+ * Copy style takes one block's look, so it is dimmed for several. Paste style
+ * gives that look to every selected block, and like Paste it is always
+ * offered: what was copied is read when it is pressed, and a paste with
+ * nothing copied, or onto a held block, says why then.
+ */
+function styleClipboardActions(count: number): ToolbarAction[] {
+  return [
+    count > 1
+      ? {
+          id: "copy-style",
+          label: "Copy style",
+          enabled: false,
+          reason: oneAtATime(count),
+          inMenu: true,
+        }
+      : { id: "copy-style", label: "Copy style", enabled: true, inMenu: true },
+    { id: "paste-style", label: "Paste style", enabled: true, inMenu: true },
+  ];
 }
 
 /**

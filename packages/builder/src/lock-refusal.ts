@@ -120,7 +120,10 @@ export function layersLockFacts(
 
 /** What an op does to the block it addresses, as a refusal of it says. */
 function verbOf(
-  op: Exclude<BuilderOp, { readonly kind: "envelope" | "seo" }>
+  op: Exclude<
+    BuilderOp,
+    { readonly kind: "envelope" | "seo" | "code" | "customCss" }
+  >
 ): LockedVerb {
   switch (op.kind) {
     case "remove":
@@ -128,6 +131,8 @@ function verbOf(
     case "move":
       return "move";
     case "update":
+    case "turnInto":
+      // Turning a block into another type changes it in place.
       return "change";
     case "insert":
       return "add";

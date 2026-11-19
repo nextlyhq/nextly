@@ -66,9 +66,12 @@ describe.each(getConfiguredTestDialects())(
     it("answers each read as a request to its own route answers it", async () => {
       const t = await boot();
       // The site's first person is its owner, who may make every read.
-      const owner = await sessionOf(t, await person(t, "owner"));
+      const ownerId = await person(t, "owner");
+      const owner = await sessionOf(t, ownerId);
       const answer = await get(owner, builderStartupPath(READS));
       expect(answer.status).toBe(200);
+      // Whom it read for: the session's person, whom the editor checks.
+      expect(answer.body.readFor).toBe(ownerId);
       const reads = answer.body.reads as Record<
         string,
         { status: number; body?: unknown }

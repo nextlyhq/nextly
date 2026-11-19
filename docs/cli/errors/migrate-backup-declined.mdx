@@ -1,0 +1,24 @@
+---
+title: MIGRATE_BACKUP_DECLINED
+description: "`nextly migrate` found the migration records of an earlier Nextly release, and its backup question was answered no."
+---
+
+## Cause
+
+`nextly migrate` found the migration records of an earlier Nextly release, and its backup question was answered no.
+
+Earlier releases recorded migrations in `nextly_migrations` and `nextly_migration_journal`. `nextly migrate` moves those records into `nextly_schema_events` and drops both tables, so it asks whether the database is backed up first. At the prompt the answer was no, so nothing was changed.
+
+## Fix
+
+- Back up the database.
+- Run `nextly migrate` again and answer yes, or pass `--backup-confirmed`.
+
+## Example
+
+```text
+✗ The migration records of an earlier Nextly release were not moved: the backup question was answered no.
+  Why:  `nextly migrate` moves those records into `nextly_schema_events` and drops the tables that held them, so it asks for a backup first, and the answer was no. Nothing was changed.
+  Next: Back up the database, then run `nextly migrate` again and answer yes, or pass `--backup-confirmed`.
+  Docs: https://nextlyhq.com/docs/cli/errors/migrate-backup-declined  (MIGRATE_BACKUP_DECLINED)
+```

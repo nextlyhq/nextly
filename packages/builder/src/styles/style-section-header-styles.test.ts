@@ -641,11 +641,16 @@ describe("the inspector at the editor's density", () => {
 });
 
 describe("a rich-text field in the Content tab", () => {
-  it("is drawn as a field at least the control's height", () => {
+  it("is drawn as a field at least four lines high", () => {
     // An unstyled element is as tall as its one 16px line, or nothing when
-    // empty: under the 24px a target needs, which axe refused.
+    // empty: under the 24px a target needs, which axe refused; and a field
+    // one control high reads as a one-line input. Four lines with the
+    // padding and the edge, past both; how it grows and holds still on focus
+    // is pinned in rich-text-control.height.test.tsx.
     const field = ruleBody(".nx-inspector__rich-text");
-    expect(field).toContain("min-height: var(--nx-control-height)");
+    expect(field).toContain(
+      "min-height: calc(4 * var(--nx-builder-line-height) + 0.75rem + 2px)"
+    );
     expect(field).toContain("border: 1px solid var(--nx-input)");
     expect(field).toContain("cursor: text");
     expect(ruleBody(".nx-inspector__rich-text:focus-visible")).toContain(

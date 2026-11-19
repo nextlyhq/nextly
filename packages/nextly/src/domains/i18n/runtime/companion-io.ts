@@ -22,6 +22,7 @@ import { and, eq, getTableColumns, isTable, sql } from "drizzle-orm";
 import type { RequestActor } from "../../../auth/request-actor";
 import { isUniqueViolation } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { readsOnTransaction } from "../../../shared/lib/read-transaction-scope";
 import type { ColumnSpec } from "../../schema/pipeline/diff/types";
@@ -32,7 +33,10 @@ import {
 import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
 import { restatedColumn } from "../../schema/pipeline/sql-templates/mysql-live-restate";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
-import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
+import {
+  classifyFieldKind,
+  toSnakeCase as toCanonicalSnakeCase,
+} from "../../schema/services/field-column-descriptor";
 import { languageRevisionTable } from "../../schema/services/runtime-schema-generator";
 import {
   CHANGED_AT_COLUMN,
@@ -141,10 +145,21 @@ export function localizedFieldRefs(
   const unique = new Set(
     fields.filter(field => field.unique === true).map(field => field.name)
   );
+  // Read off the descriptor every column is built from, as the companion's own column spec reads
+  // it: a field whose storage is JSON, which some databases hand back as text.
+  const json = new Set(
+    fields
+      .filter(
+        field =>
+          classifyFieldKind(field as FieldDefinition, "codeFirst") === "json"
+      )
+      .map(field => field.name)
+  );
   return resolveLocalizedFieldNames([...fields], true).map(name => ({
     name,
     column: toColumn(name),
     ...(unique.has(name) ? { unique: true } : {}),
+    ...(json.has(name) ? { json: true } : {}),
   }));
 }
 
@@ -734,13 +749,20 @@ export async function survivingCompanionRefusal(
 export async function refuseCompanionColumnsThatCannotHold(
   adapter: CompanionIntrospectAdapter,
   config: Parameters<typeof localizableConfigEntities>[0],
-  recordedBefore: RecordedEntities | undefined
+  recordedBefore: RecordedEntities | undefined,
+  /**
+   * The table each field group is stored in, by slug: on a site whose storage moved to the
+   * current names, a group's translations table is `fg_<slug>_locales`, which no slug alone says.
+   * Absent, the legacy derivation.
+   */
+  fieldGroupTable?: (slug: string) => string
 ): Promise<void> {
   if (recordedBefore === undefined) return;
   const reasons: string[] = [];
   const errors: { path: string; code: string; message: string }[] = [];
   for (const [kind, group, resolveTableName] of localizableConfigEntities(
-    config
+    config,
+    fieldGroupTable
   )) {
     for (const entity of group) {
       // Every entity kept per language: a translated one, or any under

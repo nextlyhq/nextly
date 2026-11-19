@@ -24,6 +24,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closedDocumentSession } from "../__tests__/closed-document-session";
 
 /** The verb the editor published, as the chain was handed it. */
 let offeredVerb: (() => void) | undefined;
@@ -110,6 +111,13 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // The empty page's starter pages read, offering none: no case here starts
+  // a page from one.
+  readPluginRoute: async () => ({ items: [] }),
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -126,6 +134,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   WEB_FONT_FORMATS: (await import("nextly/config")).WEB_FONT_FORMATS,
   // The media library, drawn as nothing: these cases never open it.
   MediaPickerDialog: () => null,
+  // The media library's upload, which an Image's empty state offers: these
+  // cases upload nothing.
+  useUploadMedia: () => ({ mutateAsync: () => new Promise<never>(() => {}) }),
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => ({}),
   // No document around the field: the state every case here was written
@@ -161,6 +172,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   // The form's storing gate, which site style writes are tracked with.
   useTrackedWrite: () => () => {},
   useBeforeDocumentAction: () => {},
+  // The session a header edited in place opens; none is opened here.
+  useDocumentSession: () => closedDocumentSession(),
   // The header's controls the bar places; drawn by the admin, not here.
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,

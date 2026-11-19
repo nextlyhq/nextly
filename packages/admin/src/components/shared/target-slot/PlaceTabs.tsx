@@ -21,6 +21,9 @@
  * It is hidden with the panel's `hidden` attribute rather than `Activity`,
  * which would stop its effects, and with them the count.
  *
+ * A tab that applies to some of the place's documents only may leave itself
+ * out of the strip (`setLeftOut`); its panel stays mounted, hidden.
+ *
  * Which tab is open is the strip's own until a page takes it over with
  * `openTab` and `onOpenTabChange`, as the edit pages do to keep it in the
  * address. A shown tab that is no longer delivered gives the content back.
@@ -41,7 +44,7 @@ import {
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { useT } from "@admin/lib/i18n/I18nProvider";
-import { tabFitsDocument } from "@admin/lib/plugins/place-entries";
+import { tabsFittingDocument } from "@admin/lib/plugins/place-entries";
 import { cn } from "@admin/lib/utils";
 
 import { IsolatedContribution } from "./IsolatedContribution";
@@ -84,6 +87,15 @@ export interface PlaceTabProps<P extends AdminPlaceId = AdminPlaceId>
    * function for as long as the tab is drawn, so an effect may name it.
    */
   setBadge: (badge: PlaceTabBadge | null) => void;
+  /**
+   * @experimental Leave this tab out of the row (`true`), or bring it back
+   * (`false`), for a tab that applies to some of the place's documents only
+   * and learns which as it is drawn. Every tab starts in the row. A tab left
+   * out keeps its panel mounted, hidden, so it can bring itself back; one
+   * shown as it leaves gives the page its own content back. The same
+   * function for as long as the tab is drawn, as `setBadge` is.
+   */
+  setLeftOut: (leftOut: boolean) => void;
 }
 
 export interface PlaceTabsProps<P extends AdminPlaceId> extends PlaceProps<P> {
@@ -159,32 +171,75 @@ function drawnBadge(
 }
 
 /**
- * Each tab's badge, and the one `setBadge` each tab is handed, the same
- * function for as long as the strip is mounted, so a tab may name it in an
- * effect's dependencies without running the effect on every render.
+ * One function per tab, the same for as long as the strip is mounted, so a
+ * tab may name it in an effect's dependencies without running the effect on
+ * every render: each calls `set` (itself the same function throughout) with
+ * the tab's id.
  */
+function useSetterPerTab<V>(
+  set: (id: string, value: V) => void
+): (id: string) => (value: V) => void {
+  const setters = useRef(new Map<string, (value: V) => void>());
+  return useCallback(
+    (id: string) => {
+      let setter = setters.current.get(id);
+      if (setter === undefined) {
+        setter = value => set(id, value);
+        setters.current.set(id, setter);
+      }
+      return setter;
+    },
+    [set]
+  );
+}
+
+/** Each tab's badge, and the one `setBadge` each tab is handed. */
 function useTabBadges(): {
   badges: Readonly<Record<string, PlaceTabBadge>>;
   setterFor: (id: string) => PlaceTabProps["setBadge"];
 } {
   const [badges, setBadges] = useState<Record<string, PlaceTabBadge>>({});
-  const setters = useRef(new Map<string, PlaceTabProps["setBadge"]>());
-  const setterFor = useCallback((id: string) => {
-    let setter = setters.current.get(id);
-    if (setter === undefined) {
-      setter = badge =>
+  const setterFor = useSetterPerTab<PlaceTabBadge | null>(
+    useCallback(
+      (id, badge) =>
         setBadges(current => {
           if (sameBadge(current[id], badge)) return current;
           if (badge !== null) return { ...current, [id]: badge };
           return Object.fromEntries(
             Object.entries(current).filter(([key]) => key !== id)
           );
-        });
-      setters.current.set(id, setter);
-    }
-    return setter;
-  }, []);
+        }),
+      []
+    )
+  );
   return { badges, setterFor };
+}
+
+/**
+ * The tabs that left themselves out of the row, and the one `setLeftOut`
+ * each tab is handed. Kept while a tab's panel is not mounted (a dialog
+ * closed around it), so the row does not change when the panel mounts
+ * again and says the same.
+ */
+function useTabsLeftOut(): {
+  leftOut: ReadonlySet<string>;
+  setterFor: (id: string) => PlaceTabProps["setLeftOut"];
+} {
+  const [leftOut, setLeftOut] = useState<ReadonlySet<string>>(new Set());
+  const setterFor = useSetterPerTab<boolean>(
+    useCallback(
+      (id, out) =>
+        setLeftOut(current => {
+          if (current.has(id) === out) return current;
+          const next = new Set(current);
+          if (out) next.add(id);
+          else next.delete(id);
+          return next;
+        }),
+      []
+    )
+  );
+  return { leftOut, setterFor };
 }
 
 /**
@@ -228,13 +283,7 @@ function useDeliveredTabs<P extends AdminPlaceId>(
 ) {
   const delivered = usePlaceContributions(place, "tab", { context, entry });
   if (context === null || page.withheld === true) return [];
-  return delivered.flatMap(item =>
-    "builtIn" in item ||
-    item.kind !== "tab" ||
-    !tabFitsDocument(item, page.fieldNames)
-      ? []
-      : [item]
-  );
+  return tabsFittingDocument(delivered, page.fieldNames);
 }
 
 /**
@@ -253,6 +302,95 @@ function useShownTabReport(
   }, [shown]);
 }
 
+/**
+ * @experimental One tab delivered to a place, ready for a page that draws the
+ * place's tabs in a row of its own, beside tabs of its own.
+ */
+export interface PlaceTabEntry {
+  /** The contribution's id, which the page's tab state names it by. */
+  id: string;
+  /** The tab's label, in the plugin's words. */
+  label: string;
+  /**
+   * The trigger's accessible name where the tab shows a count: its label
+   * with what the count means ("SEO (3 things to fix)"). Absent, the
+   * trigger's text names it.
+   */
+  accessibleName?: string;
+  /** What the trigger shows: the label, and the count where there is one. */
+  trigger: ReactNode;
+  /**
+   * Whether the tab left itself out of the row (`setLeftOut`): draw no
+   * trigger for it, and never show it, but keep its panel mounted, hidden,
+   * so it can bring itself back.
+   */
+  leftOut: boolean;
+  /**
+   * The tab's body, behind its own boundary. Keep it mounted while another
+   * tab is shown, only hidden, so its count stays current and what it holds
+   * is kept, as `PlaceTabs` does.
+   */
+  panel: ReactNode;
+}
+
+/** @experimental What {@link usePlaceTabs} reads: `PlaceTabs`' own props. */
+export type UsePlaceTabsOptions<P extends AdminPlaceId> = Pick<
+  PlaceTabsProps<P>,
+  "place" | "context" | "entry" | "tabProps" | "fieldNames" | "withheld"
+>;
+
+/**
+ * @experimental The tabs delivered to a place, each with its trigger and its
+ * panel, for a page that draws them in its own row rather than under a strip
+ * `PlaceTabs` draws: the same tabs, filtered and handed the same props, with
+ * the same counts. None while the page's context is `null`.
+ */
+export function usePlaceTabs<P extends AdminPlaceId>({
+  place,
+  context,
+  entry,
+  tabProps,
+  fieldNames,
+  withheld,
+}: UsePlaceTabsOptions<P>): readonly PlaceTabEntry[] {
+  const t = useT();
+  const tabs = useDeliveredTabs(place, context, entry, {
+    fieldNames,
+    withheld,
+  });
+  const { badges, setterFor } = useTabBadges();
+  const out = useTabsLeftOut();
+  const handed = handedTo(tabProps, context, entry);
+  if (handed === undefined) return [];
+  return tabs.map(tab => {
+    const badge = drawnBadge(badges[tab.id]);
+    return {
+      id: tab.id,
+      label: tab.label,
+      leftOut: out.leftOut.has(tab.id),
+      ...(badge === undefined
+        ? {}
+        : {
+            accessibleName: t("nextly.places.tabWithBadge", {
+              tab: tab.label,
+              badge: badge.label,
+            }),
+          }),
+      trigger: <PlaceTabTriggerContent label={tab.label} badge={badge} />,
+      panel: (
+        <PlaceTabPanelBody<P>
+          component={tab.component}
+          props={{
+            ...handed,
+            setBadge: setterFor(tab.id),
+            setLeftOut: out.setterFor(tab.id),
+          }}
+        />
+      ),
+    };
+  });
+}
+
 export function PlaceTabs<P extends AdminPlaceId>({
   place,
   context,
@@ -267,27 +405,30 @@ export function PlaceTabs<P extends AdminPlaceId>({
   withheld,
   children,
 }: PlaceTabsProps<P>): ReactNode {
-  const tabs = useDeliveredTabs(place, context, entry, {
+  const tabs = usePlaceTabs({
+    place,
+    context,
+    entry,
+    tabProps,
     fieldNames,
     withheld,
   });
+  // A tab that left itself out is never shown: the page's content is.
   const { shown, choose } = useShownTab(
-    tabs.map(tab => tab.id),
+    tabs.flatMap(tab => (tab.leftOut ? [] : [tab.id])),
     openTab,
     onOpenTabChange
   );
   useShownTabReport(shown, onShownTabChange);
-  const handed = handedTo(tabProps, context, entry);
   return (
     <>
-      {handed === undefined || tabs.length === 0 ? null : (
-        <PlaceTabStrip<P>
+      {tabs.length === 0 ? null : (
+        <PlaceTabStrip
           tabs={tabs}
           shown={shown}
           choose={choose}
           contentLabel={contentLabel}
           className={className}
-          handed={handed}
         />
       )}
       <Activity mode={shown === CONTENT_TAB ? "visible" : "hidden"}>
@@ -306,7 +447,8 @@ function handedTo<P extends AdminPlaceId>(
   context: PlaceProps<P>["context"],
   entry: PlaceProps<P>["entry"]
 ):
-  | (Omit<PlaceTabProps<P>, "setBadge"> & Readonly<Record<string, unknown>>)
+  | (Omit<PlaceTabProps<P>, "setBadge" | "setLeftOut"> &
+      Readonly<Record<string, unknown>>)
   | undefined {
   if (context === null) return undefined;
   return { ...tabProps, context, ...(entry === undefined ? {} : { entry }) };
@@ -314,104 +456,99 @@ function handedTo<P extends AdminPlaceId>(
 
 /**
  * The strip and each contributed tab's panel, drawn once the page knows its
- * ids and a tab is delivered. `handed` is what every tab receives besides its
- * own `setBadge`.
+ * ids and a tab is delivered.
  */
-function PlaceTabStrip<P extends AdminPlaceId>({
+function PlaceTabStrip({
   tabs,
   shown,
   choose,
   contentLabel,
   className,
-  handed,
 }: {
-  tabs: ReturnType<typeof useDeliveredTabs<P>>;
+  tabs: readonly PlaceTabEntry[];
   shown: string;
   choose: (value: string) => void;
   contentLabel: string;
   className: string | undefined;
-  handed: Omit<PlaceTabProps<P>, "setBadge"> &
-    Readonly<Record<string, unknown>>;
 }): ReactNode {
-  const { badges, setterFor } = useTabBadges();
   return (
     <Tabs
       value={shown}
       onValueChange={choose}
       {...(className === undefined ? {} : { className })}
     >
-      <TabsList scrollable>
-        {/* The page's content is not one of the strip's panels, since
+      {/* No strip while every tab has left itself out: their panels stay
+          mounted below, hidden, so each can bring itself back. */}
+      {tabs.every(tab => tab.leftOut) ? null : (
+        <TabsList scrollable>
+          {/* The page's content is not one of the strip's panels, since
             wrapping it in one would change the page with no tab or remount
             it when a tab arrives, so this tab names no panel. */}
-        <TabsTrigger value={CONTENT_TAB} aria-controls={undefined}>
-          {contentLabel}
-        </TabsTrigger>
-        {tabs.map(tab => (
-          <PlaceTabTrigger
-            key={tab.id}
-            value={tab.id}
-            label={tab.label}
-            badge={drawnBadge(badges[tab.id])}
-          />
-        ))}
-      </TabsList>
+          <TabsTrigger value={CONTENT_TAB} aria-controls={undefined}>
+            {contentLabel}
+          </TabsTrigger>
+          {tabs
+            .filter(tab => !tab.leftOut)
+            .map(tab => (
+              <TabsTrigger
+                key={tab.id}
+                value={tab.id}
+                {...(tab.accessibleName === undefined
+                  ? {}
+                  : { "aria-label": tab.accessibleName })}
+              >
+                {tab.trigger}
+              </TabsTrigger>
+            ))}
+        </TabsList>
+      )}
       {tabs.map(tab => (
-        <PlaceTabPanel<P>
+        // Mounted while closed, and hidden by its `hidden` attribute, which a
+        // mounted panel otherwise never carries.
+        <TabsContent
           key={tab.id}
-          id={tab.id}
-          component={tab.component}
-          open={shown === tab.id}
-          props={{ ...handed, setBadge: setterFor(tab.id) }}
-        />
+          value={tab.id}
+          forceMount
+          hidden={shown !== tab.id}
+        >
+          {tab.panel}
+        </TabsContent>
       ))}
     </Tabs>
   );
 }
 
-/**
- * One contributed tab's panel: mounted while closed, and hidden by its
- * `hidden` attribute, which a mounted panel otherwise never carries, with
- * its component behind its own boundary.
- */
-function PlaceTabPanel<P extends AdminPlaceId>({
-  id,
+/** One contributed tab's body: its component behind its own boundary. */
+function PlaceTabPanelBody<P extends AdminPlaceId>({
   component,
-  open,
   props,
 }: {
-  id: string;
   component: string;
-  open: boolean;
   props: PlaceTabProps<P> & Readonly<Record<string, unknown>>;
 }): ReactNode {
   return (
-    <TabsContent value={id} forceMount hidden={!open}>
-      <PlaceTabBody setBadge={props.setBadge}>
-        <IsolatedContribution>
-          <PluginSlot<PlaceTabProps<P> & Readonly<Record<string, unknown>>>
-            path={component}
-            fallback={<PlaceContributionFallback />}
-            props={props}
-          />
-        </IsolatedContribution>
-      </PlaceTabBody>
-    </TabsContent>
+    <PlaceTabBody setBadge={props.setBadge}>
+      <IsolatedContribution>
+        <PluginSlot<PlaceTabProps<P> & Readonly<Record<string, unknown>>>
+          path={component}
+          fallback={<PlaceContributionFallback />}
+          props={props}
+        />
+      </IsolatedContribution>
+    </PlaceTabBody>
   );
 }
 
 /**
- * One contributed tab in the strip: its label, and its count when it has one.
- * The count is drawn for sight and said in words, with the label, as the
- * tab's name, so a screen reader hears "SEO (3 things to fix)" rather than
- * "SEO 3".
+ * What a contributed tab's trigger shows: its label, and its count when it
+ * has one. The count is drawn for sight and said in words, with the label,
+ * as the tab's name (`accessibleName`), so a screen reader hears
+ * "SEO (3 things to fix)" rather than "SEO 3".
  */
-function PlaceTabTrigger({
-  value,
+function PlaceTabTriggerContent({
   label,
   badge,
 }: {
-  value: string;
   label: string;
   badge: PlaceTabBadge | undefined;
 }): ReactNode {
@@ -420,17 +557,7 @@ function PlaceTabTrigger({
   // alarm-coloured zero asks for attention it does not need.
   const attention = badge?.tone === "attention" && badge.count > 0;
   return (
-    <TabsTrigger
-      value={value}
-      {...(badge === undefined
-        ? {}
-        : {
-            "aria-label": t("nextly.places.tabWithBadge", {
-              tab: label,
-              badge: badge.label,
-            }),
-          })}
-    >
+    <>
       {label}
       {badge === undefined ? null : (
         <span
@@ -451,7 +578,7 @@ function PlaceTabTrigger({
             : badge.count}
         </span>
       )}
-    </TabsTrigger>
+    </>
   );
 }
 

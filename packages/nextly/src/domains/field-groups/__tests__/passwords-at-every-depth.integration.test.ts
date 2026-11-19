@@ -420,8 +420,10 @@ describe.each(getConfiguredTestDialects())(
           id,
           locale: "all",
         } as never);
-        // Every language's value is there, and no password in any of them.
-        expect(valuesAt(read, "a")).toEqual(["1", "2"]);
+        // Read in the default language, with every language's value beside
+        // it (`_allLocales`), and no password in any of them.
+        expect(valuesAt((read as Doc).own, "a")).toEqual(["1"]);
+        expect(valuesAt((read as Doc)._allLocales, "a")).toEqual(["1", "2"]);
         expect(valuesAt(read, "pin")).toEqual([]);
       }
     });
@@ -471,8 +473,12 @@ describe.each(getConfiguredTestDialects())(
             locale,
             depth: 1,
           } as never);
-          // The translated group is there, and no password in it.
-          expect(valuesAt(read, "b")).toEqual(values);
+          // The translated group is there, and no password in it. A read of
+          // every language holds it in the default language, with every
+          // language's value beside it (`_allLocales`).
+          expect(
+            valuesAt(locale === "all" ? (read as Doc)._allLocales : read, "b")
+          ).toEqual(values);
           expect(valuesAt(read, "pin")).toEqual([]);
         }
       }

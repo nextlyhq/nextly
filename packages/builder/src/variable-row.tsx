@@ -26,28 +26,25 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@nextlyhq/ui";
-import {
-  Braces,
-  Bold,
-  Hash,
-  Ruler,
-  SquareRoundCorner,
-  Timer,
-  Type,
-} from "lucide-react";
+import { Braces, Bold, Hash, Ruler, Timer, Type } from "lucide-react";
 import * as React from "react";
 
+import { DESKTOP_PREVIEW_WIDTH } from "./canvas/canvas-width";
+import { useColourRowDrag, useColourRowMove } from "./colour-group-ui";
 import { markOf } from "./design-group-toggle";
+import { fluidRange, pxAtWidth } from "./fluid-size";
+import { useInPlaceField } from "./in-place-field";
 import { colourHexOf } from "./style-colour";
 import { lengthInPx, variableValueText } from "./style-variables";
 import {
   lengthFamilyOf,
   relabelToken,
+  variableGroupOf,
   variableLabelIssue,
   type VariableEntry,
 } from "./tokens-studio";
 import { VariableEditor, type VariableEditorProps } from "./variable-editor";
-import { RowMenu } from "./variable-row-menu";
+import { RowMenu, type RowMenuActions } from "./variable-row-menu";
 import { swatchStyle } from "./variable-swatch";
 import { variableCountWords, type VariableReach } from "./variable-usage";
 import { CountTip, type VariableUsageHere } from "./variable-usage-view";
@@ -65,10 +62,21 @@ export interface VariableRowProps {
   onRemoved: () => void;
   /** Adds a copy right below, and opens it. */
   onDuplicate: () => void;
+  /**
+   * Just added or copied and never saved, while its editor is open: its
+   * editor's code name follows its name as it is typed. `marked` while a
+   * search would hide it, so it shows marked "New" in a narrowed list.
+   */
+  fresh?: { readonly marked: boolean } | undefined;
   /** How widely it is used, where the host reads it. */
   usage: VariableUsageHere | undefined;
   /** Every variable the row stands for, together, once read. */
   reach: VariableReach | undefined;
+  /**
+   * Marked "Built-in": a built-in colour still listed while the site hides
+   * the ones it does not use, so the author can tell why it stayed.
+   */
+  builtIn?: boolean;
 }
 
 /**
@@ -88,97 +96,69 @@ export function VariableRow({
   onChange,
   onRemoved,
   onDuplicate,
+  fresh,
   usage,
   reach,
+  builtIn = false,
 }: VariableRowProps): React.JSX.Element {
   const token = tokens.tokens[entry.row.at];
   const [removing, setRemoving] = React.useState(false);
   const [renaming, setRenaming] = React.useState(false);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const button = React.useRef<HTMLButtonElement>(null);
-  const opened = (next: boolean): void => {
-    if (!next) setRemoving(false);
-    onOpenChange(next);
-  };
+  const opened = closingEndsRemove(setRemoving, onOpenChange);
   const handOff = useHandOff(opened);
   const shown = shownName(entry);
   const changing = !readOnly && token !== undefined;
+  // A colour row moves with Alt+Up and Alt+Down.
+  const move = useColourRowMove(entry.row, tokens, onChange);
   const onKeyDown = rowKeys(changing, {
-    rename: () => setRenaming(true),
-    menu: () => setMenuOpen(true),
+    rename: setRenaming,
+    menu: setMenuOpen,
+    move,
   });
+  // A colour row can be dragged to another place in the colour order.
+  const drag = useColourRowDrag(entry.row);
   return (
-    <li className="nx-vars__item" data-open={markOf(open)}>
+    <li className="nx-vars__item" data-open={markOf(open)} {...drag}>
       <Popover open={open} onOpenChange={opened} modal>
         {/* The editor opens beside the whole row, the ⋯ with it. */}
         <PopoverAnchor asChild>
           <div className="nx-vars__line">
-            {renaming && token !== undefined ? (
-              <RenameField
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                onChange={onChange}
-                onDone={() => setRenaming(false)}
-                row={button}
-              />
-            ) : (
-              <CountTip reach={reach} quiet={open || menuOpen}>
-                <PopoverTrigger asChild>
-                  <button
-                    ref={button}
-                    type="button"
-                    className="nx-vars__row"
-                    data-variable-key={entry.row.key}
-                    // The visible name first, then the values the swatch
-                    // shows, so a screen reader hears both and speech input
-                    // still matches.
-                    aria-label={`${shown}${describe(entry, token, tokens, mode)}${countWords(reach)}`}
-                    data-kind={entry.row.kind}
-                    // Drawn as chosen while its editor is open. Its own mark:
-                    // the row's tooltip sets `data-state` too, over the
-                    // popover's.
-                    data-open={markOf(open)}
-                    onKeyDown={onKeyDown}
-                  >
-                    <RowLead
-                      entry={entry}
-                      token={token}
-                      tokens={tokens}
-                      mode={mode}
-                    />
-                    <RowName entry={entry} />
-                    <RowTail
-                      entry={entry}
-                      token={token}
-                      tokens={tokens}
-                      mode={mode}
-                    />
-                  </button>
-                </PopoverTrigger>
-              </CountTip>
-            )}
-            {changing ? (
-              <RowMenu
-                entry={entry}
-                token={token}
-                tokens={tokens}
-                suppliedOf={suppliedOf}
-                usage={usage}
-                label={shown}
-                open={menuOpen}
-                onOpenChange={setMenuOpen}
-                onChange={onChange}
-                actions={{
-                  onRename: () => setRenaming(true),
-                  onDuplicate,
-                  onEdit: startRemove => {
-                    setRemoving(startRemove);
-                    onOpenChange(true);
-                  },
-                }}
-              />
-            ) : null}
+            <RowNameOrField
+              renaming={renaming}
+              onRenamed={() => setRenaming(false)}
+              entry={entry}
+              token={token}
+              tokens={tokens}
+              mode={mode}
+              reach={reach}
+              marked={fresh?.marked === true}
+              builtIn={builtIn}
+              open={open}
+              quiet={open || menuOpen}
+              button={button}
+              onChange={onChange}
+              onKeyDown={onKeyDown}
+            />
+            <RowActions
+              changing={changing}
+              entry={entry}
+              token={token}
+              tokens={tokens}
+              suppliedOf={suppliedOf}
+              usage={usage}
+              label={shown}
+              open={menuOpen}
+              onOpenChange={setMenuOpen}
+              onChange={onChange}
+              actions={menuActionsOf({
+                setRenaming,
+                setRemoving,
+                onDuplicate,
+                onOpenChange,
+              })}
+            />
           </div>
         </PopoverAnchor>
         <RowEditor
@@ -189,11 +169,114 @@ export function VariableRow({
           onChange={onChange}
           onRemoved={onRemoved}
           removing={removing}
+          isNew={fresh !== undefined}
           usage={usage}
           handOff={handOff}
         />
       </Popover>
     </li>
+  );
+}
+
+/**
+ * What the row's ⋯ menu does: rename in place, copy, and open the editor,
+ * at its remove step where asked.
+ */
+function menuActionsOf(row: {
+  setRenaming: (renaming: boolean) => void;
+  setRemoving: (removing: boolean) => void;
+  onDuplicate: () => void;
+  onOpenChange: (open: boolean) => void;
+}): RowMenuActions {
+  return {
+    onRename: () => row.setRenaming(true),
+    onDuplicate: row.onDuplicate,
+    onEdit: startRemove => {
+      row.setRemoving(startRemove);
+      row.onOpenChange(true);
+    },
+  };
+}
+
+/** The row's ⋯ menu, where its variable can be changed; nothing otherwise. */
+function RowActions({
+  changing,
+  token,
+  ...menu
+}: Omit<React.ComponentProps<typeof RowMenu>, "token"> & {
+  changing: boolean;
+  token: SiteToken | undefined;
+}): React.JSX.Element | null {
+  if (!changing || token === undefined) return null;
+  return <RowMenu token={token} {...menu} />;
+}
+
+/**
+ * The row's button, which opens its editor: named by the visible name, then
+ * the values the swatch shows, so a screen reader hears both and speech
+ * input still matches; its tooltip says how widely it is used.
+ */
+function RowTrigger({
+  entry,
+  token,
+  tokens,
+  mode,
+  reach,
+  marked,
+  builtIn,
+  open,
+  quiet,
+  button,
+  onKeyDown,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+  reach: VariableReach | undefined;
+  marked: boolean;
+  /** Marked "Built-in"; see {@link VariableRowProps.builtIn}. */
+  builtIn: boolean;
+  open: boolean;
+  /** The tooltip stays closed: the editor or the menu is open. */
+  quiet: boolean;
+  button: React.RefObject<HTMLButtonElement | null>;
+  onKeyDown: ((event: React.KeyboardEvent) => void) | undefined;
+}): React.JSX.Element {
+  return (
+    <CountTip reach={reach} quiet={quiet}>
+      <PopoverTrigger asChild>
+        <button
+          ref={button}
+          type="button"
+          className="nx-vars__row"
+          data-variable-key={entry.row.key}
+          aria-label={rowLabel({
+            entry,
+            token,
+            tokens,
+            mode,
+            reach,
+            marked,
+            builtIn,
+          })}
+          data-kind={entry.row.kind}
+          // Drawn as chosen while its editor is open. Its own mark: the
+          // row's tooltip sets `data-state` too, over the popover's.
+          data-open={markOf(open)}
+          onKeyDown={onKeyDown}
+        >
+          <RowFace
+            entry={entry}
+            token={token}
+            tokens={tokens}
+            mode={mode}
+            marked={marked}
+            builtIn={builtIn}
+          />
+        </button>
+      </PopoverTrigger>
+    </CountTip>
   );
 }
 
@@ -234,17 +317,102 @@ function RowEditor({
  */
 function rowKeys(
   changing: boolean,
-  on: { rename: () => void; menu: () => void }
+  on: {
+    /** Starts renaming in place; called with `true`. */
+    rename: (renaming: true) => void;
+    /** Opens the row's ⋯ menu; called with `true`. */
+    menu: (open: true) => void;
+    /** A colour's move one place up or down, by Alt+Up and Alt+Down. */
+    move?: ((by: -1 | 1) => void) | undefined;
+  }
 ): ((event: React.KeyboardEvent) => void) | undefined {
   if (!changing) return undefined;
   return event => {
+    const by = moveBy(event);
+    if (by !== undefined && on.move !== undefined) {
+      event.preventDefault();
+      on.move(by);
+      return;
+    }
     const menu =
       event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
     if (event.key !== "F2" && !menu) return;
     event.preventDefault();
-    if (menu) on.menu();
-    else on.rename();
+    if (menu) on.menu(true);
+    else on.rename(true);
   };
+}
+
+/** Which way Alt+Up or Alt+Down moves a row, or nothing for any other key. */
+function moveBy(event: React.KeyboardEvent): -1 | 1 | undefined {
+  if (!event.altKey) return undefined;
+  if (event.key === "ArrowUp") return -1;
+  return event.key === "ArrowDown" ? 1 : undefined;
+}
+
+/**
+ * The row's name as a screen reader hears it: the visible name, "new" while
+ * it is marked so, the values the swatch shows, and how widely it is used.
+ */
+function rowLabel({
+  entry,
+  token,
+  tokens,
+  mode,
+  reach,
+  marked,
+  builtIn,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+  reach: VariableReach | undefined;
+  marked: boolean;
+  builtIn: boolean;
+}): string {
+  const fresh = marked ? ", new" : "";
+  const supplied = builtIn ? ", built-in" : "";
+  return `${shownName(entry)}${fresh}${supplied}${describe(entry, token, tokens, mode)}${countWords(reach)}`;
+}
+
+/**
+ * What the row draws: its preview, its name, and its value, or "New" in
+ * the value's place while the editor beside it shows the value.
+ */
+function RowFace({
+  entry,
+  token,
+  tokens,
+  mode,
+  marked,
+  builtIn,
+}: {
+  entry: VariableEntry;
+  token: SiteToken | undefined;
+  tokens: SiteTokenSet;
+  mode: TokenMode;
+  marked: boolean;
+  builtIn: boolean;
+}): React.JSX.Element {
+  return (
+    <>
+      <RowLead entry={entry} token={token} tokens={tokens} mode={mode} />
+      <RowName entry={entry} />
+      {builtIn ? (
+        <span className="nx-vars__built-in" aria-hidden="true">
+          Built-in
+        </span>
+      ) : null}
+      {marked ? (
+        <span className="nx-vars__new" aria-hidden="true">
+          New
+        </span>
+      ) : (
+        <RowTail entry={entry} token={token} tokens={tokens} mode={mode} />
+      )}
+    </>
+  );
 }
 
 /** The row's name, and its kind where another row shares the name. */
@@ -286,12 +454,7 @@ function RenameField({
   const [issue, setIssue] = React.useState<string | undefined>();
   // Once: Enter's own close takes the field away, and the blur that follows
   // must not keep or cancel a second time.
-  const done = React.useRef(false);
-  const field = React.useRef<HTMLInputElement>(null);
-  React.useEffect(() => {
-    field.current?.focus();
-    field.current?.select();
-  }, []);
+  const { field, done } = useInPlaceField();
   const finish = (refocus: boolean): void => {
     done.current = true;
     onDone();
@@ -392,6 +555,45 @@ function ColourSwatch({
 }
 
 /**
+ * The row's button, or while it is renamed in place, the name field that
+ * takes its place.
+ */
+function RowNameOrField({
+  renaming,
+  onRenamed,
+  onChange,
+  ...row
+}: React.ComponentProps<typeof RowTrigger> & {
+  renaming: boolean;
+  onRenamed: () => void;
+  onChange: (tokens: SiteTokenSet) => void;
+}): React.JSX.Element {
+  const { entry, token, tokens, button } = row;
+  if (!renaming || token === undefined) return <RowTrigger {...row} />;
+  return (
+    <RenameField
+      entry={entry}
+      token={token}
+      tokens={tokens}
+      onChange={onChange}
+      onDone={onRenamed}
+      row={button}
+    />
+  );
+}
+
+/** The editor's open change, a close leaving the remove step behind. */
+function closingEndsRemove(
+  setRemoving: (removing: boolean) => void,
+  onOpenChange: (open: boolean) => void
+): (open: boolean) => void {
+  return open => {
+    if (!open) setRemoving(false);
+    onOpenChange(open);
+  };
+}
+
+/**
  * Closing a row's editor for a control that sends the author elsewhere: the
  * editor closes without handing focus back to the row, which would take it
  * from the place the author was sent to.
@@ -464,9 +666,22 @@ function RowLead({
       </span>
     );
   }
-  // A radius draws a corner, so it is told from a spacing step at a glance.
-  const radius = lengthFamilyOf(entry.row) === "radius";
-  const Icon = radius ? SquareRoundCorner : KIND_ICONS[kind];
+  // A radius draws a square with that radius on its corners.
+  if (lengthFamilyOf(entry.row) === "radius") {
+    return (
+      <span
+        className="nx-vars__kind"
+        aria-hidden="true"
+        data-variable-icon="radius"
+      >
+        <span
+          className="nx-vars__radius"
+          style={{ borderRadius: valueFor(token, mode) }}
+        />
+      </span>
+    );
+  }
+  const Icon = KIND_ICONS[kind];
   return (
     <span
       className="nx-vars__kind"
@@ -535,18 +750,54 @@ function RowTail({
   // A colour's one swatch says its values; nothing follows its name.
   if (token === undefined || entry.row.kind === "color") return null;
   const own = valueFor(token, mode);
-  const words = chipText(entry, own);
-  return (
+  const words = tailWords(entry, own);
+  const chip = (
     <span
       className="nx-vars__chip"
       aria-hidden="true"
-      // The whole value on hover when the chip says it in fewer words, as
-      // "Fluid" does; the row's name says it to a screen reader already.
+      // The whole value on hover when the chip says it in other words, as
+      // "Fluid · 16–20px" does; the row's name says it to a screen reader.
       title={words === chipText(entry, own, "raw") ? undefined : own}
     >
       {words}
     </span>
   );
+  if (
+    variableGroupOf(entry.row) !== "spacing" ||
+    entry.row.kind !== "dimension"
+  ) {
+    return chip;
+  }
+  // A spacing draws a bar as long as it is at the desktop width.
+  const px = pxAtWidth(own, DESKTOP_PREVIEW_WIDTH);
+  return (
+    <span className="nx-vars__tail" aria-hidden="true">
+      {px === undefined ? null : (
+        <span
+          className="nx-vars__bar"
+          style={{ width: `${String(Math.round(px))}px` }}
+        />
+      )}
+      {chip}
+    </span>
+  );
+}
+
+/**
+ * What the value chip says: a fluid length's range ("Fluid · 16–20px"),
+ * the content width in px, as the block panel's Boxed option measures it,
+ * or the value in the picker's words.
+ */
+function tailWords(entry: VariableEntry, own: string): string {
+  const range = fluidRange(own);
+  if (range !== undefined && entry.lineHeight === undefined) {
+    return `Fluid · ${String(Math.round(range.minPx))}–${String(Math.round(range.maxPx))}px`;
+  }
+  if (variableGroupOf(entry.row) === "content") {
+    const px = pxAtWidth(own, DESKTOP_PREVIEW_WIDTH);
+    if (px !== undefined) return `${String(Math.round(px))}px`;
+  }
+  return chipText(entry, own);
 }
 
 /**

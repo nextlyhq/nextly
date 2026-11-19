@@ -192,8 +192,16 @@ example `Entry content shows "summary", which isn't a blocks field of Posts. Cho
 
 `bind-prop` binds the prop `prop` of the block whose id is `nodeId` to a field. `binding` is
 stored as the block stores it: `{ "$bind": "title" }`, with `source` (`entry`, the
-default, `item` inside a Collection list, `single` with `sourceKey`, or `site`), a
-`fallback` and a `format`. The prop's own value stays, and is shown when the binding can't
+default, `item` inside a Collection list, `single` with `sourceKey`, `site`, or `setting`), a
+`fallback` and a `format`. A `setting` binding is for a block inside a component: its `$bind`
+is the id of one of the component's own settings (`{ "$bind": "title", "source": "setting" }`),
+and the block shows what each placement gives that setting, as the setting's own block does:
+the placement's value, else its binding, else the setting's default. Shown on its own, the
+component shows the default. A setting the component doesn't have, or one that shows or
+hides its block, is refused, as is one whose value the prop can't hold: another type, or a
+choice the prop doesn't offer. On a page, where no setting is there to follow, the block shows
+its own value. Removing the setting leaves each block that followed it showing the
+setting's last default, unbound. The prop's own value stays, and is shown when the binding can't
 be. The write is judged as the editor's save is: a prop the block lacks, a field its source
 lacks, a type that does not fit the prop and a fallback the prop can't hold are refused.
 
@@ -210,7 +218,8 @@ value. `keep` changes whose value is kept: `{ "entry": id }` names the entry, wh
 template's bindings need, since each of its entries shows its own value; `{ "item": id }`
 names the entry of a Collection list's collection, which a block inside the list needs; and
 `{ "value": … }` gives the value; in a list inside another list's items, the item is
-the nearest list's. An image a visitor saw by its address, not a library image, is kept
+the nearest list's, or, for a binding naming the list it reads (`list`), that list's. An
+image a visitor saw by its address, not a library image, is kept
 in the block's address prop (`src` on the Image block), the media prop emptied, and so is
 an image fallback address kept in place of a private field (a media library fallback stays
 in the media prop); a block declaring none refuses the unbind; and an image's typed address, which a bound image never draws, is emptied
@@ -233,8 +242,9 @@ Content-Type: application/json
 { "action": { "kind": "add-variant", "label": "Dark" }, "dryRun": true }
 ```
 
-Where the component store translates its definition field, an edit changes the default
-language's definition.
+Where the component store translates its definition field, **`locale`** names the
+language whose definition the edit reads and changes; without it, the edit changes the
+default language's definition. A store that translates nothing ignores it.
 
 The caller needs **update** on components; where `componentReadiness` names a collection
 of the site's own for them, the route edits that collection's document field and needs
@@ -418,8 +428,10 @@ Each request below is a `POST` to the route named, and each can be sent with
 4. **Fill them with data**: `set-list-query` on the list
    (`{ "collection": "posts", "sort": "-publishedAt", "limit": 6 }`); `bind-prop` on the
    heading (`{ "$bind": "title" }`) and on a block inside the list
-   (`{ "$bind": "title", "source": "item" }`); `set-conditions` on a block shown only to
-   some entries (`[[{ "field": "featured", "op": "is_true" }]]`).
+   (`{ "$bind": "title", "source": "item" }`), adding `"list": <list id>` to read an
+   enclosing list further out, for a block in a list inside another; `set-conditions`
+   on a block shown only to some entries
+   (`[[{ "field": "featured", "op": "is_true" }]]`).
 5. **Publish it**: `{ "action": { "kind": "publish-template", "id": <template id> } }`.
    Each entry with an address is now served drawn with it.
 6. **Give one entry its own design**, if it needs one: `give-entry-design` with

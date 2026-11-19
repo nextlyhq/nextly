@@ -21,6 +21,7 @@ import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
 import { renamePluginContributes } from "../../../plugins/schema/apply-contributions";
 import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { DeclaredIndex } from "../pipeline/diff/build-from-fields";
 import {
@@ -76,6 +77,13 @@ interface PublishInput {
    * attach to no table. Absent, or for a group it does not name, the table is derived as before.
    */
   fieldGroupTables?: ReadonlyMap<string, string>;
+  /**
+   * The discriminator each field group's table holds, by table, where the caller read it (the
+   * live catalog, or the newest snapshot for a migration). A migrated table holds
+   * `_field_group_type`; seeded with the legacy column, a hook naming the real one would be refused.
+   * Absent for a table, the seed keeps the column the field-group builder names.
+   */
+  fieldGroupTypeColumns?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -239,6 +247,27 @@ interface SeedFields {
 }
 
 /** A seed's columns, and its own indexes where it has any. */
+/**
+ * A field group's seed with its discriminator named as its table holds it: the builder names the
+ * legacy column, and a table the storage migration moved holds the migrated one.
+ */
+function withTypeColumn(
+  seeded: SeedEntityTable,
+  typeColumn: string | undefined
+): SeedEntityTable {
+  if (typeColumn === undefined || typeColumn === STORAGE_FORMAT.columns.type) {
+    return seeded;
+  }
+  return {
+    ...seeded,
+    columns: seeded.columns.map(column =>
+      column.name === STORAGE_FORMAT.columns.type
+        ? { ...column, name: typeColumn }
+        : column
+    ),
+  };
+}
+
 function seedOf(
   seeded: ReturnType<typeof entitySeed>
 ): Pick<SeedEntityTable, "columns" | "ownIndexes"> {
@@ -350,14 +379,15 @@ export async function compileExtensionSchema(
     ...singles.map(single =>
       seed("single", resolveSingleTableName(single), single)
     ),
-    ...fieldGroups.map(group =>
-      seed(
-        "component",
+    ...fieldGroups.map(group => {
+      const name =
         input.fieldGroupTables?.get(group.slug) ??
-          resolveComponentTableName(group.slug),
-        group
-      )
-    ),
+        resolveComponentTableName(group.slug);
+      return withTypeColumn(
+        seed("component", name, group),
+        input.fieldGroupTypeColumns?.get(name)
+      );
+    }),
   ];
 
   const schema = await buildExtensionSchema({

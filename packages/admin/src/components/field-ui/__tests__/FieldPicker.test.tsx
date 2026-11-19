@@ -11,14 +11,30 @@ import {
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@admin/__tests__/utils";
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
+import { BuilderFieldPicker } from "@admin/components/features/schema-builder/BuilderFieldPicker";
 import { toSnakeName } from "@admin/lib/builder";
 import { insertField } from "@admin/lib/builder/insert-field";
+import {
+  addUnsavedEntity,
+  releaseUnsavedFieldGroupsOf,
+  removeUnsavedEntity,
+  unsavedEntity,
+} from "@admin/lib/builder/unsaved-entities";
+import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
 import type { PluginMetadata } from "@admin/types/branding";
 
 import {
   FieldPicker,
+  type FieldGroupOption,
   type FieldPickerConfig,
   type FieldPickerProps,
 } from "../FieldPicker";
@@ -28,8 +44,35 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({ plugins }),
 }));
 
+/** The saved field groups the Schema Builder's picker lists. */
+let savedFieldGroups: Array<{ slug: string; label: string }> = [];
+vi.mock("@admin/hooks/queries", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/hooks/queries")>()),
+  useFieldGroups: () => ({
+    data: { items: savedFieldGroups },
+    isLoading: false,
+  }),
+}));
+
+/** What the server's address check refuses, by address. */
+let refusals: Record<string, { code: string; message: string }> = {};
+vi.mock("@admin/services/addressCheckApi", () => ({
+  addressCheckApi: {
+    check: async (kind: string, address: string) => ({
+      kind,
+      address,
+      refusal: refusals[address] ?? null,
+    }),
+  },
+}));
+
 afterEach(() => {
   plugins = [];
+  savedFieldGroups = [];
+  refusals = {};
+  for (const address of ["hero", "hero_banner", "banner", "promo"]) {
+    removeUnsavedEntity("field-group", address);
+  }
 });
 
 const CONFIG: FieldPickerConfig = {
@@ -157,6 +200,19 @@ describe("FieldPicker", () => {
       { type: "textarea", label: "Sub Title", name: "sub_title" },
       { addAnother: false }
     );
+  });
+
+  // A name is judged for the type it is picked for: one that makes no column (a field-group field)
+  // is not held to a column's length.
+  it("judges a derived name for the type it was picked for", async () => {
+    const nameProblem = vi.fn((): string | null => null);
+    const { user } = renderPicker({ config: { ...CONFIG, nameProblem } });
+    await user.click(screen.getByRole("option", { name: /Long text/ }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Label" }),
+      "Sub Title"
+    );
+    expect(nameProblem).toHaveBeenLastCalledWith("sub_title", "textarea");
   });
 
   it("Enter in the label adds the field", async () => {
@@ -306,6 +362,98 @@ describe("FieldPicker", () => {
     expect(screen.queryByRole("button", { name: "Add field" })).toBeNull();
   });
 
+  it("makes a new field group from the chooser, and goes on to its label", async () => {
+    const onNew = vi.fn(async () => ({
+      slug: "hero",
+      label: "Hero",
+      text: "Hero (not saved yet)",
+    }));
+    const { user, onAdd } = renderPicker({
+      config: {
+        ...CONFIG,
+        fieldGroups: { type: "component", options: [], onNew },
+      },
+    });
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.click(screen.getByRole("button", { name: "New field group" }));
+    expect(onNew).toHaveBeenCalledTimes(1);
+    const label = await screen.findByRole("textbox", { name: "Label" });
+    expect(label).toHaveValue("Hero");
+    await user.click(screen.getByRole("button", { name: "Add field" }));
+    expect(onAdd).toHaveBeenCalledWith(
+      { type: "component", label: "Hero", name: "hero", fieldGroup: "hero" },
+      { addAnother: false }
+    );
+  });
+
+  it("stays on the chooser when the new field group is not made", async () => {
+    const onNew = vi.fn(async () => null);
+    const { user, onAdd } = renderPicker({
+      config: {
+        ...CONFIG,
+        fieldGroups: {
+          type: "component",
+          options: [
+            { slug: "seo", label: "SEO", text: "SEO (Field group, slug: seo)" },
+          ],
+          onNew,
+        },
+      },
+    });
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.click(screen.getByRole("button", { name: "New field group" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "New field group" })
+      ).toBeEnabled()
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Search field groups" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Label" })).toBeNull();
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
+  it("drops a group made after the chooser was left", async () => {
+    let finish: (made: FieldGroupOption | null) => void = () => {};
+    const onNew = vi.fn(
+      () =>
+        new Promise<FieldGroupOption | null>(resolve => {
+          finish = resolve;
+        })
+    );
+    const { user, onAdd } = renderPicker({
+      config: {
+        ...CONFIG,
+        fieldGroups: { type: "component", options: [], onNew },
+      },
+    });
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.click(screen.getByRole("button", { name: "New field group" }));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+
+    await act(async () => {
+      finish({ slug: "hero", label: "Hero", text: "Hero" });
+    });
+
+    expect(search()).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Label" })).toBeNull();
+    expect(onAdd).not.toHaveBeenCalled();
+  });
+
+  it("offers no new field group where the surface cannot make one", async () => {
+    const { user } = renderPicker({
+      config: {
+        ...CONFIG,
+        fieldGroups: { type: "component", options: [] },
+      },
+    });
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    expect(
+      screen.queryByRole("button", { name: "New field group" })
+    ).toBeNull();
+  });
+
   it("a test plugin's type appears on its surface only", () => {
     plugins = [
       {
@@ -370,5 +518,170 @@ describe("FieldPicker", () => {
     expect(optionNames()).not.toContain("password");
     expect(optionNames()).not.toContain("rating");
     expect(optionNames()).toContain("text");
+  });
+});
+
+// The Schema Builder's picker: a field group made from it waits as an unsaved entity its host
+// owns, checked by the server's address rule as the new-entity dialog checks every address.
+describe("the Schema Builder's field picker", () => {
+  function renderBuilderPicker() {
+    const onFieldsChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <BuilderFieldPicker
+        config={COLLECTION_BUILDER_CONFIG}
+        fields={[]}
+        position={{}}
+        entitySlug="posts"
+        onCancel={vi.fn()}
+        onFieldsChange={onFieldsChange}
+        onAdded={vi.fn()}
+      />
+    );
+    return { user, onFieldsChange };
+  }
+
+  it("creates a field group from the picker, refused on a used address", async () => {
+    refusals = {
+      hero: { code: "DUPLICATE", message: "Resource already exists." },
+    };
+    const { user, onFieldsChange } = renderBuilderPicker();
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.click(screen.getByRole("button", { name: "New field group" }));
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "New field group",
+    });
+    const name = within(dialog).getByRole("textbox", { name: "Name" });
+    const address = within(dialog).getByRole("textbox", {
+      name: "API address",
+    });
+    const create = within(dialog).getByRole("button", { name: "Create" });
+    await user.type(name, "Hero");
+    await waitFor(() =>
+      expect(address).toHaveAccessibleDescription(
+        "Another field group already uses this address."
+      )
+    );
+    expect(create).toBeDisabled();
+
+    await user.clear(name);
+    await user.type(name, "Hero banner");
+    await waitFor(() => expect(create).toBeEnabled());
+    await user.click(create);
+
+    // Back in the picker, with the new group chosen.
+    const label = await screen.findByRole("textbox", { name: "Label" });
+    expect(label).toHaveValue("Hero banner");
+    await user.click(screen.getByRole("button", { name: "Add field" }));
+    expect(onFieldsChange).toHaveBeenCalledWith([
+      expect.objectContaining({
+        name: "hero_banner",
+        component: "hero_banner",
+      }),
+    ]);
+    // Created as nothing on the server: an unsaved field group the host owns.
+    expect(unsavedEntity("field-group", "hero_banner")).toEqual(
+      expect.objectContaining({
+        address: "hero_banner",
+        fields: [],
+        ownedBy: { kind: "collection", address: "posts" },
+      })
+    );
+    expect(unsavedEntity("field-group", "hero")).toBeUndefined();
+  });
+
+  it("opens a fresh dialog for each new field group, never a cancelled one's values", async () => {
+    const { user } = renderBuilderPicker();
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.click(screen.getByRole("button", { name: "New field group" }));
+    let dialog = await screen.findByRole("dialog", { name: "New field group" });
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Name" }),
+      "Draft"
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await user.click(screen.getByRole("button", { name: "New field group" }));
+    dialog = await screen.findByRole("dialog", { name: "New field group" });
+    expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue(
+      ""
+    );
+  });
+
+  it("lists a field group another host's picker made once that host is left", async () => {
+    addUnsavedEntity({
+      kind: "field-group",
+      address: "promo",
+      settings: { singularName: "Promo", slug: "promo", icon: "" },
+      fields: [],
+      ownedBy: { kind: "collection", address: "pages" },
+    });
+    const first = renderBuilderPicker();
+    await first.user.click(screen.getByRole("option", { name: /Field group/ }));
+    // Still the other host's: not offered here.
+    expect(screen.queryByRole("option", { name: /promo/ })).toBeNull();
+    cleanup();
+
+    releaseUnsavedFieldGroupsOf({ kind: "collection", address: "pages" });
+
+    const { user } = renderBuilderPicker();
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    expect(
+      screen.getByRole("option", {
+        name: "Promo (Field group, slug: promo) · not saved yet",
+      })
+    ).toBeInTheDocument();
+  });
+
+  it("lists the unsaved field groups it may embed, marked as not saved yet", async () => {
+    savedFieldGroups = [{ slug: "seo", label: "SEO" }];
+    const unsaved = (address: string, label: string) => ({
+      kind: "field-group" as const,
+      address,
+      settings: { singularName: label, slug: address, icon: "" },
+      fields: [],
+    });
+    addUnsavedEntity(unsaved("banner", "Banner"));
+    addUnsavedEntity({
+      ...unsaved("hero", "Hero"),
+      ownedBy: { kind: "collection", address: "posts" },
+    });
+    // Made from another host's picker: that host's save creates or drops it.
+    addUnsavedEntity({
+      ...unsaved("promo", "Promo"),
+      ownedBy: { kind: "collection", address: "pages" },
+    });
+    const { user } = renderBuilderPicker();
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    expect(screen.getAllByRole("option").map(o => o.textContent)).toEqual([
+      "SEO (Field group, slug: seo)",
+      "Banner (Field group, slug: banner) · not saved yet",
+      "Hero (Field group, slug: hero) · not saved yet",
+    ]);
+  });
+  // A field-group field keeps its values in the group's own table, so no column carries its name
+  // and a long one is not refused for a column's length; a text field's still is.
+  it("lets a new field-group field take a name too long for a column", async () => {
+    savedFieldGroups = [{ slug: "seo", label: "SEO" }];
+    const long = "a".repeat(64);
+    const { user } = renderBuilderPicker();
+    await user.click(screen.getByRole("option", { name: /Field group/ }));
+    await user.click(screen.getByRole("option", { name: /SEO/ }));
+    const label = screen.getByRole("textbox", { name: "Label" });
+    await user.clear(label);
+    await user.type(label, long);
+    expect(screen.queryByText(/Too long/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Add field" })).toBeEnabled();
+  });
+
+  it("refuses a new text field's name too long for its column", async () => {
+    const { user } = renderBuilderPicker();
+    await user.type(search(), "text{Enter}");
+    await user.type(
+      screen.getByRole("textbox", { name: "Label" }),
+      "a".repeat(64)
+    );
+    expect(screen.getByText(/Too long/)).toBeInTheDocument();
   });
 });

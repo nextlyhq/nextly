@@ -2,7 +2,8 @@
  * The check of every document for the bindings report: nothing to do while
  * the schema is unchanged, a walk once it changes, resumed where a pass
  * stopped, never writing over a save judged after it read the document, and
- * rows of documents no longer there dropped once it completes.
+ * rows of documents no longer there dropped once it completes; and, in the
+ * same pass, where each document binds a Single, settled with its row.
  */
 import {
   createBlockRegistry,
@@ -16,6 +17,7 @@ import type { HostDocument } from "../host-rewrite/rewrite";
 import type { BindingReportRow } from "./rows";
 import { runFullCheck, type BindingReportDeps } from "./scan";
 import type { BindingReportStore, FullCheck, ReportedDocument } from "./store";
+import type { DocumentUse } from "./uses-store";
 
 /** A page's key in the report, as the check writes it. */
 const keyOf = (id: string): string =>
@@ -38,10 +40,14 @@ function memoryStore() {
     checking: null,
     cursor: null,
     startedAt: null,
+    usesPending: false,
   };
   let tokens = 0;
+  let filled = 0;
+  let failMark = 0;
+  const uses = new Map<string, readonly DocumentUse[]>();
   const store: BindingReportStore = {
-    record: async (document, found) => {
+    record: async (document, found, used) => {
       const held = rows.get(document.documentKey);
       // A row a write marked is the judgement's to settle.
       if (held !== undefined && held.dirty !== null) return;
@@ -51,16 +57,19 @@ function memoryStore() {
         at: new Date(),
         dirty: null,
       });
+      uses.set(document.documentKey, used);
     },
     markDirty: async document => {
       tokens += 1;
       const held = rows.get(document.documentKey);
+      const token = `t${String(tokens)}`;
       rows.set(document.documentKey, {
         document,
         rows: held?.rows ?? [],
         at: held?.at ?? new Date(),
-        dirty: `t${String(tokens)}`,
+        dirty: token,
       });
+      return token;
     },
     dirty: async (limit, after) =>
       [...rows.entries()]
@@ -72,7 +81,7 @@ function memoryStore() {
         .map(([, row]) => row)
         .slice(0, limit)
         .map(row => ({ document: row.document, token: row.dirty ?? "" })),
-    settle: async (marked, found) => {
+    settle: async (marked, found, used) => {
       const held = rows.get(marked.document.documentKey);
       if (held === undefined || held.dirty !== marked.token) return false;
       rows.set(marked.document.documentKey, {
@@ -81,6 +90,13 @@ function memoryStore() {
         at: new Date(),
         dirty: null,
       });
+      uses.set(marked.document.documentKey, used);
+      return true;
+    },
+    keepUses: async (marked, used) => {
+      const held = rows.get(marked.document.documentKey);
+      if (held === undefined || held.dirty !== marked.token) return false;
+      uses.set(marked.document.documentKey, used);
       return true;
     },
     list: async () =>
@@ -105,11 +121,29 @@ function memoryStore() {
       for (const [key, row] of rows) {
         if (row.dirty === null && row.at.getTime() < at.getTime() - 1000) {
           rows.delete(key);
+          uses.delete(key);
         }
       }
     },
+    markUsesFilled: async () => {
+      if (failMark > 0) {
+        failMark -= 1;
+        throw new Error("options table unavailable");
+      }
+      filled += 1;
+    },
   };
-  return { store, rows, check: () => check };
+  return {
+    store,
+    rows,
+    uses,
+    filled: () => filled,
+    check: () => check,
+    /** Make the next `n` writes of the filled mark fail. */
+    failMarks: (n: number) => {
+      failMark = n;
+    },
+  };
 }
 
 const POSTS: readonly BindingFieldShape[] = [{ name: "title", type: "text" }];
@@ -129,8 +163,31 @@ const pageBinding = (path: string) => ({
   ],
 });
 
-/** A site of pages, each with its content, and the documents it read. */
-function site(contents: Record<string, unknown>, fingerprint: () => string) {
+/** A page whose heading, named `name`, shows a Single's field. */
+const pageShowing = (single: string, path: string, name?: string) => ({
+  formatVersion: 1,
+  kind: "page",
+  nodes: [
+    {
+      id: "hero",
+      type: "core/heading",
+      version: 1,
+      ...(name === undefined ? {} : { name }),
+      props: { text: "Own", level: 2 },
+      bindings: { text: { $bind: path, source: "single", sourceKey: single } },
+    },
+  ],
+});
+
+/**
+ * A site of pages, each with its content (and a draft, where `drafts` holds
+ * one), and the documents it read.
+ */
+function site(
+  contents: Record<string, unknown>,
+  fingerprint: () => string,
+  drafts: Record<string, unknown> = {}
+) {
   const host = (id: string): HostAddress => ({
     kind: "collection",
     slug: "pages",
@@ -168,7 +225,10 @@ function site(contents: Record<string, unknown>, fingerprint: () => string) {
             kind: "value" as const,
             value: contents[address.id ?? ""],
           },
-          draft: null,
+          draft:
+            drafts[address.id ?? ""] === undefined
+              ? null
+              : { kind: "value" as const, value: drafts[address.id ?? ""] },
           liveState: null,
         };
       },
@@ -372,7 +432,8 @@ describe("the check of every document", () => {
           codes: ["binding-field-missing"],
           shows: { kind: "nothing" },
         },
-      ]
+      ],
+      []
     );
     // Recorded well before the check starts.
     const held = memory.rows.get(keyOf("gone"));
@@ -382,5 +443,230 @@ describe("the check of every document", () => {
       await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER())
     ).toBe("complete");
     expect(await memory.store.list()).toEqual([]);
+  });
+
+  it("records where each document binds a Single, named as Layers names its block", async () => {
+    const memory = memoryStore();
+    const pages = site(
+      {
+        a: pageShowing("homepage", "headline", "Hero headline"),
+        b: pageBinding("title"),
+      },
+      () => "v1"
+    );
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    expect(memory.uses.get(keyOf("a"))).toEqual([
+      {
+        nodeId: "hero",
+        blockType: "core/heading",
+        blockName: "Hero headline",
+        prop: "text",
+        sourceKey: "homepage",
+        path: "headline",
+        version: "published",
+        blocksField: "content",
+      },
+    ]);
+    // A page binding only its entry binds no Single.
+    expect(memory.uses.get(keyOf("b"))).toEqual([]);
+  });
+
+  it("records a draft's uses beside the published value's, and a draft like it once", async () => {
+    const memory = memoryStore();
+    const pages = site(
+      { a: pageBinding("title"), b: pageShowing("homepage", "headline") },
+      () => "v1",
+      {
+        a: pageShowing("homepage", "tagline"),
+        b: pageShowing("homepage", "headline"),
+      }
+    );
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    expect(
+      memory.uses.get(keyOf("a"))?.map(use => [use.version, use.path])
+    ).toEqual([["draft", "tagline"]]);
+    expect(
+      memory.uses.get(keyOf("b"))?.map(use => [use.version, use.path])
+    ).toEqual([["published", "headline"]]);
+  });
+
+  it("settles a saved document's uses with its row, and drops them once the binding is gone", async () => {
+    const memory = memoryStore();
+    const contents: Record<string, unknown> = {
+      a: pageShowing("homepage", "headline"),
+    };
+    const pages = site(contents, () => "v1");
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    expect(memory.uses.get(keyOf("a"))).toHaveLength(1);
+    // Saved without the binding: the write marks it, the next pass settles.
+    contents.a = pageBinding("title");
+    await memory.store.markDirty({
+      documentKey: keyOf("a"),
+      kind: "collection",
+      slug: "pages",
+      documentId: "a",
+      place: "pages",
+    });
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    expect(memory.uses.get(keyOf("a"))).toEqual([]);
+  });
+
+  it("marks the index filled only when a check of every document completes", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageShowing("homepage", "headline") }, () => "v1");
+    const using = deps(memory.store, pages.reading);
+    expect(await runFullCheck(pages.walk, using, new Date(0))).toBe("paused");
+    expect(memory.filled()).toBe(0);
+    expect(await runFullCheck(pages.walk, using, LATER())).toBe("complete");
+    expect(memory.filled()).toBe(1);
+    // Nothing changed: no check, and no second mark.
+    expect(await runFullCheck(pages.walk, using, LATER())).toBe("current");
+    expect(memory.filled()).toBe(1);
+  });
+
+  it("writes a document's uses while its judgement waits on a source, and keeps them while its value can't be read", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageShowing("homepage", "headline") }, () => "v1");
+    const document: ReportedDocument = {
+      documentKey: keyOf("a"),
+      kind: "collection",
+      slug: "pages",
+      documentId: "a",
+      place: "pages",
+    };
+    // The schema is current: only marked documents are judged.
+    await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER());
+    memory.uses.clear();
+    await memory.store.markDirty(document);
+    // The Single's fields can't be read: the report waits, the uses don't.
+    const failing: BindingReportDeps = {
+      ...deps(memory.store, pages.reading),
+      shapesOf: async () => {
+        throw new Error("registry unavailable");
+      },
+    };
+    await runFullCheck(pages.walk, failing, LATER());
+    expect(memory.rows.get(document.documentKey)?.dirty).not.toBeNull();
+    expect(
+      memory.uses.get(document.documentKey)?.map(use => use.sourceKey)
+    ).toEqual(["homepage"]);
+    // Its stored value can't be read: what was written stays.
+    const unreadable = {
+      ...pages.reading,
+      read: async () => {
+        throw new Error("database unavailable");
+      },
+    };
+    await runFullCheck(pages.walk, deps(memory.store, unreadable), LATER());
+    expect(memory.uses.get(document.documentKey)).toHaveLength(1);
+  });
+
+  it("writes a deferred document's uses during the check of every document", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageShowing("homepage", "headline") }, () => "v1");
+    const failing: BindingReportDeps = {
+      ...deps(memory.store, pages.reading),
+      shapesOf: async () => {
+        throw new Error("registry unavailable");
+      },
+    };
+    expect(await runFullCheck(pages.walk, failing, LATER())).toBe("complete");
+    // The report waits, marked; the uses are written, and the index filled.
+    expect(memory.rows.get(keyOf("a"))?.dirty).not.toBeNull();
+    expect(memory.uses.get(keyOf("a"))).toHaveLength(1);
+    expect(memory.filled()).toBe(1);
+  });
+
+  it("fills the index only once a document the check couldn't read has been read", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageShowing("homepage", "headline") }, () => "v1");
+    const unreadable = {
+      ...pages.reading,
+      read: async () => {
+        throw new Error("database unavailable");
+      },
+    };
+    expect(
+      await runFullCheck(pages.walk, deps(memory.store, unreadable), LATER())
+    ).toBe("complete");
+    expect(memory.filled()).toBe(0);
+    expect(memory.check().usesPending).toBe(true);
+    // Still unreadable: still not filled.
+    await runFullCheck(pages.walk, deps(memory.store, unreadable), LATER());
+    expect(memory.filled()).toBe(0);
+    // Read whole on a later pass: its uses written, the index filled.
+    expect(
+      await runFullCheck(pages.walk, deps(memory.store, pages.reading), LATER())
+    ).toBe("current");
+    expect(memory.uses.get(keyOf("a"))).toHaveLength(1);
+    expect(memory.filled()).toBe(1);
+    expect(memory.check().usesPending).toBe(false);
+  });
+
+  it("leaves the check to run again when the filled mark could not be written", async () => {
+    const memory = memoryStore();
+    const pages = site({ a: pageShowing("homepage", "headline") }, () => "v1");
+    const using = deps(memory.store, pages.reading);
+    memory.failMarks(1);
+    await expect(runFullCheck(pages.walk, using, LATER())).rejects.toThrow();
+    // Not recorded as complete: the next pass checks again, and marks it.
+    expect(memory.check().checked).toBeNull();
+    expect(await runFullCheck(pages.walk, using, LATER())).toBe("complete");
+    expect(memory.filled()).toBe(1);
+  });
+
+  it("keeps each language's uses of a value that may be shared, by the language it was read in", async () => {
+    const memory = memoryStore();
+    // A grouped blocks field whose languages store their own values, or not:
+    // which, the walk can't tell, so each language's host may be shared.
+    const values: Record<string, Record<string, unknown>> = {
+      a: { en: pageBinding("title"), fr: pageShowing("homepage", "headline") },
+      b: {
+        en: pageShowing("homepage", "headline"),
+        fr: pageShowing("homepage", "headline"),
+      },
+    };
+    const host = (id: string, locale: string): HostAddress => ({
+      kind: "collection",
+      slug: "pages",
+      id,
+      path: ["hero", "body"],
+      locale,
+    });
+    const hostsOf = (id: string) =>
+      ["en", "fr"].map(locale => ({
+        host: host(id, locale),
+        access: "write" as const,
+        maybeShared: true,
+      }));
+    const documents = Object.keys(values).map(
+      (id): HostDocument => ({ key: keyOf(id), hosts: hostsOf(id) })
+    );
+    const walk = {
+      documents: async function* () {
+        for (const document of documents) yield document;
+      },
+      cursorOf: (document: HostDocument) => document.key,
+      fingerprint: async () => "v1",
+    };
+    const reading = {
+      hostsOf: async (at: { id?: string }) => hostsOf(at.id ?? ""),
+      read: async (address: HostAddress) => ({
+        published: {
+          kind: "value" as const,
+          value: values[address.id ?? ""]?.[address.locale ?? ""],
+        },
+        draft: null,
+        liveState: null,
+      }),
+    };
+    await runFullCheck(walk, deps(memory.store, reading as never), LATER());
+    // Only the French value binds it: its use is French, not the default's.
+    expect(memory.uses.get(keyOf("a"))?.map(use => use.locale)).toEqual(["fr"]);
+    // The same value in both: a use in each, the default's among them.
+    expect(memory.uses.get(keyOf("b"))?.map(use => use.locale)).toEqual([
+      "en",
+      "fr",
+    ]);
   });
 });

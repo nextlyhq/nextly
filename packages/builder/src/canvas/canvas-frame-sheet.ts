@@ -24,7 +24,10 @@
  */
 
 import {
+  APPEAR_LOAD_GATE,
+  APPEAR_SCROLL_GATE,
   DEFAULT_TOKEN_PREFIX,
+  blockTypeClassName,
   tokenCustomProperty,
 } from "@nextlyhq/blocks-engine";
 import {
@@ -32,9 +35,20 @@ import {
   ENTRY_CONTENT_NOTE_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
 
+import {
+  QUESTION_ROOM_ATTRIBUTE,
+  QUESTION_ROOM_PROPERTY,
+} from "../accordion-questions";
+import { GALLERY_BLOCK } from "../gallery-pictures";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
-import { EMPTY_CONTAINER_SELECTOR, EMPTY_TEXT_SELECTOR } from "./empty-slot";
+import { APPEAR_REPLAY_RULES } from "./appear-replay";
+import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
+import {
+  EMPTY_CONTAINER_SELECTOR,
+  EMPTY_DISCLOSURE_SELECTOR,
+  EMPTY_TEXT_SELECTOR,
+} from "./empty-slot";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 
@@ -42,6 +56,16 @@ const ROOT = `.${CANVAS_ROOT_CLASS}`;
 function siteToken(name: string, fallback: string): string {
   return `var(${tokenCustomProperty(name, DEFAULT_TOKEN_PREFIX)}, ${fallback})`;
 }
+
+/** The class every Gallery's root wears, its block type's. */
+const EMPTY_GALLERY_CLASS = blockTypeClassName(GALLERY_BLOCK);
+
+/**
+ * The attribute a Collection list puts on each sample item it draws for an
+ * author, spelled as the block spells it; the sheet's test draws the block
+ * to find it, so the two cannot drift apart unseen.
+ */
+const LIST_SAMPLE_ATTRIBUTE = "data-nx-list-sample";
 
 /** A collection list drawing its empty state while that state holds nothing. */
 const EMPTY_LIST = `${EMPTY_CONTAINER_SELECTOR}[data-nx-list-shows]`;
@@ -135,13 +159,15 @@ ${ROOT} {
 ${BLANK} ${ROOT} {
   /* Fills the viewport: see the body above. */
   flex: 1 0 auto;
-  /* The site's background, text and body font, which the canvas root names
-     under the site's token prefix (see \`canvas.tsx\`); they follow the site's
-     dark values by themselves. */
+  /* The site's background and text, which the canvas root names under the
+     site's token prefix (see \`canvas.tsx\`); they follow the site's dark
+     values by themselves. The face is a plain base, not a site variable: the
+     site's Body font is the page sheet's rule on the page root, the same rule
+     a published page and a page the site serves carry. */
   color-scheme: light;
   background-color: var(--nx-canvas-site-ground, Canvas);
   color: var(--nx-canvas-site-ink, CanvasText);
-  font-family: var(--nx-canvas-site-font, system-ui), sans-serif;
+  font-family: system-ui, sans-serif;
 }
 
 /* The site's own dark mode, the one thing that darkens the blank page. The
@@ -163,13 +189,33 @@ ${BLANK} ${ROOT}[data-nx-site-dark-ground][data-nx-site-theme="dark"] {
    where that ground is opaque, so a blended block mixes with it as on the
    published page. The ground at no weight, so a background the page gives its
    own root wins. On a page the site serves, a blend mixes with the site's own
-   ground, as it does published. */
+   ground, as it does published. The page is the root's child, or its page
+   part's where the canvas draws regions around it. */
 ${BLANK} ${ROOT} > .nx-pb-page {
   isolation: isolate;
 }
 :where(${BLANK} ${ROOT}[data-nx-site-ground-opaque] > .nx-pb-page) {
   background-color: var(--nx-canvas-site-ground, Canvas);
 }
+${BLANK} ${ROOT} > .nx-canvas-page-part > .nx-pb-page {
+  isolation: isolate;
+}
+:where(${BLANK} ${ROOT}[data-nx-site-ground-opaque] > .nx-canvas-page-part > .nx-pb-page) {
+  background-color: var(--nx-canvas-site-ground, Canvas);
+}
+
+/* Every block in its final state: an animation set to play when it appears
+   never plays here by itself, whichever start it has, so nothing on the
+   canvas waits hidden for a scroll or a load while it is being edited. Both
+   of the page's gates closed, on every page root in the frame. */
+${ROOT} .nx-pb-page {
+  ${APPEAR_SCROLL_GATE}: none;
+  ${APPEAR_LOAD_GATE}: none;
+}
+
+/* Except the one block played, once, when its animation changes or Play is
+   pressed: see \`appear-replay.ts\`. */
+${APPEAR_REPLAY_RULES}
 
 /* The site's own layout around the canvas, on a page the site serves: there
    to show where the page sits, quietened as a Layout region's content is, and
@@ -195,17 +241,58 @@ ${ROOT} [contenteditable="true"] * {
 ${EMPTY_TEXT_SELECTOR} { min-height: 1lh; }
 
 /* An empty container always has an area to aim at, since without one it has
-   no height and cannot be clicked. Drawn in the page's own text colour, faint,
-   so it reads on a light page and a dark section alike. Its height is held
-   apart, at no specificity, so a min height the block sets (a Section at Full
-   screen) wins over it, as it does on the page. */
+   no height and cannot be clicked. Its height is held apart, at no
+   specificity, so a min height the block sets (a Section at Full screen) wins
+   over it, as it does on the page.
+   It is marked by a dashed OUTLINE drawn just inside its edges, square and
+   unfilled: an outline takes no room and paints over no property the author
+   styles, so the block's own background, border and corners show exactly as
+   they are set, edge to edge. In the page's own text colour, so it reads on
+   a light page and a dark section alike. */
 :where(${EMPTY_CONTAINER_SELECTOR}) { min-height: 2.75rem; }
+/* An empty Gallery is the room its "Add images" plate is drawn in, its two
+   buttons and its drop hint with it (\`image-states.tsx\`): a third of its
+   width tall, as a row of pictures would be, so the plate keeps its words
+   on a zoomed-out canvas, and never less than a small picture. At no
+   specificity, as the height above. */
+:where(${EMPTY_CONTAINER_SELECTOR}.${EMPTY_GALLERY_CLASS}) {
+  min-height: 12rem;
+  aspect-ratio: 3 / 1;
+}
 ${EMPTY_CONTAINER_SELECTOR} {
   display: block;
-  border: 1px dashed color-mix(in srgb, currentColor 35%, transparent);
-  border-radius: 0.25rem;
-  background: color-mix(in srgb, currentColor 6%, transparent);
+  outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
+  outline-offset: -1px;
 }
+/* An open Question emptied of its answer has the same start under its
+   title: the box an empty container draws, after the summary, where the
+   answer's blocks go. Drawn by the editor only (see
+   EMPTY_DISCLOSURE_SELECTOR); the published page draws nothing there. */
+/* The selected Accordion's row of room after its last question, where
+   "+ Add a question" sits (accordion-add-question.tsx): inside its own box,
+   so its margins and the blocks around it stay as set. The button's height
+   at the canvas's zoom. Marked by the canvas only; a published page never has it. */
+${ROOT} [${QUESTION_ROOM_ATTRIBUTE}]::after {
+  content: "";
+  display: block;
+  min-height: var(${QUESTION_ROOM_PROPERTY}, 2.75rem);
+}
+${EMPTY_DISCLOSURE_SELECTOR}::after {
+  content: "";
+  display: block;
+  min-height: 2.75rem;
+  margin-block-start: 0.5rem;
+  outline: 1px dashed color-mix(in srgb, currentColor 45%, transparent);
+  outline-offset: -1px;
+}
+
+/* An empty page's body, held open in the editor for its start area: the
+   overlay sets the area's height on the root while the page holds no blocks,
+   in the page's own pixels, and it is added above the Layout's footer, or
+   below the header where there is no footer. Unset, it adds nothing, and a
+   published page never has it. */
+${ROOT} > [data-nx-region="footer"] { margin-block-start: var(--nx-canvas-start-room, 0px); }
+${ROOT}:not(:has(> [data-nx-region="footer"])) { padding-block-end: var(--nx-canvas-start-room, 0px); }
 
 /* The cursor says what a press does: grab a block, place a caret in text being
    edited, and while dragging, whether the block can land. */
@@ -287,6 +374,21 @@ ${ROOT} .nx-condition-hidden > svg {
   background-color: ${siteToken("color.surface", "color-mix(in srgb, currentColor 6%, transparent)")};
   color: ${siteToken("color.muted", "color-mix(in srgb, currentColor 70%, transparent)")};
   line-height: 1.35;
+}
+
+/* A block the page hides on the device shown, drawn anyway so it can be found
+   and edited: edged here, in the page's own Canvas and CanvasText so the edge
+   holds 3:1 against the page's ground in the light or the dark scheme it is
+   drawn in. Its stripes and its tag ("Hidden on Mobile · still here in the
+   builder") are the editor's marks over the canvas (canvas-marks.tsx), never
+   a box of the page's own: an overlay inside the block would need the block
+   to hold it, which moves what its fixed or absolutely placed blocks are laid
+   out against. An outline moves nothing. Only the editor's canvas carries the
+   mark; the site sheet never does. */
+${ROOT} [${DEVICE_HIDDEN_ATTRIBUTE}] {
+  --nx-canvas-hidden-edge: color-mix(in srgb, CanvasText 55%, Canvas);
+  outline: 1px dashed var(--nx-canvas-hidden-edge);
+  outline-offset: -1px;
 }
 
 [data-nx-list-diagnostic="sort-fallback"] {
@@ -429,6 +531,35 @@ ${ROOT} [data-nx-list-empty-because="chosen"]::before {
   content: "When empty";
 }
 
+/* A sample item a list draws while its collection shows nothing: greyed, so
+   it reads as a stand-in, and tagged "Sample" at its corner in the list's
+   own tag colours. Never on a page a visitor is served, which draws none. */
+${ROOT} [${LIST_SAMPLE_ATTRIBUTE}] {
+  position: relative;
+}
+
+${ROOT} [${LIST_SAMPLE_ATTRIBUTE}] > * {
+  opacity: 0.55;
+}
+
+${ROOT} [${LIST_SAMPLE_ATTRIBUTE}]::before {
+  content: "Sample";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
+  z-index: 1;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0 0 0 0.1875rem;
+  background: var(--nx-builder-select, Highlight);
+  color: var(--nx-builder-select-text, HighlightText);
+  font-family: system-ui, sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  pointer-events: none;
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
+}
+
 ${ROOT} [data-nx-list-empty-because="none"]::before {
   content: "No entries match · showing When empty";
 }
@@ -560,18 +691,25 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
   border-radius: 0.1875rem;
 }
 
-/* A region of the page's Layout, drawn locked around the page. Its content
-   keeps the site's own colours, quietened, so it reads as what surrounds the
-   page; its links and forms are inert. Its mark never covers that content: a
-   lock outside the region, at the edge it shares with the page (below a
-   header, above a footer), which widens into a badge on hover or focus and
-   opens the tag beside it on a click or Enter. Where outside has no room on
-   screen the mark is placed inside instead, by its data-placement. The mark
-   holds the admin's words, so it reads the admin's tokens, which the frame
-   hands it alone as values. */
+/* A region of the page's layout, its header or footer, drawn around the page.
+   Its content keeps the site's own colours, quietened, so it reads as what
+   surrounds the page; its links and forms are inert. It is selected as a
+   whole, and every mark of it is drawn inside its own box, never over the
+   page: the outline as its own pseudo-element on its edge, and its tag at its
+   top left (bottom left where the top is scrolled away, by data-placement).
+   Neither takes the pointer, so leaving the region is leaving its marks.
+   The marks take the select hue for the page's ground, as the block marks
+   over the page do, from the tokens the frame hands the region alone. */
 .nx-canvas-region {
   position: relative;
   cursor: default;
+  --nx-region-mark: var(--nx-builder-select-on-light);
+  --nx-region-mark-text: var(--nx-builder-select-text-on-light);
+}
+
+.nx-canvas-region[data-nx-page-scheme="dark"] {
+  --nx-region-mark: var(--nx-builder-select-on-dark);
+  --nx-region-mark-text: var(--nx-builder-select-text-on-dark);
 }
 
 .nx-canvas-region__content {
@@ -587,119 +725,91 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
   border-top: 1px dashed var(--nx-builder-border);
 }
 
-.nx-canvas-region:hover,
-.nx-canvas-region:focus-within,
-.nx-canvas-region[data-state="open"] {
-  box-shadow: inset 0 0 0 1px var(--nx-builder-border);
+.nx-canvas-region:focus {
+  outline: none;
 }
 
-/* Placed in the page's own pixels, so its edge is the region's: the left
-   offset is measured to keep it on screen. Only its body takes the pointer. */
-.nx-canvas-region__mark {
+/* The outline: a ring on the region's own edge, over its content, haloed so
+   it reads on whatever the region paints. Thin while the pointer or focus is
+   on it, full while it is selected. */
+.nx-canvas-region::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.nx-canvas-region:hover::after,
+.nx-canvas-region:focus-visible::after {
+  box-shadow:
+    inset 0 0 0 1px var(--nx-region-mark),
+    inset 0 0 0 2px var(--nx-builder-halo, #fff);
+}
+
+.nx-canvas-region[data-selected]::after {
+  box-shadow:
+    inset 0 0 0 2px var(--nx-region-mark),
+    inset 0 0 0 4px var(--nx-builder-halo, #fff);
+}
+
+/* The part holding the page between its regions lays out as if it were not
+   there, so the page's own layout is the same with regions as without. */
+.nx-canvas-page-part {
+  display: contents;
+}
+
+/* A region edited in place is no longer one thing to select: its blocks take
+   the canvas's own marks, so its ring and its pointer go. */
+.nx-canvas-region[data-nx-region-edited] {
+  cursor: auto;
+}
+
+.nx-canvas-region[data-nx-region-edited]::after {
+  display: none;
+}
+
+/* The tag: the region's badge while the pointer or focus is on it, its name
+   while it is selected, hidden otherwise, on the select hue as a hovered
+   block's name is. In the admin's
+   face and size however far the frame is painted down: the scale the canvas
+   publishes is undone here. Placed in the page's own pixels, so its left
+   offset is measured to keep it on screen. */
+.nx-canvas-region__tag {
   position: absolute;
   z-index: 3;
   left: 0.5rem;
-  display: flex;
-  pointer-events: none;
-}
-
-.nx-canvas-region[data-nx-region="header"] > .nx-canvas-region__mark[data-placement="outside"] {
-  top: 100%;
-}
-
-.nx-canvas-region[data-nx-region="footer"] > .nx-canvas-region__mark[data-placement="outside"] {
-  bottom: 100%;
-}
-
-.nx-canvas-region > .nx-canvas-region__mark[data-placement="inside"] {
-  top: 0;
-}
-
-/* The admin's face and scheme rather than the site's, and the admin's size
-   however far the frame is painted down: the scale the canvas publishes is
-   undone here. */
-.nx-canvas-region__mark-body {
-  zoom: calc(1 / var(--nx-canvas-zoom, 1));
-  color-scheme: var(--nx-builder-scheme, light);
-  font-family: var(--font-sans, system-ui), sans-serif;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  margin: 0.375rem 0;
-  pointer-events: auto;
-}
-
-/* At rest a lock alone; on hover or focus it widens into the badge. */
-.nx-canvas-region__lock {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  min-width: 1.375rem;
-  height: 1.375rem;
-  padding: 0 0.3125rem;
-  border: 1px solid var(--nx-builder-border);
-  border-radius: 999px;
-  background: var(--nx-builder-surface-raised);
-  color: var(--nx-builder-text-muted);
-  font: inherit;
-  font-size: var(--text-xs, 0.75rem);
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.nx-canvas-region__lock:focus-visible {
-  outline: 2px solid var(--nx-builder-accent);
-  outline-offset: 2px;
-}
-
-.nx-canvas-region__lock[aria-expanded="true"] {
-  border-color: var(--nx-builder-text-muted);
-  color: var(--nx-builder-text);
-}
-
-.nx-canvas-region__badge {
+  top: 0.25rem;
   display: none;
-  padding-right: 0.125rem;
+  max-width: calc(100% - 1rem);
+  overflow: hidden;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--nx-region-mark);
+  color: var(--nx-region-mark-text);
+  font:
+    500 11px/16px var(--font-sans, system-ui),
+    sans-serif;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  zoom: calc(1 / var(--nx-canvas-zoom, 1));
 }
 
-/* Widened by the pointer or focus on the region, here rather than by the
-   editor, so a pointer crossing or resting on a region never draws it again;
-   with its tag open, the tag says it instead. */
-.nx-canvas-region:is(:hover, :focus-within):not([data-state="open"]) .nx-canvas-region__badge {
-  display: inline;
+.nx-canvas-region__tag[data-placement="bottom"] {
+  top: auto;
+  bottom: 0.25rem;
 }
 
-.nx-canvas-region__tag {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.375rem 0.5rem;
-  max-width: 32rem;
-  padding: 0.375rem 0.625rem;
-  border: 1px solid var(--nx-builder-border);
-  border-radius: 0.375rem;
-  background: var(--nx-builder-surface-raised);
-  color: var(--nx-builder-text);
-  box-shadow: 0 1px 3px var(--nx-builder-border);
-  font-size: 0.8125rem;
-  line-height: 1.4;
+/* A region shorter than its tag shows none, rather than one over the page:
+   kept in the layout, so the next measure still reads its size. */
+.nx-canvas-region__tag[data-placement="none"] {
+  visibility: hidden;
 }
 
-.nx-canvas-region__note {
-  color: var(--nx-builder-text-muted);
-}
-
-.nx-canvas-region__edit {
-  color: var(--nx-builder-text);
-  font-weight: 500;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.nx-canvas-region__edit:focus-visible {
-  outline: 2px solid var(--nx-builder-accent);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
+.nx-canvas-region:is(:hover, :focus-visible) > .nx-canvas-region__tag,
+.nx-canvas-region[data-selected] > .nx-canvas-region__tag {
+  display: block;
 }
 `;

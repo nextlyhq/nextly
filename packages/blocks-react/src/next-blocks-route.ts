@@ -23,7 +23,7 @@ import type {
   ContentRouteConfig,
   RenderContext,
 } from "nextly/runtime";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { createElement, Fragment } from "react";
 
 import { listEntryCount, listPagesOf, listWillRead } from "./blocks/list-read";
@@ -46,12 +46,14 @@ import {
   siteSizesBlocks,
   type ImageCopies,
 } from "./image-slot";
+import { routeCustomCss } from "./next-custom-css";
 import { drawnDocumentOf, fittedFor } from "./next-documents";
 import {
   listPageSlug,
   linkLanguageOf,
   entryPathResolver,
 } from "./next-entry-paths";
+import { ownPlugins, routedFormsFor } from "./next-forms";
 import { checkedLayoutsProvider } from "./next-layouts";
 import {
   MEDIA_TAG_COLLECTION,
@@ -503,6 +505,10 @@ export function blocksRouteConfig(
         ? config.siteStyles.singles
         : []
       ).flatMap(slug => nextlySingleTags(slug)),
+      // The singles the site's custom CSS is read from, for the same reason.
+      ...(config.customCss?.singles ?? []).flatMap(slug =>
+        nextlySingleTags(slug)
+      ),
     ],
     // Supplied only when asked for, so a route without it keeps whatever
     // `buildMetadata` the caller passed straight through to the content route.
@@ -662,6 +668,17 @@ export function blocksRouteConfig(
       // `isWorkingDraft` is surfaced, not acted on: the renderer draws the
       // pending content either way, and a host that wants to say so on the page
       // has to be told which one it got.
+      // Where the page's forms post, and the forms a provider describes,
+      // from the page builder: with none, the page's forms are left unsent.
+      const forms = await routedFormsFor({
+        ...ownPlugins(config.nextly),
+        entry,
+        field,
+        route: context,
+        language: linkLanguageOf(config.locale, context.locale),
+        cacheScope: config.cacheScope,
+        revalidate: await releaseBoundedRevalidate(listWindow),
+      });
       const pageContext: PageContext = createStandaloneContext({
         entry,
         // So a list of the entry's related entries reads the relation as the
@@ -699,6 +716,7 @@ export function blocksRouteConfig(
           context,
         }),
         // The page of its list this address draws, and where the others are.
+        forms: forms?.page,
       });
 
       const configuredSiteStyles = await configuredSiteStylesFor(
@@ -706,6 +724,9 @@ export function blocksRouteConfig(
         isPublic,
         listWindow
       );
+      // The host's custom CSS checker and the site's CSS, read for this
+      // render; none without a source.
+      const customCss = await routeCustomCss(config, isPublic, listWindow);
       // Derived ONCE, from the breakpoints the site already stated. A second
       // answer to "what are this site's breakpoints" is how the shared sheet
       // and the page sheet come to disagree about which at-rules a tier is
@@ -799,6 +820,7 @@ export function blocksRouteConfig(
         },
         blocks: resolver,
         styleContext,
+        ...customCss,
         blockFallback,
         limits,
         // Spread conditionally: `PageRenderer` distinguishes an absent policy
@@ -825,30 +847,40 @@ export function blocksRouteConfig(
         ...(page.prepared === null ? {} : { prepared: page.prepared }),
       };
 
+      // What the route draws around the page (the page's own code, from
+      // the page builder), asked of the page's own stored value.
+      const surroundings = await surroundingsOf(config, entry, field, context);
       // The structured data the route worked out for this page, from the
       // same answer as its head, placed with the page it describes.
       if (regions.length === 0) {
-        return withStructuredData(
-          createElement(PageRenderer, {
-            ...pageProps,
-            ...(siteStyles === undefined ? {} : { siteStyles }),
-          }),
-          context.structuredData
+        return withSurroundings(
+          withStructuredData(
+            createElement(PageRenderer, {
+              ...pageProps,
+              ...(siteStyles === undefined ? {} : { siteStyles }),
+            }),
+            context.structuredData
+          ),
+          surroundings
         );
       }
-      return withStructuredData(
-        createElement(
-          Fragment,
-          null,
-          ...drawWithRegions({
-            regions,
-            page: pageProps,
-            shared,
-            siteStyles,
-            definitions: regionDefinitions,
-          })
+      return withSurroundings(
+        withStructuredData(
+          createElement(
+            Fragment,
+            null,
+            ...drawWithRegions({
+              regions,
+              page: pageProps,
+              shared,
+              siteStyles,
+              definitions: regionDefinitions,
+              formsFor: forms?.region,
+            })
+          ),
+          context.structuredData
         ),
-        context.structuredData
+        surroundings
       );
     },
   };
@@ -904,4 +936,34 @@ function withStructuredData(
     }),
     page
   );
+}
+
+/** What `config.around` draws around the page, or nothing where it is unset. */
+async function surroundingsOf(
+  config: BlocksPageConfig,
+  entry: ContentEntry,
+  field: string,
+  context: RenderContext
+): Promise<
+  { readonly before?: ReactNode; readonly after?: ReactNode } | undefined
+> {
+  if (config.around === undefined) return undefined;
+  return config.around({ entry, field, document: entry[field], context });
+}
+
+/**
+ * The page with what the route draws around it: `before` ahead of it and
+ * `after` behind it, as `BlocksPageConfig.around` answered; the page as it is
+ * where it answered nothing.
+ */
+function withSurroundings(
+  page: ReactElement,
+  surroundings:
+    | { readonly before?: ReactNode; readonly after?: ReactNode }
+    | undefined
+): ReactElement {
+  if (surroundings === undefined) return page;
+  const { before, after } = surroundings;
+  if (before === undefined && after === undefined) return page;
+  return createElement(Fragment, null, before ?? null, page, after ?? null);
 }

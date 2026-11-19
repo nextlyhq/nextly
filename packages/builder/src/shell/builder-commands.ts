@@ -27,6 +27,7 @@
 
 import type { ToolbarAction, ToolbarActionId } from "../canvas/toolbar-actions";
 import { CONVERSION_WORDS } from "../editor-words";
+import { TURN_INTO_TARGETS } from "../turn-into-verb";
 
 import type { BuilderCommand } from "./command-palette";
 
@@ -35,6 +36,16 @@ export interface CommandVerbs {
   readonly move: (direction: "up" | "down") => void;
   readonly delete: () => void;
   readonly duplicate: () => void;
+  /** Copy, Cut and Paste of blocks, through the clipboard. */
+  readonly copy: () => void;
+  readonly cut: () => void;
+  readonly paste: () => void;
+  /**
+   * Copy one block's look, and give it to every selected block. Optional,
+   * so a host built before them keeps compiling; absent, they do nothing.
+   */
+  readonly copyStyle?: () => void;
+  readonly pasteStyle?: () => void;
   readonly selectParent: () => void;
   /**
    * Begin storing the selection in the pattern library.
@@ -68,10 +79,20 @@ export interface CommandVerbs {
   readonly detachComponent?: () => void;
   /** Begin duplicating the selected placement's component. */
   readonly duplicateComponent?: () => void;
+  /** Put the selected blocks in a new Box at their place. */
+  readonly wrapInBox?: () => void;
+  /** Replace the selected container by its blocks. */
+  readonly unwrap?: () => void;
   /** Begin replacing a pattern's content with the selection. */
   readonly updatePattern?: () => void;
   /** Begin saving the block's look as a shared style; the host owns the form. */
   readonly saveAsSharedStyle?: () => void;
+  /**
+   * Turn the selected block into another type (`"core/heading"`), as one undo
+   * step, saying what it removes. Optional, so a host built before it keeps
+   * compiling; absent, the verb does nothing.
+   */
+  readonly turnInto?: (to: string) => void;
 }
 
 /** Everything the command list is built from. */
@@ -124,6 +145,43 @@ const BLOCK_COMMAND_COPY: Record<
   duplicate: {
     label: "Duplicate block",
     keywords: ["duplicate", "copy", "clone", "repeat"],
+  },
+  // "Copy" and "Cut" put blocks on the clipboard; "Paste" places them where
+  // a clicked block would land, on this page or another.
+  copy: {
+    label: "Copy block",
+    keywords: ["copy", "clipboard"],
+  },
+  cut: {
+    label: "Cut block",
+    keywords: ["cut", "clipboard", "move"],
+  },
+  paste: {
+    label: "Paste blocks",
+    keywords: ["paste", "clipboard", "insert"],
+  },
+  // Named exactly as the menu names them: the words say what is copied.
+  "copy-style": {
+    label: "Copy style",
+    keywords: ["copy style", "look", "format", "painter", "appearance"],
+  },
+  "paste-style": {
+    label: "Paste style",
+    keywords: ["paste style", "look", "format", "painter", "apply", "match"],
+  },
+  // Changing which of the three text blocks it is, kept apart in words from
+  // turning a selection into a component.
+  "turn-into-text": {
+    label: "Turn block into Text",
+    keywords: ["turn into", "convert", "change", "text", "paragraph"],
+  },
+  "turn-into-rich-text": {
+    label: "Turn block into Rich text",
+    keywords: ["turn into", "convert", "change", "rich text", "formatted"],
+  },
+  "turn-into-heading": {
+    label: "Turn block into Heading",
+    keywords: ["turn into", "convert", "change", "heading", "title"],
   },
   // The conversions are named with the bar's own words, so the palette and
   // the menus offer one verb for each.
@@ -184,6 +242,14 @@ const BLOCK_COMMAND_COPY: Record<
       "save over",
     ],
   },
+  "wrap-in-box": {
+    label: "Wrap blocks in a box",
+    keywords: ["wrap", "box", "group", "container", "nest"],
+  },
+  unwrap: {
+    label: "Unwrap block (keep what's inside)",
+    keywords: ["unwrap", "ungroup", "unnest", "remove container", "flatten"],
+  },
   delete: {
     label: "Delete block",
     keywords: ["delete", "remove", "destroy", "clear"],
@@ -218,6 +284,17 @@ export function blockActionRunners(
     "move-up": () => verbs.move("up"),
     "move-down": () => verbs.move("down"),
     duplicate: verbs.duplicate,
+    copy: verbs.copy,
+    cut: verbs.cut,
+    paste: verbs.paste,
+    "copy-style": () => verbs.copyStyle?.(),
+    "paste-style": () => verbs.pasteStyle?.(),
+    "turn-into-text": () =>
+      verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-text"]),
+    "turn-into-rich-text": () =>
+      verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-rich-text"]),
+    "turn-into-heading": () =>
+      verbs.turnInto?.(TURN_INTO_TARGETS["turn-into-heading"]),
     "save-as-pattern": verbs.saveAsPattern,
     "save-as-shared-style": () => verbs.saveAsSharedStyle?.(),
     "edit-component": () => verbs.editComponent?.(),
@@ -225,6 +302,8 @@ export function blockActionRunners(
     "detach-component": () => verbs.detachComponent?.(),
     "duplicate-component": () => verbs.duplicateComponent?.(),
     "update-pattern": () => verbs.updatePattern?.(),
+    "wrap-in-box": () => verbs.wrapInBox?.(),
+    unwrap: () => verbs.unwrap?.(),
     delete: verbs.delete,
   };
 }
@@ -249,8 +328,11 @@ export function builderCommands({
 }: BuilderCommandsInput): BuilderCommand[] {
   const run = blockActionRunners(verbs);
 
+  // Paste is offered whatever is selected, since with nothing selected it
+  // lands at the end of the page; so it is added once, below, and not taken
+  // from the selection's verbs.
   const blockCommands = actions
-    .filter(action => action.enabled)
+    .filter(action => action.enabled && action.id !== "paste")
     .map(action => {
       const copy = BLOCK_COMMAND_COPY[action.id];
       return {
@@ -261,6 +343,14 @@ export function builderCommands({
         run: run[action.id],
       };
     });
+
+  blockCommands.push({
+    id: "block.paste",
+    label: BLOCK_COMMAND_COPY.paste.label,
+    group: BLOCK_GROUP,
+    keywords: BLOCK_COMMAND_COPY.paste.keywords,
+    run: run.paste,
+  });
 
   const history: BuilderCommand[] = [];
   if (canUndo) {

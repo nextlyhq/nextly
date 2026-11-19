@@ -21,13 +21,20 @@ import * as React from "react";
 import { useCssNames } from "./css-names-context";
 import { withTabFold } from "./panel-folds";
 import { usePanelFolds } from "./panel-folds-context";
+import { useSearchFolds, useSettingsMatch } from "./settings-filter";
 
 /** The ⋯ menu for the tab that is showing. */
 export function PanelOptions({ tab }: { tab: string }): React.JSX.Element {
   const { change } = usePanelFolds();
   const cssNames = useCssNames();
+  const match = useSettingsMatch();
+  const searchFolds = useSearchFolds();
+  // While filtered, the menu folds what the filter shows, and the author's
+  // own folds wait for it to be cleared.
   const foldAll = (open: boolean) =>
-    change(current => withTabFold(current, tab, open));
+    match.active
+      ? searchFolds.set(tab, { kind: "all", open })
+      : change(current => withTabFold(current, tab, open));
   return (
     // Not modal: a modal menu marks the editor around it aria-hidden while
     // its controls stay focusable (axe: aria-hidden-focus).

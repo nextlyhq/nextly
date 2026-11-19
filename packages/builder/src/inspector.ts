@@ -35,13 +35,16 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import { ACCORDION_BLOCK } from "./accordion-icon";
 import type { RefusalWording } from "./canvas/drag-refusal";
 import { COLUMNS_ROW } from "./columns-layout";
 import {
   CONTENT_CONTROL_TYPES,
   hasContentControl,
 } from "./content-control-types";
+import { holdsCustomCss } from "./custom-css";
 import type { EditorState } from "./editor-state";
+import { GALLERY_BLOCK } from "./gallery-pictures";
 import { INSPECTOR_SECTIONS } from "./inspector-sections";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
@@ -174,6 +177,12 @@ export interface BlockInspection {
   readonly identity: BlockIdentity;
   /** What the block renders as, beside what it holds. */
   readonly html: BlockHtml;
+  /**
+   * Whether the block holds custom CSS of its own. Only the answer, never the
+   * text: the Style tab's line reads it for everyone, and the CSS itself is
+   * shown only to a person who may change the site's code.
+   */
+  readonly hasCustomCss: boolean;
   /** What to title the panel: the block's label, or its name. */
   readonly label: string;
   /**
@@ -305,20 +314,35 @@ export type LockState = "locked" | "unlocked" | "mixed";
  * Whether a prop is offered at all.
  *
  * Left out: a prop that applies only while others are empty
- * (`onlyWithout`), once any of them is set, as a button's "Acts as" means
+ * (`onlyWithout`), once any of them is set, as a button's "Button type" means
  * nothing once the button links to a URL or an entry. Each entry names one
  * prop, or several that only together are something, as an entry link is a
- * collection and an entry. Also left out: a choice with fewer than two
- * options, which offers nothing to pick, as a column's one HTML tag, unless
- * what is stored is not that option, since the choice is then how it is put
- * back.
+ * collection and an entry. Left out too: a prop that applies only to some
+ * values of another (`onlyWhen`), while that one holds none of them, as a
+ * list's "Start at" means nothing on a bulleted list. Also left out: a choice
+ * with fewer than two options, which offers nothing to pick, as a column's one
+ * HTML tag, unless what is stored is not that option, since the choice is then
+ * how it is put back.
  */
 function offered(
   schema: PropSchema,
   value: unknown,
   values: Readonly<Record<string, unknown>>,
   declared: Readonly<Partial<Record<string, PropSchema>>>,
-  options: readonly string[]
+  options: readonly string[],
+  defaults: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  if (hiddenByOnlyWithout(schema, values, declared)) return false;
+  if (!appliesToValues(schema, values, declared, defaults)) return false;
+  if (schema.type !== "select" || options.length >= 2) return true;
+  return propIsSet(undefined, value) && !options.includes(String(value));
+}
+
+/** Whether a prop's `onlyWithout` names a prop, or a set of them, that is set. */
+function hiddenByOnlyWithout(
+  schema: PropSchema,
+  values: Readonly<Record<string, unknown>>,
+  declared: Readonly<Partial<Record<string, PropSchema>>>
 ): boolean {
   const without = schema.onlyWithout;
   const entries: readonly unknown[] =
@@ -329,14 +353,99 @@ function offered(
         : [];
   const setHere = (name: unknown): boolean =>
     typeof name === "string" && propIsSet(declared[name], values[name]);
-  const hidden = entries.some(entry =>
+  return entries.some(entry =>
     Array.isArray(entry)
       ? entry.length > 0 && entry.every(setHere)
       : setHere(entry)
   );
-  if (hidden) return false;
-  if (schema.type !== "select" || options.length >= 2) return true;
-  return propIsSet(undefined, value) && !options.includes(String(value));
+}
+
+/**
+ * The value a prop reads as while none is stored: what its schema says an
+ * unset value means (`whenUnset`), where it says, else the block's default.
+ *
+ * The two differ where a block's new instances start with a value that its
+ * older stored ones never had: an Accordion stored before "Open" opens each
+ * question alone ("Many"), while a new one starts with "One at a time". The
+ * renderer reads the unset value one way; the panel must show what it draws.
+ */
+function unsetValueOf(
+  schema: PropSchema,
+  name: string,
+  defaults: Readonly<Record<string, unknown>> | undefined
+): unknown {
+  return Object.hasOwn(schema, "whenUnset")
+    ? schema.whenUnset
+    : defaults?.[name];
+}
+
+/** A prop's value as it applies: stored, else what unset reads as. */
+function appliedValue(
+  values: Readonly<Record<string, unknown>>,
+  name: string,
+  declared: Readonly<Partial<Record<string, PropSchema>>> | undefined,
+  defaults: Readonly<Record<string, unknown>> | undefined
+): unknown {
+  if (propIsSet(undefined, values[name])) return values[name];
+  const schema = declared?.[name];
+  return schema === undefined
+    ? defaults?.[name]
+    : unsetValueOf(schema, name, defaults);
+}
+
+/** Whether a rule `{ prop: [values] }` holds of these values. */
+function holdsFor(
+  when: unknown,
+  values: Readonly<Record<string, unknown>>,
+  declared: Readonly<Partial<Record<string, PropSchema>>> | undefined,
+  defaults: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  if (typeof when !== "object" || when === null || Array.isArray(when)) {
+    return true;
+  }
+  return Object.entries(when).every(([name, allowed]) => {
+    const current = appliedValue(values, name, declared, defaults);
+    return Array.isArray(allowed) && allowed.includes(current);
+  });
+}
+
+/**
+ * Whether a prop's `onlyWhen`, `{ kind: ["ordered"] }`, holds: each prop it
+ * names has one of the values listed, read as stored, else as unset reads
+ * (`whenUnset`, else the block's default), since that is the value that
+ * applies. A prop without one always applies; a malformed one, naming no
+ * list, never matches.
+ */
+function appliesToValues(
+  schema: PropSchema,
+  values: Readonly<Record<string, unknown>>,
+  declared: Readonly<Partial<Record<string, PropSchema>>>,
+  defaults: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  return holdsFor(schema.onlyWhen, values, declared, defaults);
+}
+
+/**
+ * Whether a prop's `onlyWhenParent`, `{ openMode: ["many"] }`, holds of the
+ * block holding this one, read as its own `onlyWhen` is, by the parent's
+ * declaration: a question's "Open by default" shows only while its
+ * Accordion opens many. A prop without one always applies; one whose block
+ * has no parent never does.
+ */
+function appliesUnderParent(
+  schema: PropSchema,
+  parent: BlockNode | undefined
+): boolean {
+  const when = schema.onlyWhenParent;
+  if (when === undefined) return true;
+  if (parent === undefined) return false;
+  const definition = getBlock(parent.type);
+  return holdsFor(
+    when,
+    parent.props,
+    definition?.props ?? {},
+    definition?.defaultProps as Record<string, unknown> | undefined
+  );
 }
 
 /**
@@ -417,6 +526,10 @@ export function inspectSelection(
   const content = contentPropsOf(definition.props);
 
   const declared = definition.props ?? {};
+  const defaults = definition.defaultProps as
+    | Record<string, unknown>
+    | undefined;
+  const parent = locateNode(document.nodes, node.id)?.parent;
   const props = Object.entries(declared).flatMap<EditableProp>(
     ([name, schema]) => {
       if (schema === undefined) return [];
@@ -425,18 +538,18 @@ export function inspectSelection(
           name,
           schema,
           value: node.props[name],
-          defaultValue: (
-            definition.defaultProps as Record<string, unknown> | undefined
-          )?.[name],
+          defaultValue: unsetValueOf(schema, name, defaults),
           supported: hasContentControl(schema.type),
           options: optionsOf(schema),
-          offered: offered(
-            schema,
-            node.props[name],
-            node.props,
-            declared,
-            optionsOf(schema)
-          ),
+          offered:
+            offered(
+              schema,
+              node.props[name],
+              node.props,
+              declared,
+              optionsOf(schema),
+              defaults
+            ) && appliesUnderParent(schema, parent),
           readOnly: designLock !== undefined && !content.has(name),
         },
       ];
@@ -457,6 +570,8 @@ export function inspectSelection(
       cssId: typeof node.cssId === "string" ? node.cssId : undefined,
       attributes: editableAttributes(node.attributes),
     },
+    // The one answer the Layers mark and the section's dot read too.
+    hasCustomCss: holdsCustomCss(node),
     // The same name the palette offered and the layers panel shows. Reading
     // `editor.label ?? node.type` here instead was a second rule that agreed
     // only for blocks which declare a label: an unlabelled third-party block
@@ -528,7 +643,7 @@ export function advancedRowsOf(
  * the builder draws for every block (where it shows, when, its CSS id and its
  * attributes). Content is there when the block declares a setting placed in
  * it, names its own inspector to draw it, or is a core block whose Content
- * section the builder draws ({@link builderContentSectionOf}). Judged by
+ * sections the builder draws ({@link builderContentSectionsOf}). Judged by
  * what the block declares rather than by which settings show right now, so
  * a setting a condition hides does not make the tab come and go under the
  * author.
@@ -539,25 +654,32 @@ export function inspectorTabsOf(
   const holdsContent =
     inspection.inspector !== undefined ||
     contentRowsOf(inspection).length > 0 ||
-    builderContentSectionOf(inspection.blockName) !== undefined;
+    builderContentSectionsOf(inspection.blockName).length > 0;
   return INSPECTOR_TAB_ORDER.filter(tab => tab !== "content" || holdsContent);
 }
 
 /**
- * The Content sections the builder draws itself for a core block, by block:
- * Columns' layout, which writes the row's styles and adds or removes its
- * columns, so it is no prop a generated field could draw. Content, because
- * how many columns a row holds is its structure.
+ * The Content sections the builder draws itself for a core block, by block,
+ * in the order they are drawn: Columns' layout, which writes the row's
+ * styles and adds or removes its columns, so it is no prop a generated field
+ * could draw (Content, because how many columns a row holds is its
+ * structure); and a Gallery's Pictures, which adds Image children, and its
+ * Layout, whose Columns and On mobile write the gallery's styles. A section
+ * named as one the block places props in is drawn as one, the builder's
+ * controls first.
  */
-const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, string>> = {
-  [COLUMNS_ROW]: "Columns",
+const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, readonly string[]>> = {
+  [COLUMNS_ROW]: ["Columns"],
+  [GALLERY_BLOCK]: ["Pictures", "Layout"],
+  // Which icon the questions show, a style value chosen as content.
+  [ACCORDION_BLOCK]: ["Icon"],
 };
 
-/** The Content section the builder draws for a block, if it draws one. */
-export function builderContentSectionOf(blockName: string): string | undefined {
+/** The Content sections the builder draws for a block, none for most. */
+export function builderContentSectionsOf(blockName: string): readonly string[] {
   return Object.hasOwn(BUILDER_CONTENT_SECTIONS, blockName)
-    ? BUILDER_CONTENT_SECTIONS[blockName]
-    : undefined;
+    ? (BUILDER_CONTENT_SECTIONS[blockName] ?? [])
+    : [];
 }
 
 /** What a Style section is called, by its key, as the Style tab names it. */

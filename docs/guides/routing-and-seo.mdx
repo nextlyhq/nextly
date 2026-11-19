@@ -436,15 +436,82 @@ export default function ContentPage(props: {
 }
 ```
 
-The blocks page helpers in `@nextlyhq/blocks-react/next` (`createBlocksPage`,
-`createSinglePage` and their public versions) provide this boundary themselves,
-so their pages are exported as they are.
+A boundary has a cost: whatever renders beneath it is sent after the rest of
+the page, in a hidden part of the HTML that React's script reveals. A visitor
+or crawler without JavaScript never sees it, and React sends even a finished
+boundary that way once it holds an eagerly loaded image or follows more than a
+few kilobytes of the page. So put a boundary only around what has to read the
+request.
+
+The blocks page helpers in `@nextlyhq/blocks-react/next` follow that rule
+themselves, so their pages are exported as they are:
+
+- `createBlocksPage` and `createSinglePage` read with access enforced, so their
+  page is rendered beneath a boundary of their own. Under Cache Components its
+  content needs JavaScript to be seen.
+- `createPublicBlocksPage`, `createPublicSinglePage` and
+  `createPublicContentPage` render their page with no boundary, so its whole
+  content is in the HTML a build or the cache sends. Export the
+  `generateStaticParams` that `createPublicBlocksPage` and
+  `createPublicContentPage` return: a path it doesn't list is rendered on its
+  first request and kept. Only a miss answered by your own `notFound` (the SEO
+  plugin's `notFoundLogged`, for example, which reads the request) is rendered
+  beneath a boundary.
+- A page rendered on the server draws each asynchronous block in place and
+  waits for it, on every route, so the response holds every block. Render
+  such a page with a streaming renderer that waits for it
+  (`renderToReadableStream` and its `allReady`, or `prerender` from
+  `react-dom/static`): `renderToString` and `renderToStaticMarkup` can't wait,
+  and throw on an asynchronous block such as a Button or an Image. A
+  `blockFallback` you pass, `null` included, streams each one in a boundary of
+  its own instead, which a visitor sees only with JavaScript. In the browser,
+  and on an editor surface, each always streams, so a `PageRenderer` in a
+  client component that is also rendered on the server needs a
+  `blockFallback`, or the two renders disagree.
+- Nothing else above the page may add a boundary back: a `loading.tsx` in the
+  route's segment, or a `<Suspense>` in its layout around `children`, puts the
+  page beneath one again. A boundary that holds the `<body>` is the exception
+  (below): React never sends it hidden.
+- Under Cache Components a public page is built whole, so everything it reads
+  has to finish while the build renders it: cached reads, as an app made by
+  `create-nextly-app` registers them (`src/nextly/cached-read.ts`), and blocks
+  that never read the request. A read still waiting when the build stops fails
+  the build, where it used to leave a part to fill at request time.
+- Under Cache Components, hold your root layout's `<body>` in a `<Suspense>`.
+  A page the build kept is drawn again on its first visit after a write that
+  expires it, such as a database seeded or edited after `next build` on a
+  fresh deploy. That draw is a prerender too, and a read in it that isn't
+  cached, with no boundary above it, answers 500 on every visit. A boundary
+  that holds the body lets the page finish on the request instead. React never
+  sends that boundary hidden, so the page still arrives whole, and a page
+  whose reads are all cached is still kept whole. Without Cache Components it
+  changes nothing.
+
+```tsx title="app/layout.tsx"
+import { Suspense } from "react";
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <Suspense>
+        <body>{children}</body>
+      </Suspense>
+    </html>
+  );
+}
+```
 
 A page that isn't there (an unknown slug, or an entry that is unpublished or
 the visitor may not read) renders your not-found page with
 `<meta name="robots" content="noindex">`. Under Cache Components the static
 shell is sent before the route knows the entry is missing, so the HTTP status
-is already 200. A route that reads with access enforced, such as
+is already 200; a public blocks page with no `notFound` of yours, which
+renders with no boundary, answers 404. A route that reads with access
+enforced, such as
 `createContentRoute` or `createBlocksPage`, decides on every request, so it
 answers 200 with `noindex` every time, crawlers included. Next.js answers a
 real 404 only where it can keep the finished not-found render, which needs a

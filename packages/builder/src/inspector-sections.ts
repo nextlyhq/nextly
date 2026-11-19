@@ -1,6 +1,7 @@
 /**
  * Where each style property sits on the Style tab: which section, in what
- * order, and whether it shows at once or waits behind "+ More".
+ * order, and whether it shows at once or is one the author adds from "Add CSS
+ * property".
  *
  * **The builder's own arrangement, over the engine's vocabulary.** The engine's
  * groups (`STYLE_GROUP_DEFS`) are also the `supports` keys block and plugin
@@ -9,17 +10,18 @@
  * same place — Block style, Layout, Inside its parent, Spacing, Size,
  * Position, Text, Background, Border, Effects, Icon, CSS properties — with
  * the colour and list properties inside Text, shadow inside
- * Effects, and the container-query and box-sizing properties behind Layout's
- * and Size's "+ More". There is no "Advanced" style section: that name belongs
- * to Content alone, so an author never has to guess which one is meant.
+ * Effects, and the container-query and box-sizing properties added from "Add
+ * CSS property" with their sections named beside them. There is no "Advanced"
+ * style section: that name belongs to Content alone, so an author never has to
+ * guess which one is meant.
  *
  * **Every catalog property is placed exactly once**, and the test says so. A
  * property the engine adds later, before anyone places it, still appears: it
- * falls back to the section its engine group maps to, behind "+ More", so a
- * new capability is reachable on the day it ships rather than invisible until
- * this table catches up.
+ * falls back to the section its engine group maps to, added from "Add CSS
+ * property", so a new capability is reachable on the day it ships rather than
+ * invisible until this table catches up.
  *
- * **Common first, the rest behind "+ More".** Each property's tier says
+ * **Common first, the rest from "Add CSS property".** Each property's tier says
  * whether it is one an author reaches for first. A common property shows
  * without being asked for where it also has an effect on the block, which is
  * the engine's answer (`applies`), not this table's: the flex controls on a
@@ -54,17 +56,22 @@ export type InspectorSectionKey =
  * When a property shows without being asked for.
  *
  * - `common`: wherever it has an effect.
- * - `more`: only from "+ More", or once it holds a value.
+ * - `more`: only once the author adds it from "Add CSS property" (or from
+ *   "Find a setting"), or once it holds a value; then it is drawn in "CSS
+ *   properties", where it can be removed again.
  * - `common-on-media`: common where the block draws a replaced element (an
  *   image, a video, an embed), `more` on every other block. A choice about
  *   what an author reaches for first, not about whether the property works:
  *   an aspect ratio sizes any box, but it is what an image is set by.
- * - `icon-drawn`: while a disclosure draws an icon of its own (not the
- *   browser's marker, and not none), which is what a position moves.
+ * - `icon-drawn`: while a disclosure draws an icon (any but none), which is
+ *   what a position moves.
  * - `state`: while a state other than Normal is being edited.
  * - `focus-state`: while the Focus state is being edited, `more` in every
  *   other state. An outline is mostly a focus ring, so that is where an
  *   author looks for it.
+ * - `content`: never in Style, and never added there. A style value chosen in
+ *   the Content tab, because what it picks is what the block shows (an
+ *   Accordion's icon): one place to set it, so two controls never disagree.
  */
 export type PropertyTier =
   | "common"
@@ -72,7 +79,8 @@ export type PropertyTier =
   | "common-on-media"
   | "icon-drawn"
   | "state"
-  | "focus-state";
+  | "focus-state"
+  | "content";
 
 export interface InspectorSectionDef {
   readonly key: InspectorSectionKey;
@@ -116,9 +124,21 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
       ["containerType", "more"],
     ],
   },
-  // How a block sits in its parent's row or grid. Its properties are still
-  // in Size; the section is in the order, and draws once it holds them.
-  { key: "inside-parent", label: "Inside its parent", properties: [] },
+  // How a block takes its place in its parent: Fill, Fit or Fixed drawn on
+  // top, and below it the CSS rows that apply in this parent. Those the
+  // choices draw leave while a choice reads them (plain-parent-controls).
+  {
+    key: "inside-parent",
+    label: "Inside its parent",
+    properties: [
+      ["flexGrow", "common"],
+      ["flexShrink", "common"],
+      ["flexBasis", "common"],
+      ["alignSelf", "common"],
+      ["justifySelf", "common"],
+      ["order", "common"],
+    ],
+  },
   {
     key: "spacing",
     label: "Spacing",
@@ -133,7 +153,7 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     // An image's fit and focal point first: how it fills its box is what an
     // author changes first on one. Both have an effect only on a replaced
     // element, so a box never shows them. A child's share of a Row or a Grid
-    // comes after its own size, and only inside one.
+    // is in "Inside its parent".
     properties: [
       ["objectFit", "common"],
       ["objectPosition", "common"],
@@ -142,12 +162,6 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
       ["minWidth", "common"],
       ["maxWidth", "common"],
       ["aspectRatio", "common-on-media"],
-      ["flexGrow", "common"],
-      ["flexShrink", "common"],
-      ["flexBasis", "common"],
-      ["alignSelf", "common"],
-      ["justifySelf", "common"],
-      ["order", "common"],
       ["minHeight", "more"],
       ["maxHeight", "more"],
       ["overflow", "more"],
@@ -169,7 +183,9 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
       ["lineHeight", "common"],
       ["color", "common"],
       ["textAlign", "common"],
-      ["listStyleType", "common"],
+      // A list's own marker is chosen with "List as"; a custom one is a CSS
+      // detail, added from "Add CSS property" and drawn there once set.
+      ["listStyleType", "more"],
       ["letterSpacing", "more"],
       ["textTransform", "more"],
       ["fontStyle", "more"],
@@ -204,6 +220,7 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     properties: [
       ["boxShadow", "common"],
       ["opacity", "common"],
+      ["appear", "common"],
       ["transition", "state"],
       ["transform", "more"],
       ["filter", "more"],
@@ -215,14 +232,30 @@ export const INSPECTOR_SECTIONS: readonly InspectorSectionDef[] = [
     key: "icon",
     label: "Icon",
     properties: [
-      ["disclosureIcon", "common"],
+      // Chosen in the Content tab (`accordion-icon-field.tsx`).
+      ["disclosureIcon", "content"],
       ["disclosurePosition", "icon-drawn"],
     ],
   },
-  // Any CSS property the sections above do not offer. In the order so every
-  // block lists its sections the same way; it draws once it holds them.
+  // The properties the author added, each with its own Remove, and "+ Add
+  // CSS property". Last, and holding no property of its own: a property
+  // added here stays placed in the section above that it belongs to, which
+  // the picker names beside it.
   { key: "css-properties", label: "CSS properties", properties: [] },
 ];
+
+/**
+ * Fields of an object property that "Add CSS property" offers as properties
+ * of their own, with their plain names. A stacking order is reached for apart
+ * from the positioning scheme, and has an effect in more places than the
+ * offsets do (on a flex or grid item too), so its section draws the rest of
+ * the property and it is added on its own.
+ */
+export const OWN_ROW_FIELDS: readonly {
+  readonly property: string;
+  readonly field: string;
+  readonly label: string;
+}[] = [{ property: "position", field: "zIndex", label: "Layer order" }];
 
 /**
  * Where a property the table does not place falls, by its engine group.
@@ -264,8 +297,8 @@ const PLACEMENT: ReadonlyMap<string, PropertyPlacement> = new Map(
 );
 
 /**
- * Where a catalog property is placed: the table's answer, or behind "+ More"
- * in its engine group's section when the table does not name it.
+ * Where a catalog property is placed: the table's answer, or added from "Add
+ * CSS property" in its engine group's section when the table does not name it.
  */
 export function placementOf(
   property: string,
@@ -295,11 +328,8 @@ export interface TierContext {
   readonly state: StyleState;
 }
 
-/**
- * The disclosure icons that draw nothing a position could move: the browser's
- * own marker, which stays where the browser puts it, and none.
- */
-const UNDRAWN_ICONS: ReadonlySet<string> = new Set(["browser", "none"]);
+/** The disclosure icon that draws nothing a position could move. */
+const UNDRAWN_ICONS: ReadonlySet<string> = new Set(["none"]);
 
 /**
  * Whether a property of this tier shows without being asked for, where it
@@ -323,5 +353,7 @@ export function tierShows(tier: PropertyTier, context: TierContext): boolean {
       return context.state !== "base";
     case "focus-state":
       return context.state === "focus";
+    case "content":
+      return false;
   }
 }

@@ -65,7 +65,10 @@ import {
   useCanvasEntryRead,
   type CanvasEntryRead,
 } from "./editor/canvas-entry";
-import { useCanvasSourceCheck } from "./editor/canvas-source-check";
+import {
+  firstReadsInOf,
+  useCanvasSourceCheck,
+} from "./editor/canvas-source-check";
 /**
  * What each answer's reads cost the page's allowance, by the bindings it
  * gave, so the editor's read meter adds the binding reads as the route made
@@ -73,6 +76,12 @@ import { useCanvasSourceCheck } from "./editor/canvas-source-check";
  * bindings keeps the shape it always had.
  */
 const READS = new WeakMap<PageBindings, PageReadReport>();
+
+/**
+ * The change check's mark each answer carried, taken before its sources were
+ * read; kept beside the answer as its reads are.
+ */
+const STAMPS = new WeakMap<PageBindings, string>();
 
 /** What reading these bindings cost, when the route said; none for none read. */
 export function bindingReadsOf(
@@ -352,19 +361,49 @@ function useWatchedSources(
     readonly locale: string | undefined;
   },
   userId: string | null,
-  answer: { readonly key: string; readonly bindings: PageBindings } | null
+  answer: {
+    readonly key: string;
+    readonly userId: string;
+    readonly bindings: PageBindings;
+  } | null
 ): void {
   const { request, key, drawn, identity, namedQueries, locale } = watched;
-  // This ask's own answer only: another ask's could fill a bound list with
-  // a collection the page no longer draws.
+  // This ask's own answer, read for this person: another ask's could fill a
+  // bound list with a collection the page no longer draws.
   const bound =
-    answer !== null && answer.key === key ? answer.bindings : undefined;
+    answer !== null && answer.key === key && answer.userId === userId
+      ? answer.bindings
+      : undefined;
   const asked = useMemo(
     () =>
       sourcesCheckAskOf(request, drawn, identity, namedQueries, locale, bound),
     [request, drawn, identity, namedQueries, locale, bound]
   );
-  useCanvasSourceCheck(asked, userId);
+  useCanvasSourceCheck(
+    asked,
+    userId,
+    undefined,
+    firstReadsInOf(request, bound),
+    firstMarkOf(request, asked, bound)
+  );
+}
+
+/**
+ * The change check's first mark, from the answer the canvas first drew
+ * with: only where the check asks about exactly the sources that answer
+ * marked. A list whose collection a binding names is asked about too, which
+ * the answer's mark did not cover, so there the check takes its own.
+ */
+function firstMarkOf(
+  request: CanvasBindingsRequest | undefined,
+  asked: CanvasSourcesChangedRequest | undefined,
+  bound: PageBindings | undefined
+): string | undefined {
+  if (request === undefined || asked === undefined || bound === undefined) {
+    return undefined;
+  }
+  const marked = JSON.stringify(sourcesChangedAskOf(request));
+  return marked === JSON.stringify(asked) ? STAMPS.get(bound) : undefined;
 }
 
 /** The entry an ask is made for, as the route takes it. */
@@ -477,6 +516,7 @@ export function canvasBindingsFor(
     const bindings = bindingsFromWire(answer);
     const reads = readsIn(answer);
     if (reads !== undefined) READS.set(bindings, reads);
+    if (typeof answer.stamp === "string") STAMPS.set(bindings, answer.stamp);
     return bindings;
   });
   KEPT.set(key, { read: reading });
@@ -536,7 +576,13 @@ export function useCanvasBindings(
   /** The site's named queries, once the canvas has read them. */
   namedQueries?: NamedQueryLookup,
   /** What the page's conditions ask of the reads, where it holds any. */
-  conditions?: ConditionDemand
+  conditions?: ConditionDemand,
+  /**
+   * The site's page data limit (`readPageDataLimit`), which the published
+   * page reads its bindings under: `Infinity` for none. Absent, the ask
+   * names none and the route reads under its default.
+   */
+  allowance?: number
 ): PageBindings {
   // The entry the canvas is drawn as: the document's own, or a template's
   // previewed entry of the collection it draws.
@@ -546,15 +592,11 @@ export function useCanvasBindings(
   const userId = useCurrentUserId();
   const request = useMemo(
     () =>
-      canvasBindingsRequest(
-        drawn,
-        identity,
-        locale,
-        component,
-        namedQueries,
-        conditions === undefined ? {} : { conditions }
-      ),
-    [drawn, identity, locale, component, namedQueries, conditions]
+      canvasBindingsRequest(drawn, identity, locale, component, namedQueries, {
+        ...(conditions === undefined ? {} : { conditions }),
+        ...(allowance === undefined ? {} : { allowance }),
+      }),
+    [drawn, identity, locale, component, namedQueries, conditions, allowance]
   );
   // The ask as text: a new document that asks the same reads nothing new.
   const key = request === undefined ? "" : JSON.stringify(request);

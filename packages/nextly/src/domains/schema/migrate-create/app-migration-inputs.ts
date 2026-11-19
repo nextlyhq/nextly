@@ -27,6 +27,7 @@ import {
   type FieldGroupNaming,
   type FieldGroupStorageNames,
 } from "../../field-groups/services/field-group-storage-names";
+import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import {
   judgeBuilderDefinitions,
   readBuilderDefinitions,
@@ -36,6 +37,7 @@ import {
   buildComponentMetadataUpsert,
   buildSingleMetadataUpsert,
 } from "../ui-schema/metadata-sql";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
 import { assertMigrationAddresses, type JudgedEntity } from "./addresses";
 import {
@@ -50,8 +52,11 @@ import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
   snapshotFieldGroupNaming,
+  type LatestSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
+import { templateStartFor } from "./template-start";
+import { holdInBuilderChange } from "./writer-hold";
 
 /**
  * The parts of the app's config a migration is generated from: the code-first
@@ -125,8 +130,11 @@ export interface AppMigrationInputs {
   metadataUpserts: { tableName: string; sql: string }[];
   previousMetadataUpserts: { tableName: string; sql: string }[];
   appStream: AppStreamTables;
-  /** The latest snapshot file, or null where the folder has none. */
-  latest: { data: SnapshotFile } | null;
+  /**
+   * The latest snapshot file, or null where the folder has none. The one read
+   * of it: `generateMigration` is handed this (`GenerateArgs.previous`).
+   */
+  latest: LatestSnapshot | null;
   /**
    * The field-group names `components` were resolved under: the caller's, else the latest
    * snapshot's. Passed on to `generateMigration`, which records it and refuses one that differs
@@ -146,6 +154,12 @@ export async function appMigrationInputs(
   input: AppMigrationInputsArgs
 ): Promise<AppMigrationInputs> {
   const { config, dialect, logger } = input;
+  // A Builder save (the one caller that names the entity it is about) holds
+  // the folder from here, its first read of it, so what it reads is still the
+  // newest when it writes. Every other caller only reads, or holds it already.
+  if (input.judged !== undefined) {
+    await holdInBuilderChange(input.migrationsDir);
+  }
   // The Builder's definitions, read and judged as `migrate:check` reads them
   // (`readBuilderDefinitions`), merged with the configuration's entities.
   // Each Builder entity carries its manifest entry as its settings, as each
@@ -170,7 +184,18 @@ export async function appMigrationInputs(
     ...(input.manifest === undefined ? {} : { manifest: input.manifest }),
     logger,
   });
-  const latest = await loadLatestSnapshot(resolve(input.migrationsDir, "meta"));
+  // A project made from a template starts from the template's older-format
+  // snapshot, read as the tables its listed entities were made with. Field
+  // groups play no part in that start, so it is read before their names are.
+  const latest = await loadLatestSnapshot(
+    resolve(input.migrationsDir, "meta"),
+    templateStartFor({
+      collections: definitions.merged.collections,
+      singles: definitions.merged.singles,
+      plugins: config.plugins,
+      dialect,
+    })
+  );
   // The names the history keeps field groups under, unless the caller read the site's own: a
   // history moved to the current names generates every group there, and `generateMigration`
   // refuses a caller's naming that differs from the history's (`refuseNamingAgainstHistory`).
@@ -268,6 +293,18 @@ export async function appMigrationInputs(
       : {
           fieldGroupTables: new Map(
             components.map(component => [component.slug, component.tableName])
+          ),
+          // And the discriminator each holds as the newest migration recorded it
+          // (`chooseTypeColumns`: a table no migration made yet takes its name's).
+          fieldGroupTypeColumns: chooseTypeColumns(
+            (latest?.data.snapshot.tables ?? []).map(table => ({
+              table: table.name,
+              columns: table.columns.map(column => column.name),
+            })),
+            components.map(component => component.tableName),
+            dialect === "mysql"
+              ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+              : identifierCaseRules({ dialect })
           ),
         }),
   });

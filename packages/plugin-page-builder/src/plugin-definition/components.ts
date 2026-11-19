@@ -324,6 +324,11 @@ export function installComposition(
     // Through the Direct API for the validation, and on the write's own
     // transaction for the judgement under the graph lock.
     siteDefinitions: siteStyle.definitions,
+    // Where saved sections are kept, as the host named the collection.
+    patterns: {
+      collection: ctx.self.collections[PATTERNS_SLUG] ?? PATTERNS_SLUG,
+      field: "content",
+    },
     hostsOf: indexHostFinder({
       rows: () => usageTableRows(ctx.db, usageTableOf(componentUsageIndex)),
       health: () =>

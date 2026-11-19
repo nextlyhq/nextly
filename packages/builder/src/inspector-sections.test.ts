@@ -62,7 +62,7 @@ describe("the placement table", () => {
     expect([...placed].sort()).toEqual([...catalog].sort());
   });
 
-  it("puts the container query behind Layout's More and box sizing behind Size's", () => {
+  it("places the container query in Layout and box sizing in Size, both to add", () => {
     expect(placementOf("containerType", "container")).toMatchObject({
       section: "layout",
       tier: "more",
@@ -80,7 +80,7 @@ describe("the placement table", () => {
     expect(placementOf("boxShadow", "shadow").section).toBe("effects");
   });
 
-  it("places a property the table has not met yet behind More, by its engine group", () => {
+  it("places a property the table has not met yet in its engine group's section, to add", () => {
     const fresh = placementOf("acmeNewProperty", "shadow");
     expect(fresh).toMatchObject({ section: "effects", tier: "more" });
     // After every property the table places in that section.
@@ -112,6 +112,9 @@ describe("which tier shows without being asked", () => {
     expect([...tiers].sort()).toEqual([
       "common",
       "common-on-media",
+      // An Accordion's icon, chosen in its Content tab: a tab, not an
+      // answer to whether it applies.
+      "content",
       "focus-state",
       "icon-drawn",
       "more",
@@ -120,7 +123,7 @@ describe("which tier shows without being asked", () => {
   });
 
   it("makes every Layout and Size property that depends on the block common", () => {
-    // They show where they apply and nowhere else, so none needs More to
+    // They show where they apply and nowhere else, so none needs adding to
     // stay out of a block it does nothing for.
     for (const property of [
       "flexDirection",
@@ -144,7 +147,7 @@ describe("which tier shows without being asked", () => {
     expect(placementOf("justifyItems", "layout").tier).toBe("more");
   });
 
-  it("puts an image's fit and focal point first in Size, a child's share after its size", () => {
+  it("puts an image's fit and focal point first in Size, a child's share inside its parent", () => {
     // What an author changes first on an image is how it fills its box.
     const order = (property: string) =>
       placementOf(property, "dimensions").order;
@@ -152,11 +155,11 @@ describe("which tier shows without being asked", () => {
     expect(order("objectFit")).toBeLessThan(order("objectPosition"));
     expect(order("objectPosition")).toBeLessThan(order("width"));
     expect(order("maxWidth")).toBeLessThan(order("aspectRatio"));
-    expect(order("aspectRatio")).toBeLessThan(order("flexGrow"));
-    expect(placementOf("flexGrow", "dimensions").section).toBe("size");
+    // A child's share of a Row or a Grid is in "Inside its parent".
+    expect(placementOf("flexGrow", "dimensions").section).toBe("inside-parent");
   });
 
-  it("shows an aspect ratio at once on an image, behind More on a box", () => {
+  it("shows an aspect ratio at once on an image, and offers it to add on a box", () => {
     expect(placementOf("aspectRatio", "dimensions").tier).toBe(
       "common-on-media"
     );
@@ -175,9 +178,9 @@ describe("which tier shows without being asked", () => {
     expect(tierShows("state", { ...plain, state: "hover" })).toBe(true);
   });
 
-  it("puts outline in Border behind More, shown unasked in the Focus state", () => {
+  it("puts outline in Border, to add, shown unasked in the Focus state", () => {
     // A focus ring is what an outline is mostly for, so it is offered where
-    // the focused look is edited and waits behind More everywhere else.
+    // the focused look is edited and is added everywhere else.
     const outline = placementOf("outline", "border");
     expect(outline.section).toBe("border");
     expect(outline.tier).toBe("focus-state");

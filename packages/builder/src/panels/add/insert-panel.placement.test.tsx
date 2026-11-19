@@ -7,7 +7,13 @@
  *
  * @module insert-panel.placement.test
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
@@ -17,6 +23,12 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
+import {
+  InsertionPreviewProvider,
+  PREVIEW_GRACE_MS,
+  useInsertionPreview,
+  type InsertionPreview,
+} from "../../canvas/insertion-preview";
 import type { EditorState } from "../../editor-state";
 import { InsertPanel } from "./insert-panel";
 import { EMPTY_SELECTION } from "../../selection";
@@ -127,6 +139,118 @@ function line(): HTMLElement | null {
 function announcement(): HTMLElement | null {
   return document.querySelector<HTMLElement>("[data-insert-announcement]");
 }
+
+/** The preview the canvas reads, as each render saw it. */
+function previewProbe(): { seen: () => InsertionPreview | null } {
+  let last: InsertionPreview | null = null;
+  function Probe(): null {
+    last = useInsertionPreview();
+    return null;
+  }
+  render(
+    <InsertionPreviewProvider>
+      <InsertPanel editor={editorOn("hero")} />
+      <Probe />
+    </InsertionPreviewProvider>
+  );
+  return { seen: () => last };
+}
+
+describe("a highlighted tile's own place", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("says in the line where the pointed tile goes, named", () => {
+    register();
+    render(<InsertPanel editor={editorOn("hero")} />);
+    fireEvent.pointerMove(tile("Heading"));
+    expect(line()?.textContent).toBe("Heading goes inside Hero, at the end");
+    fireEvent.pointerMove(tile("Section"));
+    expect(line()?.textContent).toBe("Section goes after Hero");
+  });
+
+  it("hands the pointed tile's place and words to the canvas", () => {
+    register();
+    const { seen } = previewProbe();
+    expect(seen()).toBeNull();
+    fireEvent.pointerMove(tile("Heading"));
+    expect(seen()).toEqual({
+      at: { parentId: "hero", slot: "children", index: 1 },
+      words: "Heading goes inside Hero, at the end",
+    });
+    fireEvent.pointerMove(tile("Section"));
+    expect(seen()).toEqual({
+      at: { index: 1 },
+      words: "Section goes after Hero",
+    });
+  });
+
+  it("names no place of its own, and draws none, for a tile refused here", () => {
+    register();
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "core/column",
+          parent: ["core/columns"],
+          editor: { label: "Column", category: "layout" },
+        },
+      ] as never,
+      { source: "core" }
+    );
+    const { seen } = previewProbe();
+    fireEvent.pointerMove(tile("Column"));
+    expect(tile("Column").getAttribute("data-refused")).toBe("true");
+    // The line keeps the resting place, not a place the Column cannot take.
+    expect(line()?.textContent).toBe("Adding inside Hero, at the end");
+    expect(seen()).toBeNull();
+  });
+
+  it("follows the keyboard's highlight as well", () => {
+    register();
+    const { seen } = previewProbe();
+    const search = screen.getByRole("combobox", { name: "Insert a block" });
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(seen()?.words).toMatch(/ goes (inside|after) Hero/);
+  });
+
+  it("keeps the place 150ms after the pointer leaves the tiles, then lets it go", () => {
+    vi.useFakeTimers();
+    register();
+    const { seen } = previewProbe();
+    fireEvent.pointerMove(tile("Heading"));
+    const list = tile("Heading").closest<HTMLElement>("[cmdk-list]");
+    if (list === null) throw new Error("no list");
+    fireEvent.pointerLeave(list);
+    act(() => {
+      vi.advanceTimersByTime(PREVIEW_GRACE_MS - 1);
+    });
+    expect(seen()?.words).toBe("Heading goes inside Hero, at the end");
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(seen()).toBeNull();
+  });
+
+  it("does not drop the place when the pointer comes back within the grace", () => {
+    vi.useFakeTimers();
+    register();
+    const { seen } = previewProbe();
+    fireEvent.pointerMove(tile("Heading"));
+    const list = tile("Heading").closest<HTMLElement>("[cmdk-list]");
+    if (list === null) throw new Error("no list");
+    fireEvent.pointerLeave(list);
+    act(() => {
+      vi.advanceTimersByTime(PREVIEW_GRACE_MS - 50);
+    });
+    fireEvent.pointerMove(tile("Section"));
+    act(() => {
+      vi.advanceTimersByTime(PREVIEW_GRACE_MS);
+    });
+    expect(seen()?.words).toBe("Section goes after Hero");
+  });
+});
 
 describe("where a clicked block lands, as the Add panel says it", () => {
   it("says a block goes inside a selected Section, at the end", () => {

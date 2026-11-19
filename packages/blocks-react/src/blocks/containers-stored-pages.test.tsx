@@ -109,6 +109,9 @@ const STORED: readonly (readonly [string, BlockNode[], string])[] = [
     '<div class="nx-pb-page"><a class="nx-pb-2agvzbk2ti9 nx-bt-core--card" href="https://example.com"><p class="nx-pb-1gqpnrvag2e nx-bt-core--text">A linked card</p></a></div>',
   ],
   [
+    // Its summary carries the toggle's part (its 44px height and focus
+    // ring); it opens each question alone, as before the One at a time
+    // setting, with no shared name and none opened for it.
     "accordion",
     [
       node("a", "core/accordion", { titlesAs: "h3" }, [
@@ -117,7 +120,7 @@ const STORED: readonly (readonly [string, BlockNode[], string])[] = [
         ]),
       ]),
     ],
-    '<div class="nx-pb-page"><div class="nx-pb-27060nww1es nx-bt-core--accordion"><details class="nx-pb-9qzzwcmnkx nx-bt-core--accordion-item"><summary><span class="nx-pb-disclosure-icon" aria-hidden="true"></span><h3 class="nx-pb-disclosure-title nx-bp-core--accordion-item--title">A question</h3></summary><p class="nx-pb-a3gzrhx9ay nx-bt-core--text">Its answer</p></details></div></div>',
+    '<div class="nx-pb-page"><div class="nx-pb-27060nww1es nx-bt-core--accordion"><details class="nx-pb-9qzzwcmnkx nx-bt-core--accordion-item"><summary class="nx-bp-core--accordion-item--toggle"><span class="nx-pb-disclosure-icon" aria-hidden="true"></span><h3 class="nx-pb-disclosure-title nx-bp-core--accordion-item--title">A question</h3></summary><p class="nx-pb-a3gzrhx9ay nx-bt-core--text">Its answer</p></details></div></div>',
   ],
   [
     "gallery",
@@ -131,7 +134,9 @@ const STORED: readonly (readonly [string, BlockNode[], string])[] = [
         words("l1", "Each entry"),
       ]),
     ],
-    '<div class="nx-pb-page"><!--$?--><template id="B:0"></template><!--/$--></div><div hidden id="S:0"><div class="nx-pb-28qizzr3wjn nx-bt-core--collection-loop nx-pb-contained"><p class="nx-pb-8dqgee02kg nx-bt-core--text">Each entry</p></div></div>',
+    // The list is the same markup it was; it is now drawn in place, where it
+    // was once sent in a hidden part React's script moved into place.
+    '<div class="nx-pb-page"><div class="nx-pb-28qizzr3wjn nx-bt-core--collection-loop nx-pb-contained"><p class="nx-pb-8dqgee02kg nx-bt-core--text">Each entry</p></div></div>',
   ],
   [
     "entry content",

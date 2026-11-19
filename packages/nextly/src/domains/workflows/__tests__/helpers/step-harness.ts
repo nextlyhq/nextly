@@ -22,6 +22,7 @@ import {
 import { permissionSlug } from "../../../../schemas/_zod/rbac";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import { ServiceContainer } from "../../../../services/index";
+import { WITHOUT_REVIEW_KEY } from "../../../collections/services/save-door-gate";
 import {
   ContentEventsRepository,
   type ContentEventRecord,
@@ -49,12 +50,16 @@ const drafts = { status: true, versions: { drafts: true } } as const;
  * Boots the install every case uses, with `plugins` beside it: a case that reads what the install
  * emails boots it with a provider's plugin. `tablePrefix` stores each collection's and Single's
  * table under a name of the file's own, its slug unchanged, so files sharing these slugs never
- * share a table.
+ * share a table. `collections` are booted beside the install's own, for a case that needs a
+ * workflow none of them has.
  */
 export function bootSteps(
   dialect: TestDialect,
   plugins?: CreateTestNextlyOptions["plugins"],
-  options: { tablePrefix?: string } = {}
+  options: {
+    tablePrefix?: string;
+    collections?: NonNullable<CreateTestNextlyOptions["collections"]>;
+  } = {}
 ): Promise<TestNextly> {
   const table = (slug: string) =>
     options.tablePrefix === undefined
@@ -161,6 +166,7 @@ export function bootSteps(
         workflow: reviewWorkflow(),
         fields: [text({ name: "title" })],
       }),
+      ...(options.collections ?? []),
     ],
     singles: [
       defineSingle({
@@ -213,6 +219,19 @@ export async function versionOf(
 }
 
 /** Saves `data` to a document in `locale`, trusted, as an editor's ordinary save. */
+/**
+ * A save's body as set-up code sends it: a save naming `published` says it publishes without
+ * review, as trusted code may with a reason. What a case tests is how review state follows the
+ * content, not the publish gate, which refuses an unapproved publish.
+ */
+export function publishedPastReview(
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  return data.status === "published"
+    ? { ...data, [WITHOUT_REVIEW_KEY]: { reason: "Set up as published" } }
+    : data;
+}
+
 export async function saveIn(
   t: TestNextly,
   slug: string,
@@ -223,7 +242,7 @@ export async function saveIn(
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
   await handler.updateEntry(
     { collectionName: slug, entryId, overrideAccess: true, locale },
-    { ...data, _overwrite: true }
+    { ...publishedPastReview(data), _overwrite: true }
   );
 }
 

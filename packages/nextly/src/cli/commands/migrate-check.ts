@@ -56,6 +56,7 @@ import { resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { storageNamesFor } from "../../domains/field-groups/services/field-group-storage-names";
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
 import {
   describeDeletion,
@@ -70,8 +71,6 @@ import {
   declaredNamesOf,
   fieldGroupNamingOfHistory,
 } from "../../domains/schema/migrate/resolved-schema";
-import { withFieldGroupTables } from "../../domains/schema/migrate-create/app-migration-inputs";
-import { storageNamesFor } from "../../domains/field-groups/services/field-group-storage-names";
 import {
   marksNoTransaction,
   splitSqlStatements,
@@ -83,6 +82,7 @@ import {
   unwrittenChangesError,
 } from "../../domains/schema/migrate/unwritten-changes";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
+import { withFieldGroupTables } from "../../domains/schema/migrate-create/app-migration-inputs";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
@@ -103,11 +103,14 @@ import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-cre
 import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
+  isOlderFormatSnapshot,
   loadLatestSnapshot,
   parseSnapshotFile,
   SnapshotFileError,
+  type TemplateStart,
   verifyMigrationHash,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import { templateStartFor } from "../../domains/schema/migrate-create/template-start";
 import { describeOp } from "../../domains/schema/pipeline/diff/describe-operation";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
@@ -275,6 +278,14 @@ export async function runMigrateCheck(
     // Each entity with its settings, as `migrate:create` records them; the
     // merge sets a Builder entity's (`uiToMinimal`).
     entities: merged,
+    // A project made from a template starts from the template's snapshot,
+    // read as `migrate:create` reads it.
+    templateStart: templateStartFor({
+      collections: merged.collections,
+      singles: merged.singles,
+      plugins: configResult.config.plugins,
+      dialect,
+    }),
     definitions,
     // Every permission the configuration declares, as `migrate:create` records them, so a plugin
     // release that only adds or removes one is named here as `nextly migrate` names it.
@@ -324,6 +335,12 @@ export async function runChecks(args: {
     components: readonly MinimalConfigEntity[];
   };
   /**
+   * How a template's older-format snapshot, where it is the newest, is read
+   * as starting tables (`templateStartFor`). Omitted, such a snapshot is
+   * refused as invalid.
+   */
+  templateStart?: TemplateStart;
+  /**
    * The Builder's definitions as `readBuilderDefinitions` read them, judged
    * against the newest snapshot as `migrate:create` judges them: a Builder
    * entity the file lost, then each relationship's target. Omitted, neither is
@@ -367,8 +384,11 @@ export async function runChecks(args: {
     `Inspecting ${sqlFiles.length} .sql file(s) and ${snapshotFiles.length} snapshot file(s).`
   );
 
-  // Check 1+2: hash + missing snapshot per .sql file.
+  // Check 1+2: hash + missing snapshot per .sql file. A template's own
+  // migration is passed over: its snapshot carries no hash to hold it to.
+  const templateFiles = await templateMigrationFiles(migrationsDir, metaDir);
   for (const sqlName of sqlFiles) {
+    if (templateFiles.has(sqlName)) continue;
     const sqlContent = await readFile(resolve(migrationsDir, sqlName), "utf-8");
     // Localization/companion migrations are snapshot-less by design (they carry
     // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
@@ -430,7 +450,7 @@ export async function runChecks(args: {
   let desiredSnapshot: NextlySchemaSnapshot;
   let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
   try {
-    latest = await loadLatestSnapshot(metaDir);
+    latest = await loadLatestSnapshot(metaDir, args.templateStart);
     const existing = latest?.data.snapshot ?? EMPTY_SNAPSHOT;
     const stream = appStreamSnapshots({
       previous: existing,
@@ -526,6 +546,37 @@ export async function runChecks(args: {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/**
+ * The `.sql` files of each migration a template ships: the one whose snapshot
+ * is in the older format (`isOlderFormatSnapshot`), every dialect's file of
+ * it. Such a migration is written by hand and runs as written; its snapshot
+ * lists entities and records no hash, and the per-dialect files share the one
+ * snapshot, so neither the hash nor a snapshot per file can be asked of them.
+ */
+async function templateMigrationFiles(
+  migrationsDir: string,
+  metaDir: string
+): Promise<Set<string>> {
+  const files = new Set<string>();
+  for (const group of (await discoverMigrationGroups(migrationsDir)).values()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(
+        await readFile(
+          resolve(metaDir, `${group.baseName}.snapshot.json`),
+          "utf-8"
+        )
+      );
+    } catch {
+      // No snapshot, or not JSON: the checks below say so.
+      continue;
+    }
+    if (!isOlderFormatSnapshot(parsed)) continue;
+    for (const variant of group.variants) files.add(variant.file);
+  }
+  return files;
+}
 
 /**
  * `sqlFiles` as every reader of the folder reads them: an old Builder file is

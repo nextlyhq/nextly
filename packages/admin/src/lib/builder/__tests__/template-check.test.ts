@@ -124,6 +124,27 @@ describe("a template's names", () => {
     ).toEqual([]);
   });
 
+  it("title and slug for a field group, which holds no built-in fields; a Single's still clash", () => {
+    expect(
+      failures(
+        [text("title"), text("slug")],
+        offered("fieldGroup"),
+        "fieldGroup"
+      )
+    ).toEqual([]);
+    expect(failures([text("title")], offered("single"), "single")).toEqual([
+      "title name-clash",
+    ]);
+  });
+
+  it("a name the entity's starting field already holds, at the top level", () => {
+    const ctx = { ...offered("collection"), startingFieldNames: ["blocks"] };
+    expect(failures([text("blocks")], ctx)).toEqual(["blocks name-clash"]);
+    expect(
+      failures([{ name: "meta", type: "group", fields: [text("blocks")] }], ctx)
+    ).toEqual([]);
+  });
+
   it("a reserved name, at any depth", () => {
     expect(failures([text("created_at")])).toEqual([
       "created_at reserved-name",
@@ -145,6 +166,27 @@ describe("a template's names", () => {
 
   it("a name that is not valid", () => {
     expect(failures([text("Has Space")])).toEqual(["Has Space invalid-name"]);
+  });
+
+  // Judged by whether the field makes a column, as the save judges it: a link to several entries
+  // keeps them in a column of its own, so its name is held to the column's length; a field-group
+  // field keeps its values in the group's own table, so no column carries its name.
+  it("a name too long for a column, only where the field makes one", () => {
+    const long = "a".repeat(64);
+    expect(
+      failures([
+        {
+          name: long,
+          label: "Links",
+          type: "relationship",
+          relationTo: "posts",
+          hasMany: true,
+        },
+      ])
+    ).toContain(`${long} invalid-name`);
+    expect(
+      failures([{ name: long, label: "Card", type: "component" }])
+    ).not.toContain(`${long} invalid-name`);
   });
 });
 

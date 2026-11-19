@@ -18,6 +18,7 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import { webhookActorOf, type RequestActor } from "../../auth/request-actor";
+import { eventLanguage } from "../../hooks/hook-language";
 import type {
   ActivityLogAction,
   ActivityWriteDb,
@@ -31,7 +32,7 @@ import {
   type RecordSingleActivityInput,
 } from "../audit/record-activity";
 
-import { buildEnvelope } from "./envelope";
+import { buildEnvelope, sanitizedChange } from "./envelope";
 import {
   recordEvent,
   recordEventInTx,
@@ -46,6 +47,7 @@ import {
 import { isWebhookRecordingEnabled } from "./recording-policy";
 import type { EventRetentionClass } from "./retention-config";
 import {
+  componentRowPaths,
   sensitiveFieldPaths,
   type SensitiveFieldSource,
 } from "./sensitive-fields";
@@ -106,6 +108,25 @@ export interface RecordMutationEventArgs {
 }
 
 /**
+ * The fields an event about a change of `previous` into `data` names as
+ * changed, the sensitive ones of `fields` left out: what the outbox envelope
+ * names (`buildEnvelope`), for a write's in-process collection event, which
+ * is announced whether or not the outbox records the change.
+ */
+export function eventChangedFields(args: {
+  data: Record<string, unknown>;
+  previous?: Record<string, unknown> | null;
+  fields: readonly SensitiveFieldSource[];
+}): string[] {
+  return sanitizedChange({
+    data: args.data,
+    previous: args.previous ?? null,
+    sensitiveFields: sensitiveFieldPaths(args.fields),
+    componentRows: componentRowPaths(args.fields),
+  }).changedFields;
+}
+
+/**
  * Run the recording gates and build the envelope, or return null when the
  * mutation records nothing. Shared by both recorders so the policy (opt-out,
  * endpoint/audit gate, envelope assembly, secret stripping) lives in ONE place
@@ -151,14 +172,36 @@ function prepareMutationEnvelope(args: RecordMutationEventArgs): {
     previous: args.previous ?? null,
     actor: webhookActorOf(args.actor),
     sensitiveFields: sensitiveFieldPaths(args.fields),
+    componentRows: componentRowPaths(args.fields),
     ...(args.site !== undefined ? { site: args.site } : {}),
     ...(args.statusChange !== undefined
       ? { statusChange: args.statusChange }
       : {}),
+    ...languagesOf(args.resource),
   });
   return {
     envelope,
     retentionClass: resolveEventRetentionClass({ auditEnabled, hasEndpoints }),
+  };
+}
+
+/**
+ * The languages an event about `resource` names and whether it moved the
+ * shared part: what the change's hooks are told at the same point
+ * (`eventLanguage`), read here once for every write path rather than passed by
+ * each. Only an entry or a Single keeps content per language; any other kind
+ * names none.
+ */
+function languagesOf(resource: WebhookResource): {
+  locales?: readonly string[];
+  shared?: boolean;
+} {
+  if (resource.kind !== "entry" && resource.kind !== "single") return {};
+  const language = eventLanguage();
+  if (language === undefined) return {};
+  return {
+    locales: language.locales,
+    ...(language.shared === undefined ? {} : { shared: language.shared }),
   };
 }
 
@@ -213,6 +256,9 @@ async function recordActivity(
       ...(resource.locale !== undefined ? { locale: resource.locale } : {}),
       data: args.data,
       previous: args.previous ?? null,
+      // The same component rows the event's own diff passes over, so the trail
+      // and the event name the same fields changed.
+      componentRows: componentRowPaths(args.fields),
       actor: webhookActorOf(args.actor),
       ...(args.publication !== undefined
         ? { publication: args.publication }

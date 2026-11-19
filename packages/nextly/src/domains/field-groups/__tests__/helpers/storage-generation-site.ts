@@ -157,7 +157,8 @@ async function openDatabase(
       type: "sqlite",
       memory: true,
     } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
-    return { adapter, close: () => adapter.disconnect() };
+    // Disconnected once by the instance's own teardown already, where one ran.
+    return { adapter, close: () => adapter.disconnect().catch(() => {}) };
   }
   const serverUrl = process.env[SERVER_URL_ENV[dialect]];
   if (!serverUrl) throw new Error(`${SERVER_URL_ENV[dialect]} is not set`);
@@ -257,6 +258,8 @@ export async function openStorageGenerationSite(
       );
     },
     async close() {
+      // The live instance first, so a plugin's teardown runs while its database is still there.
+      await current?.destroy().catch(() => {});
       clearServices();
       await database.close();
       await rm(basePath, { recursive: true, force: true });

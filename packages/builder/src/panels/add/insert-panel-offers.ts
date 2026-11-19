@@ -23,6 +23,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import { numberedForPlace } from "../../accordion-questions";
 import {
   placementWording,
   refusalWording,
@@ -43,6 +44,7 @@ import { withArticle } from "../../with-article";
 import { insertLockAt, type InsertLock } from "./insert-lock";
 import type { InsertPanelProps } from "./insert-panel-types";
 import { insertedAnnouncement } from "./insert-placement-words";
+import { recordInsert, useInsertUsage } from "./insert-usage";
 import {
   blockLabel,
   blockSourceFor,
@@ -116,6 +118,7 @@ export type InsertOffersInputs = Pick<
   | "nesting"
   | "inside"
   | "after"
+  | "at"
   | "onInsert"
 > & {
   /**
@@ -169,9 +172,12 @@ export function useInsertOffers({
   nesting,
   inside,
   after,
+  at,
   onInsert,
   enabled = true,
 }: InsertOffersInputs): InsertOffers {
+  // Where the author's insert counts are kept, for the picker's most used.
+  const usage = useInsertUsage();
   // ONE snapshot, taken per mount, that both the catalog and the default
   // expansion below read. The panel documents its palette as read once per
   // mount rather than subscribed to, and a second reading of the registry
@@ -244,6 +250,7 @@ export function useInsertOffers({
     slots: slotSource,
     ...(inside === undefined ? {} : { inside }),
     ...(after === undefined ? {} : { after }),
+    ...(at === undefined ? {} : { at }),
   };
   const placesFor = (role: EntryRole): InsertionCandidate[] =>
     insertionCandidates(editor.document, editor.selectedId, {
@@ -295,7 +302,7 @@ export function useInsertOffers({
   const insert = (offer: EntryOffer | undefined) => {
     if (offer?.place === undefined) return;
     const { entry } = offer;
-    const at = offer.place.at;
+    const place = offer.place.at;
     // Named against the page as it is before the insert, where the place's
     // blocks are the ones the line named.
     const said = insertedAnnouncement(
@@ -305,11 +312,15 @@ export function useInsertOffers({
     );
     const inserted =
       entry.kind === "pattern"
-        ? insertPattern(entry, at)
+        ? insertPattern(entry, place)
         : entry.kind === "component"
-          ? insertComponent(entry, at)
-          : insertBlock(entry, at);
-    if (inserted) announce(said);
+          ? insertComponent(entry, place)
+          : insertBlock(entry, place);
+    if (!inserted) return;
+    announce(said);
+    // Only a block is counted toward the most used: a saved section or a
+    // component is the site's own content, one search away.
+    if (entry.kind === "block") recordInsert(usage, entry.blockName);
   };
 
   /** Place one block, and whether it was placed. */
@@ -321,9 +332,14 @@ export function useInsertOffers({
     // `expandSlotDefaults`, which derives the rules from these same
     // definitions — the only source that can see a supplied block's `parent`
     // and its slots' `allow`.
-    const node = withEntryContentField(
-      nodeForEntry(entry, blockSource, nesting),
-      firstBlocksField
+    // A Question added to an Accordion takes the next number there.
+    const node = numberedForPlace(
+      withEntryContentField(
+        nodeForEntry(entry, blockSource, nesting),
+        firstBlocksField
+      ),
+      at,
+      editor.document
     );
     // `apply` is the only path a document changes by, so undo covers this
     // insert for free. It answers null when the op is refused, and a refusal

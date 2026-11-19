@@ -23,13 +23,18 @@
  *
  * @module cli/commands/migrate-baseline
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
+import {
+  namingOfRegistry,
+  type FieldGroupNaming,
+} from "../../domains/field-groups/services/field-group-storage-names";
+import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-companion-spec";
 import {
   buildCompanionCreateFromLive,
@@ -60,11 +65,6 @@ import {
   withOldBuilderMarks,
 } from "../../domains/schema/migrate/old-builder-ledger";
 import {
-  namingOfRegistry,
-  type FieldGroupNaming,
-} from "../../domains/field-groups/services/field-group-storage-names";
-import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
-import {
   resolveDeclaredSchema,
   type ResolvedEntity,
 } from "../../domains/schema/migrate/resolved-schema";
@@ -85,9 +85,14 @@ import {
 } from "../../domains/schema/migrate-create/format-file";
 import {
   loadLatestSnapshot,
+  prepareSnapshot,
   snapshotPathOf,
-  writeSnapshot,
 } from "../../domains/schema/migrate-create/snapshot-io";
+import {
+  prepareWhole,
+  publishHeld,
+  withMigrationWriterHold,
+} from "../../domains/schema/migrate-create/writer-hold";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type {
@@ -976,6 +981,19 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
 export async function baselineCore(
   deps: BaselineCoreDeps
 ): Promise<BaselineCoreResult> {
+  // A dry run writes nothing, so it holds nothing.
+  if (deps.dryRun === true) return adopt(deps);
+  // A run holds the project's migration files throughout, as every writer of
+  // them does, so the newest snapshot it reads is still the newest when the
+  // baseline is written, whichever database another writer is on.
+  return withMigrationWriterHold(
+    { migrationsDir: deps.migrationsDir, command: "migrate:baseline" },
+    () => adopt(deps)
+  );
+}
+
+/** `baselineCore`, with the migration files held where the run writes. */
+async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
   const { adapter, db, dialect, migrationsDir, logger } = deps;
   const repo = new SchemaEventsRepository(db, dialect);
 
@@ -1027,22 +1045,32 @@ export async function baselineCore(
       if (planned.kind !== "adopt") return planned;
       const { baseName, sqlContent, sqlPath } = planned;
 
-      await mkdir(migrationsDir, { recursive: true });
-      await writeFile(sqlPath, sqlContent, "utf-8");
-      const snapshotPath = await writeSnapshot(
-        planned.metaDir,
-        baseName,
-        planned.snapshot,
-        sqlContent,
-        // What the app contributed to other owners' tables, as every snapshot
-        // writer records it, so the next diff can tell the app's elements from
-        // the owner's own after this file becomes the latest snapshot.
-        planned.contributions,
-        undefined,
-        undefined,
-        // The names the database keeps field groups under, which every later file follows.
-        deps.fieldGroupNaming ?? "legacy"
-      );
+      // Where `writeSnapshot` puts it, by the writer's own rule.
+      const snapshotPath = snapshotPathOf(planned.metaDir, baseName);
+      // As the folder's holder (`publishHeld`): both files written in full
+      // aside, the hold checked, then the snapshot put in place and the file
+      // after it, as `migrate:create` writes them. A run overtaken before
+      // that writes neither, and records nothing.
+      await publishHeld(migrationsDir, async () => {
+        await mkdir(migrationsDir, { recursive: true });
+        return [
+          await prepareSnapshot(
+            planned.metaDir,
+            baseName,
+            planned.snapshot,
+            sqlContent,
+            // What the app contributed to other owners' tables, as every snapshot
+            // writer records it, so the next diff can tell the app's elements from
+            // the owner's own after this file becomes the latest snapshot.
+            planned.contributions,
+            undefined,
+            undefined,
+            // The names the database keeps field groups under, which every later file follows.
+            deps.fieldGroupNaming ?? "legacy"
+          ),
+          await prepareWhole(sqlPath, sqlContent),
+        ];
+      });
 
       // The ledger is bootstrapped out of band by `migrate`, which has never
       // run on a database managed by `db:sync` — so this command is the first

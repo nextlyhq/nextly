@@ -1603,7 +1603,8 @@ const globalForReload = globalThis as unknown as {
 /**
  * How a reload ended. `"refused"`: another process held the schema lock, or a
  * storage migration was in flight, so nothing was read or applied and trying
- * again later can succeed. `"finished"`: everything else, including a reload
+ * again later can succeed; or `NODE_ENV` is `production`, where a reload never
+ * applies and nothing was read either. `"finished"`: everything else, including a reload
  * that failed and logged why; another try reads the same files and fails the
  * same way.
  */
@@ -1777,6 +1778,25 @@ function startReload(opts?: ReloadOptions): Promise<ReloadOutcome> {
 async function runReload(opts?: ReloadOptions): Promise<ReloadOutcome> {
   const resolveService = (name: string): unknown =>
     opts?.resolver ? opts.resolver(name) : defaultResolver(name);
+
+  // Production never takes the development push: a reload applies the configuration straight to
+  // the database, without a migration. Asked before the lock and before the configuration is
+  // read, so nothing is locked, created or written, and the running configuration stays in
+  // place. Skipped with a warning rather than thrown, for the reason a refused lock is: an
+  // exception escaping here turns every later request into a 500. Only `NODE_ENV=production`
+  // counts, as for `db:sync`.
+  if (process.env.NODE_ENV === "production") {
+    const skipped =
+      "[Nextly HMR] schema reload skipped: `NODE_ENV` is `production`, and a reload changes the database directly, without a migration. Nothing was changed. " +
+      'Run `nextly migrate:create --name="<migration-name>"` where you develop, commit the migration, then run `nextly migrate` against this database.';
+    try {
+      ((await resolveService("logger")) as LoggerLike).warn(skipped);
+    } catch {
+      // No logger is registered yet; the refusal is still said once.
+      consoleLogger.warn(skipped);
+    }
+    return "refused";
+  }
 
   let adapter: AdapterLike | undefined;
   let logger: LoggerLike | undefined;
@@ -2330,7 +2350,23 @@ async function applyReloadHolding(
   });
   let extensionSchemaChanged: boolean;
   try {
+    // Each field group under the table it is stored in, so a contribution to a group stays on
+    // that table: `fg_<slug>` on a site whose field-group storage was migrated. An unreadable
+    // registry refuses the reload, as an unreadable one refuses the start.
+    const { declaredFieldGroupStorage } = await import(
+      "../domains/field-groups/services/field-group-stored-tables"
+    );
+    const fieldGroups = await declaredFieldGroupStorage(
+      adapter,
+      newConfig.fieldGroups
+    );
     const reloadedExtensionSchema = await compileAndPublishExtensionSchema({
+      ...(fieldGroups === undefined
+        ? {}
+        : {
+            fieldGroupTables: fieldGroups.tables,
+            fieldGroupTypeColumns: fieldGroups.typeColumns,
+          }),
       dialect,
       plugins: newConfig.plugins ?? [],
       config: newConfig,

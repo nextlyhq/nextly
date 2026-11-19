@@ -49,6 +49,33 @@ describe("a style keyword's words", () => {
     expect(keywordLabel("overflow", "auto")).toBe("Scroll when needed");
   });
 
+  it("names an entrance animation's effects and starts as decided", () => {
+    const effect = "--nx-pb-appear-effect";
+    expect(
+      [
+        "none",
+        "fade-in",
+        "rise",
+        "slide-in-left",
+        "slide-in-right",
+        "zoom-in",
+      ].map(keyword => keywordLabel(effect, keyword))
+    ).toEqual([
+      "None",
+      "Fade in",
+      "Rise",
+      "Slide in from the left",
+      "Slide in from the right",
+      "Zoom in",
+    ]);
+    expect(keywordLabel("--nx-pb-appear-start", "scroll")).toBe(
+      "When scrolled into view"
+    );
+    expect(keywordLabel("--nx-pb-appear-start", "load")).toBe(
+      "When the page loads"
+    );
+  });
+
   it("says what an outline's auto style draws: the browser's own focus ring", () => {
     // `auto` on `outline-style` is not "Auto" in the sense of a size: it is
     // the ring the browser draws, in its own colour and shape.
@@ -115,6 +142,8 @@ describe("the keywords a menu offers", () => {
     expect(dropped).toEqual([
       "grid-auto-flow: dense row",
       "grid-auto-flow: dense column",
+      // A stored Browser default draws the plus, and reads as it.
+      "--nx-pb-disclosure-icon: browser",
     ]);
   });
 

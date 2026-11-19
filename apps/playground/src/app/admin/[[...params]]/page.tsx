@@ -27,6 +27,17 @@ import "../../../plugins/widget-check-fixture/admin";
 // The startup read fixture's page, for the e2e suite's check that a plugin
 // page's declared read is asked for inside the startup request.
 import "../../../plugins/startup-read-fixture/admin";
+// The widget-kit fixture's dashboard cards, the contributions fixture's
+// components and the block fixture's editor modules, for the browser suite,
+// which alone switches those fixtures on: the committed map is written with
+// them off, so it imports none of them (side-effect: registerComponents, and
+// registerBlockEditorModules for the blocks).
+import "../../../plugins/widget-kit-fixture/admin";
+import "../../../plugins/contributions-fixture/admin";
+import "../../../plugins/block-fixture/admin";
+// The template fixture's one template, for the e2e suite's check that a
+// template's needed collection is made too and saved first.
+import "../../../plugins/template-fixture/admin";
 
 export default function AdminPage() {
   return <RootLayout />;

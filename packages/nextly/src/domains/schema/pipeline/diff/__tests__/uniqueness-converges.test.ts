@@ -78,6 +78,39 @@ describe("what the desired schema declares and what the create path emits", () =
     }
   );
 
+  // A relation holding a list is never unique (`relationHoldsReferenceList`): the desired schema
+  // declares no unique index for it, and the create path refuses the mark rather than building a
+  // table without the uniqueness its definition records, so the two never disagree about an index.
+  it.each(DIALECTS)(
+    "agree that a unique relation holding a list has no unique index, on %s",
+    dialect => {
+      const fields = [
+        {
+          name: "tags",
+          type: "relationship",
+          relationTo: "tags",
+          hasMany: true,
+          unique: true,
+        },
+      ];
+      expect(declaredUniqueIndexes(dialect, fields)).toEqual([]);
+      expect(() =>
+        new DynamicCollectionSchemaService(
+          undefined,
+          dialect
+        ).generateMigrationSQL("dc_widgets", fields as never, {
+          hasStatus: false,
+        })
+      ).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [expect.objectContaining({ code: "UNIQUE_NOT_ON_LIST" })],
+          },
+        })
+      );
+    }
+  );
+
   it("agree for a MySQL TEXT column, which MySQL cannot key either way", () => {
     // The case that motivated the shared rule. MySQL refuses to key an unbounded TEXT column in
     // both spellings, so the create path keeps the uniqueness inline and emits no index. Before

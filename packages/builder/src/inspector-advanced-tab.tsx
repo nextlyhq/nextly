@@ -5,7 +5,8 @@
  * into the page. Visibility first (which devices, which entries, search
  * previews), then HTML (the block's own HTML settings such as its tag, its
  * anchor, its CSS classes and its attributes), then any other Advanced
- * section the block declares.
+ * section the block declares, and last Custom CSS, for a person who may
+ * change the site's code.
  *
  * The builder draws the shared settings here for every block, whatever the
  * block declares, so no block can leave them out or draw them elsewhere; a
@@ -32,8 +33,11 @@ import {
 } from "./component-fields-panel";
 import { ShowWhen } from "./conditions/condition-controls";
 import type { ContentServices } from "./content-controls";
+import type { BlockCustomCssAccess } from "./custom-css";
+import { customCssSections } from "./custom-css-section";
 import type { EditorState } from "./editor-state";
 import { HeldByLock } from "./held-by-lock";
+import { HideOn, type BreakpointsStatus } from "./hide-on";
 import {
   designReadOnlyReason,
   lockViewOf,
@@ -46,11 +50,11 @@ import { keptWhileHidden, ownBlockChanged } from "./kept-while-hidden";
 import { commitLinkChanges } from "./link-control";
 import { NeverQuote } from "./never-quote";
 import { PanelSections, rowsHoldValue } from "./panel-section";
-import { VisibleOn, type BreakpointsStatus } from "./visible-on";
+import { SettingSlot } from "./settings-filter";
 
 /** The Advanced section the builder's own HTML settings join. */
-const VISIBILITY_SECTION = "Visibility";
-const HTML_SECTION = "HTML";
+export const VISIBILITY_SECTION = "Visibility";
+export const HTML_SECTION = "HTML";
 
 /**
  * The Advanced tab. Kept mounted while hidden, so a half-typed attribute
@@ -73,6 +77,7 @@ function DrawnAdvancedTab({
   breakpoints,
   breakpoint,
   breakpointsStatus,
+  customCss,
 }: {
   block: BlockInspection;
   editor: EditorState;
@@ -85,12 +90,14 @@ function DrawnAdvancedTab({
   reasonId: string;
   /** The component's own view, when the document is a component. */
   fields: ComponentFieldsBinding | undefined;
-  /** The site's breakpoints, for "Visible on". */
+  /** The site's breakpoints, for "Hide on". */
   breakpoints: BreakpointSet | undefined;
   /** The device being edited; the base one where the host names none. */
   breakpoint: BreakpointId | undefined;
   /** Whether `breakpoints` is the site's own set yet. */
   breakpointsStatus: BreakpointsStatus;
+  /** The block's own CSS, given only to a person who may change site code. */
+  customCss: BlockCustomCssAccess | undefined;
 }): React.JSX.Element {
   const designLocked = designReadOnlyReason(
     editor.document,
@@ -130,36 +137,42 @@ function DrawnAdvancedTab({
           blockName={block.label}
         />
       )}
-      {/* Which devices the block shows on. */}
-      <VisibleOn
-        editor={editor}
-        nodeId={block.nodeId}
-        breakpoints={breakpoints}
-        editing={breakpoint ?? BASE_BREAKPOINT}
-        status={breakpointsStatus}
-        heldBy={designLocked}
-        reasonId={reasonId}
-      />
+      {/* Which devices the block is hidden on. */}
+      <SettingSlot ids={["hideOn"]}>
+        <HideOn
+          editor={editor}
+          nodeId={block.nodeId}
+          breakpoints={breakpoints}
+          editing={breakpoint ?? BASE_BREAKPOINT}
+          status={breakpointsStatus}
+          heldBy={designLocked}
+          reasonId={reasonId}
+        />
+      </SettingSlot>
       {/* Whether the block shows at all, by the entry or list item it is
           drawn with. Keyed by the block, so a row added and not yet
           finished stays with the block it was added to rather than moving
           to the next one. */}
-      <ShowWhen
-        key={block.nodeId}
-        editor={editor}
-        nodeId={block.nodeId}
-        services={services}
-        heldBy={designLocked}
-        reasonId={reasonId}
-      />
+      <SettingSlot ids={["showWhen"]}>
+        <ShowWhen
+          key={block.nodeId}
+          editor={editor}
+          nodeId={block.nodeId}
+          services={services}
+          heldBy={designLocked}
+          reasonId={reasonId}
+        />
+      </SettingSlot>
       {/* Whether search engines may quote the block's text. Drawn only on a
           container. */}
-      <NeverQuote
-        editor={editor}
-        nodeId={block.nodeId}
-        heldBy={designLocked}
-        reasonId={reasonId}
-      />
+      <SettingSlot ids={["neverQuote"]}>
+        <NeverQuote
+          editor={editor}
+          nodeId={block.nodeId}
+          heldBy={designLocked}
+          reasonId={reasonId}
+        />
+      </SettingSlot>
       {/* The block's own settings it places in Visibility. */}
       {visibilityRows.length === 0 ? null : fieldsFor(visibilityRows)}
     </>
@@ -190,8 +203,18 @@ function DrawnAdvancedTab({
     </>
   );
   const node = findNode(editor.document.nodes, block.nodeId);
-  // Visibility first, then HTML, then any section the block declares, for
-  // every block.
+  // Custom CSS, for a person who may change site code: the builder's own
+  // row, never one a block declares.
+  const customCssSection = customCssSections({
+    access: customCss,
+    block,
+    stored: node?.customCss,
+    editor,
+    active: onScreen,
+    heldBy: designLocked === undefined ? undefined : reasonId,
+  });
+  // Visibility first, then HTML, then any section the block declares, then
+  // Custom CSS last, for every block.
   return (
     <PanelSections
       tab="advanced"
@@ -215,6 +238,7 @@ function DrawnAdvancedTab({
           holdsValue: rowsHoldValue(section.rows),
           body: fieldsFor(section.rows),
         })),
+        ...customCssSection,
       ]}
     />
   );
@@ -225,7 +249,9 @@ function DrawnAdvancedTab({
  * HTML settings join the builder's sections of those names, so each is one
  * section, folded as one; any other section it declares is its own.
  */
-function advancedRowsBySection(own: BlockInspection["sections"]["advanced"]): {
+export function advancedRowsBySection(
+  own: BlockInspection["sections"]["advanced"]
+): {
   htmlRows: readonly EditableProp[];
   visibilityRows: readonly EditableProp[];
   others: BlockInspection["sections"]["advanced"];

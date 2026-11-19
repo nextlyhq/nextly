@@ -38,14 +38,27 @@ interface BindingBase {
  *
  * Sources:
  * - `entry`  — the entry that owns the document (the default when omitted)
- * - `item`   — the current item inside a collection-loop block
+ * - `item`   — the current item inside a collection-loop block, or, naming
+ *              `list`, the entry of an enclosing list further out
  * - `single` — a named single (global) document, addressed by `sourceKey`
  * - `site`   — site-level settings
+ * - `setting` — inside a component, one of the component's own settings,
+ *              its id as `$bind`: the block shows what a placement gives
+ *              that setting, as the setting's own block does
  */
 export type Binding =
   | (BindingBase & {
       source?: Exclude<BindingSource, "single">;
       sourceKey?: never;
+      /**
+       * For an `item` binding only: the id of the enclosing collection list
+       * whose entry it reads, for a block inside a list inside another.
+       * Absent, the nearest list's entry. A list the block is not inside is
+       * refused, as a list item outside every list is.
+       *
+       * @experimental Settles with the editor's binding controls.
+       */
+      list?: string;
     })
   | (BindingBase & {
       source: "single";
@@ -64,7 +77,13 @@ export type Binding =
  * on both sides still passing. Deriving makes that divergence unrepresentable
  * rather than merely discouraged.
  */
-export const BINDING_SOURCES = ["entry", "item", "single", "site"] as const;
+export const BINDING_SOURCES = [
+  "entry",
+  "item",
+  "single",
+  "site",
+  "setting",
+] as const;
 
 export type BindingSource = (typeof BINDING_SOURCES)[number];
 

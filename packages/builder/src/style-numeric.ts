@@ -48,6 +48,8 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import { keywordLabel } from "./style-keyword-labels";
+
 /**
  * The grammar CSS calls a `<number>`: an optional sign, digits with an optional
  * decimal part, and an optional exponent.
@@ -633,7 +635,14 @@ export function toggleOptionsFor(
   if ((leaf.maxParts ?? 1) !== 1) return undefined;
 
   const values = leaf.values;
-  return fitsSideBySide(values, STYLE_ROW) ? values : undefined;
+  // By the words the buttons show, which can be far longer than the keyword:
+  // `scroll` reads "When scrolled into view".
+  return fitsSideBySide(
+    values.map(value => keywordLabel(leaf.cssProperty, value)),
+    STYLE_ROW
+  )
+    ? values
+    : undefined;
 }
 
 /** How much room a row of options has: how many, how long each and together. */

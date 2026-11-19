@@ -1261,3 +1261,81 @@ describe("Save as shared style…", () => {
     ).toBe("Only one block at a time. 2 are selected.");
   });
 });
+
+describe("Copy, Cut and Paste in the menu", () => {
+  const anyParent = { parentsOf: () => undefined };
+  const slotLocked = (ops: readonly { kind: string }[]) =>
+    ops.some(op => op.kind === "remove")
+      ? {
+          code: "locked-slot-altered" as const,
+          holderType: "acme/hero",
+          lock: "all" as const,
+          childType: undefined,
+        }
+      : undefined;
+
+  it("dims Cut exactly where Delete is dimmed, with Delete's reason, by a slot's lock too", () => {
+    for (const ids of [["a"], ["a", "b"]]) {
+      const actions = toolbarActions(
+        documentOf([node("a"), node("b")]),
+        "a",
+        ids,
+        anyParent,
+        true,
+        slotLocked
+      );
+      const remove = actionOf(actions, "delete");
+      const cut = actionOf(actions, "cut");
+      expect(remove.enabled).toBe(false);
+      expect(cut.enabled).toBe(false);
+      expect(cut.reason).toBe(remove.reason);
+      // Copy and Paste change nothing that a lock protects at copy time.
+      expect(actionOf(actions, "copy").enabled).toBe(true);
+      expect(actionOf(actions, "paste").enabled).toBe(true);
+    }
+  });
+
+  it("keeps all three in the menu", () => {
+    const actions = toolbarActions(documentOf([node("a")]), "a", ["a"]);
+    for (const id of ["copy", "cut", "paste"] as const) {
+      expect(actionOf(actions, id).inMenu).toBe(true);
+    }
+  });
+
+  it("offers Copy style and Paste style beside them, in the same group", () => {
+    const actions = toolbarActions(documentOf([node("a")]), "a", ["a"]);
+    const ids = actions.map(action => action.id);
+    const at = ids.indexOf("paste");
+    expect(ids.slice(at - 2, at + 3)).toEqual([
+      "copy",
+      "cut",
+      "paste",
+      "copy-style",
+      "paste-style",
+    ]);
+    expect(actionOf(actions, "copy-style")).toEqual({
+      id: "copy-style",
+      label: "Copy style",
+      enabled: true,
+      inMenu: true,
+    });
+    expect(actionOf(actions, "paste-style")).toEqual({
+      id: "paste-style",
+      label: "Paste style",
+      enabled: true,
+      inMenu: true,
+    });
+  });
+
+  it("copies the style of one block only, and pastes onto every selected block", () => {
+    const actions = toolbarActions(documentOf([node("a"), node("b")]), "a", [
+      "a",
+      "b",
+    ]);
+    expect(actionOf(actions, "copy-style")).toMatchObject({
+      enabled: false,
+      reason: "Only one block at a time. 2 are selected.",
+    });
+    expect(actionOf(actions, "paste-style").enabled).toBe(true);
+  });
+});

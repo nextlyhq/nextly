@@ -285,11 +285,12 @@ expectTypeOf<adminEntry.FieldPickerConfig>().toEqualTypeOf<{
   exclude?: readonly string[];
   mostUsed?: readonly string[];
   deriveName: (label: string) => string;
-  nameProblem?: (name: string) => string | null;
+  nameProblem?: (name: string, type: string) => string | null;
   fieldGroups?: {
     type: string;
     options: readonly adminEntry.FieldGroupOption[];
     loading?: boolean;
+    onNew?: () => Promise<adminEntry.FieldGroupOption | null>;
   };
 }>();
 expectTypeOf<adminEntry.FieldPickerChoice>().toEqualTypeOf<{

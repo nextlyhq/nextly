@@ -18,6 +18,12 @@ import * as React from "react";
 
 import type { EditableProp } from "./inspector";
 import { useTabFolds } from "./panel-folds-context";
+import {
+  SettingTabContext,
+  sectionShown,
+  useSettingsMatch,
+} from "./settings-filter";
+import type { SettingTab } from "./settings-index";
 
 /**
  * A section's header: its name, the dot when it holds a value, the chevron.
@@ -56,6 +62,8 @@ export interface PanelSection {
   readonly label: string;
   /** Whether it holds a value for what is being edited. */
   readonly holdsValue: boolean;
+  /** `false` keeps it folded while it holds a value (`FoldedSection`). */
+  readonly opensWithValue?: false;
   readonly body: React.ReactNode;
 }
 
@@ -75,37 +83,42 @@ export function PanelSections({
   sections: readonly PanelSection[];
 }): React.JSX.Element {
   const { open, onOpenChange } = useTabFolds(tab, sections);
+  const match = useSettingsMatch();
   return (
-    <Accordion
-      type="multiple"
-      value={open}
-      onValueChange={onOpenChange}
-      className="nx-panel-sections"
-    >
-      {sections.map(section => (
-        <AccordionItem
-          key={section.key}
-          value={section.key}
-          data-section={section.key}
-          className="nx-panel-section"
-        >
-          <SectionHeading
-            label={section.label}
-            holdsValues={section.holdsValue}
-          />
-          {/* Kept mounted but hidden while closed: forced present, the
+    <SettingTabContext.Provider value={tab as SettingTab}>
+      <Accordion
+        type="multiple"
+        value={open}
+        onValueChange={onOpenChange}
+        className="nx-panel-sections"
+      >
+        {sections.map(section => (
+          <AccordionItem
+            key={section.key}
+            value={section.key}
+            data-section={section.key}
+            className="nx-panel-section"
+            // A section the filter keeps nothing in is not drawn while it is on.
+            hidden={!sectionShown(match, tab, section.key)}
+          >
+            <SectionHeading
+              label={section.label}
+              holdsValues={section.holdsValue}
+            />
+            {/* Kept mounted but hidden while closed: forced present, the
               accordion would otherwise leave a closed section's controls
               on screen and in the Tab order. */}
-          <AccordionContent
-            forceMount
-            hidden={!open.includes(section.key)}
-            className="nx-panel-section__body"
-          >
-            {section.body}
-          </AccordionContent>
-        </AccordionItem>
-      ))}
-    </Accordion>
+            <AccordionContent
+              forceMount
+              hidden={!open.includes(section.key)}
+              className="nx-panel-section__body"
+            >
+              {section.body}
+            </AccordionContent>
+          </AccordionItem>
+        ))}
+      </Accordion>
+    </SettingTabContext.Provider>
   );
 }
 

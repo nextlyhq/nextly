@@ -12,6 +12,7 @@ import type { BlocksPageConfig } from "@nextlyhq/blocks-react/next";
 import {
   loadSiteStyle,
   namedQueriesOf,
+  pageBuilderCustomCss,
   pageBuilderImageCopies,
   SITE_STYLE_SLUG,
 } from "@nextlyhq/plugin-page-builder";
@@ -64,6 +65,10 @@ export const blockPagesRoute: BlocksPageConfig = {
   // No `data`: a `core/collection-loop` reads through the route's public
   // reader, published entries and public fields only, as any visitor would.
   styleContext: SITE_STYLE_CONTEXT,
+  // The CSS authors write for the site, a page or a block, through the page
+  // builder's checker, the site's read through this page builder. Without it
+  // the route draws none of it.
+  customCss: pageBuilderCustomCss({ plugin: pageBuilderPlugin }),
   // Resolved per request: defaults with the stored Site Style layered on top.
   // The same statement the page-builder route makes, because both routes serve
   // documents of one engine and a site sheet that differed between them would

@@ -49,7 +49,7 @@ import type {
   SanitizedApiKeysConfig,
   SecurityConfig,
 } from "../collections/config/define-config";
-import { assertCollectionOpensIn } from "../collections/config/opens-in";
+import { assertOpensIn } from "../collections/config/opens-in";
 import type { FieldConfig } from "../collections/fields/types";
 import { loadDialectTables } from "../database/dialect-tables";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
@@ -123,6 +123,7 @@ import {
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
 import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
+import type { ConsentRefusal } from "../domains/schema/ownership/schema-version-check";
 import {
   listTablesAtStart,
   tableExistsAtStart,
@@ -361,7 +362,10 @@ import {
   type Container,
   type RestoredRegistrations,
 } from "./container";
-import { withDevelopmentStartSchemaLock } from "./development-start-schema-lock";
+import {
+  takesDevelopmentStartHold,
+  withDevelopmentStartSchemaLock,
+} from "./development-start-schema-lock";
 import { readLayoutScanEntities } from "./layout-scan-entities";
 import {
   type LoadedBuilderEntity,
@@ -388,6 +392,7 @@ import {
   registerWebhookServices,
   registerWorkflowComparisonBaselines,
   registerWorkflowNoticeKinds,
+  registerWorkflowPublishGate,
   resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
@@ -816,6 +821,9 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // The comparisons a review shows, "since submitted" and "since approved", registered with the
   // history's baselines so its comparison names them as it names its own.
   registerWorkflowComparisonBaselines();
+  // What a publish asks of a workflow: a part goes live only approved, or without review by
+  // someone who may, whichever door the publish came through.
+  registerWorkflowPublishGate(ctx);
 }
 
 /** How a caller registers the services. */
@@ -1074,27 +1082,16 @@ async function registerServicesOnce(
   const adapterDrizzleDb = adapter.getDrizzle<DatabaseInstance>();
 
   container.registerSingleton<DrizzleAdapter>("adapter", () => adapter);
-  // A production start reads the catalog and the Schema Builder registries
-  // once, together, and every step below that asks is answered from that
-  // reading (`di/start-reads`): its waits on the database stay few and do not
-  // grow with the number of entities. Closed before anything changes either.
-  // The stored schema version, read before anything of the registry is: the
-  // start's definitions are recorded as loaded at it (`definitionsLoaded`),
-  // and a label read after the rows it labels could name a change those rows
-  // do not hold. A change landing after it is still seen as a move by the
-  // first follow.
-  const { versionBeforeLoading, definitionsLoaded } = await import(
-    "../route-handler/schema-version"
+  // Against a database with no Nextly tables, a production start that does
+  // not migrate itself refuses, naming `nextly migrate`, before anything else
+  // reads a table it would not find. After the registration above, so a
+  // refusal releases the adapter. A start with migrations at start asks after
+  // them instead, below: they set such a database up.
+  await refuseDatabaseNotSetUp(
+    adapter,
+    structure,
+    "before migrations at start"
   );
-  const definitionsVersion = await versionBeforeLoading(adapter);
-  if (structure.productionStart) beginStartReads(adapter);
-  // Its first statement, before anything reads a table it would not find.
-  // After the registration above, so a refusal releases the adapter.
-  await refuseDatabaseNotSetUp(adapter, structure);
-  // The cache handlers read expiries from this adapter's ledger, and writes
-  // made outside a request record theirs into it, for every instance.
-  installTagExpiryLedger(adapter);
-
   await refuseUnmigratedDatabaseInBuildPhase(adapter);
 
   const bootExtensionSchema = await prepareBootSchema(
@@ -1104,9 +1101,68 @@ async function registerServicesOnce(
     resolvedLogger
   );
 
-  // Before the hold below, and touching no database: the lock writes its rows
-  // through the table resolver this sets.
+  // Before the migrations and the hold below, and touching no database: the
+  // schema lock writes its rows through the table resolver this sets.
   const staticRegistry = await createSchemaRegistry(adapter);
+
+  // Before any step that writes to the database or the registry, the
+  // migrations at start included: they would otherwise apply a refused
+  // plugin's modules, and the Builder reconcile and the code-first sync below
+  // would add its fields and tables before the refusal. Here where no
+  // development hold is taken, which is wherever the migrations at start can
+  // run; inside that hold otherwise, below, so a development start judges the
+  // plugins after any install or uninstall holding the lock has finished.
+  await assertBootPluginInstallStates(
+    transformedConfig,
+    adapter,
+    adapterDrizzleDb,
+    resolvedLogger,
+    bootExtensionSchema,
+    "before the hold"
+  );
+
+  // Migrations at start, where the app turns them on: `nextly migrate` run by
+  // the start, under the one schema lock, before anything of the registry is
+  // read. It sets an empty database up as the command does and applies what is
+  // pending, so the rest of the start reads what it wrote, as a start after
+  // `nextly migrate` does, and writes no bookkeeping or schema itself.
+  // The data-loss consent's refusal of those migrations, where it refused
+  // them: the start serves through it, and a plugin it leaves behind is
+  // refused below (`assertBootPluginSchemaVersions`), naming the consent.
+  let consentRefusal: ConsentRefusal | undefined;
+  const migratedAtBoot = await withStartRegistrationsSetAside(
+    async () =>
+      await runBootMigrations(config, transformedConfig, deferredExtends, {
+        adapter,
+        logger: resolvedLogger,
+        onDataLossRefusal: refusal => {
+          consentRefusal = refusal;
+        },
+      })
+  );
+  // The cache handlers read expiries from this adapter's ledger, and writes
+  // made outside a request record theirs into it, for every instance. After
+  // the migrations at start, which record theirs through the ledger they lend
+  // themselves, on their own transaction, as `nextly migrate` does.
+  installTagExpiryLedger(adapter);
+
+  // A run that failed before it set the database up leaves it as it was.
+  await refuseDatabaseNotSetUp(adapter, structure, "after migrations at start");
+
+  // A production start reads the catalog and the Schema Builder registries
+  // once, together, and every step below that asks is answered from that
+  // reading (`di/start-reads`): its waits on the database stay few and do not
+  // grow with the number of entities. Closed before anything changes either.
+  // The stored schema version, read before anything of the registry is: the
+  // start's definitions are recorded as loaded at it (`definitionsLoaded`),
+  // and a label read after the rows it labels could name a change those rows
+  // do not hold. A change landing after it is still seen as a move by the
+  // first follow. Both after the migrations at start, which change them.
+  const { versionBeforeLoading, definitionsLoaded } = await import(
+    "../route-handler/schema-version"
+  );
+  const definitionsVersion = await versionBeforeLoading(adapter);
+  if (structure.productionStart) beginStartReads(adapter);
 
   // Empty the `globalThis`-pinned widget registries before anything registers
   // into them, so a dev-server hot reload re-registering the same ids never
@@ -1150,8 +1206,8 @@ async function registerServicesOnce(
         bootExtensionSchema,
         transformedConfig,
         // A production start registers a translated entity without the
-        // translation table no migration made; the migrations at start make
-        // it, in their own reload.
+        // translation table no migration made; the migrations at start, which
+        // ran before this, make it as `nextly migrate` does.
         {
           createMissingCompanions: !structure.productionStart,
           completeness,
@@ -1166,15 +1222,16 @@ async function registerServicesOnce(
       // PII-bearing events despite the opt-out.
       publishWebhookRecordingPolicies(transformedConfig);
 
-      // Before any step that writes to the database or the registry: the Builder
-      // reconcile and the code-first sync below would otherwise add a refused
-      // plugin's fields and tables before the refusal.
+      // Inside the hold, before the Builder reconcile and the code-first sync
+      // below, which would otherwise add a refused plugin's fields and tables
+      // before the refusal; outside it, above, before the migrations at start.
       await assertBootPluginInstallStates(
         transformedConfig,
         adapter,
         adapterDrizzleDb,
         resolvedLogger,
-        bootExtensionSchema
+        bootExtensionSchema,
+        "inside the hold"
       );
 
       await publishStoredRecordingPolicies(adapter, transformedConfig);
@@ -1356,19 +1413,6 @@ async function registerServicesOnce(
         );
       }
 
-      // The migrations at start change tables and registry rows: what follows
-      // them reads the database again.
-      if (structure.mayDefine) endStartReads();
-      const migratedAtBoot = await runBootMigrations(
-        config,
-        transformedConfig,
-        deferredExtends,
-        {
-          adapter,
-          logger: resolvedLogger,
-        }
-      );
-
       // After the boot migrations, which store a new version where they run:
       // the database's schema version against the build's, read once.
       await reportStartSchemaVersion(adapter, adapterDrizzleDb, resolvedLogger);
@@ -1406,7 +1450,8 @@ async function registerServicesOnce(
             transformedConfig,
             adapter,
             adapterDrizzleDb,
-            resolvedLogger
+            resolvedLogger,
+            consentRefusal
           );
         },
       ]);
@@ -1766,10 +1811,14 @@ function validateBootContributions(
   // `defineSingle`, and a plugin must not take a page the site declares.
   assertConfiguredPublicAddresses(transformedConfig);
 
-  // Fail fast on a collection that opens its entries in a view it does not
-  // have: every link to them would lead nowhere. Asked of the merged
+  // Fail fast on a collection, or a Single, that opens in a view it does not
+  // have: every link to it would lead nowhere. Asked of the merged
   // configuration against every plugin's views, disabled ones included.
-  assertCollectionOpensIn(transformedConfig.collections, transformedPlugins);
+  assertOpensIn(
+    transformedConfig.collections,
+    transformedPlugins,
+    transformedConfig.singles
+  );
 
   // Fail fast on role-bundle collisions. Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
@@ -1930,15 +1979,20 @@ async function prepareBootSchema(
   // how the two modules happen to be resolved.
   // Each field group's stored table, so a contribution to a group attaches to the table the group
   // is in: `fg_<slug>` on a site whose field-group storage was migrated.
-  const { declaredFieldGroupTables } = await import(
+  const { declaredFieldGroupStorage } = await import(
     "../domains/field-groups/services/field-group-stored-tables"
   );
-  const fieldGroupTables = await declaredFieldGroupTables(
+  const fieldGroups = await declaredFieldGroupStorage(
     adapter,
     transformedConfig.fieldGroups
-  ).catch(() => undefined);
+  );
   return compileAndPublishExtensionSchema({
-    ...(fieldGroupTables === undefined ? {} : { fieldGroupTables }),
+    ...(fieldGroups === undefined
+      ? {}
+      : {
+          fieldGroupTables: fieldGroups.tables,
+          fieldGroupTypeColumns: fieldGroups.typeColumns,
+        }),
     dialect: bootDialect,
     // The transformed list, like everything else from Layer 0b down: a
     // plugin a `setup` transformer added declares tables too, and the
@@ -2958,11 +3012,34 @@ async function resealKeysUnderCurrentSecret(
 }
 
 /**
- * Layer 6.5: Pending migrations, BEFORE any plugin initialises.
+ * Run `work` with this start's registrations (its adapter and its schema
+ * registry) set aside, as `nextly migrate` runs with none. The run lends the
+ * services a write reaches, bound to its own transaction where it opens one,
+ * and a lent service never replaces a registration already there: with the
+ * start's adapter in the container, a first run's permissions and grants
+ * would go through the pool, outside the transaction that writes the registry
+ * rows and the record, and wait behind its locks. Put back afterwards,
+ * whatever `work` did, so a refusal still releases the adapter.
+ */
+async function withStartRegistrationsSetAside<T>(
+  work: () => Promise<T>
+): Promise<T> {
+  const setAside = container.detach();
+  try {
+    return await work();
+  } finally {
+    container.restore(setAside);
+  }
+}
+
+/**
+ * The migrations at start: pending migrations, BEFORE the start reads the
+ * registry and before any plugin initialises.
  *
  * Pending migrations apply before `initializePlugins`, so a plugin's `init`
  * and `onReady` never query a table, or a core column, that no migration has
- * created yet.
+ * created yet; and before the registry is loaded, so the start registers what
+ * they wrote and has nothing to load again.
  *
  * When `runMigrationsOnBoot` is off (the default) this is a no-op, and the
  * CLI remains the recommended path.
@@ -2971,7 +3048,7 @@ async function runBootMigrations(
   config: NextlyServiceConfig,
   transformedConfig: NextlyServiceConfig,
   deferredExtends: DeferredExtends,
-  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger">
+  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger" | "onDataLossRefusal">
 ): Promise<boolean> {
   // `next build` runs no migration, whatever the setting: the build may point
   // at a database other deployments share, and the deploy's own `nextly
@@ -3043,7 +3120,8 @@ async function assertBootPluginSchemaVersions(
   transformedConfig: NextlyServiceConfig,
   adapter: DrizzleAdapter,
   adapterDrizzleDb: DatabaseInstance,
-  logger: Logger
+  logger: Logger,
+  consentRefusal: ConsentRefusal | undefined
 ): Promise<void> {
   const plugins = transformedConfig.plugins ?? [];
   if (plugins.length === 0) return;
@@ -3076,6 +3154,9 @@ async function assertBootPluginSchemaVersions(
     ledgerExists: () => adapter.tableExists("nextly_schema_events"),
     production: process.env.NODE_ENV === "production",
     warn: m => logger.warn?.(m),
+    // Where this start's migrations were refused for the data-loss consent,
+    // a plugin behind is behind for that, and its refusal says so.
+    ...(consentRefusal === undefined ? {} : { consentRefusal }),
   });
 }
 
@@ -3100,8 +3181,17 @@ async function assertBootPluginInstallStates(
   adapter: DrizzleAdapter,
   adapterDrizzleDb: DatabaseInstance,
   logger: Logger,
-  bootExtensionSchema: ExtensionSchema | undefined
+  bootExtensionSchema: ExtensionSchema | undefined,
+  /**
+   * Which of its two places in the start asks. It judges once: inside the
+   * development start's schema-lock hold where that hold is taken, so it reads
+   * the plugins' states after any install or uninstall holding the lock has
+   * finished; before the hold otherwise, which is wherever the migrations at
+   * start can run, so it judges before them.
+   */
+  where: "before the hold" | "inside the hold"
 ): Promise<void> {
+  if ((where === "inside the hold") !== takesDevelopmentStartHold()) return;
   const plugins = transformedConfig.plugins ?? [];
   if (plugins.length === 0) return;
   const [
@@ -3400,15 +3490,15 @@ interface PluginBootContributions {
  *   the extends deferred to Builder entities. The schema-version gate that
  *   follows reads the same transformed list, and `nextly migrate` applies the
  *   same set: the CLI's config loader runs the same transformers and fold.
+ * - The access, the translation tables and the user fields are written for
+ *   that same configuration, whole (`served`), as the container's `config`
+ *   service will hold it: the migrations run before it is registered.
  */
 export function bootMigrationsArgs(
   rawDb: NonNullable<NextlyServiceConfig["db"]>,
-  effective: Pick<
-    NextlyServiceConfig,
-    "collections" | "singles" | "fieldGroups" | "plugins" | "db"
-  >,
+  effective: NextlyServiceConfig,
   deferredExtends: readonly unknown[],
-  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger">
+  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger" | "onDataLossRefusal">
 ): RunProdMigrationsArgs {
   return {
     config: {
@@ -3423,6 +3513,7 @@ export function bootMigrationsArgs(
       fieldGroups: effective.fieldGroups ?? [],
       plugins: effective.plugins ?? [],
     },
+    served: effective,
     deferredExtends,
     ...deps,
   };
@@ -3618,9 +3709,14 @@ interface StartStructure {
   /** A start in production (`isProductionStart`), not a command's registration. */
   productionStart: boolean;
   /**
+   * A production start that runs the migrations at start: `nextly migrate`'s
+   * step, which never runs in `next build` (`bootMigrationsEnabled` reads the
+   * same setting).
+   */
+  migratesAtStart: boolean;
+  /**
    * Whether this start may create or change structure: any start but a
-   * production one, and a production one only through the migrations at start,
-   * which are `nextly migrate`'s step and never run in `next build`.
+   * production one, and a production one only through the migrations at start.
    */
   mayDefine: boolean;
 }
@@ -3629,32 +3725,42 @@ interface StartStructure {
  * A production start serves the structure `nextly migrate` made and defines
  * none: no table, column, translation table or PostgreSQL schema. Where the
  * app runs migrations at start, that step is `nextly migrate`'s and may, as the
- * command does (`bootMigrationsEnabled` reads the same setting).
+ * command does; the rest of the start defines none either.
  */
 function startStructureOf(
   config: NextlyServiceConfig,
   options: RegisterServicesOptions
 ): StartStructure {
   const productionStart = options.start === true && isProductionStart();
+  const migratesAtStart =
+    productionStart &&
+    config.db?.runMigrationsOnBoot === true &&
+    !isNextBuildPhase();
   return {
     productionStart,
-    mayDefine:
-      !productionStart ||
-      (config.db?.runMigrationsOnBoot === true && !isNextBuildPhase()),
+    migratesAtStart,
+    mayDefine: !productionStart || migratesAtStart,
   };
 }
 
 /**
- * Against a database with no Nextly tables, a start that may not define
- * structure creates nothing and refuses, naming `nextly migrate`
- * (`assertDatabaseSetUp`). In `next build` the build's own refusal answers,
- * naming the build (`refuseUnmigratedDatabaseInBuildPhase`).
+ * Against a database with no Nextly tables, a production start creates
+ * nothing and refuses, naming `nextly migrate` (`assertDatabaseSetUp`): one
+ * without migrations at start before anything reads the database, one with
+ * them once they have run, which set such a database up unless they failed. In
+ * `next build` the build's own refusal answers, naming the build
+ * (`refuseUnmigratedDatabaseInBuildPhase`).
  */
 async function refuseDatabaseNotSetUp(
   adapter: DrizzleAdapter,
-  structure: StartStructure
+  structure: StartStructure,
+  /** Asked at both points; it answers at the one that applies to this start. */
+  at: "before migrations at start" | "after migrations at start"
 ): Promise<void> {
-  if (structure.mayDefine || isNextBuildPhase()) return;
+  if (!structure.productionStart || isNextBuildPhase()) return;
+  if ((at === "after migrations at start") !== structure.migratesAtStart) {
+    return;
+  }
   const { assertDatabaseSetUp } = await import("../init/first-run");
   await assertDatabaseSetUp(adapter);
 }

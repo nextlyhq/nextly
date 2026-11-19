@@ -381,3 +381,201 @@ describe("the core block library", () => {
     expect((coreBlocks as AnyBlockDefinition[]).length).toBeGreaterThan(10);
   });
 });
+
+describe("a form on a page", () => {
+  /** The page's markup with one form drawn under `forms`. */
+  async function drawnWith(
+    props: Record<string, unknown>,
+    script?: { module: string; reason: string }
+  ): Promise<string> {
+    const { createElement } = await import("react");
+    const { PageRenderer } = await import("./page-renderer");
+    const { createStandaloneContext } = await import("./context");
+    const element = createElement(PageRenderer, {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "f", type: "core/form", version: 2, props }],
+      } as never,
+      blocks: createBlockResolver(coreBlocks as AnyBlockDefinition[]),
+      context: createStandaloneContext({
+        forms: {
+          action: "/send",
+          document: "page:p",
+          returnTo: "/",
+          describe: () =>
+            Promise.resolve({
+              ref: "r",
+              title: "R",
+              fields: [{ name: "email", label: "Email", kind: "email" }],
+              submitText: "Send",
+              afterSending: { kind: "message", message: "Thanks." },
+              encoding: "urlencoded",
+              ...(script === undefined ? {} : { script }),
+            }),
+        },
+      }),
+    });
+    // A server render that awaits the async blocks, as a route's does.
+    const { renderToReadableStream } = await import("react-dom/server");
+    const stream = await renderToReadableStream(element);
+    await stream.allReady;
+    return await new Response(stream).text();
+  }
+
+  it("adds no script of the library's own, simple or picked", async () => {
+    expect(await drawnWith({ fields: [{ label: "Name" }] })).not.toContain(
+      "<script"
+    );
+    expect(
+      await drawnWith({ form: { provider: "acme", ref: "r" } })
+    ).not.toContain("<script");
+  });
+
+  it("adds the provider's own script where its form needs one, and only there", async () => {
+    const out = await drawnWith(
+      { form: { provider: "acme", ref: "r" } },
+      { module: "/acme/check.js", reason: "bot check" }
+    );
+    expect(out).toMatch(/<script[^>]*src="\/acme\/check.js"/);
+    // Must-be-found: the form itself was drawn.
+    expect(out).toContain('name="email"');
+  });
+});
+
+describe("a picture a click enlarges", () => {
+  it("opens with the browser's own popover and adds no script", async () => {
+    const { createElement } = await import("react");
+    const { PageRenderer } = await import("./page-renderer");
+    const { createStandaloneContext } = await import("./context");
+    const element = createElement(PageRenderer, {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "i",
+            type: "core/image",
+            version: 1,
+            props: {
+              src: "https://example.test/team.png",
+              alt: "The team",
+              caption: "Our team",
+              whenClicked: "enlarge",
+            },
+          },
+        ],
+      } as never,
+      blocks: createBlockResolver(coreBlocks as AnyBlockDefinition[]),
+      context: createStandaloneContext({}),
+    });
+    const { renderToReadableStream } = await import("react-dom/server");
+    const stream = await renderToReadableStream(element);
+    await stream.allReady;
+    const out = await new Response(stream).text();
+    expect(out).not.toContain("<script");
+    // Must-be-found: the lightbox and the button that opens it were drawn.
+    expect(out).toMatch(/<div[^>]*popover="auto"/);
+    // Attribute names are case-insensitive in HTML, and React writes this
+    // one in camel case.
+    expect(out).toMatch(/<button[^>]*popovertarget="/i);
+  });
+});
+
+describe("a table of contents that highlights the section being read", () => {
+  it("highlights with CSS alone and adds no script", async () => {
+    const { createElement } = await import("react");
+    const { PageRenderer } = await import("./page-renderer");
+    const { createStandaloneContext } = await import("./context");
+    const heading = (id: string, text: string, level: string) => ({
+      id,
+      type: "core/heading",
+      version: 1,
+      props: { text, level },
+    });
+    const element = createElement(PageRenderer, {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [
+          {
+            id: "toc",
+            type: "core/table-of-contents",
+            version: 2,
+            props: {
+              title: "On this page",
+              depth: "h2-h3",
+              marker: "numbered",
+              collapsible: true,
+              highlight: true,
+            },
+          },
+          heading("a", "First", "h2"),
+          heading("b", "Inside the first", "h3"),
+          heading("c", "Second", "h2"),
+        ],
+      } as never,
+      blocks: createBlockResolver(coreBlocks as AnyBlockDefinition[]),
+      context: createStandaloneContext({}),
+    });
+    const { renderToReadableStream } = await import("react-dom/server");
+    const stream = await renderToReadableStream(element);
+    await stream.allReady;
+    const out = await new Response(stream).text();
+    expect(out).not.toContain("<script");
+    // Must-be-found: the list, its highlight and its folding were drawn.
+    expect(out).toMatch(/<nav[^>]*aria-label="On this page"/);
+    expect(out).toContain('<a href="#inside-the-first"');
+    expect(out).toContain("scroll-target-group:auto");
+    expect(out).toContain("<details open");
+  });
+});
+
+describe("an Accordion that opens one question at a time", () => {
+  it("closes the others through the browser's own grouping and adds no script", async () => {
+    const { createElement } = await import("react");
+    const { PageRenderer } = await import("./page-renderer");
+    const { createStandaloneContext } = await import("./context");
+    const question = (n: number, open: boolean) => ({
+      id: `q${n}`,
+      type: "core/accordion-item",
+      version: 1,
+      props: { title: `Question ${n}`, open },
+      slots: { children: [] },
+    });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "acc",
+          type: "core/accordion",
+          version: 1,
+          props: { openMode: "one", firstOpen: true, titlesAs: "h3" },
+          slots: { children: [question(1, false), question(2, true)] },
+        },
+      ],
+    } as unknown as BlockDocument;
+    const blocks = createBlockResolver(coreBlocks as AnyBlockDefinition[]);
+    // The library declares no island for it, so the page needs none.
+    expect(islandsFor(document, blocks)).toEqual({});
+    const element = createElement(PageRenderer, {
+      document,
+      blocks,
+      context: createStandaloneContext({}),
+    });
+    const { renderToReadableStream } = await import("react-dom/server");
+    const stream = await renderToReadableStream(element);
+    await stream.allReady;
+    const out = await new Response(stream).text();
+    expect(out).not.toContain("<script");
+    expect(out).not.toMatch(/\son[a-z]+=/i);
+    // Must-be-found: two native disclosures sharing one name, the first open.
+    const tags = [...out.matchAll(/<details[^>]*>/g)].map(match => match[0]);
+    expect(tags).toHaveLength(2);
+    const names = tags.map(tag => /\bname="([^"]+)"/.exec(tag)?.[1]);
+    expect(names[0]).toBeTruthy();
+    expect(names[1]).toBe(names[0]);
+    expect(tags.map(tag => /\bopen=""/.test(tag))).toEqual([true, false]);
+  });
+});

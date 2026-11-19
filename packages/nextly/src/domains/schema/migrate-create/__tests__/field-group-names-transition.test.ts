@@ -1,0 +1,122 @@
+/**
+ * Which field-group names a migration history is on, and the one step that moves it: every run
+ * stays on the newest snapshot's naming, and the transition renames each field-group table and its
+ * type column in the snapshot, as the storage migration renames them in the database.
+ */
+import { describe, expect, it } from "vitest";
+
+import {
+  contributionsUnderCurrentNames,
+  historyFieldGroupNaming,
+  refuseChangesToTransition,
+  refuseNamingAgainstHistory,
+  snapshotUnderCurrentNames,
+  transitionNeeded,
+} from "../field-group-names-transition";
+
+const LEGACY = {};
+const CURRENT = { fieldGroupStorage: "current" as const };
+
+describe("the history's field-group naming", () => {
+  it("is the newest snapshot's, whatever the caller resolved", () => {
+    expect(historyFieldGroupNaming(LEGACY, undefined)).toBe("legacy");
+    expect(historyFieldGroupNaming(CURRENT, undefined)).toBe("current");
+    expect(historyFieldGroupNaming(LEGACY, "current")).toBe("legacy");
+  });
+
+  it("is the caller's, else legacy, for a project with no history yet", () => {
+    expect(historyFieldGroupNaming(null, undefined)).toBe("legacy");
+    expect(historyFieldGroupNaming(null, "current")).toBe("current");
+  });
+
+  // A diff across two namings plans to drop every comp_ table and create its fg_ twin.
+  it("refuses a run whose field groups were named under the other naming, naming the way across", () => {
+    expect(() => refuseNamingAgainstHistory(LEGACY, "current")).toThrow(
+      /nextly migrate:create --field-group-names=current/
+    );
+    expect(() => refuseNamingAgainstHistory(CURRENT, "legacy")).toThrow(
+      /nextly migrate:field-groups --apply --backup-confirmed/
+    );
+  });
+
+  it("lets a run on the history's own naming, or one that named none, through", () => {
+    expect(() => refuseNamingAgainstHistory(LEGACY, "legacy")).not.toThrow();
+    expect(() => refuseNamingAgainstHistory(CURRENT, "current")).not.toThrow();
+    expect(() => refuseNamingAgainstHistory(LEGACY, undefined)).not.toThrow();
+    expect(() => refuseNamingAgainstHistory(null, "current")).not.toThrow();
+  });
+});
+
+describe("the transition to the current names", () => {
+  it("is needed for a legacy history, and nothing to do for a current one", () => {
+    expect(transitionNeeded(LEGACY)).toBe(true);
+    expect(transitionNeeded(CURRENT)).toBe(false);
+  });
+
+  it("is refused for a project with no migration yet", () => {
+    expect(() => transitionNeeded(null)).toThrow(/no migration yet/);
+  });
+
+  it("is refused while the config has another change to migrate, naming it", () => {
+    expect(() =>
+      refuseChangesToTransition({ tables: ["dc_posts"], beyondTables: false })
+    ).toThrow(/changes to "dc_posts" to migrate/);
+    expect(() =>
+      refuseChangesToTransition({ tables: [], beyondTables: true })
+    ).toThrow(/changes to settings or permissions to migrate/);
+    expect(() =>
+      refuseChangesToTransition({ tables: [], beyondTables: false })
+    ).not.toThrow();
+  });
+
+  it("renames each field-group table and its type column, and leaves every other table alone", () => {
+    const index = { name: "comp_card_heading_idx", columns: ["heading"] };
+    const moved = snapshotUnderCurrentNames(
+      {
+        tables: [
+          {
+            name: "comp_card",
+            columns: [
+              { name: "_component_type", type: "varchar", nullable: true },
+              { name: "heading", type: "text", nullable: true },
+            ],
+            indexes: [index as never],
+          },
+          {
+            name: "dc_posts",
+            columns: [
+              { name: "_component_type", type: "varchar", nullable: true },
+            ],
+          },
+        ],
+      },
+      new Set(["comp_card"])
+    );
+
+    expect(moved.tables.map(t => t.name)).toEqual(["fg_card", "dc_posts"]);
+    expect(moved.tables[0].columns.map(c => c.name)).toEqual([
+      "_field_group_type",
+      "heading",
+    ]);
+    // A rename keeps a table's indexes under their names, as the storage migration's does.
+    expect(moved.tables[0].indexes).toEqual([index]);
+    expect(moved.tables[1].columns.map(c => c.name)).toEqual([
+      "_component_type",
+    ]);
+  });
+
+  it("keys the app's contributions to a field-group table by its current name", () => {
+    const elements = {
+      columns: ["badge"],
+      indexes: [],
+      foreignKeys: [],
+      checks: [],
+    };
+    expect(
+      contributionsUnderCurrentNames(
+        { comp_card: elements, dc_posts: elements },
+        new Set(["comp_card"])
+      )
+    ).toEqual({ fg_card: elements, dc_posts: elements });
+  });
+});

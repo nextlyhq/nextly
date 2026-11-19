@@ -5,6 +5,7 @@ import { EMAIL_BRAND_TABLE } from "../schemas/email-brand/table-name";
 import { EMAIL_QUEUE_TABLE } from "../schemas/email-queue/table-name";
 import { EMAIL_QUEUE_RECIPIENTS_TABLE } from "../schemas/email-queue-recipients/table-name";
 import { EMAIL_SEND_CLAIMS_TABLE } from "../schemas/email-send-claims/table-name";
+import { EXTERNAL_IDENTITIES_TABLE } from "../schemas/external-identities/table-name";
 import { LANGUAGES_TABLE } from "../schemas/languages/table-name";
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { MEDIA_USAGE_TABLE } from "../schemas/media-usage/table-name";
@@ -973,6 +974,12 @@ export function generateSqliteCoreTableStatements(): string[] {
       "principal_kind" TEXT,
       "principal_id" TEXT,
       "key_digest" TEXT,
+      "queued_id" TEXT,
+      "template_owner" TEXT,
+      "template_overridden" INTEGER,
+      "template_digest" TEXT,
+      "failure_kind" TEXT,
+      "failure_status" INTEGER,
       "created_at" INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_created_idx"
@@ -989,10 +996,14 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "email_deliveries" ("principal_kind", "principal_id")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_key_idx"
       ON "email_deliveries" ("key_digest")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_queued_idx"
+      ON "email_deliveries" ("queued_id")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_provider_type_idx"
       ON "email_deliveries" ("provider_type", "created_at")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_template_idx"
       ON "email_deliveries" ("template_slug", "status", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_template_created_idx"
+      ON "email_deliveries" ("template_slug", "created_at", "id")`,
     `CREATE TABLE IF NOT EXISTS "${EMAIL_SEND_CLAIMS_TABLE}" (
       "id" TEXT PRIMARY KEY,
       "scope" TEXT NOT NULL,
@@ -1041,6 +1052,24 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "email_queue_recipients_hash_idx"
       ON "${EMAIL_QUEUE_RECIPIENTS_TABLE}" ("recipient_hash")`,
+    // The external identities a person signed in with. Columns match
+    // schemas/external-identities/sqlite.ts; uniqueness holds by the
+    // key_digest column, the plain SHA-256 of the provider key, issuer and
+    // subject, computed by `externalIdentityKeyDigest`.
+    `CREATE TABLE IF NOT EXISTS "${EXTERNAL_IDENTITIES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "provider_key" TEXT NOT NULL,
+      "issuer" TEXT NOT NULL,
+      "subject" TEXT NOT NULL,
+      "key_digest" TEXT NOT NULL,
+      "address" TEXT,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "created_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_external_identities_key_uidx"
+      ON "${EXTERNAL_IDENTITIES_TABLE}" ("key_digest")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_external_identities_user_idx"
+      ON "${EXTERNAL_IDENTITIES_TABLE}" ("user_id")`,
   ];
 }
 

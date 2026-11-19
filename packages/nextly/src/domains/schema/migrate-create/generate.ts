@@ -22,7 +22,7 @@
 // The CLI then says "No schema changes detected" and exits 0, since nothing
 // to do is a finished run; a failure exits 1.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -30,7 +30,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { FieldGroupNaming } from "../../field-groups/services/field-group-storage-names";
-import { typeColumnForNewTable } from "../../field-groups/storage/resolve-storage-names";
+import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
 import { carriedDefinition } from "../../i18n/migration/carried-definition";
@@ -130,6 +130,7 @@ import {
   columnsDeclaredBy,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -190,10 +191,19 @@ import {
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  newestSnapshotName,
+  prepareSnapshot,
   snapshotPathOf,
-  writeSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
+import {
+  assertWriterHold,
+  holdInBuilderChange,
+  prepareWhole,
+  publishHeld,
+  startMovedError,
+  underWriterHold,
+} from "./writer-hold";
 
 /**
  * A field as its entity declares it.
@@ -281,6 +291,14 @@ export interface GenerateArgs {
   collections: MinimalConfigEntity[];
   singles: MinimalConfigEntity[];
   components: MinimalConfigEntity[];
+  /**
+   * The latest snapshot as the caller already read it
+   * (`AppMigrationInputs.latest`), null where the folder has none. Given, the
+   * migration starts from it, so the caller's checks and the generator read
+   * one starting point: for a project made from a template, the tables the
+   * template's entities were taken as made with. Absent, the folder is read.
+   */
+  previous?: { data: SnapshotFile; filename?: string } | null;
   /**
    * UI-built metadata-row upserts (spec §4.12.7), keyed by data-table name.
    * Each is appended to the generated SQL when an operation touches its table
@@ -667,11 +685,14 @@ const columnKey = (table: string, column: string) => `${table}\u0000${column}`;
 /**
  * `operations` with each settled column left nullable — its creation made
  * nullable, its change to NOT NULL taken out — and the changes that make each
- * NOT NULL once its rows are settled.
+ * NOT NULL once its rows are settled, for the columns `desired` declares NOT
+ * NULL. A column filled for an optional field (a Single's row given the
+ * field's default) stays nullable after its fill, as its field declares it.
  */
 function settledColumns(
   operations: readonly Operation[],
-  resolutions: readonly ColumnResolution[]
+  resolutions: readonly ColumnResolution[],
+  desired: readonly TableSpec[]
 ): {
   operations: Operation[];
   tighten: Operation[];
@@ -699,7 +720,12 @@ function settledColumns(
     }
     return [op];
   });
-  const tighten = resolutions.map(
+  const required = (r: ColumnResolution) =>
+    desired
+      .find(table => table.name === r.tableName)
+      ?.columns.find(column => column.name === r.columnName)?.nullable ===
+    false;
+  const tighten = resolutions.filter(required).map(
     (r): Operation => ({
       type: "change_column_nullable",
       tableName: r.tableName,
@@ -834,6 +860,8 @@ async function renameDecisions(
 export async function generateMigration(
   requested: GenerateArgs
 ): Promise<GenerateResult | null> {
+  // Before anything is planned: a writer another has overtaken stops here.
+  await refuseStaleStart(requested);
   // Scoped, every planner below sees the scoped entity alone.
   const scoped = withScopedEntities(requested);
   const metaDir = resolve(scoped.migrationsDir, "meta");
@@ -842,7 +870,10 @@ export async function generateMigration(
   const now = scoped.now ?? new Date();
 
   // 1. Load previous state.
-  const previous = await loadLatestSnapshot(metaDir);
+  const previous =
+    scoped.previous === undefined
+      ? await loadLatestSnapshot(metaDir)
+      : scoped.previous;
   // The history's field-group naming holds for every file but the transition, which moves it.
   refuseNamingAgainstHistory(previous?.data ?? null, scoped.fieldGroupNaming);
   if (
@@ -1040,6 +1071,7 @@ export async function generateMigration(
       ].map(({ spec }) => spec.mainTable),
   ];
   const record: Omit<MigrationPair, "sqlContent"> = {
+    startedFrom: startOf(previous),
     written,
     contributions: stream.contributions,
     entities: settingsRecord,
@@ -1148,7 +1180,11 @@ export async function generateMigration(
   // leads to — the desired side for the UP, the previous side for the DOWN.
   // A column whose rows the person settled (`resolutions`) is created, or
   // kept, nullable; the fill or delete runs; then it is made NOT NULL.
-  const settled = settledColumns(operations, args.resolutions ?? []);
+  const settled = settledColumns(
+    operations,
+    args.resolutions ?? [],
+    desiredSnapshot.tables
+  );
   const sqlStatements = [
     ...generateStatements(
       settled.operations,
@@ -1489,6 +1525,11 @@ export async function generateMigration(
   });
 
   const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
+    startedFrom: startOf(previous),
+    companions: () =>
+      companionFiles.map(({ spec, opts }) =>
+        writeCompanionMigrationFile(args.migrationsDir, spec, opts)
+      ),
     metaDir,
     now,
     sqlContent,
@@ -1498,12 +1539,6 @@ export async function generateMigration(
     permissions: permissionRecord,
     fieldGroupNaming,
   });
-
-  if (args.dryRun !== true) {
-    for (const { spec, opts } of companionFiles) {
-      writeCompanionMigrationFile(args.migrationsDir, spec, opts);
-    }
-  }
 
   return {
     sqlPath,
@@ -1522,6 +1557,49 @@ export async function generateMigration(
     permissionChanges: changedPermissions,
     deletions: judged.all,
   };
+}
+
+/**
+ * Stops a run that has no business planning, before it plans: one that
+ * stalled while another writer took the folder, or whose starting snapshot,
+ * read by its caller before it held the folder, is no longer the newest. A
+ * Builder save takes its hold here where it has none yet. A dry run, which
+ * writes nothing, is not asked; a run with no writer's hold is asked again,
+ * under one, as it writes (`writeMigrationPair`).
+ */
+async function refuseStaleStart(requested: GenerateArgs): Promise<void> {
+  if (requested.dryRun === true) return;
+  await holdInBuilderChange(requested.migrationsDir);
+  await assertWriterHold(requested.migrationsDir);
+  // One the generator reads itself, below, is the newest by its reading.
+  if (requested.previous === undefined) return;
+  await refuseMovedFrom(requested.migrationsDir, startOf(requested.previous));
+}
+
+/**
+ * The snapshot file a run starts from, as the checks of it read it: its name,
+ * undefined where it starts from none, and null where the caller gave a
+ * starting point without saying which file it is, which cannot be checked.
+ */
+function startOf(
+  previous: NonNullable<GenerateArgs["previous"]> | null
+): string | undefined | null {
+  return previous === null ? undefined : (previous.filename ?? null);
+}
+
+/**
+ * Refuses where the newest snapshot in the folder is no longer `startedFrom`,
+ * the one this run reads as its starting point: another writer has written a
+ * migration since, and this run's would be a second from the snapshot it
+ * read. Asked under the hold, when the run begins and again as it writes.
+ */
+async function refuseMovedFrom(
+  migrationsDir: string,
+  startedFrom: string | undefined | null
+): Promise<void> {
+  if (startedFrom === null) return;
+  const newest = await newestSnapshotName(resolve(migrationsDir, "meta"));
+  if (newest !== startedFrom) throw startMovedError(newest);
 }
 
 /**
@@ -1826,11 +1904,18 @@ async function transitionSnapshot(
 
 /** A migration's `.sql` content and what its paired snapshot records. */
 interface MigrationPair {
+  /** The snapshot file the run started from (`startOf`), checked again as it writes. */
+  startedFrom: string | undefined | null;
+  /**
+   * Writes the run's companion migration files, once its own file is in
+   * place, and answers their paths. Absent where the run has none.
+   */
+  companions?: () => string[];
   sqlContent: string;
   written: NextlySchemaSnapshot;
-  contributions: Parameters<typeof writeSnapshot>[4];
-  entities: Parameters<typeof writeSnapshot>[5];
-  permissions: Parameters<typeof writeSnapshot>[6];
+  contributions: Parameters<typeof prepareSnapshot>[4];
+  entities: Parameters<typeof prepareSnapshot>[5];
+  permissions: Parameters<typeof prepareSnapshot>[6];
   metaDir: string;
   now: Date;
   /** The field-group names the snapshot records this point of the history on. */
@@ -1838,8 +1923,8 @@ interface MigrationPair {
 }
 
 /**
- * Writes a migration's `.sql` file, named for the run's name and time, then its paired snapshot:
- * the order every `migrate:create` writes them in. A dry run writes neither and returns the paths
+ * Writes a migration's snapshot, then its `.sql` file, named for the run's name and time: the
+ * order every `migrate:create` writes them in. A dry run writes neither and returns the paths
  * they would be written at.
  */
 async function writeMigrationPair(
@@ -1848,22 +1933,46 @@ async function writeMigrationPair(
 ): Promise<{ sqlPath: string; snapshotPath: string }> {
   const baseName = `${formatTimestamp(pair.now)}_${slugify(args.name)}`;
   const sqlPath = resolve(args.migrationsDir, `${baseName}.sql`);
-  if (args.dryRun === true) {
-    // Where `writeSnapshot` would put it, by the writer's own rule.
-    return { sqlPath, snapshotPath: snapshotPathOf(pair.metaDir, baseName) };
-  }
-  await mkdir(args.migrationsDir, { recursive: true });
-  await writeFile(sqlPath, pair.sqlContent, "utf-8");
-  const snapshotPath = await writeSnapshot(
-    pair.metaDir,
-    baseName,
-    pair.written,
-    pair.sqlContent,
-    pair.contributions,
-    pair.entities,
-    pair.permissions,
-    pair.fieldGroupNaming
-  );
+  // Where `writeSnapshot` puts it, by the writer's own rule.
+  const snapshotPath = snapshotPathOf(pair.metaDir, baseName);
+  if (args.dryRun === true) return { sqlPath, snapshotPath };
+  // As the folder's holder (`publishHeld`): both files written in full
+  // aside, the last checks made, then the snapshot put in place and the file
+  // after it, since a reader counts a migration from its `.sql` and so never
+  // finds one whose snapshot is still to come. The companions follow in the
+  // same step, so an overtaken writer adds none after its successor.
+  const publish = () =>
+    publishHeld(
+      args.migrationsDir,
+      async () => {
+        await mkdir(args.migrationsDir, { recursive: true });
+        return [
+          await prepareSnapshot(
+            pair.metaDir,
+            baseName,
+            pair.written,
+            pair.sqlContent,
+            pair.contributions,
+            pair.entities,
+            pair.permissions,
+            pair.fieldGroupNaming
+          ),
+          await prepareWhole(sqlPath, pair.sqlContent),
+        ];
+      },
+      {
+        // Still from the newest snapshot: one written since would make this a
+        // second migration from the one it started at.
+        stillCurrent: () =>
+          refuseMovedFrom(args.migrationsDir, pair.startedFrom),
+        ...(pair.companions === undefined
+          ? {}
+          : { alongside: pair.companions }),
+      }
+    );
+  // Under the hold the running writer has, or one taken here for a caller
+  // with none, whose starting snapshot the last check then judges.
+  await underWriterHold(args.migrationsDir, "migrate:create", publish);
   return { sqlPath, snapshotPath };
 }
 
@@ -3376,6 +3485,19 @@ export function buildDesiredSnapshotFromConfig(
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
   const kept = columnsByTable(existing ?? { tables: [] }, dialect);
+  // Each field group's discriminator, read off the table as the last migration recorded it: the
+  // storage migration renames a group's column whatever its table is called, so the name alone
+  // cannot say which one an existing table has (`chooseTypeColumns`).
+  const recordedTypeColumns = chooseTypeColumns(
+    (existing?.tables ?? []).map(table => ({
+      table: table.name,
+      columns: table.columns.map(column => column.name),
+    })),
+    components.map(component => component.tableName),
+    dialect === "mysql"
+      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+      : identifierCaseRules({ dialect })
+  );
   for (const entity of collections) {
     const c = withKeptScopeFields("collection", entity, kept);
     // Why: forward the entity's Draft/Published flag so the snapshot
@@ -3429,9 +3551,9 @@ export function buildDesiredSnapshotFromConfig(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
           builtBy: columnOriginOf(c, "fieldGroup"),
           localized: storesPerLanguage(c),
-          // The discriminator a table under this name carries: the migrated column for a group
-          // on the current names, the legacy one otherwise.
-          typeColumn: typeColumnForNewTable(c.tableName),
+          // The discriminator the table carries as the last migration left it, and for a table
+          // no migration has made yet, the one it is created with under its name.
+          typeColumn: recordedTypeColumns.get(c.tableName),
         }),
         c,
         "fieldGroup",

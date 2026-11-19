@@ -1,7 +1,7 @@
 /**
- * Cross-file validation for `ui-schema.json` vs `nextly.config.ts`
- * (spec §4.14.6). This check spans both schema sources, so it lives outside
- * the per-file Zod schema (D1).
+ * Cross-file validation for `ui-schema.json` vs `nextly.config.ts`. This
+ * check spans both schema sources, so it lives outside the per-file Zod
+ * schema.
  *
  *   - Relation target: every relationship and upload, at any depth, points at
  *     a real collection — code-first, UI-built, or one Nextly provides
@@ -15,7 +15,7 @@
  * both migrate commands.
  *
  * @module domains/schema/ui-schema/cross-file
- * @since v0.0.3-alpha (Plan D2)
+ * @since v0.0.3-alpha
  */
 import type { UiSchemaManifest } from "../../../schemas/_zod/ui-schema";
 import { referencingFields } from "../../collections/services/collection-dependents";

@@ -46,6 +46,8 @@ import {
   singleLanguageInState,
   translatedFilter,
   worklistTotal,
+  worklistHasNext,
+  worklistMaxPage,
   worklistTotalPages,
   worklistId,
   worklistTitle,
@@ -70,18 +72,12 @@ import { withErrorHandler } from "./with-error-handler";
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
-/**
- * How deep into the merged list a page may reach. Each page reads the first `page × limit`
- * rows of every collection, so the order across collections is the same on every page; past this
- * depth a page answers with the last one this reaches.
- */
-const MAX_DEPTH = 2000;
-
+/** The page asked for, at most the deepest one the worklist serves (`worklistMaxPage`). */
 function parsePage(raw: string | null, limit: number): number {
   if (raw === null || raw === "") return 1;
   const n = Math.trunc(Number(raw));
   if (!Number.isFinite(n) || n < 1) return 1;
-  return Math.min(n, Math.max(1, Math.floor(MAX_DEPTH / limit)));
+  return Math.min(n, worklistMaxPage(limit));
 }
 
 function parseState(raw: string | null): TranslationFilterState {
@@ -529,6 +525,8 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   );
   // Each Single the caller may read, judged from its own translation overview.
   const singles = await singleWork(locale, state, caller);
+  // The collections and the Singles that could not answer, one sorted list as each is.
+  const unanswerableSources = [...unanswerable, ...singles.unanswerable].sort();
 
   // Named here rather than only at the cap, because both are the same claim:
   // this answer did not cover that collection.
@@ -573,8 +571,8 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // along. See `worklistTotalPages` for why this sits beside `hasNext:
       // false` rather than contradicting it.
       totalPages: worklistTotalPages(total, limit),
-      // Real paging: a page past this one holds rows when the backlog reaches past it.
-      hasNext: depth < total,
+      // Real paging: a page past this one holds rows and can be asked for (`worklistHasNext`).
+      hasNext: worklistHasNext(page, limit, total),
       hasPrev: page > 1,
       // Named, so the screen can say WHICH. Omitted entirely when the answer
       // covered everything, so the field's presence is itself the signal.
@@ -582,10 +580,10 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // Kept apart from `notConsulted` on the wire for the same reason the service keeps them
       // apart: this is the one with a remedy. A screen that merges them tells an operator to
       // look again when what they need to do is migrate.
-      ...(unanswerable.length === 0
+      ...(unanswerableSources.length === 0
         ? {}
         : {
-            unanswerable,
+            unanswerable: unanswerableSources,
             // 🔴 WHICH remedy, decided where the environment is known. `nextly migrate` applies
             // migration FILES, and a development database managed by the sync/HMR loop has no
             // migration history containing this column — so that advice can leave the notice
@@ -616,7 +614,11 @@ async function singleWork(
   locale: string,
   state: TranslationFilterState,
   caller: ReadCaller
-): Promise<{ rows: TranslationWorkRow[]; failed: string[] }> {
+): Promise<{
+  rows: TranslationWorkRow[];
+  failed: string[];
+  unanswerable: string[];
+}> {
   const registry = getService("singleRegistryService");
   const singleEntries = getService("singleEntryService");
   const localized = (await registry.getAllSinglesForRead()).filter(
@@ -625,12 +627,44 @@ async function singleWork(
   );
   const isDefault = configuredLocalization()?.defaultLocale === locale;
   const failed: string[] = [];
+  const unanswerable: string[] = [];
+  const adapter = state === "stale" ? getAdapterFromDI() : undefined;
   const found = await inBoundedBatches(
     localized,
     AUTHORIZATION_CONCURRENCY,
     async (single): Promise<TranslationWorkRow | null> => {
-      const id = await resolveSingleDocumentId(single.slug);
+      // A lookup that fails is this Single's answer missing, not the worklist's: named as not
+      // consulted, as a Single whose read fails is, and the rest is still listed.
+      let id: string | null;
+      try {
+        id = await resolveSingleDocumentId(single.slug);
+      } catch {
+        failed.push(single.slug);
+        return null;
+      }
       if (id === null) return null;
+      // Staleness compares when each language was written, which a translations table made before
+      // that column has no record of: such a Single is named as unanswerable, as a collection is
+      // (`resolveStalenessCapability`), rather than left out as if nothing in it were stale. A
+      // probe that fails is no schema fact: the Single is named as not consulted.
+      if (state === "stale") {
+        try {
+          const answers =
+            adapter !== undefined &&
+            (await resolveCompanionColumn(
+              adapter,
+              `${single.tableName}_locales`,
+              COMPANION_UPDATED_AT_COLUMN
+            ));
+          if (!answers) {
+            unanswerable.push(single.slug);
+            return null;
+          }
+        } catch {
+          failed.push(single.slug);
+          return null;
+        }
+      }
       const result = await singleEntries.get(single.slug, {
         user: caller.user,
         ...(caller.authenticatedScope === undefined
@@ -672,5 +706,6 @@ async function singleWork(
   return {
     rows: found.filter((row): row is TranslationWorkRow => row !== null),
     failed,
+    unanswerable,
   };
 }

@@ -15,9 +15,9 @@ import type {
 import type { DocumentLimits } from "../limits";
 import type { ValidationIssue } from "../validation";
 
-import type { TypographicElement } from "./compile-page-states";
 import type { MayFetchUrl } from "./css-value";
 import type { NamedClass } from "./named-class";
+import type { ElementBaseKey, SiteTextMap } from "./site-text";
 import type { StyleTraceEntry } from "./style-trace";
 
 /** Everything site-level the compiler needs; the caller loads it. */
@@ -120,13 +120,23 @@ export interface StyleCompileContext {
    * equal weight a block's own default wins on source order. Both lose to a
    * named class and to a node's own value.
    *
-   * A provisional layer, not a design system. Gutenberg — the closest peer that
-   * both ships blocks and renders pages — keeps metric defaults out of block
-   * CSS and defers to a theme; Nextly has no populated typography scale yet, so
-   * this bridges the gap until the fonts manager fills it, and is shaped so
-   * that manager can supply the same record later.
+   * The block library fills it from a site's text (`siteTextElementBases`):
+   * the size and line height of each heading level, links and captions, and
+   * under the `root` key the page root's Body text, which every block inherits.
    */
-  elementBases?: Readonly<Partial<Record<TypographicElement, NodeStyles>>>;
+  elementBases?: Readonly<Partial<Record<ElementBaseKey, NodeStyles>>>;
+  /**
+   * The site's text rows, as its token set states them.
+   *
+   * The compiler does not read this. It travels with the compile for the
+   * block library, which derives the element tier from it and lays the
+   * Buttons and Captions rows over the blocks that draw a button or a
+   * caption, so every compile path is handed one map rather than each
+   * deriving its own.
+   *
+   * @experimental
+   */
+  siteText?: SiteTextMap;
 
   /**
    * The space each container block type puts between the blocks in its slots,
@@ -220,6 +230,40 @@ export interface StyleCompileContext {
    * walk over the page.
    */
   trace?: boolean;
+  /**
+   * The host's judgement of custom CSS, and the site's own.
+   *
+   * Absent draws no custom CSS at all, at any level: whether author-written CSS
+   * is safe to put on a page is the host's question (its checker refuses an
+   * `@import`, a fetch from another origin, anything that could end the style
+   * element or run script), and an engine with no checker to ask cannot answer
+   * it. A value the checker refuses stays in the document and is left out of
+   * the sheet.
+   *
+   * @experimental
+   */
+  customCss?: CustomCssPolicy;
+}
+
+/** Where a piece of custom CSS was written. */
+export type CustomCssLevel = "site" | "page" | "block";
+
+/**
+ * The host's checker for custom CSS, with the site's own.
+ *
+ * @experimental
+ */
+export interface CustomCssPolicy {
+  /**
+   * Which checker this is, for a stored sheet's stamp: a sheet compiled under
+   * one checker is not the sheet another would write, so a stored one is
+   * compiled again when this changes.
+   */
+  readonly id: string;
+  /** Whether this CSS may be drawn at this level. */
+  accepts(css: string, level: CustomCssLevel): boolean;
+  /** The site's custom CSS, drawn on every page before the page's own. */
+  readonly site?: string;
 }
 
 /** A library entry's id, for a record that may not have one. */

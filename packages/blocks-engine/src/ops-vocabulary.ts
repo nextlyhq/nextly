@@ -7,7 +7,12 @@
  *
  * @module ops-vocabulary
  */
-import type { BlockNode, ComponentDocument, DocumentSeo } from "./document";
+import type {
+  BlockNode,
+  ComponentDocument,
+  DocumentCode,
+  DocumentSeo,
+} from "./document";
 import { holdsAValue, type NodePatch, type RemovableField } from "./ops-fields";
 
 /**
@@ -226,6 +231,56 @@ export type BuilderOp =
        */
       readonly kind: "seo";
       readonly seo: DocumentSeo | null;
+    }
+  | {
+      /**
+       * Turn a block into another type in one step: a Text into a Heading, a
+       * Rich text into a Text. `node` is the block as it will stand, under the
+       * same id and in the same place, so the edit is one undo step and its
+       * inverse is this op again with the block as it was.
+       *
+       * The new block is written whole rather than derived here, because how
+       * one type becomes another is the block's own declaration
+       * (`BlockDefinition.converters`) and applying an op reads no registry:
+       * `planTurnInto` builds `node` from it, and a stored op replays the same
+       * whatever is registered later.
+       *
+       * A seventh member of a published union, as `seo` is the sixth.
+       *
+       * @experimental Settles with the editor's "Turn into".
+       */
+      readonly kind: "turnInto";
+      readonly id: string;
+      readonly node: BlockNode;
+    }
+  | {
+      /**
+       * An edit to the code a document adds to its own page
+       * (`settings.code`): written whole, as `seo` is, so one change of the
+       * head, the end of the body and what the author acknowledged together
+       * is one undo step; `null` removes it. Judged by its shape; what the
+       * code may hold, and who may change it, is the save's question.
+       *
+       * An eighth member of a published union, as `turnInto` is the seventh.
+       *
+       * @experimental Settles with page code.
+       */
+      readonly kind: "code";
+      readonly code: DocumentCode | null;
+    }
+  | {
+      /**
+       * An edit to the document's own custom CSS (`settings.customCss`):
+       * written whole, as `code` is, so one change is one undo step; `null`
+       * removes it. Judged by its shape; what the CSS may hold, and who may
+       * change it, is the save's question.
+       *
+       * A ninth member of a published union, as `code` is the eighth.
+       *
+       * @experimental Settles with page CSS.
+       */
+      readonly kind: "customCss";
+      readonly customCss: string | null;
     };
 
 /**
@@ -234,8 +289,16 @@ export type BuilderOp =
  */
 export function addressesNoNode(
   op: BuilderOp
-): op is Extract<BuilderOp, { readonly kind: "envelope" | "seo" }> {
-  return op.kind === "envelope" || op.kind === "seo";
+): op is Extract<
+  BuilderOp,
+  { readonly kind: "envelope" | "seo" | "code" | "customCss" }
+> {
+  return (
+    op.kind === "envelope" ||
+    op.kind === "seo" ||
+    op.kind === "code" ||
+    op.kind === "customCss"
+  );
 }
 
 /**

@@ -23,13 +23,14 @@ import type { CanvasPassage } from "./canvas/canvas-passage";
 import type { ComponentFieldsHost } from "./component-fields";
 import type { ComponentVariantsHost } from "./component-variants";
 import type { ContentServices } from "./content-controls";
+import type { BlockCustomCssAccess } from "./custom-css";
 import type { EditorState } from "./editor-state";
+import type { BreakpointsStatus } from "./hide-on";
 import type { LookEditing } from "./look-inspector";
 import type { SavedComponent } from "./panels/add/inserter";
 import type { StyleInspectorPanelProps } from "./style-inspector-panel";
 import type { SharedStylesHost, StyleTargetBarProps } from "./style-target";
 import type { StylePolicy } from "./style-values";
-import type { BreakpointsStatus } from "./visible-on";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -107,6 +108,24 @@ export interface InspectorPanelProps {
    */
   fonts?: StyleInspectorPanelProps["fonts"];
   /**
+   * Opens the Design panel's Block styles at a block type, from the Style
+   * tab's "Edit block styles". Absent, the Block style section offers no way
+   * there.
+   *
+   * @experimental Settles with the Design panel's Block styles.
+   */
+  onEditBlockStyles?: (blockType: string) => void;
+  /**
+   * A block's own custom CSS, given only where the person may change the
+   * site's settings, the permission site code is held to: Advanced then ends
+   * with a Custom CSS section, checked by `check` before anything is stored.
+   * Absent, there is no such section, the Style tab only says a block has
+   * custom CSS, and the CSS itself is never shown.
+   *
+   * @experimental Settles with custom CSS.
+   */
+  customCss?: BlockCustomCssAccess;
+  /**
    * The editor whose selected block this edits.
    *
    * The whole state rather than a document and an `apply` separately: a patch is
@@ -163,7 +182,7 @@ export interface InspectorPanelProps {
   /**
    * Whether `breakpoints` is the site's own set yet: `loading` while the
    * config's defaults stand in for the stored set being read, `unavailable`
-   * when that read failed. "Visible on" writes only once it is `ready`: a
+   * when that read failed. "Hide on" writes only once it is `ready`: a
    * hide resolved against the wrong set is stored wrong. Defaults to
    * `ready`, for a host whose breakpoints are known up front.
    */
@@ -264,6 +283,22 @@ export interface InspectorPanelProps {
    * @experimental Settles with the page's settings panel.
    */
   documentSettings?: DocumentSettingsView;
+  /**
+   * The host's card for the header or footer selected on the canvas: what it
+   * is, where it comes from and how to change it. Drawn in place of
+   * everything else while no block is selected; absent while no region is.
+   *
+   * @experimental Settles with editing a header or footer in place.
+   */
+  regionCard?: React.ReactNode;
+  /**
+   * The name of the region of the page's layout edited in place, while one
+   * is ("Site header"): `editor` is the region's, and the selected block's
+   * card says where it is, "Navigation · in Site header".
+   *
+   * @experimental Settles with editing a header or footer in place.
+   */
+  editingIn?: string;
 }
 
 /** What the host draws of the open document while nothing is selected. */

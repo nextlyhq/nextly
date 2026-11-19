@@ -103,6 +103,16 @@ describe("the builder's start-up read", () => {
     expect(asked).toEqual([]);
   });
 
+  it("says whom it read for, so the editor hands it to no one else", async () => {
+    const route = builderStartupRoute([echo("/site/style")]);
+    const signedIn = contextHolding([]).ctx;
+    (signedIn as { user: unknown }).user = { id: "ada" };
+    expect((await ask(route, ["/site/style"], signedIn)).readFor).toBe("ada");
+    const nobody = contextHolding([]).ctx;
+    (nobody as { user: unknown }).user = null;
+    expect((await ask(route, ["/site/style"], nobody)).readFor).toBeNull();
+  });
+
   it("refuses one read without failing the others", async () => {
     const refusing = {
       ...echo("/capability"),

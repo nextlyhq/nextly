@@ -14,6 +14,7 @@
 
 import { sql, type SQL } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
 import {
@@ -21,7 +22,11 @@ import {
   resolveCatalogName,
 } from "../../schema/utils/resolve-catalog-name";
 import { MIGRATION_TARGET } from "../migration/target";
-import { resolveFieldGroupRegistryName } from "../storage/resolve-storage-names";
+import {
+  resolveFieldGroupRegistryName,
+  resolveKnownTypeColumns,
+  type CatalogReadAdapter,
+} from "../storage/resolve-storage-names";
 
 import {
   fieldGroupTableNameFor,
@@ -162,20 +167,54 @@ async function registryIsAbsent(
   }
 }
 
+/** Where each declared field group is stored: its table, and the discriminator that table holds. */
+export interface DeclaredFieldGroupStorage {
+  /** By slug: the registry row's table, or for a group it does not hold yet, the one it is created under. */
+  tables: Map<string, string>;
+  /** By table: the discriminator column the live table holds, or the one a new table is created with. */
+  typeColumns: Map<string, string>;
+}
+
 /**
- * The table each declared field group is stored in, by slug: its registry row's, or for a group
- * the registry does not hold yet, the one it is created under on this site. Undefined where no
- * group is declared or the registry cannot be read, so a caller derives names as it did before.
+ * Where each declared field group is stored, read from the registry and the catalog. Undefined
+ * where the configuration declares no group.
+ *
+ * 🔴 Refuses, rather than answering with derived names, where the registry is there but cannot be
+ * read: a derived name is the legacy one, and on a site whose storage was migrated a caller that
+ * acted on it would declare a second table beside the group's real one.
  */
-export async function declaredFieldGroupTables(
-  adapter: RegistryReadAdapter,
+export async function declaredFieldGroupStorage(
+  adapter: RegistryReadAdapter & CatalogReadAdapter,
   fieldGroups: readonly unknown[] | undefined
-): Promise<Map<string, string> | undefined> {
+): Promise<DeclaredFieldGroupStorage | undefined> {
   const slugs = (fieldGroups ?? [])
     .map(group => (group as { slug?: unknown }).slug)
     .filter((slug): slug is string => typeof slug === "string");
   if (slugs.length === 0) return undefined;
   const stored = await readStoredFieldGroupTables(adapter);
-  if (!stored.usable) return undefined;
-  return new Map(slugs.map(slug => [slug, storedOrNewTableName(stored, slug)]));
+  if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
+  const tables = new Map(
+    slugs.map(slug => [slug, storedOrNewTableName(stored, slug)])
+  );
+  const typeColumns = await resolveKnownTypeColumns(adapter, [
+    ...tables.values(),
+  ]);
+  return { tables, typeColumns };
+}
+
+/**
+ * The refusal of a path that must know where field groups are stored when the registry is there
+ * but cannot be read. Deriving names instead would address the legacy tables, and on a site whose
+ * storage was migrated declare a second table beside each group's real one.
+ */
+export function fieldGroupRegistryUnreadable(
+  reason: string | undefined
+): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_FIELD_GROUP_REGISTRY_UNREADABLE",
+    publicMessage:
+      "The field-group registry could not be read, so where each field group is stored is not " +
+      "known. Nothing was changed. Retry once the database answers.",
+    logContext: { reason },
+  });
 }

@@ -65,7 +65,8 @@ async function openBuilder(page: Page, id: string): Promise<void> {
 }
 
 function panel(page: Page) {
-  return page.locator('div[aria-label="Pages"]');
+  // The panel's Pages group: its folding heading, search and rows.
+  return page.getByRole("region", { name: "Pages" }).first();
 }
 
 /** Opens the Pages panel from the rail and narrows it to `search`. */
@@ -77,7 +78,7 @@ async function openPanel(page: Page, search: string): Promise<void> {
     .getByRole("button", { name: "Pages" });
   if ((await item.getAttribute("aria-pressed")) !== "true") await item.click();
   await expect(
-    panel(page).getByRole("heading", { name: "Pages", level: 2 })
+    panel(page).getByRole("button", { name: /^Pages, \d+$/ })
   ).toBeVisible();
   await panel(page).getByRole("textbox", { name: "Search pages" }).fill(search);
 }
@@ -143,7 +144,7 @@ test.describe("the Pages panel", () => {
     await switcher(page, `${stamp} first`).click();
     await page.getByRole("menuitem", { name: "All pages…" }).click();
     await expect(
-      panel(page).getByRole("heading", { name: "Pages", level: 2 })
+      panel(page).getByRole("button", { name: /^Pages, \d+$/ })
     ).toBeVisible();
     await expect(
       panel(page).getByRole("textbox", { name: "Search pages" })
@@ -158,8 +159,9 @@ test.describe("the Pages panel", () => {
     await expect(row(page, `${stamp} here`)).toBeVisible();
 
     await panel(page).getByRole("button", { name: "New page" }).click();
-    await panel(page)
-      .getByRole("textbox", { name: "Page title" })
+    await page
+      .getByRole("dialog", { name: "New page" })
+      .getByRole("textbox", { name: "Title" })
       .fill(`${stamp} fresh`);
     await page.keyboard.press("Enter");
 

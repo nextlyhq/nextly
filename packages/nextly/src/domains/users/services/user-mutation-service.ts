@@ -73,6 +73,10 @@ import {
   contentEventsTables,
 } from "../../../schemas/content-events";
 import { DELETED_PRINCIPALS_TABLE } from "../../../schemas/deleted-principals/table-name";
+import {
+  EXTERNAL_IDENTITIES_TABLE,
+  externalIdentitiesTables,
+} from "../../../schemas/external-identities";
 import { NOTICES_TABLE, noticesTables } from "../../../schemas/notices";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
@@ -3038,6 +3042,14 @@ export class UserMutationService extends BaseService {
     // reason notices are.
     const versionViewsExist = await this.tablePresent(VERSION_VIEWS_TABLE);
 
+    // The person's external identities: theirs alone, so they go with the
+    // account rather than waiting for a provider to hand the next account the
+    // same subject. Probed out here for the reason notices are: an
+    // installation that has not run `nextly migrate` has no identities table,
+    // and a delete against it would abort the transaction and the deletion
+    // with it.
+    const identitiesExist = await this.tablePresent(EXTERNAL_IDENTITIES_TABLE);
+
     // The record of content events names each event's actor; the name goes
     // with the account. Probed for the reason the tables above are.
     const contentEventsExist = await this.tablePresent(CONTENT_EVENTS_TABLE);
@@ -3216,7 +3228,16 @@ export class UserMutationService extends BaseService {
           String(userId),
           versionViewsExist
         );
-
+        // Their external identities, in the same transaction: the foreign key
+        // on `user_id` would take them with the row, but the delete says so
+        // where the deletion is read rather than leaving it to a cascade a
+        // database built without key enforcement would not run.
+        await this.eraseOwnedRows(
+          txDb,
+          externalIdentitiesTables(this.dialect).nextlyExternalIdentities,
+          String(userId),
+          identitiesExist
+        );
         if (widgetLayoutExists) {
           const layoutTable = widgetLayoutTables(this.dialect)
             .nextlyWidgetLayout as unknown as { id: Column };

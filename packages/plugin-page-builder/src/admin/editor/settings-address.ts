@@ -93,8 +93,7 @@ export function useSavedAddress(
 ): SavedAddressRead {
   const read = usePluginRoute<PageAddressResponse>({
     plugin: PAGE_BUILDER_PLUGIN_NAME,
-    path:
-      address === null ? "" : pageAddressPath(address.page, address.locale),
+    path: address === null ? "" : pageAddressPath(address.page, address.locale),
     staleTime: 0,
     enabled: enabled && address !== null,
   });
