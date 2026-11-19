@@ -15,11 +15,14 @@
  *   verification. Consumed by the auth route handlers via deps-bridge.ts.
  */
 
+import { linkingPolicyFromAuthConfig } from "../../domains/auth/linking-policy";
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import { AuthService } from "../../domains/auth/services/auth-service";
+import { IdentityService } from "../../domains/auth/services/identity-service";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { EmailService } from "../../services/email/email-service";
+import { ServiceContainer } from "../../services/index";
 import { container } from "../container";
 
 import type { RegistrationContext } from "./types";
@@ -48,6 +51,23 @@ export function registerAuthServices(ctx: RegistrationContext): void {
     "apiKeyService",
     () => new ApiKeyService(adapter, logger)
   );
+
+  // IdentityService — core's own external identities: the listing and the
+  // unlink of what one account holds. The app's auth configuration has no
+  // provider keys to read yet, so the policy is the one a configuration
+  // naming none resolves to: no key is enabled, and an unlink counts no
+  // identity as a way in — a password-less account keeps its last one.
+  // The provisioning branch's role lookup and account creation are the
+  // service container's own role and users services, the ones the rest of
+  // the app's writes go through.
+  container.registerSingleton<IdentityService>("identityService", () => {
+    const services = new ServiceContainer(adapter);
+    return new IdentityService(adapter, logger, {
+      linkingPolicy: linkingPolicyFromAuthConfig(undefined),
+      roles: services.roles,
+      users: services.users,
+    });
+  });
 
   // AuthService — user registration, password reset/change, email
   // verification. Email service is looked up lazily so we tolerate
