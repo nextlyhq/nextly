@@ -40,23 +40,21 @@ import {
  * click to the save request's send, and to the editor saying it is saved.
  */
 export async function publishes(page, watcher, id, count) {
-  const base = (await textOf(page, LEAD)).replace(/!$/, "");
-  await selectAndWait(page, LEAD, await textOf(page, LEAD));
+  const base = (await textOf(page, HEADING)).replace(/!$/, "");
+  await selectAndWait(page, HEADING, await textOf(page, HEADING));
   const out = { request: [], saved: [] };
   for (let i = 0; i < count; i++) {
-    const current = await textOf(page, LEAD);
+    const current = await textOf(page, HEADING);
     const expected = current.endsWith("!") ? base : `${base}!`;
     await caretAtEnd(page);
     if (expected === base) await page.keyboard.press("Backspace");
     else await page.keyboard.type("!");
     await page.keyboard.press("Tab");
+    // The id travels as an argument: the callback runs in the browser, where
+    // this module's constants don't exist.
     await page.waitForFunction(
-      t =>
-        window.__builderSpeedChecks.canvasText({
-          id: "speed-hero-lead",
-          text: t,
-        }),
-      expected,
+      ({ id, text }) => window.__builderSpeedChecks.canvasText({ id, text }),
+      { id: HEADING, text: expected },
       { timeout: SHOW_LIMIT_MS, polling: 100 }
     );
     // The autosave a pause after the edit, so every press starts alike.
@@ -82,6 +80,16 @@ export async function publishes(page, watcher, id, count) {
       }
     );
     out.saved.push(saved.ms);
+    if (saved.ms === null) {
+      // Which part of "saved" never arrived: the answered save, the button's
+      // finished state, or the indicator's tone.
+      const parts = await page.evaluate(
+        () => window.__builderSpeed.savedParts ?? null
+      );
+      console.error(
+        `[builder-speed] publish not seen as saved: ${JSON.stringify(parts)}`
+      );
+    }
     const request = await page.evaluate(
       ({ sentBefore, id }) =>
         window.__builderSpeed.sent

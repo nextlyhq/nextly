@@ -320,6 +320,12 @@ describeEachDialect("a field that stops being translated", dialect => {
     },
   ];
 
+  /**
+   * Whether a save of `table`'s entity runs the migration file it writes: a Single's and a field
+   * group's do; a collection's is still applied by its push.
+   */
+  const runsItsFile = (table: string) => !table.startsWith("dc_");
+
   it.each(PATHS)("keeps them when $path", async ({ entity, seed, change }) => {
     const id = await seed();
 
@@ -334,8 +340,11 @@ describeEachDialect("a field that stops being translated", dialect => {
         `WHERE ${quote(dialect, "collection")} = '${entity.slug}' AND ${quote(dialect, "field")} = 'heading' AND ${quote(dialect, "entry_id")} = '${id}' ` +
         `ORDER BY ${quote(dialect, "locale")}`
     );
+    // Every other language archived. A save that runs its migration file archives the kept one
+    // too, as `nextly migrate:create`'s file does, so the file's DOWN can put it back.
     expect(archived).toEqual([
       { locale: "ar", value: VALUES.ar },
+      ...(runsItsFile(entity.table) ? [{ locale: "en", value: VALUES.en }] : []),
       { locale: "es", value: VALUES.es },
     ]);
     expect(await columnsOf(`${entity.table}_locales`)).not.toContain("heading");

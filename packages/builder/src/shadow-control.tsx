@@ -13,6 +13,11 @@
  * read back into the fields where it can be; where it cannot, it is kept
  * exactly as typed, said to be shown as CSS, and still checked.
  *
+ * Given `onPreview`, as a shadow variable is, the whole shadow is offered to
+ * be drawn as any of its fields is typed or its colour picked, a shadow CSS
+ * would draw nothing for never among them, and every write says the edit is
+ * over first.
+ *
  * ONE control for every shadow: a shadow variable in Design and a block's
  * shadow in its Style tab both draw it, so the two never offer different
  * ways to build the same thing.
@@ -46,6 +51,7 @@ import {
 import { variableFor } from "./style-colour";
 import { ColourField } from "./style-colour-field";
 import { styleControlsFor, type StyleControl } from "./style-controls";
+import { TypesLiveContext } from "./style-field-surroundings";
 import { SizeValue } from "./variable-value-controls";
 
 /** What a shadow control is given by the place that draws it. */
@@ -67,7 +73,19 @@ export interface ShadowControlProps {
   readonly refusedBy?: string | undefined;
   /** Writes the new CSS: `none` once the last layer is removed. */
   readonly onCommit: (css: string) => void;
+  /**
+   * Draws the shadow as it is being edited, before it is written; `null` once
+   * the edit ends, said before the write. Absent, a field writes when it is
+   * left.
+   */
+  readonly onPreview?: ((css: string | null) => void) | undefined;
 }
+
+/**
+ * A field's preview of the layer it is part of: the layer with that field's
+ * value in it, or `null` once the field's edit ends.
+ */
+type LayerPreview = (layer: ShadowLayer | null) => void;
 
 /** What the CSS view says where the CSS can't be fields. */
 const KEPT_AS_CSS = "Shown as CSS because it can't be shown as fields";
@@ -107,12 +125,23 @@ export function ShadowControl(props: ShadowControlProps): React.JSX.Element {
   // Every write is checked first: a field can make a shadow CSS draws
   // nothing for, a negative blur among them, and typed CSS can be anything.
   const write = (css: string): boolean => {
+    // The edit is over, written or not.
+    props.onPreview?.(null);
     const refused = shadowRefusal(css);
     setRefusal(refused);
     if (refused !== undefined) return false;
     if (css !== value) props.onCommit(css);
     return true;
   };
+  // A shadow being edited, drawn where it is one CSS would draw; the canvas
+  // keeps the last that was.
+  const preview =
+    props.onPreview === undefined
+      ? undefined
+      : (css: string | null): void => {
+          if (css === null) props.onPreview?.(null);
+          else if (shadowRefusal(css) === undefined) props.onPreview?.(css);
+        };
   const showsCss = asCss || reading.kind === "css";
   return (
     <div className="nx-shadow" role="group" aria-label={label}>
@@ -130,6 +159,7 @@ export function ShadowControl(props: ShadowControlProps): React.JSX.Element {
           kept={reading.kind === "css"}
           refusal={refusal}
           refusedBy={props.refusedBy}
+          onPreview={preview}
           onCommit={typed => {
             // Read back into the fields where it can be; kept as CSS where not.
             if (write(typed) && readShadow(typed, tokens).kind === "layers") {
@@ -146,6 +176,12 @@ export function ShadowControl(props: ShadowControlProps): React.JSX.Element {
           refusal={refusal}
           refusalId={`${id}-said`}
           onLayers={layers => write(writeShadow(layers, tokens))}
+          onPreview={
+            preview === undefined
+              ? undefined
+              : layers =>
+                  preview(layers === null ? null : writeShadow(layers, tokens))
+          }
           onEditAsCss={() => setAsCss(true)}
         />
       )}
@@ -207,6 +243,7 @@ function CssView({
   kept,
   refusal,
   refusedBy,
+  onPreview,
   onCommit,
 }: {
   id: string;
@@ -217,6 +254,7 @@ function CssView({
   kept: boolean;
   refusal: string | undefined;
   refusedBy: string | undefined;
+  onPreview: ((css: string | null) => void) | undefined;
   onCommit: (typed: string) => void;
 }): React.JSX.Element {
   const [draft, setDraft] = React.useState(value);
@@ -229,6 +267,8 @@ function CssView({
   const commit = (text: string): void => {
     const typed = text.trim();
     if (!readOnly && typed !== "") onCommit(typed);
+    // Nothing to write: the edit is over all the same.
+    else onPreview?.(null);
   };
   return (
     <div className="nx-shadow__css">
@@ -243,7 +283,11 @@ function CssView({
           refusal === undefined && refusedBy === undefined ? undefined : true
         }
         aria-describedby={refusal === undefined ? refusedBy : saidId}
-        onChange={event => setDraft(event.currentTarget.value)}
+        onChange={event => {
+          const typed = event.currentTarget.value;
+          setDraft(typed);
+          if (!readOnly && typed.trim() !== "") onPreview?.(typed.trim());
+        }}
         onBlur={event => commit(event.currentTarget.value)}
         onKeyDown={event => {
           // Enter commits; Shift+Enter is a new line, for a long shadow.
@@ -272,6 +316,7 @@ function LayerList({
   refusal,
   refusalId,
   onLayers,
+  onPreview,
   onEditAsCss,
 }: {
   layers: readonly ShadowLayer[];
@@ -281,6 +326,8 @@ function LayerList({
   refusal: string | undefined;
   refusalId: string;
   onLayers: (layers: readonly ShadowLayer[]) => void;
+  /** Draws the layers as one is edited; `null` ends it. */
+  onPreview: ((layers: readonly ShadowLayer[] | null) => void) | undefined;
   onEditAsCss: () => void;
 }): React.JSX.Element {
   const writes = writesOf?.(writeShadow(layers, tokens));
@@ -305,6 +352,16 @@ function LayerList({
           readOnly={readOnly}
           writes={writes}
           onChange={next => change(index, next)}
+          onPreview={
+            onPreview === undefined
+              ? undefined
+              : next =>
+                  onPreview(
+                    next === null
+                      ? null
+                      : layers.map((each, at) => (at === index ? next : each))
+                  )
+          }
           onMove={by => move(index, by)}
           onRemove={() => onLayers(layers.filter((_, at) => at !== index))}
         />
@@ -357,6 +414,7 @@ function LayerFields({
   readOnly,
   writes,
   onChange,
+  onPreview,
   onMove,
   onRemove,
 }: {
@@ -367,6 +425,8 @@ function LayerFields({
   readOnly: boolean;
   writes: string | undefined;
   onChange: (layer: ShadowLayer) => void;
+  /** Draws the layer as one of its fields is edited; `null` ends it. */
+  onPreview: LayerPreview | undefined;
   onMove: (by: -1 | 1) => void;
   onRemove: () => void;
 }): React.JSX.Element {
@@ -395,6 +455,14 @@ function LayerFields({
               placeholder="0"
               readOnly={readOnly}
               onCommit={typed => onChange({ ...layer, [part]: typed })}
+              {...(onPreview === undefined
+                ? {}
+                : {
+                    onPreview: (typed: string | null) =>
+                      onPreview(
+                        typed === null ? null : { ...layer, [part]: typed }
+                      ),
+                  })}
             />
           </Hinted>
         ))}
@@ -406,6 +474,12 @@ function LayerFields({
           tokens={tokens}
           readOnly={readOnly}
           onColour={colour => onChange({ ...layer, colour })}
+          {...(onPreview === undefined
+            ? {}
+            : {
+                onPreviewColour: (colour: ShadowColour | undefined) =>
+                  onPreview({ ...layer, colour }),
+              })}
         />
       </Hinted>
       <Hinted writes={writes}>
@@ -497,6 +571,7 @@ function LayerColour({
   tokens,
   readOnly,
   onColour,
+  onPreviewColour,
 }: {
   /** The layer's name, which the picker's controls are named for. */
   layer: string;
@@ -504,6 +579,11 @@ function LayerColour({
   tokens: SiteTokenSet | undefined;
   readOnly: boolean;
   onColour: (colour: ShadowColour | undefined) => void;
+  /**
+   * Draws a colour typed or picked before it is written. Given, the field
+   * types live into it, and its commit still writes once.
+   */
+  onPreviewColour?: (colour: ShadowColour | undefined) => void;
 }): React.JSX.Element {
   const id = React.useId();
   const stored = storedColour(colour);
@@ -520,24 +600,54 @@ function LayerColour({
           value={typeof stored === "string" ? stored : ""}
         />
       ) : (
-        <ColourField
-          id={id}
-          labelledBy={`${id}-label`}
-          control={SHADOW_COLOUR_CONTROL}
-          stored={stored}
-          actionName={layer}
-          tokens={tokens}
-          prefersDark={false}
-          pairedColour={undefined}
-          obscuredBy={undefined}
-          describedBy={undefined}
-          onCommit={next => {
-            onColour(colourOf(next));
-            return "applied";
-          }}
-        />
+        <TypesLive on={onPreviewColour !== undefined}>
+          <ColourField
+            id={id}
+            labelledBy={`${id}-label`}
+            control={SHADOW_COLOUR_CONTROL}
+            stored={stored}
+            actionName={layer}
+            tokens={tokens}
+            prefersDark={false}
+            pairedColour={undefined}
+            obscuredBy={undefined}
+            describedBy={undefined}
+            onCommit={next => {
+              onColour(colourOf(next));
+              return "applied";
+            }}
+            {...(onPreviewColour === undefined
+              ? {}
+              : {
+                  onType: (next: StyleValue | null) => {
+                    onPreviewColour(colourOf(next));
+                    return "applied" as const;
+                  },
+                })}
+          />
+        </TypesLive>
       )}
     </div>
+  );
+}
+
+/**
+ * Fields drawn as typing live where `on`, as a previewed shadow's are, and as
+ * the panel around them says otherwise.
+ */
+function TypesLive({
+  on,
+  children,
+}: {
+  on: boolean;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return on ? (
+    <TypesLiveContext.Provider value={true}>
+      {children}
+    </TypesLiveContext.Provider>
+  ) : (
+    <>{children}</>
   );
 }
 

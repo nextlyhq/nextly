@@ -848,6 +848,7 @@ export type { DesignTab, VariableGroup } from "./tokens-studio";
 export type {
   VariableReach,
   VariablesAccess,
+  VariablesTogether,
   VariablesUsage,
   VariableUse,
   VariableUseKind,
