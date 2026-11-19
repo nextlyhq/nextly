@@ -71,6 +71,31 @@ const capturingLogger: Logger = {
   error: capture(),
 };
 
+/**
+ * Capture what the console and the process's own streams are handed until
+ * the returned function restores them.
+ */
+function captureOutput(): () => void {
+  const spies = [
+    ...(["log", "info", "warn", "error", "debug"] as const).map(level =>
+      vi.spyOn(console, level).mockImplementation(capture())
+    ),
+    ...[process.stdout, process.stderr].map(stream =>
+      vi.spyOn(stream, "write").mockImplementation((chunk: unknown) => {
+        logged.push(
+          typeof chunk === "string"
+            ? chunk
+            : Buffer.from(chunk as Uint8Array).toString()
+        );
+        return true;
+      })
+    ),
+  ];
+  return () => {
+    for (const spy of spies) spy.mockRestore();
+  };
+}
+
 /** `address` as plain text, or any digest of it, in `text`. */
 function expectNoAddress(text: string, address: string): void {
   expect(text.toLowerCase()).not.toContain(address.toLowerCase());
@@ -378,7 +403,10 @@ for (const dialect of getConfiguredTestDialects()) {
         messageId: "m-added",
         queuedId: queued.id,
       });
-      const found = await t.nextly.emailDeliveries.search({ address: added });
+      const found = await t.nextly.emailDeliveries.search({
+        address: added,
+        user: { id: readerId },
+      });
       expect(found.items.map(item => `${item.kind}:${item.id}`)).toEqual([
         `queued:${queued.id}`,
       ]);
@@ -485,9 +513,7 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     it("logs nothing of the address, found, refused or invalid", async () => {
-      const spies = (["log", "info", "warn", "error", "debug"] as const).map(
-        level => vi.spyOn(console, level).mockImplementation(capture())
-      );
+      const restore = captureOutput();
       logged.length = 0;
       try {
         await search(reader, { address: ADA });
@@ -499,7 +525,10 @@ for (const dialect of getConfiguredTestDialects()) {
           { address: ADA },
           `email-deliveries/search?address=${encodeURIComponent(ADA)}`
         );
-        await t.nextly.emailDeliveries.search({ address: ADA });
+        await t.nextly.emailDeliveries.search({
+          address: ADA,
+          user: { id: readerId },
+        });
         await expect(
           t.nextly.emailDeliveries.search({
             address: ADA,
@@ -508,13 +537,139 @@ for (const dialect of getConfiguredTestDialects()) {
           })
         ).rejects.toMatchObject({ code: "FORBIDDEN" });
       } finally {
-        for (const spy of spies) spy.mockRestore();
+        restore();
       }
       expectNoAddress(logged.join("\n"), ADA);
     });
 
+    it("keeps the address's digests out of a failed search's error and logs", async () => {
+      // A driver's error quotes its statement's parameters: here, the
+      // digests the search asked with.
+      const quoting = () =>
+        new Error(
+          `Failed query: select ... params: ${recipientDigests(ADA).join(",")}`
+        );
+      const list = vi.spyOn(deliveries, "list");
+      const restore = captureOutput();
+      logged.length = 0;
+      try {
+        list.mockRejectedValueOnce(quoting());
+        const failed = await search(reader, { address: ADA });
+        expect(failed.status, failed.text).toBe(500);
+        expectNoAddress(failed.text, ADA);
+
+        list.mockRejectedValueOnce(quoting());
+        const thrown = await t.nextly.emailDeliveries
+          .search({ address: ADA, user: { id: readerId } })
+          .then(
+            () => undefined,
+            (error: unknown) => error
+          );
+        expect(thrown).toMatchObject({ code: "INTERNAL_ERROR" });
+        const chain: string[] = [];
+        for (
+          let current: unknown = thrown;
+          current instanceof Error;
+          current = current.cause
+        ) {
+          chain.push(current.message, current.stack ?? "", textOf(current));
+        }
+        expectNoAddress(chain.join("\n"), ADA);
+      } finally {
+        restore();
+        list.mockRestore();
+      }
+      expectNoAddress(logged.join("\n"), ADA);
+    });
+
+    it("answers no search it could not record", async () => {
+      const activity = t.getService(
+        "activityLogService"
+      ) as unknown as ActivityLogService;
+      const write = vi
+        .spyOn(activity, "logActivityInTx")
+        .mockRejectedValueOnce(new Error("The activity log is unavailable."));
+      const before = (await searchEntries()).length;
+      try {
+        const refused = await search(reader, { address: ADA });
+        expect(refused.status, refused.text).toBe(500);
+        expect(itemsOf(refused.body)).toBeUndefined();
+        expect(write).toHaveBeenCalled();
+      } finally {
+        write.mockRestore();
+      }
+      expect(await searchEntries()).toHaveLength(before);
+    });
+
+    it("finds an address the send path takes, a quoted local part included", async () => {
+      const quoted = '"Joe Smith"@example.com';
+      await deliveries.record({
+        to: quoted,
+        providerType: "log",
+        templateSlug: "quoted",
+        status: "sent",
+        messageId: "m-quoted",
+      });
+      const found = await search(reader, { address: quoted });
+      expect(found.status, found.text).toBe(200);
+      expect(itemsOf(found.body).map(item => item.id)).toEqual([
+        await deliveryId("m-quoted"),
+      ]);
+    });
+
+    it.skipIf(dialect === "sqlite")(
+      "reads both halves on one snapshot, so an email pruned between them is listed once",
+      async () => {
+        // SQLite runs one transaction at a time, and the writes that settle
+        // and prune queued email are transactions: none lands between the
+        // two halves there.
+        const address = "pruned@example.com";
+        const queued = await t.nextly.email.queue({
+          to: address,
+          subject: "Pruned",
+          html: "<p>x</p>",
+        });
+        await deliveries.record({
+          to: address,
+          providerType: "log",
+          status: "sent",
+          messageId: "m-pruned",
+          queuedId: queued.id,
+        });
+        const queue = loadedDialect(dialect).tables.emailQueue;
+        const db = t.adapter.getDrizzle() as never as {
+          delete(table: unknown): {
+            where(condition: unknown): Promise<unknown>;
+          };
+        };
+        const original = deliveries.list.bind(deliveries);
+        const list = vi
+          .spyOn(deliveries, "list")
+          .mockImplementationOnce(async options => {
+            // The queue half has been read: the prune commits now, on a
+            // connection of its own.
+            await db.delete(queue).where(eq(queue.id as never, queued.id));
+            return original(options);
+          });
+        try {
+          const found = await t.nextly.emailDeliveries.search({
+            address,
+            user: { id: readerId },
+          });
+          expect(found.items.map(item => `${item.kind}:${item.id}`)).toEqual([
+            `queued:${queued.id}`,
+          ]);
+        } finally {
+          list.mockRestore();
+        }
+      }
+    );
+
     it("offers the search on the Direct API, checked as REST checks it and recorded as the caller", async () => {
-      const page = await t.nextly.emailDeliveries.search({ address: ADA });
+      const page = await t.nextly.emailDeliveries.search({
+        address: ADA,
+        user: { id: readerId },
+      });
       expect(page.items.map(item => item.kind).sort()).toEqual([
         "delivery",
         "queued",
@@ -542,8 +697,29 @@ for (const dialect of getConfiguredTestDialects()) {
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
       expect(await searchEntries()).toHaveLength(before + 1);
       await expect(
-        t.nextly.emailDeliveries.search({ address: "ada" })
+        t.nextly.emailDeliveries.search({
+          address: "ada",
+          user: { id: readerId },
+        })
       ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+      // A search no entry could name is refused before it reads anything:
+      // a trusted call naming nobody, and a key the Direct API knows no id of.
+      for (const unnamed of [
+        { address: ADA },
+        {
+          address: ADA,
+          actor: {
+            actorType: "apiKey" as const,
+            permissions: ["read-email-deliveries"],
+          },
+        },
+      ]) {
+        await expect(
+          t.nextly.emailDeliveries.search(unnamed)
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      }
+      expect(await searchEntries()).toHaveLength(before + 1);
     });
 
     it("finds records across one rotation, under the current and the previous secret", async () => {
@@ -569,7 +745,10 @@ for (const dialect of getConfiguredTestDialects()) {
           status: "sent",
           messageId: "m-once-b",
         });
-        const found = await t.nextly.emailDeliveries.search({ address });
+        const found = await t.nextly.emailDeliveries.search({
+          address,
+          user: { id: readerId },
+        });
         const slugs = (entry: ActivityEntry) =>
           typeof entry.template === "object" ? entry.template.slug : null;
         expect(
@@ -613,7 +792,10 @@ for (const dialect of getConfiguredTestDialects()) {
           status: "sent",
           messageId: "m-twice-c",
         });
-        const found = await t.nextly.emailDeliveries.search({ address });
+        const found = await t.nextly.emailDeliveries.search({
+          address,
+          user: { id: readerId },
+        });
         expect(
           found.items
             .map(entry =>

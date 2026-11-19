@@ -1216,14 +1216,7 @@ export class ActivityLogService extends BaseService {
    */
   async logActivity(input: LogActivityInput): Promise<void> {
     try {
-      if (this.dialect === "sqlite") {
-        await this.logActivityInTx(this.db as ActivityWriteDb, input);
-        return;
-      }
-
-      await (this.db as TransactionalActivityDb).transaction(tx =>
-        this.logActivityInTx(tx, input)
-      );
+      await this.logActivityOrThrow(input);
     } catch (error) {
       this.logger.error("Failed to log activity", {
         error: error instanceof Error ? error.message : String(error),
@@ -1234,6 +1227,22 @@ export class ActivityLogService extends BaseService {
         },
       });
     }
+  }
+
+  /**
+   * Record an activity log entry as a self-contained write, as
+   * {@link logActivity} does, with a failure reaching the caller: for an
+   * action that must not take place unrecorded, which the caller refuses
+   * when its entry cannot be written.
+   */
+  async logActivityOrThrow(input: LogActivityInput): Promise<void> {
+    if (this.dialect === "sqlite") {
+      await this.logActivityInTx(this.db as ActivityWriteDb, input);
+      return;
+    }
+    await (this.db as TransactionalActivityDb).transaction(tx =>
+      this.logActivityInTx(tx, input)
+    );
   }
 
   /**

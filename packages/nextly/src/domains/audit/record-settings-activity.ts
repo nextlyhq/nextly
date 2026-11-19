@@ -27,6 +27,7 @@
 
 import type { RequestActor, RequestActorType } from "../../auth/request-actor";
 import { container } from "../../di/container";
+import { NextlyError } from "../../errors";
 import type {
   ActivityLogAction,
   ActivityLogService,
@@ -114,6 +115,13 @@ export interface SettingsActivityInput {
   /** Resource-specific facts worth reading later. Never a secret. */
   metadata?: Record<string, unknown>;
   actor?: RequestActor | null;
+  /**
+   * Whether the entry must be written: an actor that names no one, an
+   * activity log that is not set up, or a write that fails then throws
+   * rather than recording nothing, for an action its caller refuses to take
+   * unrecorded.
+   */
+  required?: boolean;
 }
 
 /**
@@ -141,15 +149,29 @@ export async function recordSettingsActivity(
   input: SettingsActivityInput
 ): Promise<void> {
   const actor = recordableActor(input.actor);
-  if (!actor) return;
+  if (!actor) {
+    if (input.required) {
+      throw NextlyError.internal({
+        logContext: { reason: "activity-actor-missing" },
+      });
+    }
+    return;
+  }
   if (!worthRecording(input)) return;
 
   let service: ActivityLogService;
   try {
     service = container.get<ActivityLogService>("activityLogService");
-  } catch {
+  } catch (error) {
     // Absent registration is a boot-time fact about how the host assembled its
-    // container, not a write that failed.
+    // container, not a write that failed; an entry that must be written
+    // cannot be, so its action is refused.
+    if (input.required) {
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { reason: "activity-log-unavailable" },
+      });
+    }
     return;
   }
 
@@ -158,7 +180,10 @@ export async function recordSettingsActivity(
   // swallowing it at this seam would make a trail that stopped being written
   // invisible, which is worse than the failure it hides. Callers own the
   // never-throw guarantee and the log line that goes with it.
-  await service.logActivity({
+  const write = input.required
+    ? service.logActivityOrThrow.bind(service)
+    : service.logActivity.bind(service);
+  await write({
     actorType: actor.type,
     userId: actor.id,
     action: input.action,

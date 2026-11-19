@@ -52,11 +52,17 @@ import type { RequestActor } from "../../auth/request-actor";
 import { loadedDialect } from "../../database/dialect-tables";
 import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
+import {
+  adapterForReads,
+  runReadsInTransaction,
+} from "../../shared/lib/read-transaction-scope";
 
-import { recordAddressSearch } from "./address-search-activity";
+import {
+  recordAddressSearch,
+  searchRecordable,
+} from "./address-search-activity";
 import { deliveriesTableFor } from "./deliveries-table";
 import {
-  mailboxOf,
   recipientDigests,
   type DeliveryFailureKind,
   type DeliveryTemplateVersion,
@@ -89,6 +95,7 @@ import type {
   EmailDeliveryRecord,
   EmailDeliveryService,
 } from "./services/email-delivery-service";
+import { isSendableAddress } from "./services/recipients";
 
 /** What happened to one recipient of one send: `DeliveryActivity["outcome"]`. */
 type DeliveryOutcome = EmailDeliveryStatus;
@@ -306,21 +313,17 @@ const ACTIVITY_FILTER = z.object({
 
 /** The longest address a mailbox can have (RFC 5321's path limit). */
 const MAX_ADDRESS = 320;
-/** One mailbox: something before one `@`, something after, no spaces. */
-const MAILBOX_SHAPE = /^[^\s@<>]+@[^\s@<>]+$/;
 
-// The address's own value is never put in a message: a refusal names the
-// field, not what was entered.
+// An address the send path takes (`isSendableAddress`), so any address
+// email can go to can be searched for. Its own value is never put in a
+// message: a refusal names the field, not what was entered.
 const ADDRESS_SEARCH = ACTIVITY_FILTER.extend({
   address: z
     .string()
     .trim()
     .min(3)
     .max(MAX_ADDRESS)
-    .refine(
-      value => MAILBOX_SHAPE.test(mailboxOf(value)),
-      "Enter one whole email address."
-    ),
+    .refine(isSendableAddress, "Enter one whole email address."),
 });
 
 const SLUGS = z.array(z.string().min(1).max(255)).max(MAX_SLUGS);
@@ -580,8 +583,28 @@ export class EmailDeliveryActivity {
     this.dialect = adapter.getCapabilities().dialect;
   }
 
+  // Inside `inSnapshot`, its reads run on the snapshot's transaction.
   private get db(): ActivityDb {
-    return this.adapter.getDrizzle<ActivityDb>();
+    return adapterForReads(this.adapter).getDrizzle<ActivityDb>();
+  }
+
+  /**
+   * Run `work`'s reads, this reader's and the delivery reader's, on one
+   * snapshot: a transaction that is REPEATABLE READ and read-only on
+   * PostgreSQL and MySQL, and on SQLite one that keeps every other
+   * transaction out until it ends. The two halves of the merged Activity
+   * then describe one moment, never a queued email pruned or sent between
+   * them.
+   */
+  private inSnapshot<T>(work: () => Promise<T>): Promise<T> {
+    return this.run(() =>
+      this.adapter.transaction(
+        tx => runReadsInTransaction(tx, work, "none"),
+        this.dialect === "sqlite"
+          ? undefined
+          : { isolationLevel: "repeatable read", readOnly: true }
+      )
+    );
   }
 
   /** Whether the providers table exists (`providersTablePresent`). */
@@ -877,7 +900,26 @@ export class EmailDeliveryActivity {
     actor?: RequestActor | null
   ): Promise<AddressSearchPage> {
     const { address, ...filter } = parsed(ADDRESS_SEARCH, search);
-    const page = await this.activityPage(filter, address);
+    // A precondition: a search no entry could name is refused before it
+    // reads anything.
+    if (!searchRecordable(actor)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "user",
+            code: "INVALID",
+            message:
+              "A search by address is recorded by who made it: name the user making it.",
+          },
+        ],
+      });
+    }
+    let page: ActivityPage<ActivityEntry>;
+    try {
+      page = await this.activityPage(filter, address);
+    } catch (error) {
+      throw searchFailure(error);
+    }
     try {
       await recordAddressSearch({ actor, found: page.items.length });
     } catch (error) {
@@ -891,20 +933,30 @@ export class EmailDeliveryActivity {
 
   /**
    * One page of the merged Activity under `options`, narrowed to
-   * `address`'s records when one is given.
+   * `address`'s records when one is given, read on one snapshot.
    */
-  private async activityPage(
+  private activityPage(
     options: z.infer<typeof ACTIVITY_FILTER>,
     address?: string
   ): Promise<ActivityPage<ActivityEntry>> {
     const after = decodeCursor(options.before);
+    return this.inSnapshot(() => this.readPage(options, after, address));
+  }
+
+  /** {@link activityPage}'s reads. */
+  private async readPage(
+    options: z.infer<typeof ACTIVITY_FILTER>,
+    after: Cursor | undefined,
+    address: string | undefined
+  ): Promise<ActivityPage<ActivityEntry>> {
     const limit = options.limit ?? DEFAULT_LIMIT;
     const outcome =
       options.status === "sent" || options.status === "failed"
         ? options.status
         : undefined;
-    // The queue is read first: a settled email pruned between the two reads
-    // then has its deliveries listed on their own, never neither.
+    // Both read on one snapshot (`inSnapshot`): an email settled and pruned
+    // meanwhile is either the queued row or its deliveries, never both or
+    // neither.
     const queued = await this.queuedEntries(options, after, limit + 1, address);
     // A state only a queued email can be in matches no delivery.
     const deliveries =
@@ -1176,6 +1228,23 @@ function queuedEntry(row: QueueRow, job: JobRow | undefined): ActivityEntry {
 }
 
 type QueueTable = ReturnType<typeof loadedDialect>["tables"]["emailQueue"];
+
+/**
+ * A failed search's error with nothing of its query: a driver's error
+ * quotes its statement's parameters, and a search's are the address's
+ * digests. A refusal of what was asked is the caller's to read, and passes.
+ */
+function searchFailure(error: unknown): NextlyError {
+  if (error instanceof NextlyError && error.code === "VALIDATION_ERROR") {
+    return error;
+  }
+  return NextlyError.internal({
+    logContext: {
+      reason: "address-search-failed",
+      ...(error instanceof NextlyError ? { code: error.code } : {}),
+    },
+  });
+}
 
 /**
  * What both queue lists narrow by alike: the state, the template, the time

@@ -11,18 +11,32 @@
  */
 
 import type { RequestActor } from "../../auth/request-actor";
-import { recordSettingsActivity } from "../audit/record-settings-activity";
+import {
+  recordableActor,
+  recordSettingsActivity,
+} from "../audit/record-settings-activity";
 
 /** The activity-log `collection` a search by address is filed under. */
 export const EMAIL_DELIVERY_ACTIVITY_COLLECTION = "email-deliveries";
 
 /**
+ * Whether a search by `actor` can be recorded: one that names a user or an
+ * API key by id. Asked before the search reads anything, as a search no
+ * entry can name is refused.
+ */
+export function searchRecordable(
+  actor: RequestActor | null | undefined
+): boolean {
+  return recordableActor(actor) !== null;
+}
+
+/**
  * Record that `actor` searched the delivery log by address and found `found`
- * records. An actor that names nobody records nothing, as every settings
- * entry does (`recordSettingsActivity`).
+ * records.
  *
- * @throws when the activity log could not be written: the search is then not
- * answered, so no search goes unrecorded.
+ * @throws when the entry could not be written, the actor named no one or
+ * the activity log is not set up: the search is then not answered, so no
+ * search goes unrecorded.
  */
 export async function recordAddressSearch(input: {
   actor: RequestActor | null | undefined;
@@ -37,5 +51,6 @@ export async function recordAddressSearch(input: {
     entityTitle: "Search by address",
     metadata: { found: input.found },
     actor: input.actor,
+    required: true,
   });
 }
