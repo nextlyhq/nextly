@@ -69,6 +69,13 @@ export interface EditorReviewInput {
    * actions read it from `hold`.
    */
   held?: string | undefined;
+  /**
+   * Whether a workflow may hold the document's publishing, as the schema read
+   * says before the review state is: false where none is attached, so
+   * Publish is not held while the state is read. Absent where the page cannot
+   * tell, and Publish waits for the review state.
+   */
+  workflowExpected?: boolean;
 }
 
 export interface EditorReview {
@@ -111,6 +118,7 @@ export function useEditorReview({
   isDirty,
   storedStamp,
   held,
+  workflowExpected,
 }: EditorReviewInput): EditorReview {
   const query = useReviewState(document);
   const { defaultLocale, locales } = useLocalization();
@@ -165,9 +173,19 @@ export function useEditorReview({
     stepReason ??
     (hidden && sharedApproves(parts) ? SHARED_APPROVAL_HELD : undefined);
 
+  // Until the review state is known, a workflow may be holding the part: the
+  // header holds Publish, saying why, rather than offering it as free. Not
+  // where the page knows no workflow is attached.
+  const unknown =
+    document !== undefined &&
+    query.data === undefined &&
+    workflowExpected !== false
+      ? reviewUnknown(query.isError)
+      : undefined;
+
   if (document === undefined || part === undefined) {
     return {
-      binding: undefined,
+      binding: unknown,
       part: undefined,
       onScreen: [],
       parts,
@@ -214,6 +232,26 @@ export function useEditorReview({
     hold,
     stepsHold,
     dialog: taker.dialog,
+  };
+}
+
+/**
+ * What the header's actions read while the review state is not known: no
+ * step, and Publish held with why, as a stage that does not allow publishing
+ * holds it. No step is offered, so none is taken.
+ */
+function reviewUnknown(failed: boolean): DocumentReviewBinding {
+  return {
+    state: {
+      stageLabel: "",
+      publishable: false,
+      steps: [],
+      waitingFor: null,
+      publishReason: failed
+        ? "The review state couldn't be read. Reload the page to try again."
+        : "Checking the review…",
+    },
+    takeStep: () => Promise.resolve(STEP_NOT_OFFERED),
   };
 }
 

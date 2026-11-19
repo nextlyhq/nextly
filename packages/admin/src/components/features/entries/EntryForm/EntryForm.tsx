@@ -1343,6 +1343,9 @@ export function EntryForm({
         : isSubmitting
           ? "Saving…"
           : undefined,
+    // The schema read says whether a workflow holds this collection, so a
+    // collection without one offers Publish while the review state is read.
+    workflowExpected: collection.workflow != null,
   });
 
   const documentActionsInput: DocumentActionBindingsInput = {
