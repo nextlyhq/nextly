@@ -71,6 +71,14 @@ interface MoveContext {
  */
 export const placementRepairRule: RepairRule = {
   name: "nextly/placement",
+  // The breaks `apply` starts from, judged with the same sources: none
+  // found, or no nesting rules to judge by, and it moves nothing.
+  finds(document, { sources }) {
+    const judged = placementSourcesOf(sources);
+    if (judged === undefined) return false;
+    const limits = sources.limits ?? DEFAULT_LIMITS;
+    return placementBreaksIn(document, judged, limits).length > 0;
+  },
   apply(document, context) {
     const current = structuredClone(document);
     const { sources } = context;

@@ -82,11 +82,15 @@ export function FolderCardsRow({
                 )}
               />
               <div className="min-w-0 flex-1">
+                {/* The active name reads in the text colour: the primary
+                    token is a fill a brand may set to any colour, and small
+                    text drawn in it on its own tint can fall under AA. The
+                    card's tint, ring and icon keep the brand. */}
                 <p
                   className={cn(
                     "truncate text-xs font-semibold transition-colors",
                     isActive
-                      ? "text-primary"
+                      ? "text-foreground"
                       : "text-muted-foreground group-hover:text-foreground"
                   )}
                 >

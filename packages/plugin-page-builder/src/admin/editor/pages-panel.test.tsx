@@ -7,6 +7,7 @@
 import {
   cleanup,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -265,6 +266,25 @@ describe("on a site that draws its header and footer in code", () => {
     expect(
       screen.queryByText("This site draws its header and footer in code.")
     ).toBeNull();
+  });
+});
+
+describe("the page being edited", () => {
+  it("is one object while it names the same page", () => {
+    const { result, rerender } = renderHook(() => usePagesPanel(true));
+    const first = result.current.currentPage;
+    expect(first).toEqual({ collection: "pages", id: "current" });
+    // A new identity object naming the same page, as a host may give each
+    // render.
+    identity = { kind: "collection", slug: "pages", documentId: "current" };
+    rerender();
+    expect(result.current.currentPage).toBe(first);
+    identity = { kind: "collection", slug: "pages", documentId: "other" };
+    rerender();
+    expect(result.current.currentPage).toEqual({
+      collection: "pages",
+      id: "other",
+    });
   });
 });
 

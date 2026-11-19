@@ -89,6 +89,8 @@ export type OutcomeReason =
   | "kind-never-held"
   /** The pair of types is blocked whatever its values hold (`pairBlocked`). */
   | "pair-blocked"
+  /** A link a relationship's change would not carry (`pairBlocked` says `relationship`). */
+  | "link-not-carried"
   /** The new column refuses the value's writing outright, so it cannot hold it at all. */
   | "column-refuses"
   /** The new field's own validation refuses the value as the new type reads it. */
@@ -243,8 +245,14 @@ export function judgeValue(
   value: OldValue
 ): ValueVerdict {
   if (value.kind === "empty") return { outcome: "kept", reason: "empty" };
-  if (pairBlocked(from, to) !== null) {
-    return { outcome: "blocked", reason: "pair-blocked" };
+  const blocked = pairBlocked(from, to);
+  if (blocked !== null) {
+    // A relationship's link is blocked as a link the change would not carry, which a row holds:
+    // an empty one, judged above, is kept, as the switch's own conversion leaves it.
+    return {
+      outcome: "blocked",
+      reason: blocked === "relationship" ? "link-not-carried" : "pair-blocked",
+    };
   }
   if (from.family === "relationship") return judgeRelation(from, to, value);
   return judgeAs(to, value, from.family === "json");
@@ -268,6 +276,18 @@ function judgeRelation(
       outcome: "changed",
       reason: "new-form",
       readsAs: writingOf(value.items[0]),
+    };
+  }
+  // A value that is no list, becoming one link: a list column's legacy writing of one link (a JSON
+  // string, `"p1"`), which the many-to-one conversion unquotes, so it reads as that link.
+  if (to.relation?.kept === "one") {
+    return {
+      outcome: "changed",
+      reason: "new-form",
+      readsAs:
+        value.kind === "json" && typeof value.value === "string"
+          ? value.value
+          : writingOf(value),
     };
   }
   return {

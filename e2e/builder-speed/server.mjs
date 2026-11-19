@@ -8,12 +8,14 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 
 import {
   BASE,
   DB_FILE,
   DB_URL,
   DIST_DIR,
+  OUT_DIR,
   PORT,
   PRELOAD,
   ROOT,
@@ -92,22 +94,71 @@ export async function startOwnServer(log) {
   return startServer(serverEnv(log));
 }
 
-async function startServer(env) {
-  const server = spawn(
-    "pnpm",
-    ["--filter", "playground", "exec", "next", "start", "-p", String(PORT)],
-    {
-      cwd: ROOT,
-      env: {
-        ...env,
-        NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --import ${PRELOAD}`.trim(),
-      },
-      detached: true,
+/**
+ * Where the server writes what it prints. A file, not pipes to this process:
+ * a server kept running (`--keep`) outlives this process, and its next line
+ * to a pipe with no reader fails with EPIPE, which Next.js logs, which fails
+ * again, so the server spins at full processor and answers nothing.
+ */
+export const SERVER_LOG = path.join(OUT_DIR, "server.log");
+
+/** The end of what the server printed, for an error that explains a failed start. */
+function serverOutput() {
+  try {
+    return fs.readFileSync(SERVER_LOG, "utf8").slice(-2000);
+  } catch {
+    return "(the server printed nothing)";
+  }
+}
+
+/** The production server, printing to `SERVER_LOG`, in a process group of its own. */
+function spawnServer(env) {
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  const out = fs.openSync(SERVER_LOG, "w");
+  try {
+    return spawn(
+      "pnpm",
+      ["--filter", "playground", "exec", "next", "start", "-p", String(PORT)],
+      {
+        cwd: ROOT,
+        env: {
+          ...env,
+          NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --import ${PRELOAD}`.trim(),
+        },
+        detached: true,
+        stdio: ["ignore", out, out],
+      }
+    );
+  } finally {
+    // The child holds its own copy of the descriptor.
+    fs.closeSync(out);
+  }
+}
+
+/** Waits until the server answers its health check, throwing when it exits or never does. */
+async function untilAnswering(server) {
+  const until = Date.now() + 120_000;
+  for (;;) {
+    if (server.exitCode !== null)
+      throw new Error(`the server exited:\n${serverOutput()}`);
+    if (await portOpen(PORT)) {
+      // Each ask bounded, so a server that takes the request and never
+      // answers cannot hold the start past its deadline.
+      const health = await fetch(`${BASE}/api/health`, {
+        signal: AbortSignal.timeout(
+          Math.max(1, Math.min(5000, until - Date.now()))
+        ),
+      }).catch(() => null);
+      if (health?.ok) return;
     }
-  );
-  let output = "";
-  server.stdout.on("data", chunk => (output += chunk));
-  server.stderr.on("data", chunk => (output += chunk));
+    if (Date.now() > until)
+      throw new Error(`the server never answered:\n${serverOutput()}`);
+    await sleep(250);
+  }
+}
+
+async function startServer(env) {
+  const server = spawnServer(env);
   const stop = async () => {
     // The whole process group: `pnpm exec` and the Next.js server under it.
     if (server.pid !== undefined) {
@@ -119,25 +170,8 @@ async function startServer(env) {
     }
     await sleep(1000);
   };
-  const until = Date.now() + 120_000;
   try {
-    for (;;) {
-      if (server.exitCode !== null)
-        throw new Error(`the server exited:\n${output.slice(-2000)}`);
-      if (await portOpen(PORT)) {
-        // Each ask bounded, so a server that takes the request and never
-        // answers cannot hold the start past its deadline.
-        const health = await fetch(`${BASE}/api/health`, {
-          signal: AbortSignal.timeout(
-            Math.max(1, Math.min(5000, until - Date.now()))
-          ),
-        }).catch(() => null);
-        if (health?.ok) break;
-      }
-      if (Date.now() > until)
-        throw new Error(`the server never answered:\n${output.slice(-2000)}`);
-      await sleep(250);
-    }
+    await untilAnswering(server);
   } catch (error) {
     // A start that failed still leaves its processes running: stopped here,
     // since the caller never receives a handle to stop them with.
@@ -146,11 +180,10 @@ async function startServer(env) {
   }
   /**
    * Lets this process end while the server keeps running (`--keep`): the
-   * child and its output pipes no longer hold the event loop open.
+   * child no longer holds the event loop open, and its output goes on to
+   * `SERVER_LOG`.
    */
   const release = () => {
-    server.stdout.unref?.();
-    server.stderr.unref?.();
     server.unref();
   };
   return { pid: server.pid, stop, release };
