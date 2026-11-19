@@ -241,6 +241,12 @@ export function sqliteTableRebuildStatements(
      * them, so without this the rebuild refuses a table that has one rather than lose it.
      */
     keptUnique?: readonly (readonly string[])[];
+    /**
+     * The column sets of the live table's inline UNIQUE constraints the rebuild leaves out on
+     * purpose (a former one-to-one's, retyped to a field that is not unique): known, so not counted
+     * as constraints the rebuild would lose.
+     */
+    leftOutUnique?: readonly (readonly string[])[];
   } = {}
 ): string[] {
   const table = resolvePrimaryKey(spec);
@@ -267,8 +273,10 @@ export function sqliteTableRebuildStatements(
   const untracked = untrackedConstraintCounts(table, ops);
   const collations = untrackedCollationCount(table);
   const keptUnique = options.keptUnique ?? [];
-  // Each UNIQUE the rebuild carries over is one the live CREATE counts that isn't lost.
-  const indexes = `(${untrackedIndexCount(table)} - ${String(keptUnique.length)})`;
+  // Each UNIQUE the rebuild carries over, or leaves out on purpose, is one the live CREATE counts
+  // that isn't lost.
+  const known = keptUnique.length + (options.leftOutUnique ?? []).length;
+  const indexes = `(${untrackedIndexCount(table)} - ${String(known)})`;
   const uniqueLines = keptUnique.map(
     columns => `  UNIQUE (${columns.map(column => q(column)).join(", ")})`
   );

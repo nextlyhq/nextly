@@ -5,6 +5,8 @@
 // pipeline preview output + synthetic field arrays; the live-DB row
 // counting is mocked.
 
+import type { SQL } from "drizzle-orm";
+import { SQLiteDialect } from "drizzle-orm/sqlite-core";
 import { afterEach, describe, it, expect, vi } from "vitest";
 
 import type { ClassifierEvent } from "../../pipeline/resolution/types";
@@ -207,19 +209,10 @@ describe("translatePipelinePreviewToLegacy", () => {
       { name: "title", type: "text" } as FieldDefinition,
     ];
 
-    // Mock db: SQLite shape (.all returns rows synchronously).
-    // Translator calls countRows first (one call upfront), then
-    // countNulls once per removed field. Order: [countRows, countNulls(body)].
-    // Total = 100, nulls = 25 → non-null = 75.
-    let callIndex = 0;
-    const responses = [{ count: 100 }, { count: 25 }];
-    const dbMock = {
-      all: vi.fn().mockImplementation(() => {
-        const response = responses[callIndex] ?? { count: 0 };
-        callIndex += 1;
-        return [response];
-      }),
-    };
+    // 100 rows, 25 of them without a body: the body holds 75 values.
+    const { db: dbMock } = countingDb({
+      dc_posts: { rows: 100, nulls: { body: 25 } },
+    });
 
     const result = await translatePipelinePreviewToLegacy(emptyPreview, {
       tableName: "dc_posts",
@@ -307,8 +300,10 @@ describe("translatePipelinePreviewToLegacy", () => {
 //
 // A count the preview cannot read must never read as "nothing is deleted",
 // and a field's values are counted where they are stored. The SQLite double
-// below answers each count query from the table and column it names, and
-// records every query, so a test sees both what was counted and where.
+// below answers each count query from the table and column it names, read
+// from the query as SQLite would be sent it, and records every query's text,
+// so a test sees both what was counted and where. A column's values
+// (`COUNT("column")`) are its table's rows less its nulls.
 
 interface CountTable {
   /** Rows in the table, or an Error the row count throws. */
@@ -317,30 +312,36 @@ interface CountTable {
   nulls: Record<string, number | Error>;
 }
 
+const sqliteDialect = new SQLiteDialect();
+
 function countingDb(tables: Record<string, CountTable>) {
   const queries: string[] = [];
   const db = {
-    all: vi.fn().mockImplementation((query: unknown) => {
-      const text = JSON.stringify(query);
+    all: vi.fn().mockImplementation((query: SQL) => {
+      const text = sqliteDialect.sqlToQuery(query).sql;
       queries.push(text);
-      const name = Object.keys(tables).find(t => text.includes(`\\"${t}\\"`));
-      if (!name) throw new Error(`no such table in ${text}`);
-      const table = tables[name];
-      const isNullCount = text.includes("IS NULL");
-      if (!isNullCount) {
-        if (table.rows instanceof Error) throw table.rows;
-        return [{ count: table.rows }];
-      }
-      const column = Object.keys(table.nulls).find(c =>
-        text.includes(`\\"${c}\\" IS NULL`)
-      );
-      if (!column) throw new Error(`no such column in ${text}`);
-      const nulls = table.nulls[column];
-      if (nulls instanceof Error) throw nulls;
-      return [{ count: nulls }];
+      return [{ count: countOf(tables, text) }];
     }),
   };
   return { db, queries };
+}
+
+/**
+ * The count `text` asks of `tables`: a column's values (`COUNT("column")`), its table's rows less
+ * its nulls, or else the table's rows. A table or column the double does not hold throws, as
+ * SQLite does.
+ */
+function countOf(tables: Record<string, CountTable>, text: string): number {
+  const name = Object.keys(tables).find(t => text.includes(`"${t}"`));
+  if (!name) throw new Error(`no such table in ${text}`);
+  const table = tables[name];
+  if (table.rows instanceof Error) throw table.rows;
+  const column = /COUNT\("([^"]+)"\)/i.exec(text)?.[1];
+  if (column === undefined) return table.rows;
+  const nulls = table.nulls[column];
+  if (nulls === undefined) throw new Error(`no such column: ${column}`);
+  if (nulls instanceof Error) throw nulls;
+  return table.rows - nulls;
 }
 
 const text = (name: string, extra: Record<string, unknown> = {}) =>
@@ -489,7 +490,8 @@ describe("a removal the preview cannot count, and where it counts", () => {
       rowCountUnknown: true,
       classification: "destructive",
     });
-    expect(queries.some(q => q.includes("IS NULL"))).toBe(false);
+    // Nothing is stored in a column of the row to count, so nothing is asked of the database.
+    expect(queries).toEqual([]);
   });
 
   it("classes a hasMany toggle as deleting data, in both directions", async () => {
@@ -591,7 +593,8 @@ describe("a removal the preview cannot count, and where it counts", () => {
       rowCount: 0,
       classification: "safe",
     });
-    expect(queries.some(q => q.includes("IS NULL"))).toBe(false);
+    // Nothing is stored in a column of the row to count, so nothing is asked of the database.
+    expect(queries).toEqual([]);
   });
 
   it("keeps a hasMany flag spelled false where it was absent from being a toggle", async () => {
@@ -783,6 +786,34 @@ describe("a many-to-many leaving its link table", () => {
     });
     expect(result.warnings).toContain(
       "Changing 'tags' from a single link to many-to-many drops the column holding its 3 links; its new link table starts empty."
+    );
+  });
+
+  // A group with no name only lays its fields out: a many-to-many inside it is the row's own, and
+  // leaving its link table drops the links as one beside the group does.
+  it("counts the links a many-to-many inside a group with no name drops, as one beside it", async () => {
+    const { db, queries } = linkCountDb(2);
+    const inAGroup = (field: FieldDefinition) =>
+      ({
+        type: "group",
+        label: "Links",
+        fields: [field],
+      }) as unknown as FieldDefinition;
+    const result = await leaving(
+      inAGroup(manyToMany({ junctionTable: "post-tag-links" })),
+      inAGroup(singleLink),
+      db
+    );
+    expect(queries.some(query => query.includes("post-tag-links"))).toBe(true);
+    expect(result.changes.changed).toEqual([
+      expect.objectContaining({
+        name: "tags",
+        rowCount: 2,
+        classification: "destructive",
+      }),
+    ]);
+    expect(result.warnings).toContain(
+      "Changing 'tags' from many-to-many to a single link drops its link table and the 2 links it holds."
     );
   });
 

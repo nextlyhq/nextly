@@ -106,6 +106,7 @@ import {
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import type { SqliteTypeChange } from "../../schema/services/sqlite-nullability-rebuild";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
@@ -342,6 +343,13 @@ interface UpdateDdlPlan {
    * applied by rebuilding the table once its statements have run, in the same transaction.
    */
   sqliteNullability?: ReadonlyMap<string, boolean>;
+  /**
+   * On SQLite, the type changes `migrationSQL` can't express (column → the type it becomes),
+   * applied by the same rebuild. The values were judged against the new type while planning.
+   */
+  sqliteTypes?: ReadonlyMap<string, SqliteTypeChange>;
+  /** The values judged again on the rebuild's own transaction, where it changes a type. */
+  sqliteTypeJudge?: (db: unknown) => Promise<void>;
   /** The field list the table holds once this plan has run. */
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
@@ -1909,6 +1917,7 @@ export class SingleMetadataService {
 
     // What SQLite can't alter in place, which the apply rebuilds the table for.
     const sqliteNullability = new Map<string, boolean>();
+    const sqliteTypes = new Map<string, SqliteTypeChange>();
     return {
       leavingSettings: deferred.leavingSettings,
       migrationSQL: schemaService.generateAlterTableMigration(
@@ -1939,13 +1948,127 @@ export class SingleMetadataService {
           ...groupMigration,
           onSqliteNullability: (column, required) =>
             sqliteNullability.set(column, required),
+          onSqliteTypeChange: (column, change) =>
+            sqliteTypes.set(column, change),
         }
       ),
       sqliteNullability,
+      sqliteTypes,
+      sqliteTypeJudge: this.typeChangeJudgeInRebuild(
+        input.slug,
+        tableName,
+        {
+          previousFields: startingFields,
+          fields,
+          wasLocalized,
+          migrationStatus: existing.migrationStatus,
+        },
+        schemaService
+      ),
       fields,
       previousFields,
       describesWholeTable: false,
       ownsMigrationStatus: true,
+    };
+  }
+
+  /**
+   * Each field whose type the save changes, judged over the value it holds (in each language, for
+   * a translated one), as every road that changes a field's type judges it, read through `db`: the
+   * app's database while the save is planned, the rebuild's own transaction where SQLite rebuilds
+   * the table (`typeChangeJudgeInRebuild`). Loaded here, as the save preconditions are, so the
+   * schema machinery stays out of the service's boot.
+   */
+  private async typeChangeRefusals(
+    db: unknown,
+    slug: string,
+    tableName: string,
+    change: {
+      previousFields: FieldDefinition[];
+      fields: FieldDefinition[];
+      wasLocalized: boolean;
+      migrationStatus: string | null | undefined;
+    },
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ) {
+    const adapter = this.adapter;
+    if (!adapter) return [];
+    const [
+      { entityLabel, fieldTypeChangeRefusals, perLanguageBefore },
+      { builtByFor },
+    ] = await Promise.all([
+      import("../../schema/value-conversion/type-change/field-type-changes"),
+      import("../../schema/pipeline/registered-collections"),
+    ]);
+    const rename = schemaService.detectFieldRename(
+      change.previousFields,
+      change.fields
+    );
+    return fieldTypeChangeRefusals(db, adapter.getCapabilities().dialect, {
+      label: entityLabel("single", slug),
+      table: tableName,
+      ...perLanguageBefore(
+        { localized: change.wasLocalized },
+        tableName,
+        change.previousFields
+      ),
+      previous: change.previousFields,
+      next: change.fields,
+      ...(rename !== null
+        ? { renamed: new Map([[rename.from.name, rename.to.name]]) }
+        : {}),
+      migrationStatus: change.migrationStatus ?? null,
+      builtBy: builtByFor("single", true),
+    });
+  }
+
+  /**
+   * The same judgement, for the SQLite rebuild that makes a type change: run on the rebuild's own
+   * transaction, before its copy, so a value written after the save was planned is judged too, and
+   * no write can come between it and the copy (SQLite's one connection runs the transaction alone).
+   * The save's statements have run by then, a rename among them, so the fields before are read
+   * under the names they now have.
+   */
+  private typeChangeJudgeInRebuild(
+    slug: string,
+    tableName: string,
+    change: {
+      previousFields: FieldDefinition[];
+      fields: FieldDefinition[];
+      wasLocalized: boolean;
+      migrationStatus: string | null | undefined;
+    },
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ): (db: unknown) => Promise<void> {
+    const rename = schemaService.detectFieldRename(
+      change.previousFields,
+      change.fields
+    );
+    const previousFields =
+      rename === null
+        ? change.previousFields
+        : change.previousFields.map(field =>
+            field.name === rename.from.name
+              ? { ...field, name: rename.to.name }
+              : field
+          );
+    return async db => {
+      const refusals = await this.typeChangeRefusals(
+        db,
+        slug,
+        tableName,
+        { ...change, previousFields },
+        schemaService
+      );
+      if (refusals.length === 0) return;
+      const { typeChangeError } = await import(
+        "../../schema/value-conversion/type-change/field-type-changes"
+      );
+      const errors = refusals.map(typeChangeError);
+      throw NextlyError.validation({
+        errors,
+        logContext: { single: slug, fields: errors.map(e => e.path) },
+      });
     };
   }
 
@@ -1984,44 +2107,15 @@ export class SingleMetadataService {
       "../../dynamic-collections/services/save-preconditions"
     );
     const dialect = adapter.getCapabilities().dialect;
-    // Each field whose type the save changes, judged over the value it holds (in each language,
-    // for a translated one), as every road that changes a field's type judges it. Loaded here, as
-    // the save preconditions are, so the schema machinery stays out of the service's boot.
-    const [
-      {
-        entityLabel,
-        fieldTypeChangeRefusals,
-        perLanguageBefore,
-        typeChangeError,
-      },
-      { builtByFor },
-    ] = await Promise.all([
-      import("../../schema/value-conversion/type-change/field-type-changes"),
-      import("../../schema/pipeline/registered-collections"),
-    ]);
-    const rename = schemaService.detectFieldRename(
-      change.previousFields,
-      change.fields
+    const { typeChangeError } = await import(
+      "../../schema/value-conversion/type-change/field-type-changes"
     );
-    const typeChanges = await fieldTypeChangeRefusals(
+    const typeChanges = await this.typeChangeRefusals(
       adapter.getDrizzle(),
-      dialect,
-      {
-        label: entityLabel("single", slug),
-        table: tableName,
-        ...perLanguageBefore(
-          { localized: change.wasLocalized },
-          tableName,
-          change.previousFields
-        ),
-        previous: change.previousFields,
-        next: change.fields,
-        ...(rename !== null
-          ? { renamed: new Map([[rename.from.name, rename.to.name]]) }
-          : {}),
-        migrationStatus: change.migrationStatus ?? null,
-        builtBy: builtByFor("single", true),
-      }
+      slug,
+      tableName,
+      change,
+      schemaService
     );
     const where = await this.whereTheValuesAre(change);
     const onMain = await refusalsForCollectionSave({
@@ -2674,7 +2768,13 @@ export class SingleMetadataService {
     plan: UpdateDdlPlan,
     undoRename: readonly string[]
   ): Promise<void> {
-    if (!plan.migrationSQL && !plan.sqliteNullability?.size) return;
+    if (
+      !plan.migrationSQL &&
+      !plan.sqliteNullability?.size &&
+      !plan.sqliteTypes?.size
+    ) {
+      return;
+    }
     try {
       await applyMigrationWhole({
         db: adapter.getDrizzle(),
@@ -2683,10 +2783,16 @@ export class SingleMetadataService {
         entity: "single",
         tolerateApplied: true,
         busyTable: this.busyTableWait(adapter),
-        sqliteNullability: plan.sqliteNullability && {
+        sqliteNullability: {
           adapter,
           tableName,
-          required: plan.sqliteNullability,
+          required: plan.sqliteNullability ?? new Map(),
+          ...(plan.sqliteTypes === undefined
+            ? {}
+            : { types: plan.sqliteTypes }),
+          ...(plan.sqliteTypeJudge === undefined
+            ? {}
+            : { judge: plan.sqliteTypeJudge }),
         },
       });
     } catch (refusal) {
