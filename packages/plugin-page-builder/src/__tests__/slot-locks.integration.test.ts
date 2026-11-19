@@ -236,12 +236,24 @@ describe.each(getConfiguredTestDialects())(
         "its visibility",
         (n: BlockNode) => (n.visibility = { devices: { base: false } }),
       ],
-      ["its custom CSS", (n: BlockNode) => (n.customCss = "color: red;")],
+      // CSS the server would store, so the lock is the only reason refused:
+      // a block's rules start from `selector`, and CSS that can't be read is
+      // refused on its own, beside the lock.
+      [
+        "its custom CSS",
+        (n: BlockNode) => (n.customCss = "selector { color: red; }"),
+      ],
       ["its own lock", (n: BlockNode) => (n.locked = true)],
     ])(
       "refuses an API save that changes %s inside contentOnly",
       async (_kind, change) => {
         const t = await boot();
+        // CONTROL: the same change to a block in no locked slot saves, so
+        // the refusal below is the lock's alone.
+        const loose = placed("acme/headline");
+        change(loose);
+        await expect(savePage(t, [loose])).resolves.toBeDefined();
+
         const card = placed("acme/sealed-card");
         change(card.slots!.body![0]!);
 
