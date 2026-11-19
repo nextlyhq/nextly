@@ -312,6 +312,12 @@ interface Reach {
 const READ: readonly Action[] = ["read"];
 /** What a resource's own routes do: read, create, update and delete. */
 const CRUD: readonly Action[] = ["read", "create", "update", "delete"];
+/**
+ * The email deliveries: the Activity's read, and the retry of one queued
+ * email, which is its one write (an update) and is made only through REST and
+ * the Direct API.
+ */
+const READ_RETRY: readonly Action[] = ["read", "update"];
 /** A user's writes, asked apart from the read the table asked first. */
 const USER_WRITES: readonly Action[] = ["create", "update", "delete"];
 const READ_UPDATE: readonly Action[] = ["read", "update"];
@@ -356,7 +362,7 @@ const REACH: Record<Door, Reach> = {
       "single-pub": PUBLISHING,
       roles: CRUD,
       providers: CRUD,
-      deliveries: READ,
+      deliveries: READ_RETRY,
     },
   },
   // Media, users, roles and email deliveries are read by the namespaces a principal cannot call
@@ -372,7 +378,7 @@ const REACH: Record<Door, Reach> = {
       users: READ,
       "single-pub": PUBLISHING,
       roles: READ,
-      deliveries: READ,
+      deliveries: READ_RETRY,
     },
     callersOf: {
       media: NOT_PRINCIPAL,
@@ -713,9 +719,9 @@ const SEEDED: Partial<Record<Target, readonly Action[]>> = {
   users: ["create", "read", "update", "delete"],
   roles: ["create", "read", "update", "delete"],
   providers: ["create", "read", "update", "delete"],
-  // The Activity is read only: `read-email-deliveries` is its one permission
-  // here (`manage-email-deliveries` cancels a queued email, and does not
-  // count as a read).
+  // `read-email-deliveries` reads the Activity. Its one write, a retry, has
+  // no permission of its own: `manage-email-deliveries` grants it
+  // (`MANAGED_WRITES`), and does not count as a read.
   deliveries: ["read"],
 };
 
@@ -738,10 +744,19 @@ const MANAGE_COUNTS_AS: readonly Action[] = [
   "delete",
 ];
 
+/**
+ * The writes a resource's `manage-` permission grants without counting as
+ * its read: a queued email's retry, granted by `manage-email-deliveries`
+ * alone. Extend an entry for another write or door.
+ */
+const MANAGED_WRITES: Partial<Record<Target, readonly Action[]>> = {
+  deliveries: ["update"],
+};
+
 const holdsManage = (caller: Caller, action: Action, target: Target) =>
-  MANAGED.includes(target) &&
-  MANAGE_COUNTS_AS.includes(action) &&
-  caller === "key-super-admin";
+  caller === "key-super-admin" &&
+  ((MANAGED.includes(target) && MANAGE_COUNTS_AS.includes(action)) ||
+    (MANAGED_WRITES[target]?.includes(action) ?? false));
 
 /** Whether the role screen grants the caller this action on this target. */
 function holdsPermission(caller: Caller, action: Action, target: Target) {
