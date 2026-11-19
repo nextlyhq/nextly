@@ -514,6 +514,14 @@ This is the level most systems either do not have or sell separately. It is what
 collection serve two audiences — an editor who sees the article, and a finance user who
 also sees the fields describing what it cost.
 
+The Page Builder's page code and custom CSS are not read-restricted this way. Anyone who may
+edit a page can read its code and CSS, draft, published and history, and visitors get the
+published ones in the page; only people with **Manage page builder site settings** may change
+them, as
+[site code](/docs/page-builder/site-code#page-code) and
+[custom CSS](/docs/page-builder/custom-css#who-may-change-page-and-block-css) explain. Page
+code is printed into the published page, so it must never hold a secret.
+
 ## The Direct API bypasses these rules by default
 
 The Direct API is trusted server code, so `overrideAccess` defaults to `true` and collection,
