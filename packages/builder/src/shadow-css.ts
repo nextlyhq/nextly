@@ -20,8 +20,8 @@ import {
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
 
+import { NEW_SHADOW_VALUE } from "./panels/design/tokens-studio";
 import { variableFor, variablesFor } from "./style-colour";
-import { NEW_SHADOW_VALUE } from "./tokens-studio";
 
 /**
  * A layer's colour: one of the site's colour variables, by the identity a

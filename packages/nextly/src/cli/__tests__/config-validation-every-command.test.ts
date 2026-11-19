@@ -60,7 +60,6 @@ const READ_ENTITIES: ReadonlyArray<readonly string[]> = [
   ["prune"],
   ["i18n:restore", "--collection", "notes"],
   ["workflow:stranded"],
-  ["upgrade", "--reconcile-core"],
   ["media", "reindex-usage"],
 ];
 

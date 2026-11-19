@@ -168,6 +168,7 @@ describe("teardownEntityI18n (real SQLite)", () => {
       companionDropped: false,
       archiveRowsPurged: 0,
       provenanceRowsPurged: 0,
+      transitionRecordsPurged: 0,
     });
   });
 
@@ -188,6 +189,7 @@ describe("teardownEntityI18n (real SQLite)", () => {
       companionDropped: true,
       archiveRowsPurged: 0,
       provenanceRowsPurged: 0,
+      transitionRecordsPurged: 0,
     });
     expect(await tableNames()).not.toContain("dc_pages_locales");
   });

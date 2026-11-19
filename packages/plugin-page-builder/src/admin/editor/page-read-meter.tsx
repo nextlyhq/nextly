@@ -556,16 +556,18 @@ export function usePageDataCount({
   componentTitle,
   cap,
 }: PageDataCountInputs): PageDataCount | null {
-  const { report, retry } = usePageReads(
-    drawnWith,
-    editor.document,
-    regions,
-    cap,
-    counts
-  );
+  // Only what the meter reads of the editor (the document, and `select`),
+  // so the count the top bar is handed stays the same while only the
+  // selection moves: the editor's state is a new object on every one.
+  const { document: page, select } = editor;
+  const counted = useMemo(() => ({ document: page, select }), [page, select]);
+  const { report, retry } = usePageReads(drawnWith, page, regions, cap, counts);
   return useMemo(
-    () => (counts ? { report, retry, editor, regions, componentTitle } : null),
-    [counts, report, retry, editor, regions, componentTitle]
+    () =>
+      counts
+        ? { report, retry, editor: counted, regions, componentTitle }
+        : null,
+    [counts, report, retry, counted, regions, componentTitle]
   );
 }
 

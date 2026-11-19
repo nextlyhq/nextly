@@ -50,20 +50,9 @@ import {
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 
-import { compositionRefusalReason } from "../composition-refusal";
-import { blockDeletion } from "../delete-block";
 import { CONVERSION_WORDS } from "../editor-words";
-import {
-  compositionEntryContentRefusal,
-  duplicationRefusal,
-} from "../entry-content-rules";
 import type { Rect } from "../geometry";
-import { placedComponentId } from "../instance-inspector";
-import {
-  keyboardMovePosition,
-  type KeyboardMove,
-  type MoveDirection,
-} from "../keyboard-move";
+import { placedComponentId } from "../inspector/instance-inspector";
 import {
   lockedBlockWording,
   lockRefusalWording,
@@ -79,24 +68,35 @@ import { refusalAnnouncement } from "../move-refusal";
 import type { BuilderOp, OpPosition } from "../op-vocabulary";
 import { pathTo } from "../panels/layers/layers";
 import {
+  saveAsSharedStyleRefusal,
+  type SharedStyleOffer,
+} from "../shared-style-target";
+
+import { compositionRefusalReason } from "./composition-refusal";
+import { blockDeletion } from "./delete-block";
+import type { RefusalWording } from "./drag-refusal";
+import {
+  compositionEntryContentRefusal,
+  duplicationRefusal,
+} from "./entry-content-rules";
+import {
+  keyboardMovePosition,
+  type KeyboardMove,
+  type MoveDirection,
+} from "./keyboard-move";
+import {
   isRefusal,
   selectionDeletion,
   selectionDuplication,
   selectionMove,
-} from "../selection-ops";
+} from "./selection-ops";
 import {
   isUnwrappable,
   planUnwrap,
   planWrap,
   WRAP_WORDS,
-} from "../selection-wrap";
-import {
-  saveAsSharedStyleRefusal,
-  type SharedStyleOffer,
-} from "../shared-style-target";
-import { turnIntoOffers, type TurnIntoActionId } from "../turn-into-verb";
-
-import type { RefusalWording } from "./drag-refusal";
+} from "./selection-wrap";
+import { turnIntoOffers, type TurnIntoActionId } from "./turn-into-verb";
 
 /** The editor's own lock question, asked of the ops a verb would apply. */
 type LockQuestion = (ops: readonly BuilderOp[]) => LockRefusalFacts | undefined;
@@ -1056,23 +1056,49 @@ function wrapActions(
   if (wrap !== null) {
     items.push(
       isRefusal(wrap)
-        ? { id: "wrap-in-box", label: WRAP_WORDS.wrap, enabled: false, reason: wrap.reason, inMenu: true }
+        ? {
+            id: "wrap-in-box",
+            label: WRAP_WORDS.wrap,
+            enabled: false,
+            reason: wrap.reason,
+            inMenu: true,
+          }
         : heldByLock(
-            { id: "wrap-in-box", label: WRAP_WORDS.wrap, enabled: true, inMenu: true },
+            {
+              id: "wrap-in-box",
+              label: WRAP_WORDS.wrap,
+              enabled: true,
+              inMenu: true,
+            },
             ask,
             wrap.ops
           )
     );
   }
   const [only] = ids;
-  if (ids.length === 1 && only !== undefined && isUnwrappable(findNode(document.nodes, only))) {
+  if (
+    ids.length === 1 &&
+    only !== undefined &&
+    isUnwrappable(findNode(document.nodes, only))
+  ) {
     const unwrap = planUnwrap(document, only, nesting);
     if (unwrap !== null) {
       items.push(
         isRefusal(unwrap)
-          ? { id: "unwrap", label: WRAP_WORDS.unwrap, enabled: false, reason: unwrap.reason, inMenu: true }
+          ? {
+              id: "unwrap",
+              label: WRAP_WORDS.unwrap,
+              enabled: false,
+              reason: unwrap.reason,
+              inMenu: true,
+            }
           : heldByLock(
-              { id: "unwrap", label: WRAP_WORDS.unwrap, enabled: true, inMenu: true },
+              {
+                id: "unwrap",
+                label: WRAP_WORDS.unwrap,
+                enabled: true,
+                inMenu: true,
+              },
               ask,
               unwrap.ops
             )

@@ -36,7 +36,8 @@ import {
   withClassApplied,
   withClassRemoved,
 } from "./class-library";
-import { designReadOnlyReason, type LockView } from "./inspector";
+import { designReadOnlyReason, type LockView } from "./inspector/inspector";
+import { stateLabel } from "./inspector/style-inspector/state-switcher";
 import { sameStyleValue, type BuilderOp } from "./op-vocabulary";
 import {
   renameSharedStyle,
@@ -45,7 +46,6 @@ import {
   sharedStyleSlug,
   type SharedStyleRow,
 } from "./shared-style-library";
-import { stateLabel } from "./state-switcher";
 import {
   readStyleValue,
   styleClearOp,

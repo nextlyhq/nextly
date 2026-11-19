@@ -57,6 +57,7 @@ import { isServicesRegistered } from "../di/service-access";
 import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
+import type { IdentityService } from "../domains/auth/services/identity-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
@@ -239,6 +240,7 @@ import type {
   GetRolePermissionsArgs,
   ListApiKeysArgs,
   ListFoldersArgs,
+  ListUserIdentitiesArgs,
   BulkDeleteMediaArgs,
   PreviewEmailTemplateArgs,
   ReorderUserFieldsArgs,
@@ -251,6 +253,7 @@ import type {
   SetRolePermissionsArgs,
   SubmitFormArgs,
   TestEmailProviderArgs,
+  UnlinkIdentityArgs,
   UpdateApiKeyArgs,
   UpdateFieldGroupArgs,
   UpdateEmailProviderArgs,
@@ -597,6 +600,11 @@ export class Nextly implements NextlyContext {
   /** @internal */
   public get apiKeyService(): ApiKeyService {
     return container.get<ApiKeyService>("apiKeyService");
+  }
+
+  /** @internal */
+  public get identityService(): IdentityService {
+    return container.get<IdentityService>("identityService");
   }
 
   /**
@@ -1278,7 +1286,11 @@ export const nextly = {
       (await requireNextlyOnceStarted()).users.update(args),
     delete: async (args: DeleteUserArgs) =>
       (await requireNextlyOnceStarted()).users.delete(args),
-  },
+    listIdentities: async (args: ListUserIdentitiesArgs) =>
+      (await requireNextlyOnceStarted()).users.listIdentities(args),
+    unlinkIdentity: async (args: UnlinkIdentityArgs) =>
+      (await requireNextlyOnceStarted()).users.unlinkIdentity(args),
+  } satisfies UsersNamespace,
 
   media: {
     upload: async (args: UploadMediaArgs) =>

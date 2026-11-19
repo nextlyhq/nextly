@@ -63,7 +63,7 @@ export type { OpenPreferenceStore } from "./shell-state";
  * A pure function over a document, so it crosses this entry carrying no state
  * and no React.
  */
-export { lockViewOf, selectionIsInspectable } from "./inspector";
+export { lockViewOf, selectionIsInspectable } from "./inspector/inspector";
 export { pageStyleTrace } from "./style-trace";
 
 /**
@@ -155,7 +155,7 @@ export {
 export {
   CANVAS_ROUTE_DOCS_HREF,
   SITE_CODE_POLICY_DOCS_HREF,
-} from "./docs-links";
+} from "./shell/docs-links";
 export { CanvasMarks } from "./canvas/canvas-marks";
 /**
  * @experimental The line where the Add panel's highlighted tile would land,
@@ -214,11 +214,11 @@ export {
   type RegionEditing,
   type RegionEditingWords,
   type RegionStateArgs,
-} from "./editing-target";
+} from "./shell/editing-target";
 export {
   RegionEditingBar,
   type RegionEditingBarProps,
-} from "./region-editing-bar";
+} from "./shell/region-editing-bar";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -244,33 +244,33 @@ export {
  * and publishing it invites a host to build a second inspector that disagrees
  * with this one about the merge rule for a patch.
  */
-export { InspectorPanel } from "./inspector-panel";
+export { InspectorPanel } from "./inspector/inspector-panel";
 export type {
   BlockInspectorResolver,
   InspectorPanelProps,
-} from "./inspector-panel";
+} from "./inspector/inspector-panel";
 /**
  * A bound image's Fallback row: an image address, shown with its picture,
  * and a reserved place for choosing a library file. The inspector draws it
  * under a bound image's chip; exported so the same row can be given more
  * ways to fill it without a second implementation. @experimental
  */
-export { ImageBindingFallback } from "./image-binding-fallback";
-export type { ImageBindingFallbackProps } from "./image-binding-fallback";
+export { ImageBindingFallback } from "./bindings/image-binding-fallback";
+export type { ImageBindingFallbackProps } from "./bindings/image-binding-fallback";
 // What a host tells the inspector about the component it edits, beside it.
-export type { ComponentFieldsHost } from "./component-fields";
+export type { ComponentFieldsHost } from "./panels/components/component-fields";
 // The banner over a component's own view: its name, its reach, and Back.
-export { ComponentBanner } from "./component-banner";
-export type { ComponentBannerProps } from "./component-banner";
+export { ComponentBanner } from "./shell/component-banner";
+export type { ComponentBannerProps } from "./shell/component-banner";
 // And about its variants: how many placements chose one, for the delete dialog.
 export type {
   ComponentVariantsHost,
   VariantPreviewBinding,
   VariantUse,
-} from "./component-variants";
+} from "./panels/components/component-variants";
 // The variant open in a component's view, previewed on the host's canvas.
-export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
-export type { VariantPreviewState } from "./variant-preview";
+export { useVariantPreview, VariantPreviewTag } from "./canvas/variant-preview";
+export type { VariantPreviewState } from "./canvas/variant-preview";
 // The one row of tags over the canvas: the variant previewed.
 export { CanvasPreviewTags } from "./canvas/canvas-preview-tags";
 export type { CanvasPreviewTagsProps } from "./canvas/canvas-preview-tags";
@@ -284,8 +284,8 @@ export type { CanvasPreviewTagsProps } from "./canvas/canvas-preview-tags";
  * is about. Mounting BOTH is the ordinary case and needs nothing here:
  * `InspectorPanel` already renders this one under its Style tab.
  */
-export { StyleInspectorPanel } from "./style-inspector-panel";
-export type { StyleInspectorPanelProps } from "./style-inspector-panel";
+export { StyleInspectorPanel } from "./inspector/style-inspector/style-inspector-panel";
+export type { StyleInspectorPanelProps } from "./inspector/style-inspector/style-inspector-panel";
 
 export { InsertPanel } from "./panels/add/insert-panel";
 export type {
@@ -311,8 +311,8 @@ export {
   selectionAnchor,
 } from "./panels/add/insert-picker-anchor";
 export { InsertUsageContext } from "./panels/add/insert-usage";
-export { ComponentsPanel } from "./components-panel";
-export type { ComponentsPanelProps } from "./components-panel";
+export { ComponentsPanel } from "./panels/components/components-panel";
+export type { ComponentsPanelProps } from "./panels/components/components-panel";
 // The shape a host hands the panel for the pattern tier. Published beside the
 // panel because supplying `patterns` is impossible without it: a caller loads
 // rows from a plugin's collection and has to know which fields the palette
@@ -430,14 +430,14 @@ export {
   BlockKeyboardActions,
   useBlockActionsContext,
   useBlockKeyboardActions,
-} from "./keyboard-actions";
+} from "./shell/keyboard-actions";
 export type {
   BlockActions,
   BlockKeyboardActionsOptions,
   BlockKeyboardActionsResult,
   ComponentVerbsHost,
   SharedStyleVerbHost,
-} from "./keyboard-actions";
+} from "./shell/keyboard-actions";
 // Which way "Turn into component…" may go, as the host is told when it opens.
 export type { TurnIntoChoice } from "./canvas/toolbar-actions";
 
@@ -544,7 +544,7 @@ export type { FormStatesProps } from "./canvas/form-states";
  *
  * @experimental
  */
-export { useFormsShownAgain } from "./form-source-control";
+export { useFormsShownAgain } from "./inspector/content/form-source-control";
 /**
  * The chooser a block just added asks for, drawn over it on the canvas while
  * the editor's first-add step holds: the Columns layouts with Skip. A canvas
@@ -567,21 +567,24 @@ export type { AccordionAddQuestionProps } from "./canvas/accordion-add-question"
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
  */
-export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
-export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
-export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
+export { VisitorUnreadableBadges } from "./shell/visitor-unreadable-badges";
+export type { VisitorUnreadableBadgesProps } from "./shell/visitor-unreadable-badges";
+export { VisitorUnreadableProvider } from "./shell/visitor-unreadable-context";
 /**
  * @experimental Where the host keeps the signed-in author's Recent colours,
  * provided once around the shell so every colour picker in it, a block's and
  * a colour variable's, reads and adds to the one list.
  */
-export { RecentColoursStore } from "./recent-colours";
+export { RecentColoursStore } from "./panels/design/recent-colours";
 /**
  * @experimental The colours every colour picker in the builder leaves out
  * while the site hides its unused built-in colours, provided once around
  * the shell, and the read a host provides it from.
  */
-export { HiddenColours, useHiddenColoursRead } from "./built-in-colours";
+export {
+  HiddenColours,
+  useHiddenColoursRead,
+} from "./panels/design/built-in-colours";
 /**
  * @experimental A template's document with an entry's own blocks composed
  * into its Entry content block, as the canvas draws it, for a host asking
@@ -599,12 +602,12 @@ export {
   PreviewedEntryProvider,
   usePreviewedCollection,
   usePreviewedEntry,
-} from "./previewed-entry";
+} from "./canvas/previewed-entry";
 export type {
   PreviewedBlocksField,
   PreviewedCollection,
   PreviewedEntry,
-} from "./previewed-entry";
+} from "./canvas/previewed-entry";
 /**
  * @experimental Visibility conditions applied for the entry a template is
  * previewed with: what the host hands the canvas (`conditionsApplied`) and
@@ -631,7 +634,7 @@ export {
   applyStarterPage,
   planStarterPage,
   type StarterPageSources,
-} from "./starter-page";
+} from "./shell/starter-page";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -641,8 +644,21 @@ export {
  * handler and an agent all reach the same `apply`, so undo covers every one of
  * them rather than only the path that happened to implement it.
  */
-export { MAX_HISTORY, useEditorState } from "./editor-state";
-export type { EditorState, UseEditorStateArgs } from "./editor-state";
+export { MAX_HISTORY, useDocumentView, useEditorState } from "./editor-state";
+
+/**
+ * A handler that keeps its identity across renders and calls the newest one,
+ * for a surface memoised so a selection draws it nothing again.
+ */
+export {
+  useLatestCallback,
+  useLatestOptionalCallback,
+} from "./shell/latest-callback";
+export type {
+  EditorDocumentView,
+  EditorState,
+  UseEditorStateArgs,
+} from "./editor-state";
 
 /**
  * Why `EditorState.lockRefusalFor` refuses an edit: a slot lock a block
@@ -712,15 +728,18 @@ export { useInlineEditing } from "./canvas/use-inline-editing";
  *
  * @experimental
  */
-export { createOpenPassages } from "./open-passages";
-export type { OpenPassages } from "./open-passages";
+export { createOpenPassages } from "./canvas/open-passages";
+export type { OpenPassages } from "./canvas/open-passages";
 export type { UseInlineEditingResult } from "./canvas/use-inline-editing";
 /**
  * What a host says when a double-click lands on text a component does not
  * expose: the hook selects the placement and hands the host its id, and the
  * host reads the placement with `inspectInstance` against its own library.
  */
-export { inspectInstance, partOfComponentSentence } from "./instance-inspector";
+export {
+  inspectInstance,
+  partOfComponentSentence,
+} from "./inspector/instance-inspector";
 /**
  * What finishing an inline edit did.
  *
@@ -812,38 +831,38 @@ export type {
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
  */
-export { GroupToggle } from "./design-group-toggle";
-export { TokensPanel, useVariablesHeader } from "./tokens-panel";
+export { GroupToggle } from "./panels/design/design-group-toggle";
+export { TokensPanel, useVariablesHeader } from "./panels/design/tokens-panel";
 export type {
   GroupFolds,
   TokensPanelProps,
   VariablesHeader,
-} from "./tokens-panel";
+} from "./panels/design/tokens-panel";
 // What a host's variables write made at once answers it stored, so an import
 // can say a save the site took only in part as exactly that.
-export type { VariablesStored } from "./variables-transfer";
+export type { VariablesStored } from "./panels/design/variables-transfer";
 // Which variable groups each Design tab lists, and the one variable search,
 // so a tab's count and the rows it lists come from the same rule.
 export {
   DESIGN_TAB_GROUPS,
   searchVariableGroups,
   variableMatchesByTab,
-} from "./tokens-studio";
+} from "./panels/design/tokens-studio";
 // How many of the Styles tab's styles a search matches, by the tab's own rule,
 // and the way a host hands the tab its search.
-export { stylesTabMatches } from "./styles-tab-matches";
-export { SharedStylesHostSearch } from "./shared-styles-panel";
+export { stylesTabMatches } from "./panels/design/styles-tab-matches";
+export { SharedStylesHostSearch } from "./panels/design/shared-styles-panel";
 // Where a block type's styles sit in the Styles tab, so a host sending the
 // author there ("Edit block styles") reveals the group the tab draws.
-export { blockStyleFoldId } from "./block-looks-group";
+export { blockStyleFoldId } from "./panels/design/block-looks-group";
 // The site's fonts, for every Font control the host draws: the block panel's
 // and a font variable's in Design.
-export { FontChoicesContext } from "./font-family-field";
-export type { FontChoices } from "./font-family-field";
+export { FontChoicesContext } from "./panels/design/font-family-field";
+export type { FontChoices } from "./panels/design/font-family-field";
 // The top of Design's Type tab: the Body and Headings fonts every page uses.
-export { SiteFontRoles } from "./site-font-roles";
-export type { SiteFontRolesProps } from "./site-font-roles";
-export type { DesignTab, VariableGroup } from "./tokens-studio";
+export { SiteFontRoles } from "./panels/design/site-font-roles";
+export type { SiteFontRolesProps } from "./panels/design/site-font-roles";
+export type { DesignTab, VariableGroup } from "./panels/design/tokens-studio";
 /*
  * How widely variables are used, as a host reads it for the Variables view.
  * Experimental, as the view's `usage` is.
@@ -856,7 +875,7 @@ export type {
   VariableUse,
   VariableUseKind,
   VariableUsesPage,
-} from "./variable-usage";
+} from "./panels/design/variable-usage";
 export { SelectionBreadcrumb } from "./shell/breadcrumb";
 export type { SelectionBreadcrumbProps } from "./shell/breadcrumb";
 /*
@@ -894,9 +913,9 @@ export type { ClassSelectorProps } from "./class-selector";
  * the block verb, and what the Style tab borrows from the host to edit a
  * shared style as its target.
  */
-export { SaveSharedStyleDialog } from "./shared-style-save-dialog";
-export type { SaveSharedStyleDialogProps } from "./shared-style-save-dialog";
-export type { SharedStylesHost } from "./style-target";
+export { SaveSharedStyleDialog } from "./panels/design/shared-style-save-dialog";
+export type { SaveSharedStyleDialogProps } from "./panels/design/shared-style-save-dialog";
+export type { SharedStylesHost } from "./inspector/style-inspector/style-target";
 export type {
   SharedStyleChange,
   SharedStyleOffer,
@@ -915,14 +934,14 @@ export { sharedStyleNameTaken } from "./shared-style-target";
  */
 export { useNoticeQueue } from "./shell/builder-notices";
 export type { NoticeQueue, RaiseNotice } from "./shell/builder-notices";
-export { SharedStylesPanel } from "./shared-styles-panel";
+export { SharedStylesPanel } from "./panels/design/shared-styles-panel";
 /**
  * Design → Type → "Text styles": the site's text styles and their parts.
  *
  * @experimental Settles with text styles.
  */
-export { TextStylesSection } from "./text-styles-section";
-export type { TextStylesSectionProps } from "./text-styles-section";
+export { TextStylesSection } from "./panels/design/text-styles-section";
+export type { TextStylesSectionProps } from "./panels/design/text-styles-section";
 // The whole-list class write the Styles tab's Block styles make, copy,
 // rename and hide block styles and move ★ through.
 export type { ClassListEdit, EditClasses } from "./block-style-actions";
@@ -931,7 +950,7 @@ export type {
   PageClassBlocks,
   SharedStylesAccess,
   SharedStylesPanelProps,
-} from "./shared-styles-panel";
+} from "./panels/design/shared-styles-panel";
 export type {
   SharedStyleHereParts,
   SharedStyleKind,
@@ -975,14 +994,14 @@ export type {
  *
  * @experimental The catalogue's shapes may change while the feature settles.
  */
-export { FontsPanel } from "./fonts-panel";
+export { FontsPanel } from "./panels/design/fonts-panel";
 /**
  * The one Fonts screen around that list: what the builder opens over its
  * Design panel and the admin draws as its Fonts page.
  *
  * @experimental Its props may change while the screen settles.
  */
-export { FontsScreen } from "./fonts-panel";
+export { FontsScreen } from "./panels/design/fonts-panel";
 export type {
   CatalogueAddRequest,
   CatalogueFamilyView,
@@ -990,27 +1009,27 @@ export type {
   FontsPanelProps,
   FontsScreenProps,
   FontFaceUpload,
-} from "./fonts-panel";
+} from "./panels/design/fonts-panel";
 export {
   fontTokenRows,
   readStack,
   rowsNeedingAttention,
   withoutFamily,
-} from "./font-library";
+} from "./panels/design/font-library";
 export type {
   FamilyReading,
   FamilySource,
   FontTokenRow,
   SiteFamily,
   StackReading,
-} from "./font-library";
+} from "./panels/design/font-library";
 
 /**
  * Which values each placement of a new component may change: the picker the
  * host's "Turn into component" form draws.
  */
-export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
-export type { ExposurePickerProps } from "./exposure-picker";
+export { ExposurePicker, selectionAsComponent } from "./shell/exposure-picker";
+export type { ExposurePickerProps } from "./shell/exposure-picker";
 
 /**
  * Page checks: the count beside Publish that opens the list and walks it

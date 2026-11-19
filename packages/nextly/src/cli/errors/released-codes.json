@@ -222,8 +222,13 @@
   "UNIQUE_INDEX_NAME_TAKEN": "`nextly migrate` would make a one-to-one relationship unique under an index name another object already holds.",
   "UPGRADE_BACKUP_NOT_CONFIRMED": "`nextly upgrade` would change the database, and no backup was confirmed, with no terminal attached to ask.",
   "UPGRADE_CANCELLED": "The backup prompt of `nextly upgrade` was answered no, so the upgrade did not run.",
+  "UPGRADE_CANNOT_START": "`nextly upgrade` could not read the project it was run in, or the registry the project uses, so it changed nothing.",
   "UPGRADE_EVENTS_TABLE_TAKEN": "A table of another shape already has the name `nextly upgrade` moves the migration records into.",
+  "UPGRADE_INSTALL_FAILED": "The package manager failed while `nextly upgrade` was moving the packages, and the project was put back as it was.",
   "UPGRADE_LEDGER_UNREADABLE": "`nextly upgrade` found a `nextly_migrations` table holding records it cannot read, so it moved none of them.",
+  "UPGRADE_NOT_RESTORED": "The package manager failed while `nextly upgrade` was moving the packages, and the installed packages could not be put back.",
+  "UPGRADE_PACKAGE_CANNOT_MOVE": "A Nextly package of the project cannot move to the release `nextly upgrade` was moving to, so no package was moved.",
+  "UPGRADE_RELEASE_UNKNOWN": "`nextly upgrade` could not tell which release to move to: the one given is not published, or the installed release's channel names none, so it changed nothing.",
   "UPGRADE_WORK_MOVED": "`nextly upgrade` was run for the database work it used to do, which `nextly migrate` and `nextly i18n:convert-zoned-dates` now do, so it changed nothing.",
   "WIDGET_GENERATE_CANCELLED": "A prompt of `nextly generate:widget` was cancelled, so it wrote no widget.",
   "WORKFLOW_CANNOT_ATTACH": "A workflow in the configuration is attached to a collection or Single it cannot run on."
