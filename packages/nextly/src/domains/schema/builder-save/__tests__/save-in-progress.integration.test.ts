@@ -1067,6 +1067,88 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
+      // A settle overtaken while it generates its replacement, by a writer whose own migration
+      // happens to share the replacement's name: nothing tells the two apart, so the stopped file is
+      // kept, set aside, never deleted, and the record stays for the stop to be settled again.
+      it.runIf(dialect === "mysql")(
+        "a settle overtaken by a writer of a same-named migration keeps the stopped file",
+        async () => {
+          const restoreBounds = setWriterHoldBounds({
+            waitMs: 30_000,
+            leaseSeconds: 1,
+            renewMs: 600_000,
+          });
+          try {
+            const t = await boot();
+            await path.create([text("heading")]);
+            const refused = refuseAdding(t, "beta");
+            const history = join(basePath, HISTORY);
+            // The save's own file, the first migration file put in place.
+            let stoppedFile: string | undefined;
+            let overtaken = false;
+            kill.stall = async point => {
+              if (
+                stoppedFile === undefined &&
+                point.startsWith(`renamed:${history}`) &&
+                point.endsWith(".sql")
+              ) {
+                stoppedFile = point.slice(`renamed:${history}/`.length);
+                return;
+              }
+              // The settle's generation writing its replacement in full, once the save's own file
+              // has stopped at its statement: stalled past the lease while another writer takes
+              // the folder and writes a migration of the same name.
+              if (
+                stoppedFile === undefined ||
+                refused() === 0 ||
+                overtaken ||
+                !point.startsWith(history) ||
+                !point.endsWith(".tmp")
+              ) {
+                return;
+              }
+              overtaken = true;
+              await new Promise(resolve => setTimeout(resolve, 1_200));
+              const other = await acquireWriterHold({
+                migrationsDir: history,
+                command: "migrate:create",
+                whenHeld: "wait",
+              });
+              writeFileSync(
+                join(history, `29991231_235959_999_${path.slug}_update.sql`),
+                "-- UP\n-- DOWN\n"
+              );
+              await other.release();
+            };
+
+            const answer = await path
+              .save(t, [text("heading"), text("alpha"), text("beta")])
+              .catch((error: unknown) => error);
+            kill.stall = undefined;
+            expect(refused(), "no statement adding `beta` was met").toBe(1);
+            expect(overtaken, "the settle was never overtaken").toBe(true);
+            expect(
+              answer instanceof Response
+                ? answer.ok
+                : !(answer instanceof Error),
+              "the save was not refused"
+            ).toBe(false);
+            // The stopped file is in the folder, put back or set aside, never deleted.
+            const files = filesBelow(history);
+            expect(
+              files.some(
+                f => f === stoppedFile || f.startsWith(`${stoppedFile}.`)
+              ),
+              `the stopped file ${stoppedFile}, among ${files.join(", ")}`
+            ).toBe(true);
+            expect(await recordRow(t, path), "the record's row").toBeDefined();
+          } finally {
+            restoreBounds();
+          }
+        },
+        300_000
+      );
+
       it("a save overtaken before it put any file in place withdraws its record, with nothing written", async () => {
         const restoreBounds = setWriterHoldBounds({
           waitMs: 30_000,
