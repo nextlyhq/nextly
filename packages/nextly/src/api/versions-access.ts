@@ -38,6 +38,7 @@ import {
 import type { UserContext } from "../domains/singles/types";
 import {
   resolveComparisonPair,
+  sharedPartDraftSlots,
   sharedPartVersions,
 } from "../domains/versions/comparison-baselines";
 import {
@@ -1403,7 +1404,13 @@ export async function compareDocumentVersions(args: {
         baseline: query.baseline,
         locale: query.locale,
         userId: readingPersonId(args.user, args.authenticatedScope),
-        workingDraftParts,
+        // The shared part's drafts are read as its versions are: any slot
+        // that holds the shared part, a language's included where drafts are
+        // not kept by part.
+        workingDraftParts:
+          query.part === "shared"
+            ? sharedPartDraftSlots(workingDraftParts)
+            : workingDraftParts,
         partIsLive: part =>
           partIsLiveNow(entity, args.scopeKind, args.entryId, part),
         // Whether a `status` is the lifecycle's or the document's own word:

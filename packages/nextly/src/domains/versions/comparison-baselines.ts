@@ -23,6 +23,7 @@ import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 
 import { isComparisonBaselineName } from "./comparison-baseline-name";
+import { draftSlotParts } from "./part-drafts";
 import {
   recordsServedContent,
   type RecordedVersionStatus,
@@ -324,6 +325,19 @@ export function sharedPartVersions(
   versions: readonly PartVersion[]
 ): PartVersion[] {
   return versions.map(version => ({ ...version, locale: null }));
+}
+
+/**
+ * The shared part's working-draft slots, from a document's: the shared part
+ * (null) where any slot holds it (`draftSlotParts`), as the shared draft
+ * does, and, where drafts are not kept by part, every language's draft does,
+ * since it holds the whole document. Named as `sharedPartVersions` names the
+ * shared part's versions, so a draft with no version is found in the part.
+ */
+export function sharedPartDraftSlots(
+  slots: readonly (string | null)[]
+): (string | null)[] {
+  return slots.some(slot => draftSlotParts(slot).shared) ? [null] : [];
 }
 
 /** What a comparison request names, before its pair is resolved. */

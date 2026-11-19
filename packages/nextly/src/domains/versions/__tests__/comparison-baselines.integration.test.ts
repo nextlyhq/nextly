@@ -58,10 +58,15 @@ type Seed = {
 async function documentWithHistory(
   dialect: TestDialect,
   seeds: Seed[],
-  { live = true }: { live?: boolean } = {}
+  {
+    live = true,
+    perLanguageStorage = false,
+  }: { live?: boolean; perLanguageStorage?: boolean } = {}
 ) {
   current = await createTestNextlyAsSuperAdmin({
     dialect,
+    // Whether a held edit's drafts are kept by part (`experimental.perLanguageStorage`).
+    perLanguageStorage,
     collections: [
       defineCollection({
         slug: "posts",
@@ -106,7 +111,13 @@ async function documentWithHistory(
 
 function compare(
   id: string,
-  args: { from?: number; to?: number; baseline?: string; locale?: string }
+  args: {
+    from?: number;
+    to?: number;
+    baseline?: string;
+    locale?: string;
+    part?: "shared";
+  }
 ) {
   return getVersionDiffForDocument({
     scopeKind: "collection",
@@ -292,6 +303,56 @@ describe.each(getConfiguredTestDialects())(
       const error = await refusal(compare(id, { locale: "en" }));
       expect(JSON.stringify(error.publicData)).toContain("NO_BASELINE");
       expect(JSON.stringify(error.publicData)).toContain("Save it once");
+    });
+
+    it("refuses the shared part's comparison of a draft a language saved before saves were recorded", async () => {
+      const id = await documentWithHistory(dialect, [
+        { status: "published", locale: "en", title: "en published" }, // v2
+      ]);
+      // Drafts not kept by part: English's working draft holds the whole document, the shared
+      // fields included, with no draft version after the publish.
+      await new VersionsRepository(
+        current!.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      ).upsertWorkingDraft({
+        ref: { scopeKind: "collection", scopeSlug: "posts", entryId: id },
+        locale: "en",
+        snapshot: { title: "pending" },
+      });
+
+      // Refused as the language is, rather than compared from an older version as if the
+      // shared draft did not exist.
+      const error = await refusal(compare(id, { part: "shared" }));
+      expect(JSON.stringify(error.publicData)).toContain("NO_BASELINE");
+      expect(JSON.stringify(error.publicData)).toContain("Save it once");
+    });
+
+    it("compares the shared part past a language's own draft when drafts are kept by part", async () => {
+      const id = await documentWithHistory(
+        dialect,
+        [{ status: "published", locale: "en", title: "en published" }], // v2
+        { perLanguageStorage: true }
+      );
+      // Kept by part, English's working draft holds English alone.
+      await new VersionsRepository(
+        current!.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      ).upsertWorkingDraft({
+        ref: { scopeKind: "collection", scopeSlug: "posts", entryId: id },
+        locale: "en",
+        snapshot: { title: "pending" },
+      });
+
+      // English is still refused, and the shared part, which has no draft, compares as before.
+      const english = await refusal(compare(id, { locale: "en" }));
+      expect(JSON.stringify(english.publicData)).toContain("Save it once");
+      expect(await compare(id, { part: "shared" })).toMatchObject({
+        from: 1,
+        to: 2,
+        baseline: { name: "previous", versionNo: 1 },
+      });
     });
 
     it("has no published baseline once the document is withdrawn", async () => {
