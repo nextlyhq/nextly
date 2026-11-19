@@ -26,6 +26,22 @@ import type {
   VariablesUsage,
 } from "./variable-usage";
 
+/**
+ * An element's accessible name, as a screen reader hears it: from its content
+ * where it has no label of its own. Read through the role query, which
+ * computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
   Partial<Pick<TokensPanelProps, "onChange">>;
 
@@ -137,9 +153,10 @@ describe("a colour row", () => {
 
   it("still says both values to a screen reader", () => {
     render(<Hosted tokens={SITE} />);
-    expect(row(/^Brand/).getAttribute("aria-label")).toBe(
-      "Brand, light #1d2b6b, dark #8fa7ff"
-    );
+    // Named by the words it shows, then the values in words only a screen
+    // reader hears: no label laid over the row's visible name.
+    expect(row(/^Brand/).getAttribute("aria-label")).toBeNull();
+    expect(nameOf(row(/^Brand/))).toBe("Brand, light #1d2b6b, dark #8fa7ff");
   });
 });
 
