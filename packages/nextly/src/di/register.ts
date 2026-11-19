@@ -1211,6 +1211,12 @@ async function registerServicesOnce(
         {
           createMissingCompanions: !structure.productionStart,
           completeness,
+          // A production start sets a new database up only to run the
+          // migrations at start, and their history names the legacy field-group
+          // storage; every other start begins a new site on the current names.
+          newSiteFieldGroupNaming: structure.productionStart
+            ? "legacy"
+            : "current",
         }
       );
 
@@ -3852,6 +3858,11 @@ export async function initializeSchemaRegistry(
      * its reads and writes say the table is not ready.
      */
     createMissingCompanions: boolean;
+    /**
+     * The names a new database's field-group storage starts on, where this
+     * start sets one up (`ensureFirstRunSetup`). Absent, the current names.
+     */
+    newSiteFieldGroupNaming?: "legacy" | "current";
   }
 ): Promise<SchemaRegistry | undefined> {
   if (registry === undefined) return undefined;
@@ -3887,6 +3898,9 @@ export async function initializeSchemaRegistry(
         logger: consoleLogger,
         // Several processes may start on the same new database at once.
         holdSchemaLock: firstStartSchemaLock(adapter, consoleLogger),
+        ...(options.newSiteFieldGroupNaming === undefined
+          ? {}
+          : { newSiteFieldGroupNaming: options.newSiteFieldGroupNaming }),
       });
       // A start that set a new database up changed what the start's shared
       // reads found: they are read again.
