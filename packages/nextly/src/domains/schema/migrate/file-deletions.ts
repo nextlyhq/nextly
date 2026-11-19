@@ -194,8 +194,11 @@ type Reach = "delete" | "truncate" | "none";
 /** What one statement does that can delete data, or change which name means which table. */
 type Step =
   | { kind: "create"; table: string; temporary?: boolean }
-  /** A table dropped; `temporary` when only a temporary table of the name can be (MySQL's DROP TEMPORARY). */
-  | { kind: "drop"; table: string; temporary?: boolean }
+  /**
+   * A table dropped; `temporary` when only a temporary table of the name can be (MySQL's DROP
+   * TEMPORARY), `ifExists` when written to do nothing where the table is not there.
+   */
+  | { kind: "drop"; table: string; temporary?: boolean; ifExists?: boolean }
   | { kind: "add-column"; table: string; column: string }
   | {
       kind: "add-key";
@@ -466,11 +469,16 @@ function readDropTables(
   tokens: readonly Token[]
 ): Step[] {
   cursor.acceptCondition();
+  const ifExists = cursor.conditional;
   const tables = cursor.names();
   if (tables === undefined) return [unread(tokens)];
   if (!cursor.accept("CASCADE")) cursor.accept("RESTRICT");
   if (!cursor.done()) return [unread(tokens)];
-  return tables.map(table => ({ kind: "drop", table }));
+  return tables.map(table => ({
+    kind: "drop",
+    table,
+    ...(ifExists ? { ifExists: true } : {}),
+  }));
 }
 
 /**
@@ -1693,7 +1701,7 @@ class FileWalk {
         this.create(step.table, step.temporary === true);
         return true;
       case "drop":
-        this.drop(step.table, step.temporary === true);
+        this.drop(step.table, step.temporary === true, step.ifExists === true);
         return true;
       case "rows":
         this.removeRows(step);
@@ -1775,7 +1783,7 @@ class FileWalk {
     this.origins.set(table, null);
   }
 
-  private drop(name: string, temporary: boolean): void {
+  private drop(name: string, temporary: boolean, ifExists = false): void {
     if (this.shadowed.has(name)) {
       // Dropping a temporary table loses only what the run put in it, and
       // the name reaches what it reached before again.
@@ -1790,7 +1798,11 @@ class FileWalk {
     if (temporary) return;
     const table = this.origin(name);
     if (table !== null) {
-      this.emit({ kind: "table", table, ...this.translationsTableOf(table) });
+      this.emit({
+        kind: "table",
+        table,
+        ...this.translationsTableOf(table, ifExists),
+      });
     }
     this.origins.set(name, null);
   }
@@ -1800,15 +1812,24 @@ class FileWalk {
    * `<X>_locales` and, where it stands, holding `_locale` with `_parent` a
    * foreign key to `X`, as every translations table is made. Neither a name
    * nor two column names prove it of a table that stands: an entity's own
-   * table, or one a plugin made, may be named and laid out so. One the database does not have holds nothing,
-   * so its drop (a delete file's `DROP TABLE IF EXISTS`) loses nothing however
-   * it is named, and goes with the table it would translate.
+   * table, or one a plugin made, may be named and laid out so.
+   *
+   * A drop written `IF EXISTS` (`ifExists`, a delete file's) of one the facts
+   * say is not there deletes nothing, however it is named, and goes with the
+   * table it would translate. Only so written: facts read from a snapshot
+   * (`migrate:create`) never hold a translations table, and a plain drop of one
+   * there (translation turned off) is the table's own deletion.
    */
-  private translationsTableOf(table: string): { translates?: string } {
+  private translationsTableOf(
+    table: string,
+    ifExists: boolean
+  ): { translates?: string } {
     const suffix = "_locales";
     if (!table.endsWith(suffix) || table.length <= suffix.length) return {};
     const owner = table.slice(0, -suffix.length);
-    if (this.facts.liveTable(table) === false) return { translates: owner };
+    if (ifExists && this.facts.liveTable(table) === false) {
+      return { translates: owner };
+    }
     const live = this.facts.liveColumns(table);
     const parent = this.facts.keyTargets(table)?.get("_parent");
     if (live?.has("_locale") !== true || parent?.includes(owner) !== true) {
