@@ -1855,7 +1855,8 @@ export function EntryForm({
                                             slug: collection.name,
                                             entryId: savedEntryId,
                                           }}
-                                          part={review.part}
+                                          parts={review.onScreen}
+                                          allParts={review.parts}
                                           className={DOCUMENT_COLUMN_INSET}
                                         />
                                       )}

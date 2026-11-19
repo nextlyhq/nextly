@@ -66,6 +66,12 @@ export interface EditorReview {
   binding: DocumentReviewBinding | undefined;
   /** The part on screen, while it stands in a stage of an attached workflow. */
   part: PartReview | undefined;
+  /**
+   * The parts the header's steps move together: the part on screen first,
+   * with the shared part where it waits in the same stage. Empty where none
+   * waits.
+   */
+  onScreen: readonly PartReview[];
   /** Every part of the document the caller may read, whatever its stage. */
   parts: readonly PartReview[];
   /** The dialog a step needing a comment asks with. */
@@ -104,7 +110,13 @@ export function useEditorReview({
       : [];
 
   if (document === undefined || part === undefined) {
-    return { binding: undefined, part: undefined, parts, dialog: null };
+    return {
+      binding: undefined,
+      part: undefined,
+      onScreen: [],
+      parts,
+      dialog: null,
+    };
   }
 
   // Offered only where every part it moves may take it.
@@ -132,7 +144,13 @@ export function useEditorReview({
     ...stepHold(isDirty, onScreen),
   };
 
-  return { binding: { state, takeStep }, part, parts, dialog: taker.dialog };
+  return {
+    binding: { state, takeStep },
+    part,
+    onScreen,
+    parts,
+    dialog: taker.dialog,
+  };
 }
 
 /** Why no step can be taken at this moment, where something holds them. */

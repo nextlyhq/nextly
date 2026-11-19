@@ -21,6 +21,13 @@ vi.mock("@admin/components/features/versions/diff/VersionDiffView", () => ({
   ),
 }));
 
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({
+    getLocale: (code: string | undefined) =>
+      code === "en" ? { code: "en", label: "English" } : undefined,
+  }),
+}));
+
 import { ReviewChanges } from "../ReviewChanges";
 
 const SCOPE = { kind: "collection", slug: "posts", entryId: "e1" } as const;
@@ -82,7 +89,7 @@ describe("ReviewChanges", () => {
   it("shows a reviewer the changes since the published version, in its language", () => {
     listing([version(7), version(5, "published")]);
 
-    render(<ReviewChanges scope={SCOPE} part={inReview()} />);
+    render(<ReviewChanges scope={SCOPE} parts={[inReview()]} />);
 
     expect(
       screen.getByText("Changes since the published version.")
@@ -99,7 +106,7 @@ describe("ReviewChanges", () => {
     render(
       <ReviewChanges
         scope={SCOPE}
-        part={inReview({ approval: { versionNo: 8, by: "rita", at: "x" } })}
+        parts={[inReview({ approval: { versionNo: 8, by: "rita", at: "x" } })]}
       />
     );
 
@@ -112,7 +119,7 @@ describe("ReviewChanges", () => {
   it("hides the comparison and shows it again", async () => {
     listing([version(7), version(5, "published")]);
     const user = userEvent.setup();
-    render(<ReviewChanges scope={SCOPE} part={inReview()} />);
+    render(<ReviewChanges scope={SCOPE} parts={[inReview()]} />);
 
     await user.click(screen.getByRole("button", { name: "Hide changes" }));
     expect(screen.queryByText("comparing 5 with 7")).not.toBeInTheDocument();
@@ -137,8 +144,55 @@ describe("ReviewChanges", () => {
       ],
     } as Partial<PartReview>);
 
-    const { container } = render(<ReviewChanges scope={SCOPE} part={writer} />);
+    const { container } = render(
+      <ReviewChanges scope={SCOPE} parts={[writer]} />
+    );
 
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows the shared fields' changes beside the language's where both wait", () => {
+    versionsMock.mockImplementation(({ locale }: { locale?: string }) => ({
+      data: {
+        pages: [
+          {
+            items:
+              locale === "en"
+                ? [version(7), version(5, "published")]
+                : [version(4), version(2, "published")],
+            meta: {},
+          },
+        ],
+      },
+      isError: false,
+    }));
+
+    render(
+      <ReviewChanges
+        scope={SCOPE}
+        parts={[inReview(), inReview({ part: null, version: "s4" })]}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "English" })).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Shared fields" })
+    ).toBeVisible();
+    expect(screen.getByText("comparing 5 with 7")).toBeInTheDocument();
+    // The shared part's versions are the document's, read in no language.
+    expect(screen.getByText("comparing 2 with 4")).toBeInTheDocument();
+    expect(versionsMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ locale: expect.anything() })
+    );
+  });
+
+  it("offers no approval of every language where only one part waits", () => {
+    listing([version(7), version(5, "published")]);
+
+    render(<ReviewChanges scope={SCOPE} parts={[inReview()]} />);
+
+    expect(
+      screen.queryByRole("button", { name: "Approve all languages…" })
+    ).not.toBeInTheDocument();
   });
 });

@@ -2113,7 +2113,8 @@ export function SingleForm({
                                         slug: schema.slug,
                                         documentId: String(document.id),
                                       }}
-                                      part={review.part}
+                                      parts={review.onScreen}
+                                      allParts={review.parts}
                                       className={DOCUMENT_COLUMN_INSET}
                                     />
                                     <EntryMetaStrip
