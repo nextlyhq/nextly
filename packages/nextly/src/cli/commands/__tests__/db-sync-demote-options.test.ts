@@ -150,6 +150,29 @@ describe("a demoted collection's record", () => {
     expect(updateOptions).toEqual([{ handOver: "builder" }]);
   });
 
+  it("keeps the table a record already names, whatever table the configuration now asks for", async () => {
+    // The configuration's `dbName` changed since the record was written: the entries are still
+    // in the table the record names, and a demote moves no table.
+    const synced = {
+      ...asRecord({
+        slug: "articles",
+        labels: { singular: "Article", plural: "Articles" },
+        tableName: "dc_articles",
+        fields: [],
+        source: "code",
+        schemaHash: "older",
+      }),
+      locked: true,
+    };
+    const { updated } = await demoted(coded({ dbName: "dc_renamed" }), synced);
+    expect(updated).toHaveLength(1);
+    expect(updated[0].tableName).toBe("dc_articles");
+    // A collection the registry does not hold yet takes the table its configuration names.
+    expect(
+      (await registeredFor(coded({ dbName: "dc_renamed" }))).tableName
+    ).toBe("dc_renamed");
+  });
+
   it("keeps the lifecycle when it replaces a record already registered", async () => {
     const existing = asRecord({
       slug: "articles",

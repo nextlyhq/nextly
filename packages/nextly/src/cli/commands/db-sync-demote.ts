@@ -195,6 +195,9 @@ function demotedWrite(
       // a newly registered demote records.
       data: {
         ...options,
+        // The table the record already names, where its entries are: a demote moves no table,
+        // so a `dbName` the configuration changed since is not written over it.
+        tableName: current.tableName,
         source: "ui",
         locked: false,
         schemaHash: calculateSchemaHash(options.fields),
