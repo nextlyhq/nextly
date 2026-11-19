@@ -1288,7 +1288,11 @@ export class CollectionMetadataService extends BaseService {
       const writerDeps = this.saveDeps();
       // The registry row as the save writer wrote it, in the transaction that records the update's
       // files applied (development only); left unset, it is written below.
-      let updatedInSave: unknown;
+      let updatedInSave:
+        | Awaited<
+            ReturnType<DynamicCollectionService["updateCollectionMetadata"]>
+          >
+        | undefined;
       let writtenInSave = false;
       if (writerDeps !== undefined) {
         const refused = await this.writeUpdate(
