@@ -23,7 +23,10 @@ import { rowKeyText } from "../../repair-columns/clearing";
 import { fieldsByColumnOf } from "../../required-column-registries";
 import type { ColumnOrigin } from "../../services/field-column-descriptor";
 import { compareAsFor } from "../../value-conversion/compare-as";
-import { reasonClass } from "../../value-conversion/judge-column";
+import {
+  AFFECTED_ROWS_BOUND,
+  reasonClass,
+} from "../../value-conversion/judge-column";
 import {
   fieldTypeChangesOf,
   judgeFieldTypeChanges,
@@ -31,6 +34,7 @@ import {
 import {
   judgeStoredColumn,
   keyedByOf,
+  readStoredValues,
   type KeyedBy,
 } from "../../value-conversion/read-values";
 import type {
@@ -294,10 +298,58 @@ export async function judgeOfferedTypeChange(
   ) {
     return { judgement, cleared };
   }
-  return worseOf(
+  const verdict = worseOf(
     { judgement, cleared },
     await fieldVerdict(db, dialect, at.table, fieldReadings)
   );
+  return withRepeatsToClear(db, dialect, at, verdict, fieldReadings);
+}
+
+/**
+ * `verdict`, blocked where the new field is unique and two values it would clear are the same.
+ *
+ * SQLite clears a consented value only once its table's rebuild has succeeded, and the rebuild
+ * copies every value into the new column first. Two equal values copied into a unique column end
+ * the rebuild part-way, before either is cleared, so the change is refused before any statement
+ * runs, naming the rows. Values that all differ are copied and then cleared.
+ */
+async function withRepeatsToClear(
+  db: unknown,
+  dialect: SupportedDialect,
+  at: { table: string; column: string; keyedBy: KeyedBy },
+  verdict: ColumnVerdict,
+  readings: FieldReadings
+): Promise<ColumnVerdict> {
+  const field = readings.next.find(next => next.name === readings.field);
+  if (field?.unique !== true || verdict.cleared.length < 2) return verdict;
+  const toClear = new Set(verdict.cleared.map(rowKeyText));
+  const holders = new Map<string, RowKey[]>();
+  for await (const value of readStoredValues(db, dialect, {
+    ...at,
+    toJson: false,
+  })) {
+    if (value.text === null || !toClear.has(rowKeyText(value.key))) continue;
+    holders.set(value.text, [...(holders.get(value.text) ?? []), value.key]);
+  }
+  const repeated = [...holders.values()].filter(keys => keys.length > 1).flat();
+  if (repeated.length === 0) return verdict;
+  return {
+    judgement: {
+      class: "blocked",
+      reasons: [
+        ...verdict.judgement.reasons,
+        {
+          kind: "repeated",
+          class: reasonClass("repeated"),
+          rows: {
+            first: repeated.slice(0, AFFECTED_ROWS_BOUND),
+            count: repeated.length,
+          },
+        },
+      ],
+    },
+    cleared: verdict.cleared,
+  };
 }
 
 /**

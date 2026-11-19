@@ -2,9 +2,10 @@
  * On SQLite, `db:sync` and the development push judge a column's type change by what the new field
  * reads from each value, beside the column rule, which there finds every value kept.
  *
- * Each case applies a code-first change through the real pipeline, with the fields the registry
- * recorded before it where the case has them, and reads the judgement the classifier is handed.
- * The clearing is then run as the apply runs it on SQLite: after the table's rebuild.
+ * Each case is a code-first collection: its table is made by a code-first apply of the real
+ * pipeline, then a second apply changes its field, with the fields the registry recorded before
+ * it where the case has them, and the judgement the classifier is handed is read. The clearing is
+ * then run as the apply runs it on SQLite: after the table's rebuild.
  */
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
@@ -12,13 +13,13 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../../../database/index";
 import { clearCachedSnapshot } from "../../../../../init/schema-snapshot-cache";
-import { DynamicCollectionSchemaService } from "../../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { DrizzleStatementExecutor } from "../../../services/drizzle-statement-executor";
 import type { Operation } from "../../diff/types";
 import { freshPushSchema } from "../../fresh-push";
 import { clearConsentedValues } from "../../pre-cleanup/executor";
 import { PushSchemaPipeline } from "../../pushschema-pipeline";
 import {
+  noopClassifier,
   noopMigrationJournal,
   noopNotifier,
   noopPreCleanupExecutor,
@@ -26,6 +27,7 @@ import {
   noopPromptDispatcher,
   noopRenameDetector,
 } from "../../pushschema-pipeline-stubs";
+import type { Classifier } from "../../pushschema-pipeline-interfaces";
 import type { TypeChangeEvent } from "../../resolution/types";
 import type { DesiredSchema } from "../../types";
 import type { JudgedTypeChange, TypeChangeJudge } from "../judge-type-change";
@@ -37,20 +39,24 @@ const fieldsOf = (value: Record<string, unknown>) => [
   { name: "value", ...value },
 ];
 
-/** The Builder's own DDL for the table, one statement at a time. */
-function statementsFor(table: string, fields: unknown[]): string[] {
-  return new DynamicCollectionSchemaService(undefined, "sqlite")
-    .generateMigrationSQL(table, fields as never)
-    .split("--> statement-breakpoint")
-    .map(part =>
-      part
-        .split("\n")
-        .filter(line => !line.trim().startsWith("--"))
-        .join("\n")
-        .trim()
-    )
-    .filter(statement => statement.length > 0);
-}
+/** The collection as code declares it: never the Schema Builder's. */
+const desiredOf = (
+  fields: Record<string, unknown>,
+  recorded?: Record<string, unknown>
+): DesiredSchema => ({
+  collections: {
+    [TABLE]: {
+      slug: TABLE,
+      tableName: TABLE,
+      fields: fieldsOf(fields) as never,
+      ...(recorded !== undefined
+        ? { recordedFields: fieldsOf(recorded) as never }
+        : {}),
+    },
+  },
+  singles: {},
+  components: {},
+});
 
 /** Stops the apply once the classifier has been handed what it judges. */
 class Captured extends Error {}
@@ -71,14 +77,38 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
     sqlite?.close();
   });
 
-  /** The table as `from` makes it, holding `values` by row id (null for no value). */
-  function create(
+  const pipelineWith = (classifier: Classifier) =>
+    new PushSchemaPipeline({
+      executor: new DrizzleStatementExecutor("sqlite", db),
+      renameDetector: noopRenameDetector,
+      classifier,
+      promptDispatcher: noopPromptDispatcher,
+      preRenameExecutor: noopPreRenameExecutor,
+      preCleanupExecutor: noopPreCleanupExecutor,
+      migrationJournal: noopMigrationJournal,
+      notifier: noopNotifier,
+    });
+
+  const applyCodeFirst = (classifier: Classifier, desired: DesiredSchema) =>
+    pipelineWith(classifier).apply({
+      desired,
+      db,
+      dialect: "sqlite",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+  /**
+   * The table as a code-first apply makes it for `from`, holding `values` by row id (null for no
+   * value).
+   */
+  async function create(
     from: Record<string, unknown>,
     values: Record<string, string | null>
   ) {
-    for (const statement of statementsFor(TABLE, fieldsOf(from))) {
-      sqlite.exec(statement);
-    }
+    const made = await applyCodeFirst(noopClassifier, desiredOf(from));
+    expect(made.error).toBeUndefined();
+    clearCachedSnapshot();
     const insert = sqlite.prepare(
       `INSERT INTO "${TABLE}" (id, title, slug, value) VALUES (?, 'T', ?, ?)`
     );
@@ -90,26 +120,9 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
     to: Record<string, unknown>,
     recorded?: Record<string, unknown>
   ): Promise<JudgedTypeChange> {
-    const desired: DesiredSchema = {
-      collections: {
-        [TABLE]: {
-          slug: TABLE,
-          tableName: TABLE,
-          fields: fieldsOf(to) as never,
-          ...(recorded !== undefined
-            ? { recordedFields: fieldsOf(recorded) as never }
-            : {}),
-          builderOwned: true,
-        },
-      },
-      singles: {},
-      components: {},
-    };
     let handed: JudgedTypeChange | null | undefined;
-    const result = await new PushSchemaPipeline({
-      executor: new DrizzleStatementExecutor("sqlite", db),
-      renameDetector: noopRenameDetector,
-      classifier: {
+    const result = await applyCodeFirst(
+      {
         classify: async (args: { operations: Operation[] }) => {
           const judge = (args as { judgeConversion?: TypeChangeJudge })
             .judgeConversion;
@@ -122,18 +135,8 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
           throw new Captured("captured");
         },
       },
-      promptDispatcher: noopPromptDispatcher,
-      preRenameExecutor: noopPreRenameExecutor,
-      preCleanupExecutor: noopPreCleanupExecutor,
-      migrationJournal: noopMigrationJournal,
-      notifier: noopNotifier,
-    }).apply({
-      desired,
-      db,
-      dialect: "sqlite",
-      source: "code",
-      promptChannel: "terminal",
-    });
+      desiredOf(to, recorded)
+    );
     expect(result.error?.message).toBe("captured");
     if (handed === undefined || handed === null) {
       throw new Error("the apply planned no type change of the column");
@@ -155,7 +158,7 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
     }[];
 
   it("blocks a fraction held where the field becomes a whole number, naming its row", async () => {
-    create(
+    await create(
       { type: "number", options: { format: "float" } },
       { r1: "2", r2: "1.5" }
     );
@@ -170,7 +173,7 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
 
   it("judges by the column rule alone where the registry recorded no field before the apply", async () => {
     // Nothing says what the values were written as, so nothing is refused on a guess.
-    create(
+    await create(
       { type: "number", options: { format: "float" } },
       { r1: "2", r2: "1.5" }
     );
@@ -180,30 +183,54 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
   });
 
   it("lets a text whose every value is a number become a number", async () => {
-    create({ type: "text" }, { r1: "5", r2: "12" });
+    await create({ type: "text" }, { r1: "5", r2: "12" });
     const change = await judged({ type: "number" }, { type: "text" });
     expect(change.judgement.class).toBe("safe");
     expect(change.cleared).toEqual([]);
   });
 
-  it("clears, under consent, only the value the new field cannot read, after the rebuild", async () => {
+  it("blocks a unique field where two values to be cleared repeat: the rebuild would copy both first", async () => {
+    // SQLite clears a consented value only after its rebuild, which copies every value into the
+    // new column, a unique one here: two equal values end it part-way, before either is cleared.
+    await create({ type: "text" }, { r1: "maybe", r2: "maybe", r3: "later" });
+    const change = await judged(
+      { type: "checkbox", unique: true },
+      { type: "text" }
+    );
+    expect(change.judgement.class).toBe("blocked");
+    expect(rowsOf(change)).toEqual([
+      ["not-a-boolean", "lossy", ["r1", "r2", "r3"]],
+      ["repeated", "blocked", ["r1", "r2"]],
+    ]);
+  });
+
+  it("asks only for consent where a unique field's values to be cleared all differ", async () => {
+    await create({ type: "text" }, { r1: "maybe", r2: "later" });
+    const change = await judged(
+      { type: "checkbox", unique: true },
+      { type: "text" }
+    );
+    expect(change.judgement.class).toBe("lossy");
+    expect(rowsOf(change)).toEqual([["not-a-boolean", "lossy", ["r1", "r2"]]]);
+  });
+
+  it("clears, under consent, only the value the new field cannot read, after the rebuild, then fails naming a value written since", async () => {
     // "maybe" is no checkbox, and the column rule finds it kept: only the field's reading names it.
-    create({ type: "text" }, { r1: null, r2: "maybe", r3: null });
+    await create({ type: "text" }, { r1: null, r2: "maybe", r3: null });
     const change = await judged({ type: "checkbox" }, { type: "text" });
     expect(change.judgement.class).toBe("lossy");
     expect(rowsOf(change)).toEqual([["not-a-boolean", "lossy", ["r2"]]]);
     expect(change.cleared).toEqual([{ id: "r2" }]);
 
-    // The rebuild, as the apply makes it: the table made anew for the checkbox, every value copied.
+    // The rebuild, as the apply makes it: the table made anew for the checkbox by a code-first
+    // apply, every value copied into it.
     sqlite.exec(`ALTER TABLE "${TABLE}" RENAME TO "${TABLE}_old"`);
-    for (const statement of statementsFor(
-      TABLE,
-      fieldsOf({ type: "checkbox" })
-    )) {
-      // The old table still holds the indexes' names until it is dropped.
-      if (!statement.startsWith("CREATE TABLE")) continue;
-      sqlite.exec(statement);
-    }
+    clearCachedSnapshot();
+    const rebuilt = await applyCodeFirst(
+      noopClassifier,
+      desiredOf({ type: "checkbox" })
+    );
+    expect(rebuilt.error).toBeUndefined();
     sqlite.exec(
       `INSERT INTO "${TABLE}" (id, title, slug, value) SELECT id, title, slug, value FROM "${TABLE}_old"`
     );
@@ -233,11 +260,27 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
           : {}),
       },
     };
-    await clearConsentedValues({
-      tx: db,
-      dialect: "sqlite",
-      events: [event],
-      clearing: [event.id],
+    // The apply cannot undo the rebuild, so it clears what was consented to and then fails,
+    // saying what landed and naming the row written since.
+    await expect(
+      clearConsentedValues({
+        tx: db,
+        dialect: "sqlite",
+        events: [event],
+        clearing: [event.id],
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            path: `schema.${TABLE}.value`,
+            code: "CONVERSION_LEFT_A_LATER_VALUE",
+            message: expect.stringMatching(
+              /was made, and the values consented to were cleared\. One row holds a value written after the column was checked.*r3/
+            ) as unknown,
+          },
+        ],
+      },
     });
     expect(stored()).toEqual([
       { id: "r1", value: null },
