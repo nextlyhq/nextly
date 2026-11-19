@@ -1976,7 +1976,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 `[applySingleSchemaChanges] The translation records of '${slug}' were not moved after its rename: ${error.logMessage ?? ""}. Run these to finish it:\n${provenanceStatementsOf(error).join("\n")}`
               );
               await writeRow();
-              refreshRuntime(fields as unknown[]);
+              refreshRuntime(fields);
             }
             throw error;
           });

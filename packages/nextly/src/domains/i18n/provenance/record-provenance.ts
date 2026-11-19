@@ -32,13 +32,13 @@ import {
   type ProvenanceScopeKind,
 } from "../../../schemas/translation-provenance";
 import { canonicalJson } from "../../../shared/lib/canonical-json";
-import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
-import { quoteSqlLiteral } from "../../schema/utils/sql-literal";
 import {
   tablePresence,
   type DashboardLogger,
   type TableProbe,
 } from "../../dashboard/table-presence";
+import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
+import { quoteSqlLiteral } from "../../schema/utils/sql-literal";
 import {
   readLanguageRevisions,
   type SelectsRows,

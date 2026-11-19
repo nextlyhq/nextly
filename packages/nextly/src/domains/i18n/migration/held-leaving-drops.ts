@@ -11,7 +11,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors/nextly-error";
-
 import {
   applyMigrationWhole,
   applyStatementsInTries,
