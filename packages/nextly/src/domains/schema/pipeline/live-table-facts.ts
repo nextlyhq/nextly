@@ -108,6 +108,51 @@ async function probeReturnsRow(
   return (await rowsOf<unknown>(db, dialect, probe)).length > 0;
 }
 
+/**
+ * Of `names` (lower-cased), those some relation of the database already has, compared without
+ * regard to case: a table, a view, or anything else a `CREATE TABLE` of the name would meet.
+ * A `CREATE TABLE IF NOT EXISTS` of such a name makes nothing and says nothing, so only a name
+ * this leaves out is one the statement is sure to create.
+ *
+ * Every kind of relation counts, and more than the name could ever meet:
+ * - PostgreSQL: any `pg_class` entry outside the system schemas, whatever its kind (a table, a
+ *   partitioned table, a view, a materialised view, a foreign table, a sequence, an index, a
+ *   composite type) and whatever its schema, a session's temporary schema included;
+ * - MySQL: any `information_schema.TABLES` row of the database, a view among them;
+ * - SQLite: any entry of `sqlite_master` or `sqlite_temp_master`.
+ */
+export async function readTakenRelationNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  names: readonly string[]
+): Promise<Set<string>> {
+  if (names.length === 0) return new Set();
+  const namesIn = sql.join(
+    names.map(name => sql`${name.toLowerCase()}`),
+    sql`, `
+  );
+  const query =
+    dialect === "postgresql"
+      ? sql`SELECT lower(c.relname) AS name FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE lower(c.relname) IN (${namesIn})
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname NOT LIKE 'pg_toast%'`
+      : dialect === "mysql"
+        ? sql`SELECT lower(TABLE_NAME) AS name FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND lower(TABLE_NAME) IN (${namesIn})`
+        : sql`SELECT lower(name) AS name FROM sqlite_master
+              WHERE lower(name) IN (${namesIn})
+              UNION ALL
+              SELECT lower(name) AS name FROM sqlite_temp_master
+              WHERE lower(name) IN (${namesIn})`;
+  const rows = await rowsOf<{ name?: unknown }>(db, dialect, query);
+  return new Set(
+    rows.flatMap(row => (typeof row.name === "string" ? [row.name] : []))
+  );
+}
+
 export async function tableHasRows(
   db: unknown,
   dialect: SupportedDialect,

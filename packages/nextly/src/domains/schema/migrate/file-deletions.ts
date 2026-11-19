@@ -52,6 +52,7 @@ import {
 } from "../pipeline/diff/introspect-live";
 import {
   readHiddenCode,
+  readTakenRelationNames,
   readMysqlOtherCharsets,
   readPgDescendants,
   readForeignKeyTargets,
@@ -120,6 +121,14 @@ export interface DeletionFacts {
    */
   madeBeforeTheFiles?: ReadonlySet<string>;
   /**
+   * Whether no relation of any kind has `name` before the run: not a table, a view or anything
+   * else a `CREATE TABLE` of the name would meet (`readTakenRelationNames`). Only then is a
+   * table created only if absent sure to be created. Undefined when unreadable; left out by a
+   * reader with no catalog (a snapshot says which tables it records, not which names are
+   * free), which the walk takes as not knowing.
+   */
+  nameFree?(name: string): boolean | undefined;
+  /**
    * Each column of `table` that carries a foreign key, with the tables (lower-cased) its keys
    * reference. Undefined when unreadable; a fact source without it reads every table so.
    */
@@ -178,6 +187,8 @@ interface FactSource {
   liveTable(table: string): boolean | undefined;
   /** Whether the run makes `table` itself before the list runs (`DeletionFacts.madeBeforeTheFiles`). */
   madeFirst(table: string): boolean;
+  /** Whether no relation has `name` before the run (`DeletionFacts.nameFree`); undefined when not known. */
+  nameFree(name: string): boolean | undefined;
   /** Whether a SELECT calling `name` may run code that deletes. */
   mayDeleteThrough(name: string): boolean;
   unseenRebuild: "drop" | "deferred";
@@ -207,7 +218,13 @@ type Reach = "delete" | "truncate" | "none";
 
 /** What one statement does that can delete data, or change which name means which table. */
 type Step =
-  | { kind: "create"; table: string; temporary?: boolean }
+  | {
+      kind: "create";
+      table: string;
+      temporary?: boolean;
+      /** Written IF NOT EXISTS: it makes the table only where the name is free. */
+      conditional?: boolean;
+    }
   /**
    * A table dropped; `temporary` when only a temporary table of the name can be (MySQL's DROP
    * TEMPORARY), `ifExists` when written to do nothing where the table is not there.
@@ -585,14 +602,18 @@ function readCreateTemporary(cursor: StatementCursor): Step[] {
 
 /**
  * `TABLE [IF NOT EXISTS] name`, after `CREATE [TEMPORARY]`: the table the
- * list makes. One created only if absent may be a live table, so it makes
+ * list makes. One created only if absent may be a live table: the step says
+ * so (`conditional`), and whether it makes the table is decided where it is
+ * applied (`FileWalk.createIfAbsent`). A temporary one so written makes
  * nothing of the name.
  */
 function readCreateTable(cursor: StatementCursor, temporary: boolean): Step[] {
   if (!cursor.accept("TABLE")) return [];
-  if (cursor.accept("IF", "NOT", "EXISTS")) return [];
+  const conditional = cursor.accept("IF", "NOT", "EXISTS");
+  if (conditional && temporary) return [];
   const table = cursor.name();
   if (table === undefined) return [];
+  if (conditional) return [{ kind: "create", table, conditional }];
   return [
     temporary
       ? { kind: "create", table, temporary }
@@ -1609,6 +1630,45 @@ interface ColumnNames {
   away: Set<string>;
 }
 
+/**
+ * Every name a statement's tokens hold, lower-cased: a bare or quoted one, and each part of one
+ * qualified by a schema. `unsure` where a name is written in a form the scan does not decode
+ * (PostgreSQL's `U&"..."`), or is a quoted token with no text: it may be any name.
+ */
+function namesIn(tokens: readonly Token[]): {
+  names: string[];
+  unsure: boolean;
+} {
+  const names: string[] = [];
+  let unsure = false;
+  for (const token of tokens) {
+    if (typeof token === "string") {
+      names.push(...token.split(".").map(part => part.toLowerCase()));
+    } else if (token.kind === "name") {
+      if (token.name === undefined || token.escaped === true) unsure = true;
+      else names.push(token.name.toLowerCase());
+    }
+  }
+  return { names, unsure };
+}
+
+/** PostgreSQL keeps 63 bytes of a name and cuts the rest, without a word. */
+const POSTGRES_NAME_BYTES = 63;
+
+/**
+ * Whether the catalog's answer for `name` (`DeletionFacts.nameFree`) can be trusted: the name as
+ * a statement writes it is compared with the names the database stores, and the two can differ
+ * where the name carries a dot (a schema, or a quoted dot, which the answer does not cover),
+ * letters outside ASCII (folded differently here and by each database), or more bytes than
+ * PostgreSQL keeps.
+ */
+function comparableName(name: string, dialect: SupportedDialect): boolean {
+  if (name.includes(".")) return false;
+  // Only printable ASCII folds the same way everywhere.
+  if (!/^[\x20-\x7e]+$/.test(name)) return false;
+  return dialect !== "postgresql" || name.length <= POSTGRES_NAME_BYTES;
+}
+
 /** One walk over a statement list, following names and collecting deletions. */
 class FileWalk {
   /** Each deletion with the part of the list (a file of a run) whose statement made it. */
@@ -1635,6 +1695,12 @@ class FileWalk {
    * made, so a write to it is spared nothing.
    */
   private readonly renamed = new Set<string>();
+  /** Every name a statement before the one being read holds (`saw`). */
+  private readonly mentioned = new Set<string>();
+  /** Whether such a statement held a name the reading could not be sure of. */
+  private mentionedUnsure = false;
+  /** The tables a conditional create made the run's own (`createIfAbsent`). */
+  private readonly madeIfAbsent = new Set<string>();
   /** The functions the list defines, by the last part of their names; `*` for one it cannot name. */
   private readonly functions = new Set<string>();
   /** The foreign keys with an ON DELETE action the list added, in order. */
@@ -1666,17 +1732,8 @@ class FileWalk {
    * of rows, names: bare, quoted, or qualified by a schema.
    */
   named(tokens: readonly Token[]): void {
-    for (const token of tokens) {
-      const names =
-        typeof token === "string"
-          ? token.split(".")
-          : token.kind === "name" && token.name !== undefined
-            ? [token.name]
-            : [];
-      for (const name of names) {
-        const table = name.toLowerCase();
-        if (this.facts.madeFirst(table)) this.renamed.add(table);
-      }
+    for (const table of namesIn(tokens).names) {
+      if (this.facts.madeFirst(table)) this.renamed.add(table);
     }
   }
 
@@ -1737,7 +1794,8 @@ class FileWalk {
   private applyToTable(step: Step): boolean {
     switch (step.kind) {
       case "create":
-        this.create(step.table, step.temporary === true);
+        if (step.conditional === true) this.createIfAbsent(step.table);
+        else this.create(step.table, step.temporary === true);
         return true;
       case "drop":
         this.drop(step.table, step.temporary === true, step.ifExists === true);
@@ -1820,6 +1878,60 @@ class FileWalk {
     )
       return;
     this.origins.set(table, null);
+  }
+
+  /**
+   * A table created only if absent (`CREATE TABLE IF NOT EXISTS`). Where a
+   * relation has the name already the statement makes nothing and says
+   * nothing, so the name keeps what it meant unless this statement is sure
+   * to be what creates the table:
+   * - the walk has not resolved the name: a rename onto it, a table the list
+   *   made or a temporary one shadowing it stand as they are;
+   * - no earlier statement of the run names it in any form, or holds a name
+   *   the reading cannot be sure of: the walk does not follow every statement
+   *   (a rename with a schema, a view, a partition attached), and one of them
+   *   may have given the name to something live;
+   * - the name is one the catalog's answer can be trusted for
+   *   (`comparableName`);
+   * - the catalog says no relation of any kind has the name before the run.
+   * Then the table holds only what the run puts in it, as one created
+   * plainly does, until a statement the walk does not follow alters it
+   * (`unfollowed`).
+   */
+  private createIfAbsent(table: string): void {
+    if (this.origins.has(table) || this.shadowed.has(table)) return;
+    if (this.mentionedUnsure || this.mentioned.has(table)) return;
+    if (!comparableName(table, this.dialect)) return;
+    if (this.facts.nameFree(table) !== true) return;
+    this.origins.set(table, null);
+    this.madeIfAbsent.add(table);
+  }
+
+  /**
+   * Notes every name `tokens`, a statement the walk is done with, holds
+   * (`namesIn`): what a later conditional create asks (`createIfAbsent`). A
+   * name the reading cannot be sure of counts as every name.
+   */
+  saw(tokens: readonly Token[]): void {
+    const { names, unsure } = namesIn(tokens);
+    for (const name of names) this.mentioned.add(name);
+    this.mentionedUnsure ||= unsure;
+  }
+
+  /**
+   * `tokens` is a statement the walk read nothing of (a rename with a schema,
+   * a partition attached, a table made to inherit): where it alters a table
+   * and names one a conditional create made, the name may now reach something
+   * else, so the table is the run's own no longer and is judged as a live one.
+   */
+  unfollowed(tokens: readonly Token[]): void {
+    if (tokens[0] !== "ALTER") return;
+    const { names, unsure } = namesIn(tokens);
+    for (const table of this.madeIfAbsent) {
+      if (!unsure && !names.includes(table)) continue;
+      this.madeIfAbsent.delete(table);
+      if (this.origins.get(table) === null) this.origins.delete(table);
+    }
   }
 
   private drop(name: string, temporary: boolean, ifExists = false): void {
@@ -2461,18 +2573,22 @@ function walk(
       for (const step of steps) {
         file.apply(fingerprinted(step, statement));
       }
+      if (steps.length === 0) file.unfollowed(tokens);
       const call = readCalls(tokens);
       if (call !== undefined) file.apply(fingerprinted(call, statement));
       advance(state, tokens);
       // A statement read whole as a write of rows leaves every name meaning what it meant.
       if (steps.length > 0 && steps.every(step => step.kind === "writes")) {
+        file.saw(tokens);
         return;
       }
     }
     // Any other statement that names a table the run makes first may have given that name
     // to something else (a rename the walk does not follow, a table made to inherit from
     // it, a view): from here on a write to it is judged as a write to any table.
-    file.named(tokensOf(statement, dialect));
+    const named = tokensOf(statement, dialect);
+    file.named(named);
+    file.saw(named);
   });
   return file.found;
 }
@@ -2624,6 +2740,7 @@ function factSource(facts: DeletionFacts): FactSource {
     descendantsOf: table => facts.descendantsOf(table),
     liveTable: table => facts.liveTable(table),
     madeFirst: table => facts.madeBeforeTheFiles?.has(table) === true,
+    nameFree: name => facts.nameFree?.(name),
     mayDeleteThrough: name => mayDeleteThrough(name, facts.userFunctions),
     unseenRebuild: facts.unseenRebuild ?? "drop",
     liveColumns: table => facts.liveColumns.get(table),
@@ -2778,6 +2895,8 @@ interface Questions {
   live: Set<string>;
   /** Tables asked what their foreign keys reference. */
   keys: Set<string>;
+  /** Names a conditional create would make, asked whether any relation has them. */
+  free: Set<string>;
   calls: boolean;
 }
 
@@ -2793,6 +2912,7 @@ function answered(asked: Questions): boolean {
       asked.descendants,
       asked.live,
       asked.keys,
+      asked.free,
     ].every(set => set.size === 0)
   );
 }
@@ -2818,6 +2938,8 @@ class FactReading {
   private readonly truncates = new Map<string, readonly string[] | undefined>();
   private readonly hidden = new Map<string, HiddenCode | undefined>();
   private readonly liveTables = new Map<string, boolean | undefined>();
+  /** Per name asked, whether no relation has it; undefined where the catalog could not say. */
+  private readonly freeNames = new Map<string, boolean | undefined>();
   private readonly keyTargets = new Map<
     string,
     ReadonlyMap<string, readonly string[]> | undefined
@@ -2863,6 +2985,7 @@ class FactReading {
       descendants: new Set(),
       live: new Set(),
       keys: new Set(),
+      free: new Set(),
       calls: false,
     };
     walk(statements, this.dialect, this.answering(asked));
@@ -2899,6 +3022,8 @@ class FactReading {
         return known === undefined ? false : known.value;
       },
       madeFirst: table => this.madeBeforeTheFiles?.has(table) === true,
+      // Not known until read: a name is never taken for free on a guess.
+      nameFree: name => lookup(this.freeNames, name, asked.free)?.value,
       mayDeleteThrough: name => {
         if (this.userFunctions !== null)
           return mayDeleteThrough(name, this.userFunctions);
@@ -2946,6 +3071,18 @@ class FactReading {
         table,
         this.spellFailed ? undefined : this.spellings.has(table)
       );
+    }
+    if (asked.free.size > 0) {
+      const names = [...asked.free];
+      const taken = await settle(() =>
+        readTakenRelationNames(this.db, this.dialect, names)
+      );
+      for (const name of names) {
+        this.freeNames.set(
+          name,
+          taken === undefined ? undefined : !taken.has(name)
+        );
+      }
     }
     for (const table of asked.cascade)
       this.cascades.set(table, await this.readCascade(table));
@@ -3129,6 +3266,7 @@ class FactReading {
       hiddenCode: (table, on) => this.hidden.get(table.toLowerCase())?.[on],
       descendantsOf: table => this.descendants.get(table.toLowerCase()),
       liveTable: table => this.liveTables.get(table.toLowerCase()),
+      nameFree: name => this.freeNames.get(name.toLowerCase()),
       ...(this.madeBeforeTheFiles === undefined
         ? {}
         : { madeBeforeTheFiles: this.madeBeforeTheFiles }),

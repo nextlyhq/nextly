@@ -5,7 +5,10 @@
  * A Builder save writes its migration with the registry rows beside the table: an INSERT or
  * UPDATE of Nextly's own `dynamic_collections` and `nextly_meta`. On a new database those tables
  * are not there until the run makes them, so a write to them can run no code a table carried,
- * and nothing of it needs consent.
+ * and nothing of it needs consent. The same holds for a translations table: the save that turns
+ * a collection's translation on creates it only if absent and then fills it, and on a new
+ * database, where no relation has its name and nothing in the run named it before, the run
+ * makes it.
  *
  * A site is run in development and its collection made, and changed, in the Builder, which
  * leaves the definition file and the migrations in the project folder. The folder is then
@@ -91,6 +94,8 @@ const SERVER_URL_ENV = {
   mysql: "TEST_MYSQL_URL",
 } as const;
 
+/** The site's languages: a collection's translation is turned on in the Builder. */
+const LOCALIZATION = { locales: ["en", "es"], defaultLocale: "en" };
 const MIGRATIONS = "./database/history";
 const DEFINITION_FILE = "./schema/builder.json";
 /** Where the run started, put back after a case that runs a start from its project folder. */
@@ -178,6 +183,7 @@ describe.each(getConfiguredTestDialects())(
         adapter: (await open()) as never,
         basePath: project,
         collections: [],
+        localization: LOCALIZATION,
         db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION_FILE },
       });
       await dispatchCollections(
@@ -203,15 +209,49 @@ describe.each(getConfiguredTestDialects())(
           schemaVersion: 1,
         }
       );
+      // A second collection, with an entry, whose translation is then turned on: that save's
+      // file creates the translations table only if absent, fills it from the entries, and
+      // drops the moved column from the main table.
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "notes",
+          label: "Notes",
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+      await current.nextly.create({
+        collection: "notes",
+        data: { heading: "Hello" },
+      });
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "notes" },
+        {
+          fields: [{ name: "heading", type: "text" }],
+          confirmed: true,
+          schemaVersion: 1,
+          localized: true,
+        }
+      );
       const files = readdirSync(join(project, "database", "history"))
         .filter(file => file.endsWith(".sql"))
         .map(file =>
           readFileSync(join(project, "database", "history", file), "utf-8")
         );
-      // The files the case is about are there: a create and an update, each writing the
-      // collection's registry row.
-      expect(files).toHaveLength(2);
-      for (const file of files) expect(file).toMatch(/dynamic_collections/);
+      // The files the case is about are there: each save's registry rows, and the
+      // translations table created only if absent and then filled.
+      expect(
+        files.filter(file => /dynamic_collections/.test(file)).length
+      ).toBeGreaterThanOrEqual(2);
+      const translation = files.find(file =>
+        /CREATE TABLE IF NOT EXISTS\s+["`]dc_notes_locales["`]/.test(file)
+      );
+      expect(translation).toBeDefined();
+      expect(translation).toMatch(/INSERT INTO\s+["`]dc_notes_locales["`]/);
       await current.destroy();
       current = undefined;
     }, 180_000);
@@ -232,10 +272,14 @@ describe.each(getConfiguredTestDialects())(
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
-    /** What the deployed database holds of `posts`: its registry row's field names, and its table's columns. */
+    /**
+     * What the deployed database holds: `posts`' registry row's field names and its table's
+     * columns, and the columns of the translations table of `notes`.
+     */
     async function deployed(adapter: DrizzleAdapter): Promise<{
       registered: string[] | undefined;
       columns: string[];
+      translations: string[];
     }> {
       const rows = await adapter
         .executeQuery<{
@@ -248,7 +292,7 @@ describe.each(getConfiguredTestDialects())(
       const live = await introspectLiveSnapshot(
         adapter.getDrizzle(),
         adapter.getCapabilities().dialect,
-        ["dc_posts"]
+        ["dc_posts", "dc_notes_locales"]
       );
       const columnsOf = (table: string): string[] =>
         (live.tables.find(t => t.name === table)?.columns ?? []).map(
@@ -264,6 +308,7 @@ describe.each(getConfiguredTestDialects())(
                 }[]
               ).map(field => field.name),
         columns: columnsOf("dc_posts"),
+        translations: columnsOf("dc_notes_locales"),
       };
     }
 
@@ -272,6 +317,7 @@ describe.each(getConfiguredTestDialects())(
       run.adapter = adapter;
       run.config = defineConfig({
         collections: [],
+        localization: LOCALIZATION,
         db: {
           migrationsDir: join(project, "database", "history"),
           uiSchemaFile: join(project, "schema", "builder.json"),
@@ -293,6 +339,10 @@ describe.each(getConfiguredTestDialects())(
       const after = await deployed(adapter);
       expect(after.registered).toEqual(["body", "teaser"]);
       expect(after.columns).toEqual(expect.arrayContaining(["body", "teaser"]));
+      // The translations table is there, made and filled by the run with no consent.
+      expect(after.translations).toEqual(
+        expect.arrayContaining(["_parent", "_locale", "heading"])
+      );
     }, 180_000);
 
     it("is applied by a production start that runs its own migrations, with no consent", async () => {
@@ -311,6 +361,7 @@ describe.each(getConfiguredTestDialects())(
         adapter: adapter as never,
         basePath: project,
         collections: [],
+        localization: LOCALIZATION,
         logger: {
           ...quiet,
           error: (line: string) => {
@@ -330,6 +381,10 @@ describe.each(getConfiguredTestDialects())(
       const after = await deployed(adapter);
       expect(after.registered).toEqual(["body", "teaser"]);
       expect(after.columns).toEqual(expect.arrayContaining(["body", "teaser"]));
+      // The translations table is there, made and filled by the run with no consent.
+      expect(after.translations).toEqual(
+        expect.arrayContaining(["_parent", "_locale", "heading"])
+      );
       // The deployed site serves the collection.
       const written = await current.nextly.create({
         collection: "posts",

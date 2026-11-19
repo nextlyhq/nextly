@@ -455,6 +455,96 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     ]);
   }, 120_000);
 
+  it("says a name is free only where no relation of any kind has it", async () => {
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    const unused = `${P}_unused`;
+    const viewed = `${P}_viewed`;
+    // A name a relation has under another case is taken too.
+    const cased = `${P}_Cased`;
+    const taken: string[] = [posts, viewed, cased.toLowerCase()];
+    await adapter.executeQuery(
+      `CREATE VIEW ${viewed} AS SELECT id FROM ${keeper}`
+    );
+    await adapter.executeQuery(
+      `CREATE TABLE ${q(cased)} (id integer PRIMARY KEY)`
+    );
+    if (dialect === "postgresql") {
+      const more = {
+        [`${P}_matview`]: `CREATE MATERIALIZED VIEW ${P}_matview AS SELECT id FROM ${keeper}`,
+        [`${P}_sequence`]: `CREATE SEQUENCE ${P}_sequence`,
+        [`${P}_parted`]: `CREATE TABLE ${P}_parted (id integer) PARTITION BY RANGE (id)`,
+        [`${P}_part`]: `CREATE TABLE ${P}_part PARTITION OF ${P}_parted FOR VALUES FROM (0) TO (10)`,
+        [`${P}_idx`]: `CREATE INDEX ${P}_idx ON ${keeper} (parent_id)`,
+      };
+      for (const [name, statement] of Object.entries(more)) {
+        await adapter.executeQuery(statement);
+        taken.push(name);
+      }
+    }
+    if (dialect === "sqlite") {
+      // One connection, so a temporary table of it is the run's to meet.
+      await adapter.executeQuery(
+        `CREATE TEMPORARY TABLE ${P}_temp (id integer)`
+      );
+      taken.push(`${P}_temp`);
+    }
+    const names = [unused, ...taken];
+    const statements = names.flatMap(name => [
+      `CREATE TABLE IF NOT EXISTS ${name} (id integer)`,
+      `DELETE FROM ${name}`,
+    ]);
+    const facts = await readDeletionFacts(
+      adapter.getDrizzle(),
+      dialect,
+      statements
+    );
+
+    expect(facts.nameFree?.(unused)).toBe(true);
+    for (const name of taken) {
+      expect(facts.nameFree?.(name), name).toBe(false);
+    }
+    // Only the unused name's table is the run's own: its rows removed are not a deletion,
+    // and every other name's are.
+    const removed = fileDeletions(statements, dialect, facts).flatMap(
+      deletion => (deletion.kind === "rows" ? [deletion.table] : [])
+    );
+    expect(removed).not.toContain(unused);
+    expect(removed).toEqual(expect.arrayContaining(taken));
+  }, 120_000);
+
+  it("names offline at least what it names against the database, for a table created only if absent", async () => {
+    const { offlineDeletionFacts } = await import("../offline-deletion-facts");
+    const unused = `${P}_fresh`;
+    const statements = [
+      `CREATE TABLE IF NOT EXISTS ${unused} (id integer)`,
+      `INSERT INTO ${unused} (id) VALUES (1)`,
+      `DELETE FROM ${unused}`,
+      `DROP TABLE ${unused}`,
+    ];
+    const live = fileDeletions(
+      statements,
+      dialect,
+      await readDeletionFacts(adapter.getDrizzle(), dialect, statements)
+    );
+    // Against the database the name is free, so the run makes the table and loses nothing.
+    expect(live).toEqual([]);
+    // A reader with no catalog does not know the name is free: it names the table's
+    // deletions, which the run then finds it need not ask for, never the other way round.
+    const offline = fileDeletions(
+      statements,
+      dialect,
+      offlineDeletionFacts({ tables: [] } as never, new Set())
+    );
+    expect(offline).toEqual(
+      expect.arrayContaining([
+        { kind: "rows", table: unused },
+        { kind: "table", table: unused },
+      ])
+    );
+    for (const deletion of live) expect(offline).toContainEqual(deletion);
+  }, 120_000);
+
   it("judges a file against the facts the database gives", async () => {
     const facts = await readDeletionFacts(
       adapter.getDrizzle(),

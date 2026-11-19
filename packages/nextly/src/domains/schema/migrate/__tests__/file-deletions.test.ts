@@ -51,6 +51,11 @@ interface Facts {
   /** The tables the run itself makes before any statement of the list runs, where the database lacks them. */
   madeFirst?: readonly string[];
   /**
+   * The names no relation of any kind has before the run, of those asked; "unreadable" where the
+   * catalog could not say. Left out: a reader with no catalog, which does not answer at all.
+   */
+  free?: readonly string[] | "unreadable";
+  /**
    * MySQL: per table in `columns`, the columns whose character set is not the table's default;
    * none when left out. "unreadable": not read for any table.
    */
@@ -102,6 +107,14 @@ function fake(facts: Facts = {}): DeletionFacts {
     ...(facts.madeFirst === undefined
       ? {}
       : { madeBeforeTheFiles: new Set(facts.madeFirst) }),
+    ...(facts.free === undefined
+      ? {}
+      : {
+          nameFree: (name: string) =>
+            facts.free === "unreadable"
+              ? undefined
+              : (facts.free ?? []).includes(name),
+        }),
     ...(facts.deferred === true ? { unseenRebuild: "deferred" as const } : {}),
     liveColumns: new Map(
       tables.map(([table, columns]) => [table, new Set(Object.keys(columns))])
@@ -277,6 +290,200 @@ describe("tables dropped", () => {
         "/* DELETE */ SELECT 2",
       ])
     ).toEqual([]);
+  });
+});
+
+describe("a table created only if absent", () => {
+  // The save that turns a collection's translation on writes its translations table so, then
+  // fills it. What the table carries cannot be read where it is not there.
+  const unread = {
+    triggers: { posts_locales: undefined },
+    descendants: { posts_locales: undefined },
+    cascade: { posts_locales: undefined },
+  };
+  const create =
+    "CREATE TABLE IF NOT EXISTS posts_locales (_parent integer, _locale text, title text)";
+  const fill =
+    "INSERT INTO posts_locales (_parent, _locale, title) SELECT id, 'en', title FROM posts";
+  const statements = [
+    create,
+    fill,
+    "UPDATE posts_locales SET title = 'x'",
+    "DELETE FROM posts_locales WHERE title IS NULL",
+    "DROP TABLE posts_locales",
+  ];
+
+  it("is the run's own where no relation has the name and the run has not named it", () => {
+    for (const dialect of ["sqlite", "mysql", "postgresql"] as const) {
+      expect(
+        read(dialect, statements, { ...unread, free: ["posts_locales"] }),
+        dialect
+      ).toEqual([]);
+    }
+  });
+
+  it("is a live table where the name is taken, by a table, a view or anything else", () => {
+    const judged = read("mysql", statements, { ...unread, free: [] });
+    expect(judged).toContainEqual(rows("posts_locales"));
+    expect(judged).toContainEqual(table("posts_locales"));
+    expect(judged).toContainEqual(
+      unnamed(
+        "rows written to posts_locales may run code the table carries, which could not be read"
+      )
+    );
+  });
+
+  it("is a live table where the catalog could not say, or there is none to ask", () => {
+    for (const free of ["unreadable", undefined] as const) {
+      const judged = read("mysql", statements, {
+        ...unread,
+        ...(free === undefined ? {} : { free }),
+      });
+      expect(judged, String(free)).toContainEqual(rows("posts_locales"));
+      expect(judged, String(free)).toContainEqual(table("posts_locales"));
+    }
+  });
+
+  it("never takes a name the run already gave to a live table", () => {
+    // The create makes nothing: the name is the renamed table's, and the drop takes it.
+    expect(
+      read(
+        "postgresql",
+        [
+          "ALTER TABLE posts RENAME TO archive",
+          "CREATE TABLE IF NOT EXISTS archive (id integer)",
+          "DROP TABLE archive",
+        ],
+        { live: ["posts"], free: ["archive"] }
+      )
+    ).toEqual([table("posts")]);
+  });
+
+  it("is a live table once any earlier statement of the run has named it", () => {
+    const remove = "DELETE FROM posts_locales";
+    const facts = { free: ["posts_locales"] };
+    // A rename the walk does not follow may have put a live table under the name.
+    expect(
+      read(
+        "postgresql",
+        ["ALTER TABLE public.audit RENAME TO posts_locales", create, remove],
+        facts
+      )
+    ).toContainEqual(rows("posts_locales"));
+    // However it was named, and whatever the statement.
+    expect(
+      read(
+        "postgresql",
+        ['CREATE VIEW "posts_locales" AS SELECT 1', create, remove],
+        facts
+      )
+    ).toContainEqual(rows("posts_locales"));
+    expect(
+      read(
+        "mysql",
+        ["SELECT count(*) FROM posts_locales", create, remove],
+        facts
+      )
+    ).toContainEqual(rows("posts_locales"));
+  });
+
+  it("is a live table where the name is one the catalog's answer cannot be trusted for", () => {
+    const judged = (dialect: "postgresql" | "sqlite", name: string) =>
+      read(
+        dialect,
+        [
+          `CREATE TABLE IF NOT EXISTS "${name}" (id integer)`,
+          `DROP TABLE "${name}"`,
+        ],
+        { free: [name, name.toLowerCase()] }
+      );
+    // A quoted dot, which a schema's name would look like to the catalog's answer.
+    expect(judged("postgresql", "a.b")).not.toEqual([]);
+    // Letters the database and this reading fold differently.
+    expect(judged("sqlite", "école")).not.toEqual([]);
+    // More bytes than PostgreSQL keeps of a name: the stored name is another.
+    const long = "t".repeat(64);
+    expect(judged("postgresql", long)).not.toEqual([]);
+    // The same length is whole elsewhere, and one byte fewer is whole on PostgreSQL.
+    expect(judged("sqlite", long)).toEqual([]);
+    expect(judged("postgresql", "t".repeat(63))).toEqual([]);
+  });
+
+  it("is a live table once an earlier statement holds a name the reading cannot be sure of", () => {
+    expect(
+      read(
+        "postgresql",
+        [
+          'ALTER TABLE public.audit RENAME TO U&"\\0070osts_locales"',
+          create,
+          "DELETE FROM posts_locales",
+        ],
+        { free: ["posts_locales"] }
+      )
+    ).toContainEqual(rows("posts_locales"));
+  });
+
+  it("is the run's own no longer once a statement the walk does not follow alters it", () => {
+    const facts = { free: ["posts_locales"] };
+    // The table the run made is renamed away and a live one put under its name.
+    expect(
+      read(
+        "postgresql",
+        [
+          create,
+          "ALTER TABLE public.posts_locales RENAME TO old_locales",
+          "ALTER TABLE public.audit RENAME TO posts_locales",
+          "DELETE FROM posts_locales",
+        ],
+        facts
+      )
+    ).toContainEqual(rows("posts_locales"));
+    // A statement the walk follows, or one about another table, changes nothing.
+    expect(
+      read(
+        "postgresql",
+        [
+          create,
+          "ALTER TABLE posts_locales ADD COLUMN note text",
+          "ALTER TABLE public.audit RENAME TO audit_old",
+          "DELETE FROM posts_locales",
+        ],
+        facts
+      )
+    ).toEqual([]);
+  });
+
+  it("stays the run's own when the create is repeated", () => {
+    expect(
+      read("sqlite", [create, fill, create, "DELETE FROM posts_locales"], {
+        ...unread,
+        free: ["posts_locales"],
+      })
+    ).toEqual([]);
+  });
+
+  it("leaves a temporary table created only if absent as it was read before", () => {
+    const temporary = [
+      "CREATE TEMPORARY TABLE IF NOT EXISTS scratch (id integer)",
+      "DROP TABLE scratch",
+    ];
+    expect(read("postgresql", temporary, { live: ["scratch"] })).toEqual(
+      read("postgresql", temporary, { live: ["scratch"], free: ["scratch"] })
+    );
+  });
+
+  it("does not read a write after the run defines code on it", () => {
+    expect(
+      read(
+        "sqlite",
+        [
+          create,
+          "CREATE TRIGGER wipe AFTER INSERT ON posts_locales BEGIN DELETE FROM posts; END",
+          fill,
+        ],
+        { free: ["posts_locales"] }
+      )
+    ).toEqual([afterCode("INSERT INTO POSTS_LOCALES", fill)]);
   });
 });
 
