@@ -207,6 +207,7 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
     );
     await homepageWithABlock(page);
     await openEditor(page);
+    await expect(page.locator(".nextly-admin").first()).toHaveClass(/\bdark\b/);
     await openAddPanel(page);
     await expect(page.getByRole("option").first()).toBeVisible({
       timeout: 15_000,
@@ -234,6 +235,7 @@ test.describe("the page builder meets WCAG 2.2 AA", () => {
       ["nextly-theme", "dark"] as const
     );
     await openEditor(page);
+    await expect(page.locator(".nextly-admin").first()).toHaveClass(/\bdark\b/);
 
     const findings = await scanEditor(page);
 

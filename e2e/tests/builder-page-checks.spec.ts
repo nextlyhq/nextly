@@ -112,14 +112,18 @@ test("lists the page's checks by group, beside Publish", async ({ page }) => {
     { id: "team", name: "Team photo" },
     { id: "office", name: "Office photo" },
   ]);
-  // The plugins' checks are asked once the page opens. Waited for, so the
-  // count and the groups are read once every check has answered, not before
-  // the plugins' have.
+  // The plugins' checks are asked once the page opens, and each of them
+  // ran: a provider that failed still answers, as one that "did not run".
   const provided = page.waitForResponse(providedChecksAnswer);
   await openBuilder(page, id);
-  expect((await provided).ok()).toBe(true);
+  const answered = await provided;
+  expect(answered.ok()).toBe(true);
+  const { items } = (await answered.json()) as {
+    items: { provider: string; ran: boolean }[];
+  };
+  expect(items.map(each => each.provider)).toContain("seo");
+  expect(items.filter(each => !each.ran)).toEqual([]);
 
-  await expect(chip(page)).toHaveText("2 checks");
   // Beside Publish: the count comes just before Save and Publish.
   const publish = topBarEnd(page).getByRole("button", {
     name: /^Publish/,
@@ -138,14 +142,16 @@ test("lists the page's checks by group, beside Publish", async ({ page }) => {
   await chip(page).click();
   await expect(list(page)).toBeVisible();
   // Search is a plugin's group, listed only where one offers checks: this
-  // suite's server runs the SEO plugin, which does. It finds nothing on a
-  // draft, so the count above is the two pictures alone.
+  // suite's server runs the SEO plugin, which does. Its group drawn is the
+  // plugins' answer rendered, so the count is read after it.
   await expect(list(page).getByRole("heading", { level: 3 })).toHaveText([
     /^Accessibility/,
     /^Content and data/,
     /^Publishing/,
     /^Search/,
   ]);
+  // The SEO plugin finds nothing on a draft: the count is the two pictures.
+  await expect(chip(page)).toHaveText("2 checks");
   await expect(item(page, "Team photo")).toContainText(
     "Screen readers can’t describe the picture"
   );
