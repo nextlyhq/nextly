@@ -221,18 +221,93 @@ describe("a class save made under a range the site no longer uses", () => {
     ).toBeUndefined();
   });
 
-  it("leaves a size whose sizes it did not change, a typed one among them", () => {
-    const typed = {
-      ...madeFluid(OLD),
-      styles: { base: { base: { fontSize: "20px" } } },
-    } as NamedClass;
-    const stored = madeFluid(OLD);
+  it("leaves a size whose sizes it did not change", () => {
     expect(
       follow({
-        data: { classes: [typed, lead(OLD)] },
-        originalData: { tokens: tokens(NEW), classes: [stored, lead(OLD)] },
+        data: { classes: [madeFluid(OLD), lead(OLD)] },
+        originalData: {
+          tokens: tokens(NEW),
+          classes: [madeFluid(OLD), lead(OLD)],
+        },
         user: USER,
       })
     ).toBeUndefined();
+  });
+});
+
+describe("a classes write that changes a size beside fluid sizes it leaves as stored", () => {
+  /** The classes in what the hook answered, none where it left the write. */
+  const sent = (out: Record<string, unknown> | undefined): NamedClass[] =>
+    (out?.classes as NamedClass[] | undefined) ?? [];
+  const TYPED = "clamp(1rem, 2vw, 3rem)";
+  /** Lead with its Desktop size typed by hand, its sizes sent as stored. */
+  const typed = (size: unknown = TYPED): NamedClass =>
+    ({
+      ...lead(OLD),
+      styles: { base: { base: { fontSize: size } } },
+    }) as NamedClass;
+
+  it("drops the sizes and keeps the size, as an API client might send it", () => {
+    const out = follow({
+      data: { classes: [typed(), PLAIN] },
+      originalData: { tokens: tokens(OLD), classes: [lead(OLD), PLAIN] },
+      user: USER,
+    });
+    expect(out).toBeDefined();
+    expect(firstSize(out)).toBe(TYPED);
+    expect(sent(out)[0]).not.toHaveProperty("fluidSizes");
+    expect(sent(out)[1]).toBe(PLAIN);
+  });
+
+  it("drops them for a size pointed at a variable or reset too", () => {
+    for (const size of [{ $token: "font-size.lg" }, undefined]) {
+      const out = follow({
+        data: { classes: [typed(size)] },
+        originalData: { tokens: tokens(OLD), classes: [lead(OLD)] },
+        user: USER,
+      });
+      expect(sent(out)[0]).toBeDefined();
+      expect(sent(out)[0]).not.toHaveProperty("fluidSizes");
+    }
+  });
+
+  it("keeps them where the new size is the value they make across the range stored now", () => {
+    // "Fluid…" made again from the same sizes, after the range changed.
+    expect(
+      follow({
+        data: { classes: [lead(NEW)] },
+        originalData: { tokens: tokens(NEW), classes: [lead(OLD)] },
+        user: USER,
+      })
+    ).toBeUndefined();
+  });
+
+  it("judges a write that also changes the range across the new one, after its sizes are made again", () => {
+    // Stored with sizes beside a size typed before this rule held.
+    const old = { ...typed("24px"), id: "t-old", slug: "old" } as NamedClass;
+    // Sent with the size those sizes make across the old range: the range
+    // change makes it again across the new one, and the sizes stay.
+    const sent = { ...lead(OLD), id: "t-old", slug: "old" } as NamedClass;
+    const out = follow({
+      data: {
+        tokens: tokens(NEW),
+        classes: [sent, { ...lead(NEW), id: "t-two" }, typed()],
+      },
+      originalData: {
+        tokens: tokens(OLD),
+        classes: [old, { ...lead(OLD), id: "t-two" }, lead(OLD)],
+      },
+      user: USER,
+    });
+    const classes = out?.classes as NamedClass[];
+    expect(classes[0]?.styles.base?.base?.fontSize).toBe(
+      fluidValue(SIZES, NEW)
+    );
+    expect(classes[0]?.fluidSizes).toEqual({ base: SIZES });
+    // Sent already made across the new range: the sizes stay.
+    expect(classes[1]?.fluidSizes).toEqual({ base: SIZES });
+    // Typed by hand in the same write: the sizes go, the size stays.
+    expect(classes[2]?.styles.base?.base?.fontSize).toBe(TYPED);
+    expect(classes[2]).not.toHaveProperty("fluidSizes");
   });
 });

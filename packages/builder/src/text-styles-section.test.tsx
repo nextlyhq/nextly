@@ -639,4 +639,43 @@ describe("a size made fluid", () => {
       (screen.getByLabelText("On small screens") as HTMLInputElement).value
     ).toBe("12");
   });
+
+  it("copies a text style's sizes only while they make its size across the site's range", async () => {
+    const sizes = { small: 16, large: 32 };
+    const own = { min: 400, max: 800 };
+    const made = (size: string): NamedClass => ({
+      ...eyebrow,
+      styles: { base: { [BASE_BREAKPOINT]: { fontSize: size } } },
+      fluidSizes: { [BASE_BREAKPOINT]: sizes },
+    });
+    const duplicate = async (size: string) => {
+      const { stored } = mount({
+        library: [made(size)],
+        tokens: { tokens: [], fluidRange: own },
+      });
+      fireEvent.keyDown(row(/^Text styles: Eyebrow/), {
+        key: "F10",
+        shiftKey: true,
+      });
+      await act(async () => {
+        fireEvent.click(
+          within(screen.getByRole("menu")).getByRole("menuitem", {
+            name: "Duplicate",
+          })
+        );
+      });
+      cleanup();
+      return stored().at(-1);
+    };
+    // Made across the site's own range: the copy follows it too.
+    expect((await duplicate(fluidValue(sizes, own)))?.fluidSizes).toEqual({
+      [BASE_BREAKPOINT]: sizes,
+    });
+    // Typed by hand since: the copy keeps the typed size, without the sizes.
+    const typed = await duplicate("clamp(1rem, 2vw, 3rem)");
+    expect(typed).not.toHaveProperty("fluidSizes");
+    expect(typed?.styles.base?.[BASE_BREAKPOINT]?.fontSize).toBe(
+      "clamp(1rem, 2vw, 3rem)"
+    );
+  });
 });

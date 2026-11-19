@@ -19,6 +19,7 @@
  * @module text-styles-section
  */
 import {
+  newId,
   textStylesOf,
   type BreakpointSet,
   type NamedClass,
@@ -60,6 +61,7 @@ import {
   renameTextStylePlan,
   type TextStylePlanResult,
 } from "./text-style-plans";
+import { fluidRangeOf } from "./tokens-studio";
 import { CloseVariableEditor } from "./variable-value-controls";
 
 /** What the section is handed. */
@@ -387,7 +389,12 @@ function rowActions({
   return {
     onDuplicate: () =>
       void runPlan(panel.onEditClasses, existing =>
-        duplicateTextStylePlan(existing, row.id)
+        duplicateTextStylePlan(
+          existing,
+          row.id,
+          newId,
+          panel.tokens === undefined ? undefined : fluidRangeOf(panel.tokens)
+        )
       ).then(answer => said("refused" in answer ? answer.refused : undefined)),
     onLock: () => {
       const lock = panel.access?.lock;

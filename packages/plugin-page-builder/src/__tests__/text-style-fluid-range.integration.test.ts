@@ -393,5 +393,143 @@ describe.each(getConfiguredTestDialects())(
         fluidValue(SIZES, NEW)
       );
     });
+
+    /** A size typed by hand over a fluid one: a clamp no range makes from its sizes. */
+    const TYPED = "clamp(1rem, 2vw, 3rem)";
+
+    /** One stored class, by id. */
+    const entryOf = (
+      classes: Record<string, unknown>[],
+      id: string
+    ): Record<string, unknown> | undefined =>
+      classes.find(entry => entry.id === id);
+
+    /**
+     * The stored classes with Lead's Desktop size set to `size` and every
+     * other key, its fluid sizes among them, as stored: a class write as an
+     * API client might send it.
+     */
+    const withLeadSize = (
+      classes: Record<string, unknown>[],
+      size: unknown
+    ): Record<string, unknown>[] =>
+      classes.map(entry =>
+        entry.id === "t-lead"
+          ? { ...entry, styles: { base: { base: { fontSize: size } } } }
+          : entry
+      );
+
+    it("drops a size's fluid sizes when a classes write changes the size beside them, keeping the size", async () => {
+      const t = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const before = await stored(t);
+      const plainBefore = classText(before.classes, "t-plain");
+      const saved = await patch(designer, {
+        classes: withLeadSize(before.classes, "20px"),
+        _overwrite: true,
+      });
+      expect(saved.status).toBe(200);
+      const after = await stored(t);
+      expect(Number(after.rev)).toBe(Number(before.rev) + 1);
+      expect(sizeOf(after.classes, "t-lead")).toBe("20px");
+      expect(entryOf(after.classes, "t-lead")).not.toHaveProperty("fluidSizes");
+      expect(classText(after.classes, "t-plain")).toBe(plainBefore);
+    });
+
+    it("keeps a typed clamp on a copy of the style, with no fluid sizes beside it", async () => {
+      const t = await boot();
+      const designer = await holding(t, ...DESIGN);
+      // The size typed by hand over the fluid one.
+      const typed = await patch(designer, {
+        classes: withLeadSize((await stored(t)).classes, TYPED),
+        _overwrite: true,
+      });
+      expect(typed.status).toBe(200);
+      // Then duplicated: the copy carries every key the stored style has.
+      const read = (await stored(t)).classes;
+      const lead = entryOf(read, "t-lead") ?? {};
+      const copy = {
+        ...lead,
+        id: "t-lead-copy",
+        slug: "lead-copy",
+        label: "Lead copy",
+        orderIndex: 2,
+      };
+      const duplicated = await patch(designer, {
+        classes: [...read, copy],
+        _overwrite: true,
+      });
+      expect(duplicated.status).toBe(200);
+      const after = await stored(t);
+      expect(sizeOf(after.classes, "t-lead")).toBe(TYPED);
+      expect(sizeOf(after.classes, "t-lead-copy")).toBe(TYPED);
+      expect(entryOf(after.classes, "t-lead")).not.toHaveProperty("fluidSizes");
+      expect(entryOf(after.classes, "t-lead-copy")).not.toHaveProperty(
+        "fluidSizes"
+      );
+    });
+
+    it("keeps a typed clamp through a change of the range", async () => {
+      const t = await boot();
+      const designer = await holding(t, ...DESIGN);
+      expect(
+        (
+          await patch(designer, {
+            classes: withLeadSize((await stored(t)).classes, TYPED),
+            _overwrite: true,
+          })
+        ).status
+      ).toBe(200);
+      expect(entryOf((await stored(t)).classes, "t-lead")).not.toHaveProperty(
+        "fluidSizes"
+      );
+      expect(
+        (await patch(designer, { tokens: tokensAcross(NEW), _overwrite: true }))
+          .status
+      ).toBe(200);
+      const after = await stored(t);
+      expect(sizeOf(after.classes, "t-lead")).toBe(TYPED);
+      expect(entryOf(after.classes, "t-lead")).not.toHaveProperty("fluidSizes");
+    });
+
+    it("keeps the fluid sizes of a size the same write's range change makes again", async () => {
+      // Stored with fluid sizes beside a size typed before they were dropped.
+      const t = await boot({
+        ...LEAD,
+        styles: { base: { base: { fontSize: "24px" } } },
+      });
+      const designer = await holding(t, ...DESIGN);
+      // One save: the new range, and Lead's size made from its sizes across
+      // the old one, which the range change makes again across the new one.
+      const read = (await stored(t)).classes;
+      const saved = await patch(designer, {
+        tokens: tokensAcross(NEW),
+        classes: withLeadSize(read, fluidValue(SIZES, OLD)),
+        _overwrite: true,
+      });
+      expect(saved.status).toBe(200);
+      const after = await stored(t);
+      expect(sizeOf(after.classes, "t-lead")).toBe(fluidValue(SIZES, NEW));
+      expect(entryOf(after.classes, "t-lead")).toMatchObject({
+        fluidSizes: { base: SIZES },
+      });
+    });
+
+    it("keeps the fluid sizes of a size sent already made across the range the same write sets", async () => {
+      const t = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const read = (await stored(t)).classes;
+      const saved = await patch(designer, {
+        tokens: tokensAcross(NEW),
+        classes: withLeadSize(read, fluidValue(SIZES, NEW)),
+        _overwrite: true,
+      });
+      expect(saved.status).toBe(200);
+      const after = await stored(t);
+      expect(sizeOf(after.classes, "t-lead")).toBe(fluidValue(SIZES, NEW));
+      expect(entryOf(after.classes, "t-lead")).toMatchObject({
+        fluidSizes: { base: SIZES },
+      });
+    });
   }
 );

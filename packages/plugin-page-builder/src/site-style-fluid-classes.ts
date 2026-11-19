@@ -15,8 +15,17 @@
  * before a range change and sent after it) has each size whose fluid sizes it
  * newly sets made again across the range stored now, in that write.
  *
+ * A classes write that changes a size beside fluid sizes it leaves as stored
+ * (a size typed by hand, pointed at a variable or reset, as an API client may
+ * send it) has those sizes dropped, unless the size is the value they make
+ * across the range the write leaves: sizes left beside a size they no longer
+ * make would be taken for the ones it was made from, and the size made again
+ * from them by a copy or a range change. Judged after the sizes a range
+ * change makes again, across the new range.
+ *
  * Nothing else is touched: a write that neither changes the range nor sets
- * new fluid sizes is as it was, and so is every class without fluid sizes.
+ * new fluid sizes nor changes a size beside them is as it was, and so is
+ * every class without fluid sizes.
  *
  * @module site-style-fluid-classes
  */
@@ -26,6 +35,7 @@ import {
   fluidValue,
   isFluidSizes,
   isPlainRecord,
+  withoutStaleFluidSizes,
   type FluidRangeWidths,
   type FluidSizes,
   type NamedClass,
@@ -88,8 +98,9 @@ function lockedRefusal(
 
 /**
  * The Single's before-validate hook: the write's data with the classes made
- * again across the new range, or `undefined` (the data as it is) where the
- * write does not change the range or no class follows it.
+ * again across the new range, and fluid sizes left beside a size they no
+ * longer make dropped, or `undefined` (the data as it is) where neither
+ * changes anything.
  *
  * A locked text style that would change refuses the write for a caller, with
  * every such style named, so nothing of it is stored; server code acting as
@@ -102,22 +113,41 @@ export function fluidClassesFollowRange(
   return hook => {
     const data = hook.data;
     if (data === undefined) return undefined;
+    const original = hook.originalData;
     const change = rangeChange(hook, defaults);
-    if (change === undefined) {
-      return classesMadeAcrossStoredRange(data, hook.originalData, defaults);
-    }
-    const library = classesLeftBy(data, hook.originalData);
-    if (library === undefined) return undefined;
-    const across = classesAcrossFluidRange(library, change.from, change.to);
-    if (across === library) return undefined;
-    if (hook.user !== undefined || hook.principal !== undefined) {
-      const locked = across.filter(
-        (entry, at) => entry !== library[at] && entry.locked === true
-      );
-      if (locked.length > 0) throw lockedRefusal(locked, nameOf);
-    }
-    return { ...data, classes: across };
+    const made =
+      change === undefined
+        ? eachSentClass(data, original, defaults, entryAcross)
+        : classesFollowingRange(hook, data, change, nameOf);
+    // After the sizes made again, so a size just made across the new range
+    // keeps its sizes.
+    const out = made ?? data;
+    return eachSentClass(out, original, defaults, sizesLeftByHand) ?? made;
   };
+}
+
+/**
+ * The write's data with the classes it leaves made again across the new
+ * range, or `undefined` where none follows it; a refusal where a locked one
+ * would change for a caller.
+ */
+function classesFollowingRange(
+  hook: FluidRangeWrite,
+  data: Record<string, unknown>,
+  change: { from: FluidRangeWidths; to: FluidRangeWidths },
+  nameOf: StyleName
+): Record<string, unknown> | undefined {
+  const library = classesLeftBy(data, hook.originalData);
+  if (library === undefined) return undefined;
+  const across = classesAcrossFluidRange(library, change.from, change.to);
+  if (across === library) return undefined;
+  if (hook.user !== undefined || hook.principal !== undefined) {
+    const locked = across.filter(
+      (entry, at) => entry !== library[at] && entry.locked === true
+    );
+    if (locked.length > 0) throw lockedRefusal(locked, nameOf);
+  }
+  return { ...data, classes: across };
 }
 
 /**
@@ -149,20 +179,23 @@ function classesLeftBy(
     : undefined;
 }
 
+/** One sent class judged against its stored entry, across the site's range. */
+type SentClassStep = (
+  entry: unknown,
+  stored: unknown,
+  range: FluidRangeWidths
+) => unknown;
+
 /**
- * A classes write whose sizes were made fluid across a range the site no
- * longer uses: the save was made before a range change landed and sent after
- * it, as a retry onto the newer copy sends the classes alone. Each device
- * whose fluid sizes are new or changed in this write, and whose size is a
- * clamp, is made again across the range the site uses now, since "Fluid…"
- * writes the clamp from those sizes. A device whose sizes this write leaves
- * as stored is not touched, so a size typed since keeps its value.
- * `undefined` where nothing changes.
+ * The write's data with `step` applied to each class it sends, against the
+ * stored class of the same id and across the range the write leaves stored;
+ * `undefined` where the write sends no classes or nothing changes.
  */
-function classesMadeAcrossStoredRange(
+function eachSentClass(
   data: Record<string, unknown>,
   original: Record<string, unknown> | undefined,
-  defaults: SiteStyleData | undefined
+  defaults: SiteStyleData | undefined,
+  step: SentClassStep
 ): Record<string, unknown> | undefined {
   if (!Object.hasOwn(data, "classes")) return undefined;
   const tokens = Object.hasOwn(data, "tokens") ? data.tokens : original?.tokens;
@@ -173,11 +206,28 @@ function classesMadeAcrossStoredRange(
   let changed = false;
   const classes = incoming.map((entry: unknown) => {
     const id = isPlainRecord(entry) ? entry.id : undefined;
-    const next = entryAcross(entry, stored.get(id), range);
+    const next = step(entry, stored.get(id), range);
     if (next !== entry) changed = true;
     return next;
   });
   return changed ? { ...data, classes } : undefined;
+}
+
+/**
+ * One sent class without the fluid sizes of each device whose size the write
+ * changes beside sizes it leaves as stored, unless the size is the value they
+ * make across `range`.
+ */
+function sizesLeftByHand(
+  entry: unknown,
+  stored: unknown,
+  range: FluidRangeWidths
+): unknown {
+  // Read as stored data: the engine checks each key it reads.
+  const sent = entry as NamedClass;
+  return isPlainRecord(sent)
+    ? withoutStaleFluidSizes(sent, stored, range)
+    : entry;
 }
 
 /** The stored classes by id, the first of each id. */
@@ -191,7 +241,16 @@ function storedById(raw: unknown): Map<unknown, unknown> {
   return byId;
 }
 
-/** One sent class with each new or changed fluid size made across `range`. */
+/**
+ * One sent class with each new or changed fluid size made across `range`.
+ *
+ * For a save made before a range change landed and sent after it, as a retry
+ * onto the newer copy sends the classes alone: a device whose fluid sizes are
+ * new or changed in the write, and whose size is a clamp, is made again
+ * across the range the site uses now, since "Fluid…" writes the clamp from
+ * those sizes. A device whose sizes the write leaves as stored is not
+ * touched here.
+ */
 function entryAcross(
   entry: unknown,
   stored: unknown,

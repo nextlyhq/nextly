@@ -11,10 +11,12 @@
  */
 import {
   BASE_BREAKPOINT,
+  fluidValue,
   isTextStyle,
   MAX_NAMED_CLASS_NAME_LENGTH,
   newId,
   tokenLabelIssue,
+  type FluidRangeWidths,
   type FluidSizes,
   type NamedClass,
   type NodeStyles,
@@ -129,13 +131,15 @@ function copyName(
 
 /**
  * A copy of a text style: its parts and the sizes a fluid size was made
- * from, under the next free "copy" name, and unlocked, since a lock is the
- * original's.
+ * from (each only while it still makes its size across `range`), under the
+ * next free "copy" name, and unlocked, since a lock is the original's.
  */
 export function duplicateTextStylePlan(
   library: readonly NamedClass[],
   id: string,
-  mintId: () => string = newId
+  mintId: () => string = newId,
+  /** The site's fluid range now, or `undefined` where it is not known. */
+  range?: FluidRangeWidths
 ): TextStylePlanResult {
   const source = textStyleOf(library, id);
   if (source === undefined) return { ok: false, reason: GONE };
@@ -149,11 +153,29 @@ export function duplicateTextStylePlan(
   const made = madeTextStyle(library, label, source.styles, mintId);
   // The sizes its fluid sizes were made from go with them, so the copy's
   // follow a change of the site's fluid range as the original's do.
-  const entry =
-    source.fluidSizes === undefined
-      ? made
-      : { ...made, fluidSizes: source.fluidSizes };
+  const fluidSizes = fluidSizesStillMaking(source, range);
+  const entry = fluidSizes === undefined ? made : { ...made, fluidSizes };
   return { ok: true, classes: [...library, entry], id: entry.id };
+}
+
+/**
+ * A text style's fluid sizes for each device whose size they still make
+ * across `range`, or `undefined` for none. A size typed since, or made across
+ * another range, is the author's: sizes copied beside it would be taken for
+ * the ones it was made from, and the copy's size made again from them.
+ * Nothing is copied where the range is not known.
+ */
+function fluidSizesStillMaking(
+  source: NamedClass,
+  range: FluidRangeWidths | undefined
+): NamedClass["fluidSizes"] {
+  const sizes = source.fluidSizes;
+  if (sizes === undefined || range === undefined) return undefined;
+  const atRest = source.styles.base ?? {};
+  const kept = Object.entries(sizes).filter(
+    ([device, made]) => atRest[device]?.fontSize === fluidValue(made, range)
+  );
+  return kept.length === 0 ? undefined : Object.fromEntries(kept);
 }
 
 /**

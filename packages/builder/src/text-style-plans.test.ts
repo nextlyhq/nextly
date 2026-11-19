@@ -4,6 +4,7 @@
  */
 import {
   BASE_BREAKPOINT,
+  fluidValue,
   isTextStyle,
   type NamedClass,
 } from "@nextlyhq/blocks-engine";
@@ -137,20 +138,60 @@ describe("renaming a text style", () => {
 });
 
 describe("a copy of a text style with a fluid size", () => {
-  it("keeps the two sizes the size was made from, so it follows the range too", () => {
-    const sizes = { small: 16, large: 32 };
-    const fluid: NamedClass = {
-      ...eyebrow,
-      fluidSizes: { [BASE_BREAKPOINT]: sizes },
-    };
+  const sizes = { small: 16, large: 32 };
+  const range = { min: 360, max: 1280 };
+  /** Eyebrow with these Desktop and Mobile sizes, both made fluid from `sizes`. */
+  const fluidEyebrow = (desktop: string, mobile: string): NamedClass => ({
+    ...eyebrow,
+    styles: {
+      base: {
+        [BASE_BREAKPOINT]: { fontSize: desktop },
+        mobile: { fontSize: mobile },
+      },
+    },
+    fluidSizes: { [BASE_BREAKPOINT]: sizes, mobile: sizes },
+  });
+  const copyOf = (
+    source: NamedClass,
+    across: { min: number; max: number } | undefined
+  ): NamedClass | undefined => {
     const planned = duplicateTextStylePlan(
-      [fluid],
+      [source],
       "t-eyebrow",
-      () => "t-copy"
+      () => "t-copy",
+      across
     );
-    expect(planned.ok && planned.classes.at(-1)?.fluidSizes).toEqual({
+    return planned.ok ? planned.classes.at(-1) : undefined;
+  };
+
+  it("keeps the two sizes the size was made from, so it follows the range too", () => {
+    const made = fluidValue(sizes, range);
+    expect(copyOf(fluidEyebrow(made, made), range)?.fluidSizes).toEqual({
       [BASE_BREAKPOINT]: sizes,
+      mobile: sizes,
     });
+  });
+
+  it("leaves out the sizes of a device whose size they no longer make", () => {
+    // Mobile's size was typed by hand after "Fluid…": its sizes are stale.
+    const typed = "clamp(1rem, 2vw, 3rem)";
+    const copy = copyOf(fluidEyebrow(fluidValue(sizes, range), typed), range);
+    expect(copy?.fluidSizes).toEqual({ [BASE_BREAKPOINT]: sizes });
+    expect(copy?.styles.base?.mobile?.fontSize).toBe(typed);
+  });
+
+  it("leaves out sizes whose size was made across another range, and the field once none is left", () => {
+    const other = fluidValue(sizes, { min: 400, max: 800 });
+    const copy = copyOf(fluidEyebrow(other, other), range);
+    expect(copy).not.toHaveProperty("fluidSizes");
+    expect(copy?.styles.base?.[BASE_BREAKPOINT]?.fontSize).toBe(other);
+  });
+
+  it("copies no sizes where the site's range is not known", () => {
+    const made = fluidValue(sizes, range);
+    expect(copyOf(fluidEyebrow(made, made), undefined)).not.toHaveProperty(
+      "fluidSizes"
+    );
   });
 });
 
