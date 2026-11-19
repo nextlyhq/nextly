@@ -367,4 +367,33 @@ export class RoleQueryService extends BaseService {
       .limit(1);
     return role && role.length > 0 ? { id: String(role[0].id) } : null;
   }
+
+  /**
+   * Find the roles carrying any of the given slugs, in one read.
+   *
+   * A caller resolving a set of slugs asks once rather than once per slug.
+   * Each role comes back with the slug it carries, in no particular order,
+   * and a slug no role carries is simply absent — so a caller that must
+   * name the missing one keys the answer by slug. The empty set reads
+   * nothing.
+   *
+   * @param slugs - The role slugs to search for
+   * @returns The id and slug of every role carrying one of them
+   */
+  async findRoleIdsBySlugs(
+    slugs: readonly string[]
+  ): Promise<Array<{ id: string; slug: string }>> {
+    if (slugs.length === 0) return [];
+    const { roles } = this.tables;
+    const rows = await this.db
+      .select({ id: roles.id, slug: roles.slug })
+      .from(roles)
+      .where(inArray(roles.slug, [...new Set(slugs)]));
+    // The dialect-union handle leaves the row untyped; both columns are
+    // stringified as `findRoleIdBySlug` does with its id.
+    return rows.map((row: { id: unknown; slug: unknown }) => ({
+      id: String(row.id),
+      slug: String(row.slug),
+    }));
+  }
 }

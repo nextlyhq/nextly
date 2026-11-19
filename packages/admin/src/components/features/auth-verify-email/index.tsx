@@ -58,7 +58,9 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps): JSX.Element {
       >
         <Link
           href={ROUTES.LOGIN}
-          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+          // In the text colour, underlined: a brand's primary is a fill and
+          // can fall under AA as small text.
+          className="inline-flex items-center text-foreground underline underline-offset-2 cursor-pointer font-medium transition-colors"
         >
           <ArrowLeft className="h-4 w-4" />
           Back to Sign In
@@ -90,7 +92,9 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps): JSX.Element {
       >
         <Link
           href={ROUTES.LOGIN}
-          className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+          // In the text colour, underlined: a brand's primary is a fill and
+          // can fall under AA as small text.
+          className="inline-flex items-center text-foreground underline underline-offset-2 cursor-pointer font-medium transition-colors"
         >
           Go to Sign In
           <ArrowRight className="h-4 w-4 ml-2" />
@@ -104,7 +108,9 @@ export function VerifyEmail({ searchParams }: VerifyEmailProps): JSX.Element {
     <AuthStatusCard title="Verification Failed" description={errorMessage}>
       <Link
         href={ROUTES.LOGIN}
-        className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+        // In the text colour, underlined: a brand's primary is a fill and
+        // can fall under AA as small text.
+        className="inline-flex items-center text-foreground underline underline-offset-2 cursor-pointer font-medium transition-colors"
       >
         <ArrowLeft className="h-4 w-4" />
         Back to Sign In
