@@ -25,9 +25,11 @@ import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import { lastMovesOn, type LastMove } from "./last-moves";
 import { documentTableOn, partVersionOn } from "./part-versions";
 import {
+  nameWaits,
   partsWaitingFor,
   partWaitsDecider,
   type PartWaitingFor,
+  type PartWaits,
 } from "./part-waits-for";
 import { registeredWorkflows, workflowAttachedTo } from "./registry";
 import {
@@ -300,6 +302,8 @@ export interface WaitingPart {
   stageColour: string | null;
   /** Who it is assigned to; null for work no one is assigned, which waits for every holder. */
   assignee: ReviewAssignee | null;
+  /** Whom it waits for, named as the document's own review read names it. */
+  waitingFor: PartWaitingFor | null;
   enteredAt: Date;
   dueAt: Date | null;
 }
@@ -442,18 +446,36 @@ export async function waitingFor(
   const need = query.offset + query.limit + 1;
   const ceiling = query.scanCeiling ?? WAITING_SCAN_CEILING;
   const scan = waitingScan(adapter, terms);
-  const waiting: WaitingPart[] = [];
+  const waiting: WaitingFound[] = [];
   while (waiting.length < need && !scan.done() && scan.read < ceiling) {
     const window = await scan.next(
       Math.min(WAITING_SCAN_LIMIT, ceiling - scan.read)
     );
     waiting.push(...(await waitingIn(window, decided)));
   }
+  // Whom each part on the page waits for, named once for the page: one read per kind of name.
+  const page = waiting.slice(query.offset, query.offset + query.limit);
+  const names = await nameWaits(
+    adapter,
+    page.map(found => ({
+      slug: found.item.document.scopeSlug,
+      waits: found.waits,
+    }))
+  );
   return {
-    items: waiting.slice(query.offset, query.offset + query.limit),
+    items: page.map((found, index) => ({
+      ...found.item,
+      waitingFor: names[index] ?? null,
+    })),
     total: waiting.length,
     totalCapped: !scan.done(),
   };
+}
+
+/** A part that waits for the caller, with whom it waits for, decided but not yet named. */
+interface WaitingFound {
+  item: WaitingPart;
+  waits: PartWaits;
 }
 
 /** What deciding whether a window's parts wait for the caller needs, asked once per list. */
@@ -480,9 +502,10 @@ async function waitingIn(
     stageOfRow,
     presentationOf,
   }: WaitingContext
-): Promise<WaitingPart[]> {
+): Promise<WaitingFound[]> {
   const movable: ReviewState[] = [];
   const stageOf = new Map<ReviewState, ScopedStage>();
+  const waitsOf = new Map<ReviewState, PartWaits>();
   for (const row of window) {
     const scoped = stageOfRow.get(
       `${row.scopeKind}:${row.scopeSlug}:${row.stage}`
@@ -498,6 +521,7 @@ async function waitingIn(
     if (takesStep(scoped.step, query.caller, accountable, row.enteredBy)) {
       movable.push(row);
       stageOf.set(row, scoped);
+      waitsOf.set(row, waits);
     }
   }
   // The read check, asked of every part the caller may move at once, before the page is cut: a
@@ -512,13 +536,14 @@ async function waitingIn(
       part: row.part,
     }))
   );
-  const items: WaitingPart[] = [];
+  const items: WaitingFound[] = [];
   for (const [index, row] of movable.entries()) {
     const scoped = stageOf.get(row);
-    if (readable[index] !== true || !scoped) continue;
+    const waits = waitsOf.get(row);
+    if (readable[index] !== true || !scoped || waits === undefined) continue;
     // Shown as every surface shows the stage: its saved label and colour, else the code's.
     const shown = (await presentationOf(scoped.workflow))(row.stage);
-    items.push(waitingItem(row, row.assignee, shown));
+    items.push({ item: waitingItem(row, row.assignee, shown), waits });
   }
   return items;
 }
@@ -729,6 +754,8 @@ function waitingItem(
     stageLabel: shown.label,
     stageColour: shown.colour,
     assignee,
+    // Named once for the page it lands on, by `nameWaits`.
+    waitingFor: null,
     enteredAt: row.enteredAt,
     dueAt: row.dueAt,
   };

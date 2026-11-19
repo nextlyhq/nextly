@@ -70,6 +70,11 @@ import {
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 import {
+  bootedHeadingRegistries,
+  headingKey,
+  readableHeadings,
+} from "../services/dashboard/readable-headings";
+import {
   resolveDocumentVisibilityScope,
   visibleDocuments,
   type DocumentRef,
@@ -508,9 +513,38 @@ export async function waitingPage(
     // read the document in is left out, as a read of that language would be refused.
     readable: items => readableAmong(asker, items),
   });
+  // Each item's document named by its title as the caller reads it: the dashboard's heading read,
+  // one read per collection and language for the page, never a title the caller may not read.
+  const headings = await readableHeadings(
+    items.map(item => ({
+      kind: item.document.scopeKind,
+      slug: item.document.scopeSlug,
+      entryId:
+        item.document.scopeKind === "single" ? "" : item.document.entryId,
+      locale: item.part,
+    })),
+    {
+      user: asker.user,
+      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
+    },
+    bootedHeadingRegistries()
+  );
+  const titled = items.map(item => ({
+    ...item,
+    title:
+      headings.get(
+        headingKey({
+          kind: item.document.scopeKind,
+          slug: item.document.scopeSlug,
+          entryId:
+            item.document.scopeKind === "single" ? "" : item.document.entryId,
+          locale: item.part,
+        })
+      )?.title ?? null,
+  }));
   const totalPages = Math.max(1, Math.ceil(total / query.limit));
   return {
-    items,
+    items: titled,
     meta: {
       total,
       page: query.page,
