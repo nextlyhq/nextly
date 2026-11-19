@@ -84,6 +84,7 @@ import {
 } from "../../domains/schema/migrate/core-reconcile";
 import {
   consentToCover,
+  countDeletions,
   describeDeletion,
   resolveDataLossConsent,
   type DataLossConsent,
@@ -3832,7 +3833,9 @@ function pluginModuleUnits(
  * What each unit of a run deletes, the run read as one list
  * (`runDeletions`): a unit is judged against the schema as the units before
  * it leave it, so a table an earlier one creates holds only what the run
- * put there. The live facts are read once, for every unit's statements.
+ * put there. The live facts are read once, for every unit's statements. Each
+ * deletion carries how much it deletes where the database before the run can
+ * say (`countedRunDeletions`), so the listing reads `table dc_notes (1 row)`.
  *
  * With `entities`, as `nextly migrate` judges its run, each deletion in a
  * table a collection or Single owns belongs to its main table, and a unit
@@ -3867,7 +3870,40 @@ async function pendingRunDeletions(
           adapter: entities.adapter,
           ...(retires === undefined ? {} : { retires }),
         });
-  return units.map((unit, at) => ({ unit, deletions: perUnit[at] ?? [] }));
+  const counted = await countedRunDeletions(perUnit, db, dialect);
+  return units.map((unit, at) => ({ unit, deletions: counted[at] ?? [] }));
+}
+
+/**
+ * Each unit's deletions with how much each deletes, read from the database before the run
+ * (`countDeletions`): a table's rows, a column's non-empty values. A deletion in a table an
+ * earlier unit's deletion already names is left uncounted: that unit has changed the table by
+ * then, so the database before the run cannot say what is left in it.
+ */
+async function countedRunDeletions(
+  perUnit: readonly (readonly Deletion[])[],
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<Deletion[][]> {
+  const earlierTables = new Set<string>();
+  const counted: Deletion[][] = [];
+  for (const deletions of perUnit) {
+    const unit: Deletion[] = [];
+    for (const deletion of deletions) {
+      const changedEarlier =
+        deletion.kind !== "unnamed" && earlierTables.has(deletion.table);
+      unit.push(
+        changedEarlier
+          ? deletion
+          : ((await countDeletions([deletion], db, dialect))[0] ?? deletion)
+      );
+    }
+    for (const deletion of deletions) {
+      if (deletion.kind !== "unnamed") earlierTables.add(deletion.table);
+    }
+    counted.push(unit);
+  }
+  return counted;
 }
 
 /**
