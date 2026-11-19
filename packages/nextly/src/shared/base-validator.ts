@@ -24,7 +24,10 @@ import type { FieldAccess } from "../collections/fields/types/base";
 import { isIconIdShape } from "../collections/fields/types/icon";
 import { MAX_FIELD_NAME_LENGTH } from "../domains/dynamic-collections/field-name-rule";
 import { MIGRATION_TARGET } from "../domains/field-groups/migration/target";
-import { neverTranslatable } from "../domains/i18n/classify-fields";
+import {
+  holdsOneStructure,
+  neverTranslatable,
+} from "../domains/i18n/classify-fields";
 import {
   configuredSiblingClashes,
   siblingClashMessage,
@@ -774,6 +777,22 @@ export function validateFieldBasicsShared(
       path: `${path}.localized`,
       message: `Field "${String(field.name)}" cannot be translatable: a password or a virtual field is the same in every language. Remove \`localized: true\`.`,
       code: "FIELD_NEVER_TRANSLATABLE",
+    });
+  }
+  // Refused rather than honoured or ignored: a repeater, group or field group keeps one structure
+  // in every language (its rows, their order and its shared values), and its translatable fields
+  // inside are translated row by row. Marking the container itself asks for a structure per
+  // language, which no field offers; quietly ignoring the flag would leave the author believing it
+  // was. The fields inside choose what is translated, each by its own `localized`.
+  if (
+    field.localized === true &&
+    typeof field.type === "string" &&
+    holdsOneStructure(field as { type: string })
+  ) {
+    errors.push({
+      path: `${path}.localized`,
+      message: `Field "${String(field.name)}" keeps one structure in every language and cannot be translated as a whole: remove \`localized: true\` and mark the fields inside as localized instead.`,
+      code: "FIELD_STRUCTURE_NOT_TRANSLATABLE",
     });
   }
   validateAccessShared(
