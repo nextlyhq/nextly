@@ -134,7 +134,9 @@ export interface ExternalUserCreator {
     image?: string | null;
     roleIds: string[];
     emailVerifiedAt: Date;
-  }): Promise<{ id: string }>;
+    // The id as the users service types it (`MinimalUser.id`); the one
+    // reader, `provisionFor`, normalizes it to the string the table stores.
+  }): Promise<{ id: string | number }>;
 }
 
 /** What a listed login plugin hands over about one external identity. */
@@ -710,6 +712,8 @@ export class IdentityService extends BaseService {
       // sign-in that carries that proof.
       emailVerifiedAt: new Date(),
     });
+    // Users ids are text in every dialect; the primitive's type merely admits a number.
+    const userId = String(created.id);
 
     // The identity row, attached to the account it made, under the digest
     // the table holds uniqueness by. Two first sign-ins racing each other
@@ -722,7 +726,7 @@ export class IdentityService extends BaseService {
       subject: identity.subject,
       keyDigest: identity.keyDigest,
       address: identity.address,
-      userId: created.id,
+      userId,
       createdAt: new Date(),
     };
     try {
@@ -730,7 +734,7 @@ export class IdentityService extends BaseService {
     } catch (error) {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
-    return created.id;
+    return userId;
   }
 
   /**
