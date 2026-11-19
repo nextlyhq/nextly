@@ -1460,10 +1460,45 @@ export class SingleMetadataService {
     plan: UpdateDdlPlan | null,
     save: CollectionSave
   ): Promise<UpdateSingleSchemaResult> {
-    const { writeEntitySave } = await loadEntitySave();
+    const [{ writeEntitySave }, { appliedFieldsOf }] = await Promise.all([
+      loadEntitySave(),
+      import("../../schema/builder-save/stopped-save"),
+    ]);
     // `apply` does not run where the writer runs the file itself.
     await writeEntitySave(deps, save, () => Promise.resolve(undefined), {
       runsFile: true,
+      // A file that stops part way is settled to what of it applied: the row then records the
+      // fields as far as the database holds them, and the save is thrown as the report of it.
+      onSettled: async report => {
+        const fields = appliedFieldsOf(
+          (input.existing.fields ?? []) as unknown as FieldDefinition[],
+          input.fields ?? [],
+          report
+        );
+        await this.recordUpdate(
+          {
+            ...input,
+            fields,
+            updateData: {
+              ...input.updateData,
+              fields,
+              schemaHash: calculateSchemaHash(
+                fields as unknown as FieldConfig[]
+              ),
+            },
+          },
+          { status: "applied", refused: [] }
+        );
+        // The running server's table follows the fields the row records, as after an apply.
+        if (plan) {
+          await this.registerUpdatedRuntimeSchema(
+            input,
+            { ...plan, fields },
+            deps.adapter,
+            input.isLocalized
+          );
+        }
+      },
     });
     const outcome = plan
       ? await this.applyUpdateDdl(input, plan, false, "file")

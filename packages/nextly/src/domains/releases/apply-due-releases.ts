@@ -66,7 +66,14 @@ import { getNextlyLogger } from "../../observability/logger";
 import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
 
+import {
+  actionsByComponent,
+  begunReleases,
+  componentHold,
+  type ComponentHold,
+} from "./component-hold";
 import { asReleaseRun } from "./early-stop";
+import { goingLiveHold, type GoingLiveDocument } from "./going-live-hold";
 import {
   componentsToStop,
   planReleaseMaterialisation,
@@ -168,6 +175,16 @@ export interface ApplyDueReleasesDeps {
   mutations: ReleaseMutations;
   /** The identity reads, so a member's author can be resolved. */
   runAs: RunAsDeps;
+  /**
+   * Which of these documents going live are held back now, by id: asked again for each member
+   * the pass publishes, after the schedule check and before the write, since what the checks
+   * passed before the moment may have changed without anything telling the release. A member
+   * coming down is never asked. The registered hold (`goingLiveHold`) when left out, the one the
+   * read's projection of a due release asks, so the run and a reader agree.
+   */
+  notApproved?: (
+    documents: readonly GoingLiveDocument[]
+  ) => Promise<ReadonlySet<string>>;
   now?: () => Date;
   /**
    * Where the pass's fairness rotation comes from.
@@ -231,7 +248,17 @@ export type MaterialisationFailure =
    * The release was cancelled OR RESCHEDULED between this pass reading it and
    * acting on it, so the plan describes a schedule that no longer exists.
    */
-  | "RELEASE_NO_LONGER_SCHEDULED";
+  | "RELEASE_NO_LONGER_SCHEDULED"
+  /**
+   * The document going live is held back now (`notApproved`): a workflow
+   * holds a part it would publish that is not approved.
+   */
+  | "NOT_APPROVED"
+  /**
+   * Asking whether the document is held back failed; not evidence either
+   * way, so nothing is written and the next pass asks again.
+   */
+  | "APPROVAL_CHECK_FAILED";
 
 /**
  * Whether retrying could ever change this outcome.
@@ -249,6 +276,10 @@ const RETRY_COULD_HELP: Record<MaterialisationFailure, boolean> = {
   NO_RECORDED_AUTHOR: false,
   AUTHOR_UNAVAILABLE: false,
   LOCALE_SCOPE_UNSUPPORTED: false,
+  // A withdrawn approval comes back only through a person's step, and a
+  // release retried each tick meanwhile would hold silently, looking healthy.
+  // Stopped, so its owner is told and schedules it again once it is approved.
+  NOT_APPROVED: false,
 
   // Documented at their declarations as evidence of nothing: a lookup that
   // errored does not mean the user is gone, and a re-read that errored does not
@@ -256,6 +287,7 @@ const RETRY_COULD_HELP: Record<MaterialisationFailure, boolean> = {
   // database blip permanently halt a launch the next pass would have completed.
   IDENTITY_LOOKUP_FAILED: true,
   SCHEDULE_CHECK_FAILED: true,
+  APPROVAL_CHECK_FAILED: true,
 
   // Ambiguous, and resolved toward retrying deliberately. "Refused or errored"
   // covers both a permission the caller will never gain and a connection that
@@ -289,9 +321,10 @@ async function stopHopelessReleases(
   deps: ApplyDueReleasesDeps,
   plan: ReturnType<typeof planReleaseMaterialisation>,
   outcomes: readonly MaterialisationOutcome[],
-  plannedInstants: ReadonlyMap<string, Date>
+  plannedInstants: ReadonlyMap<string, Date>,
+  begun: ReadonlySet<string>
 ): Promise<number> {
-  const permanent = permanentlyBrokenReleases(outcomes);
+  const permanent = permanentlyBrokenReleases(outcomes, begun);
   if (permanent.size === 0) return 0;
 
   // ONE CALL PER COMPONENT, and the component is the unit of atomicity. The
@@ -353,13 +386,27 @@ async function withinComponent(
   }
 }
 
-/** The releases this pass proved can never be applied as they stand. */
+/**
+ * The releases this pass proved can never be applied as they stand.
+ *
+ * A hold (`NOT_APPROVED`) on a component an earlier pass already began is the
+ * exception: that pass was cut off after writing some of it, those documents
+ * are live, and stopping the release would leave it so for good. Retried
+ * instead, the release stays scheduled, a read projects nothing more of it, and
+ * the next pass after the approval returns writes the rest.
+ */
 function permanentlyBrokenReleases(
-  outcomes: readonly MaterialisationOutcome[]
+  outcomes: readonly MaterialisationOutcome[],
+  begun: ReadonlySet<string>
 ): Set<string> {
   return new Set(
     outcomes
-      .filter(o => o.failure !== null && !RETRY_COULD_HELP[o.failure])
+      .filter(
+        o =>
+          o.failure !== null &&
+          !RETRY_COULD_HELP[o.failure] &&
+          !(o.failure === "NOT_APPROVED" && begun.has(o.releaseId))
+      )
       .map(o => o.releaseId)
   );
 }
@@ -492,7 +539,9 @@ export async function applyDueReleases(
     // schedule the plan was built from.
     new Map(
       releases.flatMap(r => (r.scheduledAt ? [[r.id, r.scheduledAt]] : []))
-    )
+    ),
+    // From every member's receipt, the losing actions' included (`begunReleases`).
+    begunReleases(plan, members, releases)
   );
 
   const { published, undischarged } = await dischargeSettledComponents(
@@ -590,6 +639,44 @@ async function applyOne(
   if (refused !== null) return refused;
 
   return writeAndConfirm(deps, action, identity.user, base);
+}
+
+/**
+ * What the run asks of the documents a component would publish (`notApproved`): the registered
+ * hold when left out, the one a read's projection of a due release asks too.
+ */
+function askHeld(
+  deps: ApplyDueReleasesDeps
+): (documents: readonly GoingLiveDocument[]) => Promise<ReadonlySet<string>> {
+  return deps.notApproved ?? (documents => goingLiveHold().held(documents));
+}
+
+/**
+ * The outcome of an action its component's hold refuses, written nowhere. The held documents are
+ * reported as held; every other one says which held documents it waits for, so a release stopped
+ * for one document is not read as stopped for each.
+ */
+function heldOutcome(
+  action: MaterialisationAction,
+  hold: ComponentHold
+): MaterialisationOutcome {
+  const base = {
+    ref: action.ref,
+    memberId: action.memberId,
+    releaseId: action.releaseId,
+    effect: action.effect,
+  };
+  if (hold.failure === "APPROVAL_CHECK_FAILED") {
+    return { ...base, failure: hold.failure, detail: hold.detail };
+  }
+  if (hold.held.has(action.memberId)) {
+    return { ...base, failure: "NOT_APPROVED" };
+  }
+  return {
+    ...base,
+    failure: "NOT_APPROVED",
+    detail: `Waits for ${[...hold.held].join(", ")}, held back in a release it goes live with.`,
+  };
 }
 
 /**
@@ -824,6 +911,9 @@ async function applyWithinBudget(
     (a, b) => rank(a.releaseId) - rank(b.releaseId)
   );
   const startedComponents = new Set<number>();
+  const byComponent = actionsByComponent(plan);
+  // Each started component's hold, asked before its first write (`componentHold`).
+  const holds = new Map<number, ComponentHold | null>();
   const applied = new Set<string>();
   for (const action of ordered) {
     const component = componentOf.get(action.releaseId) ?? -1;
@@ -841,9 +931,22 @@ async function applyWithinBudget(
       unfinished.add(action.releaseId);
       continue;
     }
-    startedComponents.add(component);
+    if (!startedComponents.has(component)) {
+      startedComponents.add(component);
+      holds.set(
+        component,
+        await componentHold(askHeld(deps), byComponent[component] ?? [])
+      );
+    }
     applied.add(action.releaseId);
-    outcomes.push(await applyOne(deps, action));
+    // A held component writes nothing more: what an earlier pass applied still goes through
+    // `applyOne`, which writes nothing again, so it is reported as it stands.
+    const hold = holds.get(component) ?? null;
+    outcomes.push(
+      hold !== null && !action.applied
+        ? heldOutcome(action, hold)
+        : await applyOne(deps, action)
+    );
   }
 
   // A release is discharged only when nothing attributed to it failed — AND

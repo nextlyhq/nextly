@@ -182,7 +182,9 @@ function ListBody({ read }: { read: PluginRouteRead<StaffAccountsListBody> }) {
             <td className="px-3 py-2">
               <a
                 href={adminPageHref("account", account.id)}
-                className="font-medium text-primary"
+                // In the text colour, underlined: a brand's primary is a fill and
+                // can fall under AA as small text.
+                className="font-medium text-foreground underline underline-offset-2"
               >
                 {account.name}
               </a>
