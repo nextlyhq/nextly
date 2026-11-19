@@ -1480,6 +1480,39 @@ describe.each(getConfiguredTestDialects())(
       expect(push).not.toHaveBeenCalled();
     });
 
+    // Its key columns and key are there, but `_parent` references nothing: rows could outlive the
+    // entry they translate, which the translations table's create never allows.
+    it("refuses a pushed save turning translation on over a translations table whose parent references nothing", async () => {
+      await writeCollectionSave(translatedDeps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      const q = (name: string) =>
+        adapter.getCapabilities().dialect === "mysql"
+          ? `\`${name}\``
+          : `"${name}"`;
+      await adapter.executeQuery(
+        `CREATE TABLE dc_posts_locales (${q("_parent")} varchar(36) NOT NULL, ${q("_locale")} varchar(20) NOT NULL, title text, PRIMARY KEY (${q("_parent")}, ${q("_locale")}))`
+      );
+      const push = vi.fn(() => Promise.resolve());
+
+      const refused: unknown = await writeCollectionSave(
+        translatedDeps(),
+        enableTitle,
+        { appliedBy: push }
+      ).catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      expect(
+        String((refused as { publicMessage?: unknown }).publicMessage)
+      ).toContain(
+        "dc_posts_locales foreign key _parent → dc_posts absent from DB"
+      );
+      expect(push).not.toHaveBeenCalled();
+    });
+
     it("refuses a pushed save over a column the history does not record before the push, naming it, and changes nothing", async () => {
       await writeCollectionSave(deps(), {
         slug: "posts",

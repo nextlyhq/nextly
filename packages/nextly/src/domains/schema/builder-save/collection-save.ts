@@ -67,6 +67,7 @@ import {
   COMPANION_KEY_COLUMNS,
   COMPANION_LOCALE_COLUMN,
   COMPANION_OPTIONAL_STRUCTURAL_COLUMNS,
+  COMPANION_PARENT_COLUMN,
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../i18n/companion-columns";
 import { appLanguageOrder } from "../../i18n/configured-locales";
@@ -130,12 +131,14 @@ import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type {
+  ColumnSpec,
   ForeignKeySpec,
   NextlySchemaSnapshot,
   Operation,
   TableSpec,
 } from "../pipeline/diff/types";
 import {
+  readForeignKeyTargets,
   readIndexColumns,
   readIndexUniqueness,
   uniqueIndexNames,
@@ -1990,8 +1993,10 @@ async function companionPresentItems(
 /**
  * Where a translations table standing in the database lacks the structure every translated write
  * relies on: each structural column a healthy one must have (`COMPANION_STRUCTURAL_COLUMNS` less
- * `COMPANION_OPTIONAL_STRUCTURAL_COLUMNS`, the field group plan's rule), and a primary key of
- * exactly `(_parent, _locale)`, the target a translated write matches rows on.
+ * `COMPANION_OPTIONAL_STRUCTURAL_COLUMNS`, the field group plan's rule), a primary key of exactly
+ * `(_parent, _locale)`, the target a translated write matches rows on, and the key columns as the
+ * translations table's create makes them (`buildCompanionCreateStatement`): `_parent` NOT NULL, of
+ * the main table's `id` type, referencing that `id`; `_locale` NOT NULL and text.
  *
  * Its twin is the structural check in `field-groups/services/reconcile-field-group-plan.ts`: both
  * derive from those constants and `COMPANION_KEY_COLUMNS` in `i18n/companion-columns.ts`, so a
@@ -2021,13 +2026,95 @@ async function companionShapeItems(
     COMPANION_KEY_COLUMNS.every(column =>
       liveKey.some(name => key(name) === key(column))
     );
-  return keyMatches
-    ? missing
+  return [
+    ...missing,
+    ...(keyMatches
+      ? []
+      : [
+          {
+            kind: "?" as const,
+            detail: `${companion} has the primary key (${liveKey.join(", ") || "none"}) in DB, not (${COMPANION_KEY_COLUMNS.join(", ")})`,
+          },
+        ]),
+    ...(await keyColumnItems(deps, companion, columns)),
+    ...(await parentForeignKeyItems(deps, companion)),
+  ];
+}
+
+/**
+ * Where `_parent` or `_locale` stands otherwise than the translations table's create makes it:
+ * nullable, `_parent` of another type than the main table's `id`, or `_locale` not text. Types are
+ * compared as the same introspection reads both tables.
+ */
+async function keyColumnItems(
+  deps: CollectionSaveDeps,
+  companion: string,
+  columns: readonly ColumnSpec[]
+): Promise<DriftItem[]> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const key = (name: string) => identifierKey(dialect, name);
+  const main = companion.replace(/_locales$/, "");
+  const columnOf = (name: string) =>
+    columns.find(c => key(c.name) === key(name));
+  const items: DriftItem[] = [];
+  for (const name of COMPANION_KEY_COLUMNS) {
+    const column = columnOf(name);
+    if (column?.nullable === true) {
+      items.push({
+        kind: "?",
+        detail: `${companion}.${name} is nullable in DB`,
+      });
+    }
+  }
+  const mainId = (await liveTables(deps, [main])).tables
+    .find(t => t.name === main)
+    ?.columns.find(c => key(c.name) === key("id"));
+  const parent = columnOf(COMPANION_PARENT_COLUMN);
+  if (
+    parent !== undefined &&
+    mainId !== undefined &&
+    parent.type.toLowerCase() !== mainId.type.toLowerCase()
+  ) {
+    items.push({
+      kind: "?",
+      detail: `${companion}.${COMPANION_PARENT_COLUMN} is ${parent.type} in DB, not ${mainId.type} as ${main}.id`,
+    });
+  }
+  const locale = columnOf(COMPANION_LOCALE_COLUMN);
+  if (locale !== undefined && !/char|text/i.test(locale.type)) {
+    items.push({
+      kind: "?",
+      detail: `${companion}.${COMPANION_LOCALE_COLUMN} is ${locale.type} in DB, not text`,
+    });
+  }
+  return items;
+}
+
+/** Where `_parent` does not reference the main table, as the translations table's create makes it. */
+async function parentForeignKeyItems(
+  deps: CollectionSaveDeps,
+  companion: string
+): Promise<DriftItem[]> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const key = (name: string) => identifierKey(dialect, name);
+  const main = companion.replace(/_locales$/, "");
+  const targets = await readForeignKeyTargets(
+    deps.adapter.getDrizzle(),
+    dialect,
+    companion
+  );
+  // A target as the catalog names it, without quotes or a schema.
+  const bare = (target: string) =>
+    target.replace(/"/g, "").split(".").pop() ?? target;
+  const parentTargets = [...targets]
+    .filter(([column]) => key(column) === key(COMPANION_PARENT_COLUMN))
+    .flatMap(([, list]) => list);
+  return parentTargets.some(target => key(bare(target)) === key(main))
+    ? []
     : [
-        ...missing,
         {
-          kind: "?" as const,
-          detail: `${companion} has the primary key (${liveKey.join(", ") || "none"}) in DB, not (${COMPANION_KEY_COLUMNS.join(", ")})`,
+          kind: "-",
+          detail: `${companion} foreign key ${COMPANION_PARENT_COLUMN} → ${main} absent from DB`,
         },
       ];
 }
