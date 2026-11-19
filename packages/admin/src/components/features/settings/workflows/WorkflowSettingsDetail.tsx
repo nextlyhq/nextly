@@ -351,9 +351,9 @@ export function WorkflowSettingsDetail({
             canChange={access.update}
             saving={saving}
             errors={errors}
-            onChange={(trigger, on) => {
-              void save(`emails.${trigger}`, { emails: { [trigger]: on } });
-            }}
+            onChange={(trigger, on) =>
+              saved(`emails.${trigger}`, { emails: { [trigger]: on } })
+            }
           />
         </Section>
       </div>

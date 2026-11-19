@@ -358,6 +358,52 @@ describe("a workflow in Settings", () => {
     );
   });
 
+  it("keeps an email switch's choice through a conflict, and saves it again over the settings read again", async () => {
+    const user = userEvent.setup();
+    await open();
+    api.updateWorkflowSettings.mockRejectedValueOnce(apiError(409, "CONFLICT"));
+    api.getWorkflowSettings.mockResolvedValue(settingsOf({ revision: 5 }));
+
+    const approved = screen.getByRole("switch", { name: "Email for Approved" });
+    await user.click(approved);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Someone changed these settings; review and save again."
+        )
+      ).toBeTruthy()
+    );
+    expect(api.getWorkflowSettings).toHaveBeenCalledTimes(2);
+    // The choice stays on screen, unsaved, though the settings read again say on.
+    expect(
+      screen
+        .getByRole("switch", { name: "Email for Approved" })
+        .getAttribute("aria-checked")
+    ).toBe("false");
+
+    api.updateWorkflowSettings.mockResolvedValue(
+      settingsOf({
+        revision: 6,
+        emails: { assigned: true, approved: false, changesRequested: true },
+      })
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Save email for Approved" })
+    );
+    await waitFor(() =>
+      expect(api.updateWorkflowSettings).toHaveBeenLastCalledWith("editorial", {
+        revision: 5,
+        emails: { approved: false },
+      })
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Save email for Approved" })
+      ).toBeNull()
+    );
+  });
+
   it("alerts when no role holds a step's permission", async () => {
     await open(settingsOf({ grants: { clear: [], bounce: [] } }));
 

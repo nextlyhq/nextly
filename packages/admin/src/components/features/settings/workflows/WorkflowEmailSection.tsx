@@ -3,12 +3,15 @@
 /**
  * Which workflow notifications also send an email. The bell always tells the
  * person named; each switch decides the email for its trigger alone and is
- * saved as it is switched.
+ * saved as it is switched. A switch whose save did not land (the settings
+ * moved meanwhile, or the change was refused) keeps the choice on screen, with
+ * a Save to send it again, as the other settings keep theirs.
  */
 
-import { Switch } from "@nextlyhq/ui";
+import { Button, Switch } from "@nextlyhq/ui";
 import { Bell } from "lucide-react";
 import type React from "react";
+import { useState } from "react";
 
 import type {
   WorkflowEmailTrigger,
@@ -16,7 +19,7 @@ import type {
 } from "@admin/types/workflows";
 
 /** Each trigger, in the order shown, with what it says and to whom. */
-export const EMAIL_TRIGGERS: readonly {
+const EMAIL_TRIGGERS: readonly {
   trigger: WorkflowEmailTrigger;
   label: string;
   to: string;
@@ -44,7 +47,8 @@ export interface WorkflowEmailSectionProps {
   /** The field being saved (`emails.<trigger>`), or null. */
   saving: string | null;
   errors: Record<string, string>;
-  onChange: (trigger: WorkflowEmailTrigger, on: boolean) => void;
+  /** Saves one trigger's email; resolves true once it is saved. */
+  onChange: (trigger: WorkflowEmailTrigger, on: boolean) => Promise<boolean>;
 }
 
 export function WorkflowEmailSection({
@@ -54,11 +58,30 @@ export function WorkflowEmailSection({
   errors,
   onChange,
 }: WorkflowEmailSectionProps): React.JSX.Element {
+  // Each choice not yet saved, by trigger: shown over the settings read, so a
+  // save that meets settings changed meanwhile does not lose it.
+  const [pending, setPending] = useState<
+    Partial<Record<WorkflowEmailTrigger, boolean>>
+  >({});
+  const send = (trigger: WorkflowEmailTrigger, on: boolean) => {
+    setPending(current => ({ ...current, [trigger]: on }));
+    void onChange(trigger, on).then(saved => {
+      if (!saved) return;
+      setPending(current =>
+        Object.fromEntries(
+          Object.entries(current).filter(([each]) => each !== trigger)
+        )
+      );
+    });
+  };
   return (
     <ul className="divide-y divide-border">
       {EMAIL_TRIGGERS.map(({ trigger, label, to }) => {
         const id = `workflow-email-${trigger}`;
-        const on = settings.emails[trigger];
+        const stored = settings.emails[trigger];
+        const choice = pending[trigger];
+        const on = choice ?? stored;
+        const unsaved = choice !== undefined && choice !== stored;
         const error = errors[`emails.${trigger}`];
         return (
           <li
@@ -81,8 +104,19 @@ export function WorkflowEmailSection({
                   checked={on}
                   disabled={saving === `emails.${trigger}`}
                   aria-label={`Email for ${label}`}
-                  onCheckedChange={checked => onChange(trigger, checked)}
+                  onCheckedChange={checked => send(trigger, checked)}
                 />
+                {unsaved && saving !== `emails.${trigger}` && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    aria-label={`Save email for ${label}`}
+                    onClick={() => send(trigger, on)}
+                  >
+                    Save
+                  </Button>
+                )}
               </span>
             ) : (
               <span className="text-xs">Email: {on ? "on" : "off"}</span>
