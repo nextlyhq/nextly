@@ -899,37 +899,47 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         this.adapter.delete(table, this.whereEq("slug", slug))
       );
     } else {
-      const [{ teardownAdapterIn }, { forgetCompanionReadiness }] =
-        await Promise.all([
-          import("../../collections/services/teardown-adapter-in-transaction"),
-          import("../../i18n/runtime/companion-readiness"),
-        ]);
-      await this.adapter.transaction(async tx => {
-        await this.tearDownAndDrop(
-          teardownAdapterIn(this.adapter, tx),
-          slug,
-          tableName
-        );
-        const removed = await tx.delete(table, this.whereEq("slug", slug));
-        // The row this delete read, not removed (a row-level rule or a trigger keeping it), would
-        // describe storage this transaction dropped: refused here, so the drops roll back with it
-        // and the field group stays whole. The transaction's own delete counts its rows on every
-        // dialect.
-        if (removed === 0) {
-          throw NextlyError.conflict({
-            reason: "state",
-            message:
-              "The field group's registry entry could not be removed, so nothing was deleted. Check " +
-              "what keeps the entry (a row-level rule or a trigger on the registry), then delete again.",
-            logContext: {
-              reason: "field-group-registry-row-not-removed",
-              slug,
-            },
-          });
+      const [
+        { teardownAdapterIn },
+        { forgetCompanionReadiness },
+        { deleteTransactionInTries },
+      ] = await Promise.all([
+        import("../../collections/services/teardown-adapter-in-transaction"),
+        import("../../i18n/runtime/companion-readiness"),
+        import("../../collections/services/delete-transaction-tries"),
+      ]);
+      // In tries for a busy table: a try whose wait for a held table ended rolled back whole.
+      await deleteTransactionInTries(
+        this.adapter,
+        `delete field group "${slug}"`,
+        line => this.logger.warn(line),
+        async tx => {
+          await this.tearDownAndDrop(
+            teardownAdapterIn(this.adapter, tx),
+            slug,
+            tableName
+          );
+          const removed = await tx.delete(table, this.whereEq("slug", slug));
+          // The row this delete read, not removed (a row-level rule or a trigger keeping it), would
+          // describe storage this transaction dropped: refused here, so the drops roll back with it
+          // and the field group stays whole. The transaction's own delete counts its rows on every
+          // dialect.
+          if (removed === 0) {
+            throw NextlyError.conflict({
+              reason: "state",
+              message:
+                "The field group's registry entry could not be removed, so nothing was deleted. Check " +
+                "what keeps the entry (a row-level rule or a trigger on the registry), then delete again.",
+              logContext: {
+                reason: "field-group-registry-row-not-removed",
+                slug,
+              },
+            });
+          }
+          // The stored schema version's count, on the same transaction.
+          await this.countWriteOn(tx);
         }
-        // The stored schema version's count, on the same transaction.
-        await this.countWriteOn(tx);
-      });
+      );
       // The delete is the database's from here: a failure of what follows it no longer undoes it.
       committed();
       // Committed: this process serves the new version at once rather than after its read

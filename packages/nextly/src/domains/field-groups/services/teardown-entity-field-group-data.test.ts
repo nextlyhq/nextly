@@ -10,9 +10,34 @@
  * databases in `__tests__/entity-delete-component-data.integration.test.ts`.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
+
+// The catalog the sweep asks whether a table it cannot address has a `_parent_table` column:
+// every table has one, unless named in `withoutParent`.
+const catalog = vi.hoisted(() => ({ withoutParent: new Set<string>() }));
+vi.mock("../../schema/pipeline/diff/introspect-live", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../schema/pipeline/diff/introspect-live")
+  >()),
+  liveColumnNames: vi.fn(
+    async (_db: unknown, _dialect: unknown, tables: string[]) =>
+      new Map(
+        tables.map(table => [
+          table.toLowerCase(),
+          new Set(
+            catalog.withoutParent.has(table)
+              ? ["id", "label"]
+              : ["id", "_parent_id", "_parent_table"]
+          ),
+        ])
+      )
+  ),
+}));
+afterEach(() => {
+  catalog.withoutParent.clear();
+});
 
 const UNREGISTERED =
   'Table "comp_ghost" not found in schema registry. Ensure setTableResolver() has been called during boot.';
@@ -28,6 +53,8 @@ function makeAdapter(failingTable: string, error: unknown, rowsForParent = 0) {
     tableExists: vi.fn().mockResolvedValue(false),
     delete: vi.fn().mockResolvedValue(1),
     executeQuery: vi.fn().mockResolvedValue([{ n: rowsForParent }]),
+    // The handle the catalog is read through (`liveColumnNames`, mocked above).
+    getDrizzle: () => ({}),
     select: vi.fn(async (table: string) => {
       if (table === failingTable) throw error;
       return [];
@@ -92,6 +119,7 @@ describe("teardownEntityComponentData failure handling", () => {
           ? [{ n: 2 }]
           : [{ n: 0 }]
       ),
+      getDrizzle: () => ({}),
     };
 
     await expect(
@@ -122,6 +150,21 @@ describe("teardownEntityComponentData failure handling", () => {
         parentTable: "dc_posts",
       })
     ).rejects.toThrow("Connection terminated unexpectedly");
+  });
+
+  it("passes over an unaddressable table with no parent column without counting its rows", async () => {
+    // The count would name a column the table lacks: on PostgreSQL that failure aborts the
+    // delete's transaction, so the catalog is asked instead and no count is sent at all.
+    catalog.withoutParent.add("comp_ghost");
+    const adapter = makeAdapter("comp_ghost", new Error(UNREGISTERED), 4);
+
+    const result = await teardownEntityComponentData({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(result.skippedTables).toEqual(["comp_ghost"]);
+    expect(adapter.executeQuery).not.toHaveBeenCalled();
   });
 
   it("probes an unresolvable table once, not once per parent", async () => {

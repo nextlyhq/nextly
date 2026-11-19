@@ -173,6 +173,12 @@ async function countRowsUnder(
   // only the instances deleted at the previous level own the rows below them.
   if (parent.ids !== null && parent.ids.length === 0) return 0;
 
+  // No `_parent_table` column means the table does not hold component instances at all, despite
+  // its prefix, so it cannot own rows for this entity. Asked of the catalog, through the adapter
+  // the teardown runs on, rather than by catching the count's failure: on PostgreSQL a failed
+  // statement aborts the delete's transaction, and every statement after it fails.
+  if (!(await hasParentTableColumn(adapter, componentTable))) return 0;
+
   const pg = adapter.dialect === "postgresql";
   const quoted = q(componentTable, adapter.dialect);
   const parentTableColumn = q(
@@ -191,21 +197,37 @@ async function countRowsUnder(
     params.push(...parent.ids);
   }
 
-  let rows: Array<Record<string, unknown>>;
-  try {
-    rows = await adapter.executeQuery<Record<string, unknown>>(
-      `SELECT COUNT(*) AS n FROM ${quoted} WHERE ${where}`,
-      params
-    );
-  } catch (error) {
-    // No `_parent_table` column means the table does not hold component instances at all,
-    // despite the `comp_` prefix, so it cannot own rows for this entity. Any other failure
-    // leaves the question unanswered and must not be read as "empty".
-    if (String(error).includes(STORAGE_FORMAT.columns.parentTable)) return 0;
-    throw error;
-  }
+  // Any failure leaves the question unanswered and must not be read as "empty".
+  const rows = await adapter.executeQuery<Record<string, unknown>>(
+    `SELECT COUNT(*) AS n FROM ${quoted} WHERE ${where}`,
+    params
+  );
 
   return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * Whether `table` has a `_parent_table` column, read from the catalog through `adapter`'s own
+ * connection (the delete's transaction, where it runs in one). A table the catalog does not list
+ * has none.
+ */
+async function hasParentTableColumn(
+  adapter: TeardownComponentDataAdapter,
+  table: string
+): Promise<boolean> {
+  // Loaded on demand: the introspection reaches the schema pipeline, which this teardown
+  // otherwise does not.
+  const { liveColumnNames } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const columns = await liveColumnNames(adapter.getDrizzle(), adapter.dialect, [
+    table,
+  ]);
+  return (
+    columns
+      .get(table.toLowerCase())
+      ?.has(STORAGE_FORMAT.columns.parentTable.toLowerCase()) ?? false
+  );
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
