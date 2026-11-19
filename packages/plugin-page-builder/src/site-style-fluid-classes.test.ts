@@ -188,3 +188,51 @@ describe("text styles following a change of the site's fluid range", () => {
     expect(firstSize(out)).toBe(fluidValue(SIZES, NEW));
   });
 });
+
+describe("a class save made under a range the site no longer uses", () => {
+  const MADE = { small: 14, large: 28 };
+  /** PLAIN made fluid on Desktop from `MADE`, across `range`. */
+  const madeFluid = (range: { min: number; max: number }): NamedClass => ({
+    ...PLAIN,
+    styles: { base: { base: { fontSize: fluidValue(MADE, range) } } },
+    fluidSizes: { base: MADE },
+  });
+
+  it("makes a newly fluid size again across the range stored now", () => {
+    const out = follow({
+      data: { classes: [madeFluid(OLD)] },
+      originalData: { tokens: tokens(NEW), classes: [PLAIN] },
+      user: USER,
+    });
+    const classes = out?.classes as NamedClass[] | undefined;
+    expect(classes?.[0]?.styles.base?.base?.fontSize).toBe(
+      fluidValue(MADE, NEW)
+    );
+    expect(classes?.[0]?.fluidSizes).toEqual({ base: MADE });
+  });
+
+  it("leaves a size made across the range stored now as it is", () => {
+    expect(
+      follow({
+        data: { classes: [madeFluid(NEW)] },
+        originalData: { tokens: tokens(NEW), classes: [PLAIN] },
+        user: USER,
+      })
+    ).toBeUndefined();
+  });
+
+  it("leaves a size whose sizes it did not change, a typed one among them", () => {
+    const typed = {
+      ...madeFluid(OLD),
+      styles: { base: { base: { fontSize: "20px" } } },
+    } as NamedClass;
+    const stored = madeFluid(OLD);
+    expect(
+      follow({
+        data: { classes: [typed, lead(OLD)] },
+        originalData: { tokens: tokens(NEW), classes: [stored, lead(OLD)] },
+        user: USER,
+      })
+    ).toBeUndefined();
+  });
+});

@@ -11,23 +11,30 @@
  * stored version, under the same `update-site-style` permission, judged by the
  * same validators and lock guard as any classes write.
  *
- * It does nothing unless the range the site uses changes, and nothing to a
- * class without fluid sizes, so every other save is as it was.
+ * A classes write made across a range the site no longer uses (a save made
+ * before a range change and sent after it) has each size whose fluid sizes it
+ * newly sets made again across the range stored now, in that write.
+ *
+ * Nothing else is touched: a write that neither changes the range nor sets
+ * new fluid sizes is as it was, and so is every class without fluid sizes.
  *
  * @module site-style-fluid-classes
  */
 import {
   DEFAULT_FLUID_RANGE,
   classesAcrossFluidRange,
+  fluidValue,
+  isFluidSizes,
   isPlainRecord,
   type FluidRangeWidths,
+  type FluidSizes,
   type NamedClass,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "nextly/errors";
 
 import type { SiteStyleData } from "./site-style";
 import { isFluidRange } from "./site-style-record";
-import { readStoredJson } from "./stored-json";
+import { readStoredJson, sameStoredValue } from "./stored-json";
 
 /**
  * The name a refusal calls a style by: the lock guard's own, handed in by the
@@ -94,8 +101,11 @@ export function fluidClassesFollowRange(
 ): (hook: FluidRangeWrite) => Record<string, unknown> | undefined {
   return hook => {
     const data = hook.data;
+    if (data === undefined) return undefined;
     const change = rangeChange(hook, defaults);
-    if (data === undefined || change === undefined) return undefined;
+    if (change === undefined) {
+      return classesMadeAcrossStoredRange(data, hook.originalData, defaults);
+    }
     const library = classesLeftBy(data, hook.originalData);
     if (library === undefined) return undefined;
     const across = classesAcrossFluidRange(library, change.from, change.to);
@@ -137,4 +147,105 @@ function classesLeftBy(
   return Array.isArray(classes)
     ? (classes as readonly NamedClass[])
     : undefined;
+}
+
+/**
+ * A classes write whose sizes were made fluid across a range the site no
+ * longer uses: the save was made before a range change landed and sent after
+ * it, as a retry onto the newer copy sends the classes alone. Each device
+ * whose fluid sizes are new or changed in this write, and whose size is a
+ * clamp, is made again across the range the site uses now, since "Fluid…"
+ * writes the clamp from those sizes. A device whose sizes this write leaves
+ * as stored is not touched, so a size typed since keeps its value.
+ * `undefined` where nothing changes.
+ */
+function classesMadeAcrossStoredRange(
+  data: Record<string, unknown>,
+  original: Record<string, unknown> | undefined,
+  defaults: SiteStyleData | undefined
+): Record<string, unknown> | undefined {
+  if (!Object.hasOwn(data, "classes")) return undefined;
+  const tokens = Object.hasOwn(data, "tokens") ? data.tokens : original?.tokens;
+  const range = rangeOf(readStoredJson(tokens), defaults);
+  const incoming = readStoredJson(data.classes);
+  if (range === undefined || !Array.isArray(incoming)) return undefined;
+  const stored = storedById(original?.classes);
+  let changed = false;
+  const classes = incoming.map((entry: unknown) => {
+    const id = isPlainRecord(entry) ? entry.id : undefined;
+    const next = entryAcross(entry, stored.get(id), range);
+    if (next !== entry) changed = true;
+    return next;
+  });
+  return changed ? { ...data, classes } : undefined;
+}
+
+/** The stored classes by id, the first of each id. */
+function storedById(raw: unknown): Map<unknown, unknown> {
+  const list = readStoredJson(raw);
+  const byId = new Map<unknown, unknown>();
+  if (!Array.isArray(list)) return byId;
+  for (const entry of list) {
+    if (isPlainRecord(entry) && !byId.has(entry.id)) byId.set(entry.id, entry);
+  }
+  return byId;
+}
+
+/** One sent class with each new or changed fluid size made across `range`. */
+function entryAcross(
+  entry: unknown,
+  stored: unknown,
+  range: FluidRangeWidths
+): unknown {
+  const sizes = isPlainRecord(entry) ? entry.fluidSizes : undefined;
+  if (!isPlainRecord(entry) || !isPlainRecord(sizes)) return entry;
+  let out: Record<string, unknown> = entry;
+  for (const device in sizes) {
+    const pair = newPairAt(sizes, stored, device);
+    if (pair !== undefined) {
+      out = withSizeAt(out, device, fluidValue(pair, range));
+    }
+  }
+  return out;
+}
+
+/**
+ * A device's fluid sizes where this write sets them anew (absent from the
+ * stored class, or different there), or `undefined`.
+ */
+function newPairAt(
+  sizes: Record<string, unknown>,
+  stored: unknown,
+  device: string
+): FluidSizes | undefined {
+  const pair = Object.hasOwn(sizes, device) ? sizes[device] : undefined;
+  if (!isFluidSizes(pair)) return undefined;
+  const before = isPlainRecord(stored) ? stored.fluidSizes : undefined;
+  const was = isPlainRecord(before) ? before[device] : undefined;
+  return sameStoredValue(pair, was) ? undefined : pair;
+}
+
+/**
+ * The class with one device's clamp set to `size`, copied along the path; the
+ * same class where that device's size is not a clamp or already is `size`.
+ */
+function withSizeAt(
+  entry: Record<string, unknown>,
+  device: string,
+  size: string
+): Record<string, unknown> {
+  const styles = isPlainRecord(entry.styles) ? entry.styles : {};
+  const atRest = isPlainRecord(styles.base) ? styles.base : {};
+  const values = isPlainRecord(atRest[device]) ? atRest[device] : {};
+  const now = values.fontSize;
+  if (typeof now !== "string" || !now.startsWith("clamp(") || now === size) {
+    return entry;
+  }
+  return {
+    ...entry,
+    styles: {
+      ...styles,
+      base: { ...atRest, [device]: { ...values, fontSize: size } },
+    },
+  };
 }

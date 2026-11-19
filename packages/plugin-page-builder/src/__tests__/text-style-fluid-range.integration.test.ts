@@ -29,6 +29,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { pageBuilder } from "../plugin";
 import { classOverrideOf } from "../site-style";
+import { mergeSiteStyleSection } from "../site-style-merge";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 
 const ORIGIN = "http://localhost";
@@ -291,6 +292,44 @@ describe.each(getConfiguredTestDialects())(
       const after = await stored(t);
       expect(after.tokens).toBe(before.tokens);
       expect(after.classesText).toBe(before.classesText);
+    });
+
+    it("makes a size made fluid under the old range again when its save lands after a range change", async () => {
+      const t = await boot();
+      const designer = await holding(t, ...DESIGN);
+      const made = { small: 14, large: 28 };
+      // Designer A reads the classes and makes Plain fluid under the old range.
+      const read = await stored(t);
+      const mine = read.classes.map(entry =>
+        entry.id === "t-plain"
+          ? {
+              ...entry,
+              styles: { base: { base: { fontSize: fluidValue(made, OLD) } } },
+              fluidSizes: { base: made },
+            }
+          : entry
+      );
+      // Designer B saves the new range first.
+      expect(
+        (await patch(designer, { tokens: tokensAcross(NEW), _overwrite: true }))
+          .status
+      ).toBe(200);
+      // A's save is refused as stale, read again and merged onto B's, and
+      // sent with the classes alone, as the editor's retry sends it.
+      const theirs = (await stored(t)).classes;
+      const retry = mergeSiteStyleSection(
+        "classes",
+        read.classes,
+        mine,
+        theirs,
+        "mine"
+      ).value;
+      expect(
+        (await patch(designer, { classes: retry, _overwrite: true })).status
+      ).toBe(200);
+      const after = await stored(t);
+      expect(sizeOf(after.classes, "t-plain")).toBe(fluidValue(made, NEW));
+      expect(sizeOf(after.classes, "t-lead")).toBe(fluidValue(SIZES, NEW));
     });
 
     it("refuses a range change a locked fluid text style follows, naming it, and stores nothing", async () => {
