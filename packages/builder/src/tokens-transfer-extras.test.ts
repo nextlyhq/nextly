@@ -11,8 +11,9 @@ import {
   type FontFaceDef,
   type NamedClass,
   type SiteTokenSet,
+  type TokenRemap,
 } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { DESIGN_ACTION_WORDS } from "./editor-words";
 import {
@@ -22,6 +23,24 @@ import {
   planImport,
   type ImportPlan,
 } from "./tokens-transfer";
+
+/**
+ * Each remap an import points a value through, recorded and passed on: the
+ * engine builds its table once per remap object, so the objects an import
+ * hands it count the tables it builds.
+ */
+const remaps = vi.hoisted((): TokenRemap[] => []);
+
+vi.mock("@nextlyhq/blocks-engine", async importOriginal => {
+  const real = await importOriginal<typeof import("@nextlyhq/blocks-engine")>();
+  return {
+    ...real,
+    remapTokenReferences: <T>(value: T, remap: TokenRemap): T => {
+      remaps.push(remap);
+      return real.remapTokenReferences(value, remap);
+    },
+  };
+});
 
 const eyebrow: NamedClass = {
   id: "ts-eyebrow",
@@ -477,7 +496,11 @@ describe("an import carrying the site's own design data", () => {
     });
     const source: SiteTokenSet = {
       tokens: [
-        { name: "font-size.lead", kind: "dimension", values: { light: "2rem" } },
+        {
+          name: "font-size.lead",
+          kind: "dimension",
+          values: { light: "2rem" },
+        },
       ],
     };
     const lost = style("ts-lost", "Lost", "font-size.nowhere");
@@ -485,9 +508,13 @@ describe("an import carrying the site's own design data", () => {
     const builtIn = style("ts-built-in", "Heading", "font-size.h2");
     const lead = style("ts-lead", "Lead", "font-size.lead");
     const plan = ready(
-      planImport(files(source, [lost, builtIn, lead]), { tokens: [] }, {
-        textStyles: [],
-      })
+      planImport(
+        files(source, [lost, builtIn, lead]),
+        { tokens: [] },
+        {
+          textStyles: [],
+        }
+      )
     );
     expect(plan.extras.textStyles.added.map(entry => entry.id)).toEqual([
       "ts-built-in",
@@ -506,25 +533,38 @@ describe("an import carrying the site's own design data", () => {
     ).toEqual(["ts-built-in", "ts-lead"]);
   });
 
-  it("plans a large file into a site with another prefix without slowing with its size", () => {
-    // Each variable's value is remapped through one table built per import,
-    // not one per variable.
-    const tokens = Array.from({ length: 3000 }, (_, at) => ({
-      name: `color.c${String(at)}`,
-      kind: "color" as const,
-      values: { light: "#123456" },
+  it("plans a large file into a site with another prefix through one remap, pointing every reference", () => {
+    // Each variable names the one before it, so every value has a var() to
+    // point at this site's prefix. Each is pointed through one table built
+    // per import, not one per variable: every value is handed to the engine
+    // with the same remap, which it builds its table for once.
+    const size = 1000;
+    const tokens = Array.from({ length: size }, (_, at) => ({
+      name: `shadow.s${String(at)}`,
+      kind: "shadow" as const,
+      values: {
+        light:
+          at === 0
+            ? "0 1px 2px #123456"
+            : `0 1px 2px var(--site-shadow-s${String(at - 1)})`,
+      },
     }));
-    const started = performance.now();
-    ready(
-      planImport(
-        files({ tokens }, []),
-        { tokens: [], prefix: "--brand-" },
-        {
-          textStyles: [],
-        }
-      )
+    const file = files({ tokens }, []);
+    remaps.length = 0;
+    const plan = ready(
+      planImport(file, { tokens: [], prefix: "--brand-" }, { textStyles: [] })
     );
-    expect(performance.now() - started).toBeLessThan(1500);
+    const light = new Map(
+      plan.added.map(token => [token.name, token.values.light])
+    );
+    expect(light.size).toBe(size);
+    for (let at = 1; at < size; at++) {
+      expect(light.get(`shadow.s${String(at)}`)).toBe(
+        `0 1px 2px var(--brand-shadow-s${String(at - 1)})`
+      );
+    }
+    expect(remaps.length).toBeGreaterThanOrEqual(size);
+    expect(new Set(remaps).size).toBe(1);
   });
 
   it("remaps a text style's values, never its name", () => {

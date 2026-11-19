@@ -197,9 +197,11 @@ function StarterRow({
 /**
  * One starter's tile: its picture and title, pressed to start the page from
  * it. A starter the site can't use is dimmed and says so, with the host's
- * reason, and pressing it does nothing. It stays a focusable button
- * (`aria-disabled`, not `disabled`) so a keyboard user can reach it and hear
- * why; its name is its title alone, and the note and reason describe it.
+ * reason, on a panel over its picture, so its tile is as tall as the others
+ * and the reason is still there to read; pressing it does nothing. It stays
+ * a focusable button (`aria-disabled`, not `disabled`) so a keyboard user can
+ * reach it and hear why; its name is its title alone, and the note and
+ * reason describe it.
  */
 function StarterTile({
   id,
@@ -219,10 +221,14 @@ function StarterTile({
       <button
         type="button"
         className="nx-page-start__tile"
+        // Named by its title alone: a picture of a page draws words of its
+        // own (a form's labels, a heading), which would otherwise run into
+        // the name before the title.
+        aria-labelledby={`${id}-title`}
         onClick={() => onStarter?.(starter.id)}
       >
         {starter.picture}
-        <span>{starter.title}</span>
+        <span id={`${id}-title`}>{starter.title}</span>
       </button>
     );
   }
@@ -237,16 +243,21 @@ function StarterTile({
       // nothing for the host to start.
       onClick={event => event.preventDefault()}
     >
-      {/* Its own box, so the picture alone is dimmed and the words that say
-        why keep their contrast. */}
-      <span className="nx-page-start__tile-picture">{starter.picture}</span>
+      {/* The picture's box holds the dimmed picture and, over it, the words
+        that say why: the tile stays a picture and a title, as tall as the
+        others, and the words keep their contrast on their own panel. */}
+      <span className="nx-page-start__tile-picture">
+        <span className="nx-page-start__tile-thumb">{starter.picture}</span>
+        <span className="nx-page-start__tile-why">
+          <span id={`${id}-note`} className="nx-page-start__tile-note">
+            {notAvailable}
+          </span>
+          <span id={`${id}-reason`} className="nx-page-start__tile-reason">
+            {reason}
+          </span>
+        </span>
+      </span>
       <span id={`${id}-title`}>{starter.title}</span>
-      <span id={`${id}-note`} className="nx-page-start__tile-note">
-        {notAvailable}
-      </span>
-      <span id={`${id}-reason`} className="nx-page-start__tile-reason">
-        {reason}
-      </span>
     </button>
   );
 }

@@ -1087,20 +1087,11 @@ export class SqliteAdapter extends DrizzleAdapter {
 
       ...this.createTransactionForwarders(txDb),
 
-      // eslint-disable-next-line @typescript-eslint/require-await
-      savepoint: async (name: string): Promise<void> => {
-        db.exec(`SAVEPOINT ${this.escapeIdentifier(name)}`);
-      },
-
-      // eslint-disable-next-line @typescript-eslint/require-await
-      rollbackToSavepoint: async (name: string): Promise<void> => {
-        db.exec(`ROLLBACK TO SAVEPOINT ${this.escapeIdentifier(name)}`);
-      },
-
-      // eslint-disable-next-line @typescript-eslint/require-await
-      releaseSavepoint: async (name: string): Promise<void> => {
-        db.exec(`RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`);
-      },
+      // Savepoints on the one connection, the effects held for the transaction
+      // scoped to each (`contextSavepointMethods`).
+      ...this.contextSavepointMethods(statement => {
+        db.exec(statement);
+      }),
     };
   }
 

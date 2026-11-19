@@ -24,5 +24,6 @@ export { registerWebhookServices } from "./register-webhooks";
 export { registerWorkflowComparisonBaselines } from "./register-workflow-baselines";
 export { registerWorkflowNoticeKinds } from "./register-workflow-notices";
 export { registerWorkflowPublishGate } from "./register-workflow-publish-gate";
+export { registerWorkflowReleaseChecks } from "./register-workflow-release-checks";
 export { resetWidgetRegistries } from "./register-widgets";
 export type { RegistrationContext } from "./types";
