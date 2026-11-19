@@ -9,7 +9,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { deliveryRow, queuedRow } from "../activity-model";
+import { activityRow } from "../activity-model";
 
 // The admin's own formatter, which writes times in the General Settings time
 // zone; marked here so a row shown in the browser's zone can't pass.
@@ -22,43 +22,43 @@ import { ActivityList, type ActivityListProps } from "../ActivityList";
 const NOW = new Date("2026-11-16T12:00:00.000Z");
 
 const ROWS = [
-  deliveryRow({
+  activityRow({
+    kind: "delivery",
     id: "d1",
     createdAt: "2026-11-16T11:00:00.000Z",
-    outcome: "sent",
-    templateSlug: "password-reset",
-    provider: { id: "p1", type: "resend" },
-    recipientKind: "cc",
+    status: "sent",
+    template: { slug: "password-reset" },
+    provider: { id: "p1", type: "resend", origin: "stored" },
+    recipientKinds: ["cc"],
     failureReason: null,
-    namedPerson: true,
+    attempts: null,
+    nextAttemptAt: null,
     erased: false,
   }),
-  queuedRow({
+  activityRow({
+    kind: "queued",
     id: "q1",
     createdAt: "2026-11-16T10:30:00.000Z",
-    updatedAt: "2026-11-16T11:40:00.000Z",
-    settledAt: null,
-    state: "retrying",
+    status: "retrying",
+    template: { slug: "order-shipped" },
+    provider: { id: null, type: "smtp", origin: "code" },
+    recipientKinds: ["to", "bcc"],
+    failureReason: "Resend answered 503",
     attempts: 2,
     nextAttemptAt: "2026-11-16T12:10:00.000Z",
-    lastFailure: {
-      retryable: true,
-      status: 503,
-      reason: "Resend answered 503",
-    },
-    messageHeld: true,
-    templateSlug: "order-shipped",
-    queuedBy: "plugin:shop",
+    erased: false,
   }),
-  deliveryRow({
+  activityRow({
+    kind: "delivery",
     id: "d2",
     createdAt: "2026-11-16T09:00:00.000Z",
-    outcome: "failed",
-    templateSlug: null,
-    provider: { id: null, type: "postmark" },
-    recipientKind: "to",
+    status: "failed",
+    template: "none",
+    provider: { id: null, type: "postmark", origin: "deleted" },
+    recipientKinds: ["to"],
     failureReason: "Mailbox does not exist",
-    namedPerson: false,
+    attempts: null,
+    nextAttemptAt: null,
     erased: true,
   }),
 ];
@@ -90,12 +90,12 @@ describe("the Activity list", () => {
     expect(rows).toHaveLength(3);
     const text = rows.map(row => row.textContent ?? "");
 
-    // A delivery: the template's name, the provider's name, Cc, a person.
+    // A delivery: the template's name, the stored provider's name, Cc.
     expect(text[0]).toContain("Password reset");
     expect(text[0]).toContain("Resend (main)");
     expect(text[0]).toContain("Cc");
-    expect(text[0]).toContain("Named a person");
     expect(text[0]).toContain("Sent");
+    expect(text[0]).not.toContain("Erased");
 
     // A queued email: its state, its attempt, and when it tries next.
     expect(text[1]).toContain("Retrying");
@@ -105,12 +105,13 @@ describe("the Activity list", () => {
     expect(text[1]).toContain("Resend answered 503");
     // A template the hub cannot name is shown by its slug.
     expect(text[1]).toContain("order-shipped");
+    // Its latest attempt's provider, set in code, and every kind it went to.
+    expect(text[1]).toContain("smtp (in code)");
+    expect(text[1]).toContain("To, Bcc");
 
-    // A delivery without a template, by a provider that isn't stored (set in
-    // code, or deleted since: the log doesn't say which), erased.
+    // A delivery without a template, by a provider deleted since, erased.
     expect(text[2]).toContain("No template");
-    expect(text[2]).toContain("postmark (not stored)");
-    expect(text[2]).not.toContain("deleted");
+    expect(text[2]).toContain("postmark (deleted)");
     expect(text[2]).toContain("Erased");
     expect(text[2]).toContain("Mailbox does not exist");
   });
@@ -137,7 +138,7 @@ describe("the Activity list", () => {
     expect(cards).toHaveLength(3);
     expect(cards[0].textContent).toContain("Password reset");
     expect(cards[0].textContent).toContain("Resend (main)");
-    expect(cards[2].textContent).toContain("postmark (not stored)");
+    expect(cards[2].textContent).toContain("postmark (deleted)");
   });
 
   it("says what this log keeps, and that a queued email's message is held only while it can be sent", () => {
@@ -150,26 +151,27 @@ describe("the Activity list", () => {
     );
   });
 
-  it("says a queued email without a template slug has none recorded, which is true of both causes", () => {
+  it("says a queued email's template wasn't recorded, and shows no provider or recipient before it is tried", () => {
     renderList({
       rows: [
-        queuedRow({
+        activityRow({
+          kind: "queued",
           id: "q9",
           createdAt: "2026-11-16T10:00:00.000Z",
-          updatedAt: "2026-11-16T10:00:00.000Z",
-          settledAt: null,
-          state: "waiting",
+          status: "waiting",
+          template: "not-recorded",
+          provider: null,
+          recipientKinds: null,
+          failureReason: null,
           attempts: 0,
           nextAttemptAt: "2026-11-16T12:05:00.000Z",
-          lastFailure: null,
-          messageHeld: true,
-          templateSlug: null,
-          queuedBy: "site",
+          erased: false,
         }),
       ],
     });
     const row = within(screen.getByRole("table")).getAllByRole("row")[1];
-    expect(row.textContent).toContain("No template recorded");
+    expect(row.textContent).toContain("Template not recorded");
+    expect(row.querySelector("[data-compact-details]")).toBeNull();
   });
 
   it("says why it is empty, filtered or not", () => {
