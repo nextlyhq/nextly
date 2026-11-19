@@ -14,9 +14,9 @@ import { test } from "./support/test";
 import {
   expectEditorAccessible,
   expectStage,
+  expectPublishHeldForReview,
   NOTES,
   openNote,
-  publishControl,
   resetReviewSettings,
   reviewedNote,
   sharedPartOf,
@@ -75,9 +75,8 @@ test("an edit to an approved note sends it back to review and holds Publish, and
 
     // The publisher's Publish is held again, with why.
     await openNote(publisher.page, id);
-    await expect(publishControl(publisher.page)).toBeDisabled();
-    await expect(publishControl(publisher.page)).toHaveAttribute(
-      "title",
+    await expectPublishHeldForReview(
+      publisher.page,
       /^Needs approval: In review\b/
     );
 

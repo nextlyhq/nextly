@@ -38,6 +38,10 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
       .getByRole("listitem")
       .filter({ hasText: "English" });
     await expect(english.locator("[data-review-stage]")).toHaveText(/Drafting/);
+    // Words with the shape of the stage's kind, so it never rests on colour.
+    await expect(
+      english.locator('[data-review-stage] [data-stage-shape="drafting"]')
+    ).toHaveText("Drafting");
     await expectNoAxeViolations(page, {
       include: '[data-testid="document-panel-sections"]',
     });

@@ -258,6 +258,38 @@ export function publishControl(page: Page): Locator {
 }
 
 /**
+ * Publish held until the note is approved, as the header draws it: greyed and
+ * `aria-disabled`, yet focusable and read with its reason; pressed, it opens
+ * "Ready to publish?", which Escape closes again.
+ */
+export async function expectPublishHeldForReview(
+  page: Page,
+  reason: RegExp
+): Promise<void> {
+  const held = publishControl(page);
+  await expect(held).toHaveAttribute("aria-disabled", "true");
+  // Not the native `disabled`, which would take it out of the Tab order.
+  expect(
+    await held.evaluate(element => (element as HTMLButtonElement).disabled)
+  ).toBe(false);
+  await held.focus();
+  await expect(held).toBeFocused();
+  await expect(held).toHaveAccessibleDescription(reason);
+  await held.click();
+  const ready = page
+    .locator("[data-publish-parts-dialog]")
+    .getByRole("region", { name: "Ready to publish?" });
+  await expect(ready).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(ready).toBeHidden();
+}
+
+/** What the review's polite status region last said, as a locator on its words. */
+export function announced(page: Page, words: string): Locator {
+  return page.getByRole("status").filter({ hasText: words });
+}
+
+/**
  * The editor's screens a workflow changes, each held to WCAG 2.2 AA: the
  * header, the line under the title and the side panel, which holds the
  * Review section.

@@ -10,7 +10,9 @@ import { expect } from "@playwright/test";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 import {
+  announced,
   expectEditorAccessible,
+  expectPublishHeldForReview,
   expectStage,
   leading,
   NOTES,
@@ -66,6 +68,11 @@ test("a writer submits, a reviewer approves, and a publisher publishes, Publish 
     await openNote(writer.page, id);
     // Drafting waits for whoever may submit it, so the line names them too.
     await expect(statusLine(writer.page)).toHaveText(/^Draft · Drafting\b/);
+    // The stage is words with the shape of its kind, never a button.
+    await expect(
+      statusLine(writer.page).locator('[data-stage-shape="drafting"]')
+    ).toHaveText("Drafting");
+    await expect(statusLine(writer.page).getByRole("button")).toHaveCount(0);
     await expect(leading(writer.page)).toHaveAttribute(
       "data-action",
       "review-step:submit"
@@ -75,6 +82,9 @@ test("a writer submits, a reviewer approves, and a publisher publishes, Publish 
     await expect(publishControl(writer.page)).toHaveCount(0);
     await expectEditorAccessible(writer.page);
     await leading(writer.page).click();
+    await expect(
+      announced(writer.page, "Submit for review: done.")
+    ).toHaveCount(1);
     await expectStage(writer, id, "inReview");
     await expect(statusLine(writer.page)).toContainText(
       "Draft · In review · waiting for "
@@ -82,14 +92,15 @@ test("a writer submits, a reviewer approves, and a publisher publishes, Publish 
 
     // The publisher, before the approval: Publish leads, held with the stage and who it waits for.
     await openNote(publisher.page, id);
-    const held = publishControl(publisher.page);
-    await expect(held).toHaveAttribute("data-primary", "true");
-    await expect(held).toBeDisabled();
-    await expect(held).toHaveAttribute(
-      "title",
-      /^Needs approval: In review, waiting for /
+    await expect(publishControl(publisher.page)).toHaveAttribute(
+      "data-primary",
+      "true"
     );
     await expectEditorAccessible(publisher.page);
+    await expectPublishHeldForReview(
+      publisher.page,
+      /^Needs approval: In review, waiting for /
+    );
 
     // The reviewer: Approve leads, with Request changes beside it.
     await openNote(reviewer.page, id);
@@ -100,6 +111,8 @@ test("a writer submits, a reviewer approves, and a publisher publishes, Publish 
     await expect(stepControl(reviewer.page, "requestChanges")).toBeVisible();
     await expectEditorAccessible(reviewer.page);
     await leading(reviewer.page).click();
+    // Said to assistive technology, not only in a toast.
+    await expect(announced(reviewer.page, "Approve: done.")).toHaveCount(1);
     await expectStage(reviewer, id, "approved");
     // Approved allows publishing, so nobody is waited for any more.
     await expect(statusLine(reviewer.page)).toHaveText("Draft · Approved");
