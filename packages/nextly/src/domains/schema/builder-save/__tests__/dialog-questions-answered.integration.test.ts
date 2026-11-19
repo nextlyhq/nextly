@@ -518,12 +518,30 @@ for (const dialect of getConfiguredTestDialects()) {
       await rm(basePath, { recursive: true, force: true });
     });
 
-    // The links the link table holds, or none where the table is gone.
-    const links = async () =>
-      exec<{ n: number | string }>(t, `SELECT COUNT(*) AS n FROM ${link}`).then(
-        rows => Number(rows[0]?.n ?? 0),
-        () => 0
+    // The links the link table holds, or none where the table is gone: its absence is read, and a
+    // query that fails on a table that stands fails the test rather than reading as no links.
+    const links = async () => {
+      // A missing table reads as no columns, or on SQLite as the reader's "no table" refusal.
+      const stands = await readTableDefinition(
+        statement => exec(t, statement),
+        (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+        link
+      ).then(
+        table => table.columns.length > 0,
+        (error: unknown) => {
+          if (error instanceof Error && error.message === `no table ${link}`) {
+            return false;
+          }
+          throw error;
+        }
       );
+      if (!stands) return 0;
+      const [row] = await exec<{ n: number | string }>(
+        t,
+        `SELECT COUNT(*) AS n FROM ${link}`
+      );
+      return Number(row?.n ?? 0);
+    };
     const save = async (fields: Field[], answers: Answers) =>
       dispatchCollections(
         {} as ServiceContainer,
@@ -729,12 +747,30 @@ for (const dialect of getConfiguredTestDialects()) {
           "dc_posts_locales"
         )
       ).columns.map(column => column.name);
-    // The links the link table holds, or none where the table is gone.
-    const links = async () =>
-      exec<{ n: number | string }>(t, `SELECT COUNT(*) AS n FROM ${link}`).then(
-        rows => Number(rows[0]?.n ?? 0),
-        () => 0
+    // The links the link table holds, or none where the table is gone: its absence is read, and a
+    // query that fails on a table that stands fails the test rather than reading as no links.
+    const links = async () => {
+      // A missing table reads as no columns, or on SQLite as the reader's "no table" refusal.
+      const stands = await readTableDefinition(
+        statement => exec(t, statement),
+        (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+        link
+      ).then(
+        table => table.columns.length > 0,
+        (error: unknown) => {
+          if (error instanceof Error && error.message === `no table ${link}`) {
+            return false;
+          }
+          throw error;
+        }
       );
+      if (!stands) return 0;
+      const [row] = await exec<{ n: number | string }>(
+        t,
+        `SELECT COUNT(*) AS n FROM ${link}`
+      );
+      return Number(row?.n ?? 0);
+    };
     const save = async (fields: unknown[], answers: Answers) =>
       dispatchCollections(
         {} as ServiceContainer,
