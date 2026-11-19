@@ -70,3 +70,36 @@ describe("an entity with no slug, or one that is not a string", () => {
     expect(paths).toContain("singles[0].slug");
   });
 });
+
+describe("a public address its own rule refuses, beside another problem", () => {
+  // The address is judged with the entity's other rules, so it is listed with every other
+  // problem rather than stopping the load before them.
+  it("is reported with the rest", async () => {
+    exported.config = {
+      collections: [
+        {
+          slug: "posts",
+          fields: [{ name: "title", type: "text" }],
+          publicAddress: "/blog",
+        },
+        { slug: "Blog Posts", fields: [{ name: "title", type: "text" }] },
+      ],
+    };
+
+    const refused = await loadConfig({ cwd: project() }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toContain("collections[0].publicAddress");
+    expect(paths).toContain("collections[1].slug");
+  });
+});

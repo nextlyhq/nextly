@@ -86,3 +86,16 @@ describe("an app's entity a plugin's setup changed", () => {
     ).toEqual(["collections[0].fields"]);
   });
 });
+
+describe("a collection defineCollection finds a problem in", () => {
+  // It is normalized all the same: a plugin's setup may repair the problem, and the collection
+  // it leaves must be the one an equivalent valid declaration gives, system fields and all.
+  it("is returned normalized, with its system fields", () => {
+    const declared = defineCollection({ slug: "notes", fields: [] });
+
+    expect(
+      declared.fields.map(field => (field as { name?: string }).name)
+    ).toEqual(["title", "slug"]);
+    expect(declared.labels).toMatchObject({ singular: "Notes" });
+  });
+});

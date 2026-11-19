@@ -36,6 +36,7 @@ import { assertNoFieldGroupCycleInCode } from "../../domains/field-groups/field-
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { validateLanguageAddressRule } from "../../domains/i18n/language-addresses";
 import { assertConfiguredPublicAddresses } from "../../domains/public-addresses/distinct-public-addresses";
+import { declaredPublicAddressProblem } from "../../domains/public-addresses/public-address-template";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { workflowAttachmentsOf } from "../../domains/workflows/attachments";
 import { NextlyError } from "../../errors";
@@ -96,6 +97,22 @@ function slugKey(entity: { slug?: unknown }): string | undefined {
     : undefined;
 }
 
+/** Whether an entity's own public address, if it has one, passes the address rule. */
+function addressAccepted(
+  type: { publicAddress?: unknown; fields?: unknown },
+  kind: "collection" | "single"
+): boolean {
+  return (
+    declaredPublicAddressProblem(
+      type.publicAddress,
+      kind,
+      (Array.isArray(type.fields) ? type.fields : []) as Parameters<
+        typeof declaredPublicAddressProblem
+      >[2]
+    ) === null
+  );
+}
+
 function validateNextlyConfig(config: NextlyConfig): void {
   const collections = config.collections ?? [];
   const slugs = new Set<string>();
@@ -141,7 +158,17 @@ function validateNextlyConfig(config: NextlyConfig): void {
 
   // Each Single is one page at one address, so two at the same address are
   // refused here, naming both, as the boot refuses them once plugins join.
-  assertConfiguredPublicAddresses(config);
+  // Only the addresses each entity's own rule accepts: one it refuses is that entity's problem,
+  // reported with every other one where the configuration is loaded or started, rather than
+  // stopping the load before them. Two Singles at one address are still refused here.
+  assertConfiguredPublicAddresses({
+    collections: (config.collections ?? []).filter(type =>
+      addressAccepted(type, "collection")
+    ),
+    singles: (config.singles ?? []).filter(type =>
+      addressAccepted(type, "single")
+    ),
+  });
 
   assertNoLegacyFieldGroupKey(config, "defineConfig");
 

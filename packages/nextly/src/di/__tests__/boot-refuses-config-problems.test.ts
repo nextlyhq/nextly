@@ -174,3 +174,30 @@ describe("a start given a define* entity whose problems include a field type not
     expect(created.adapters).toBe(0);
   });
 });
+
+describe("a start given a define* entity with a public address its own rule refuses", () => {
+  it("refuses with it beside the entity's other problems, before it connects", async () => {
+    const refused = await refusalOf({
+      collections: [
+        defineCollection({
+          slug: "Blog Posts",
+          fields: [{ name: "title", type: "text" }],
+          publicAddress: "/blog",
+        } as Parameters<typeof defineCollection>[0]),
+      ],
+      db: DB,
+    } as unknown as Parameters<typeof registerServices>[0]);
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toContain("collections[0].slug");
+    expect(paths).toContain("collections[0].publicAddress");
+    expect(created.adapters).toBe(0);
+  });
+});

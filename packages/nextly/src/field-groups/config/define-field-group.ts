@@ -184,42 +184,43 @@ export function defineFieldGroup(
 
   // Judged, not thrown: a configuration's load and the start judge every entity in it by the
   // same rules (`configurationProblems`) and report every problem, where a throw here would stop
-  // at the first field group with one, during the import. One with a problem is returned as declared
-  // and marked (`markDeclaredByDefine`), since the defaults below assume an entity the rules
-  // accept; the mark is what tells the start to refuse it rather than warn.
-  if (
-    !validateFieldGroupConfig({
-      ...config,
-      fields: asDeclaredFields(config.fields),
-    }).valid
-  ) {
-    return markDeclaredByDefine({ ...config }) as unknown as FieldGroupConfig;
-  }
-
-  // ============================================================
-  // Apply Defaults
-  // ============================================================
-
-  // Generate label from slug if not provided
-  const label: FieldGroupLabel = {
-    singular: config.label?.singular ?? toTitleCase(config.slug),
-  };
-
-  // Build normalized config with defaults. The authored fields narrow back to
-  // the canonical union here, so what leaves this function is the same closed
-  // shape every internal reader already holds.
-  const normalized: FieldGroupConfig = {
+  // at the first one, during the import. The entity is normalized all the same, since a plugin's
+  // setup may repair the problem and must leave what a valid declaration gives; only where the
+  // problem makes normalizing itself throw is the entry returned as declared. Either way it is
+  // marked (`markDeclaredByDefine`), which tells the start to refuse it rather than warn.
+  const accepted = validateFieldGroupConfig({
     ...config,
     fields: asDeclaredFields(config.fields),
-    label,
-    admin: {
-      ...config.admin,
-    },
-  };
+  }).valid;
+  try {
+    // ============================================================
+    // Apply Defaults
+    // ============================================================
 
-  // Marked as declared through this function, so a start refuses it should the configuration's
-  // load find a problem this call could not, such as a field type nothing registers.
-  return markDeclaredByDefine(normalized);
+    // Generate label from slug if not provided
+    const label: FieldGroupLabel = {
+      singular: config.label?.singular ?? toTitleCase(config.slug),
+    };
+
+    // Build normalized config with defaults. The authored fields narrow back to
+    // the canonical union here, so what leaves this function is the same closed
+    // shape every internal reader already holds.
+    const normalized: FieldGroupConfig = {
+      ...config,
+      fields: asDeclaredFields(config.fields),
+      label,
+      admin: {
+        ...config.admin,
+      },
+    };
+
+    // Marked as declared through this function, so a start refuses it should the configuration's
+    // load find a problem this call could not, such as a field type nothing registers.
+    return markDeclaredByDefine(normalized);
+  } catch (error) {
+    if (accepted) throw error;
+    return markDeclaredByDefine({ ...config }) as unknown as FieldGroupConfig;
+  }
 }
 
 // ============================================================

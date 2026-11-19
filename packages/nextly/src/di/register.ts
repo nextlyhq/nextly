@@ -1808,12 +1808,6 @@ function validateBootContributions(
     transformedPlugins
   );
 
-  // Fail fast on a public address that breaks the template rule, or two
-  // Singles at one address. Asked of the merged configuration, since a
-  // plugin's types reach it without passing through `defineCollection` or
-  // `defineSingle`, and a plugin must not take a page the site declares.
-  assertConfiguredPublicAddresses(transformedConfig);
-
   // Fail fast on a collection, or a Single, that opens in a view it does not
   // have: every link to it would lead nowhere. Asked of the merged
   // configuration against every plugin's views, disabled ones included.
@@ -1865,6 +1859,14 @@ function validateBootContributions(
       `[Nextly] Configuration problem at ${problem.path}: ${problem.message} Every nextly command refuses this configuration until it is fixed.`
     );
   }
+
+  // Fail fast on a public address that breaks the template rule, or two
+  // Singles at one address. Asked of the merged configuration, since a
+  // plugin's types reach it without passing through `defineCollection` or
+  // `defineSingle`, and a plugin must not take a page the site declares.
+  // After the app's entities are judged, so a `define*` entity's address is
+  // refused with its other problems rather than alone.
+  assertConfiguredPublicAddresses(transformedConfig);
 
   // Now that the registry is populated, each plugin field type gets to check the
   // declarations that use it. A plugin's own contributions are raw configs — its
