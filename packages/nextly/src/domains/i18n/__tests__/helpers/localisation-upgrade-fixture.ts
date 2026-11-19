@@ -142,6 +142,8 @@ export async function migrateData(
   site: UpgradeSite,
   steps: readonly UpgradeStep[] = MIGRATE_DATA_STEPS
 ): Promise<void> {
+  // The command runs as this release, whatever layout the earlier release's boot stood in for.
+  _resetPerLanguageStorage();
   await runDataSteps({
     adapter: adapter as DataStepsDeps["adapter"],
     command: "nextly migrate",
@@ -159,6 +161,8 @@ export function previewMigrateData(
   adapter: unknown,
   site: UpgradeSite
 ): Promise<DryRunPlan> {
+  // The command runs as this release, whatever layout the earlier release's boot stood in for.
+  _resetPerLanguageStorage();
   return previewDataSteps({
     adapter: adapter as DataStepsDeps["adapter"],
     command: "nextly migrate",

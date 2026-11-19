@@ -6443,9 +6443,15 @@ async function entitiesTheLayoutCanRefuse<T extends { tableName: string }>(
 
 /**
  * For each configured code the configuration writes the earlier way, a warning naming the code it
- * is read as; and a refusal while the database still stores rows under the older spelling, since
- * the site would read that language under the standard code and find nothing. `nextly migrate`
- * moves them. Nothing is read where the configuration writes every code in standard form.
+ * is read as; and a refusal while the database still stores rows under an older spelling of a
+ * configured language, since the site would read that language under the standard code and find
+ * nothing. `nextly migrate` moves them. The older spellings are found from the rows as well as the
+ * configuration, so a configuration already corrected to the standard code is still refused.
+ *
+ * The scan reads every translation table, so a start that finds nothing records it in `nextly_meta`
+ * for the languages it was configured with (`OLDER_CODES_CHECKED_KEY`), and a later start with the
+ * same languages does not scan again. Recording is an optimisation: a database it cannot be written
+ * to is scanned at each start instead.
  */
 async function refuseOlderCodesStillStored(
   adapter: DrizzleAdapter,
@@ -6453,14 +6459,28 @@ async function refuseOlderCodesStillStored(
   logger: Logger
 ): Promise<void> {
   const olderCodes = config.localization?.olderCodes ?? [];
-  if (olderCodes.length === 0) return;
   for (const { from, to } of olderCodes) {
     logger.warn(
       `localization names the language "${from}", which is read as "${to}". Write "${to}" in the ` +
         `configuration: the older spelling is accepted for one release.`
     );
   }
-  const { tablesHoldingCode } = await import("../domains/i18n/older-codes");
+  const codes = (config.localization?.locales ?? []).map(locale =>
+    typeof locale === "string" ? locale : locale.code
+  );
+  const {
+    OLDER_CODES_CHECKED_KEY,
+    olderCodesCheckedFor,
+    storedOlderSpellings,
+    tablesHoldingCode,
+  } = await import("../domains/i18n/older-codes");
+  const { MetaService } = await import("../domains/meta/services/meta-service");
+  const meta = new MetaService(adapter, logger);
+  const checked = olderCodesCheckedFor(codes);
+  const recorded = await meta
+    .get<string>(OLDER_CODES_CHECKED_KEY)
+    .catch(() => null);
+  if (olderCodes.length === 0 && recorded === checked) return;
   const declared = await declaredLaidOutEntitiesAsStored(adapter, config);
   const entities = [
     ...declared,
@@ -6475,7 +6495,15 @@ async function refuseOlderCodesStillStored(
     const table = `${entity.tableName}_locales`;
     if (await adapter.tableExists(table)) translationTables.push(table);
   }
-  for (const { from, to } of olderCodes) {
+  const spellings = new Map(olderCodes.map(({ from, to }) => [from, to]));
+  for (const { from, to } of await storedOlderSpellings(
+    adapter,
+    translationTables,
+    codes
+  )) {
+    spellings.set(from, to);
+  }
+  for (const [from, to] of spellings) {
     const holding = await tablesHoldingCode(adapter, translationTables, from);
     if (holding.length === 0) continue;
     throw new NextlyError({
@@ -6486,6 +6514,11 @@ async function refuseOlderCodesStillStored(
       logContext: { from, to, tables: holding },
     });
   }
+  await meta.set(OLDER_CODES_CHECKED_KEY, checked).catch((error: unknown) => {
+    logger.debug(
+      `Could not record that no older language code is stored: ${String(error)}`
+    );
+  });
 }
 
 /**

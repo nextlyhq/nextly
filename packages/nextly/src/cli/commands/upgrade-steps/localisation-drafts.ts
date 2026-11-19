@@ -21,6 +21,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import { storesPerLanguage } from "../../../domains/i18n/per-language-storage";
 import type { LaidOutEntity } from "../../../domains/i18n/per-language-storage-layout";
 import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { SHARED_PART_ALONE } from "../../../domains/versions/changed-parts";
@@ -99,8 +100,11 @@ async function documentsToSplit(
       },
     });
     if (drafts.length === 0) continue;
+    // Classified by where the entity's values are stored, as a save classifies them: under
+    // per-language storage an entity that is not translated still keeps its translatable fields
+    // per language, so a pending text edit belongs to a language's draft.
     const keys = await partKeysOf(entity.fields, {
-      translated: entity.localized === true,
+      translated: storesPerLanguage(entity),
     });
     const byEntry = new Map<string, VersionRow[]>();
     for (const draft of drafts) {

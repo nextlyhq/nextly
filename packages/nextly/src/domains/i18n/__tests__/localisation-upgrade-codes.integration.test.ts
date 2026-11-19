@@ -24,6 +24,7 @@ import {
   type VersionRow,
 } from "../../versions/versions-repository";
 import { normalizeLocalization } from "../config/normalize";
+import { OLDER_CODES_CHECKED_KEY } from "../older-codes";
 import { ensureI18nArchive } from "../migration/ensure-archive";
 import { _resetPerLanguageStorage } from "../per-language-storage";
 
@@ -101,6 +102,11 @@ describeEachDialect(
         _overwrite: true,
       });
       await storeUnderCode(database, "pt-BR", "pt_BR");
+      // That release recorded no scan for older spellings; this release's boot above, which
+      // stood in for it, recorded one before the rows were stored under the older code.
+      await database.adapter.delete("nextly_meta", {
+        and: [{ column: "key", op: "=", value: OLDER_CODES_CHECKED_KEY }],
+      });
       return id;
     }
 
@@ -271,6 +277,101 @@ describeEachDialect(
         /pt_BR.*pt-BR|pt-BR.*pt_BR/
       );
       expect(await storedLanguages()).toEqual(["en", "pt_BR"]);
+    });
+
+    // The start's warning says to write the standard code in the configuration, and an operator
+    // may do that before running the upgrade. The rows still stored under the older spelling are
+    // found from the rows themselves, so the start still refuses rather than read the language as
+    // empty, and the upgrade still converts them.
+    it("refuses to start over rows under an older spelling the configuration no longer names", async () => {
+      await legacyArticle();
+
+      // Started as the release that wrote the rows laid them out, so only their language code is
+      // out of step with this one.
+      await expect(
+        bootSite(database!, "legacy", STANDARD, warningsKept().logger)
+      ).rejects.toThrow(/pt_BR[\s\S]*nextly migrate/);
+    });
+
+    it("converts rows under an older spelling the configuration no longer names", async () => {
+      await legacyArticle();
+
+      await migrateData(database!.adapter as never, STANDARD);
+
+      expect(await storedLanguages()).toEqual(["en", "pt-BR"]);
+    });
+
+    // The scan for older spellings reads every translation table, so a start that found none
+    // records it for the languages it was configured with, and a later start with the same
+    // languages does not scan again. Rows stored after that under an older spelling (which only
+    // an earlier release wrote) are therefore not looked for: the scan's absence is the evidence.
+    // A change to the configured languages scans again.
+    it("scans for older spellings once per language configuration", async () => {
+      await legacyArticle();
+      await migrateData(database!.adapter as never, UNDERSCORED);
+      await bootSite(database!, "upgraded", STANDARD, warningsKept().logger);
+
+      await storeUnderCode(database!, "pt-BR", "pt_BR");
+      await bootSite(database!, "upgraded", STANDARD, warningsKept().logger);
+
+      await expect(
+        bootSite(
+          database!,
+          "upgraded",
+          siteWithLanguages(["en", "pt-BR", "fr"], "en"),
+          warningsKept().logger
+        )
+      ).rejects.toThrow(/pt_BR[\s\S]*nextly migrate/);
+    });
+
+    // A site that manages its languages in Settings keeps them in `nextly_languages`, each with the
+    // codes it falls back to. The upgrade converts that registry with the content, so the site's
+    // next start names the language as its rows are stored.
+    it("converts the Settings language registry with the content", async () => {
+      await legacyArticle();
+      const at = new Date("2026-08-01T10:00:00Z");
+      const language = (
+        code: string,
+        position: number,
+        fallback: string[]
+      ) => ({
+        code,
+        label: code,
+        direction: "ltr",
+        fallback: JSON.stringify(fallback),
+        position,
+        isDefault: code === "en",
+        active: true,
+        revision: 1,
+        createdAt: at,
+        updatedAt: at,
+      });
+      for (const row of [
+        language("en", 0, []),
+        language("pt_BR", 1, ["en"]),
+        language("es", 2, ["pt_BR", "en"]),
+      ]) {
+        await database!.adapter.insert("nextly_languages", row, {
+          returning: [],
+        });
+      }
+      const { localization: _configured, ...inSettings } = STANDARD;
+
+      await migrateData(database!.adapter as never, inSettings as never);
+
+      const registry = await database!.adapter.select<{
+        code: string;
+        fallback: string;
+      }>("nextly_languages", { columns: ["code", "fallback"] });
+      expect(registry.map(row => row.code).sort()).toEqual([
+        "en",
+        "es",
+        "pt-BR",
+      ]);
+      expect(
+        JSON.parse(registry.find(row => row.code === "es")!.fallback)
+      ).toEqual(["pt-BR", "en"]);
+      expect(await storedLanguages()).toEqual(["en", "pt-BR"]);
     });
 
     // Two spellings of one language can meet in a keyed table the translations never show: here

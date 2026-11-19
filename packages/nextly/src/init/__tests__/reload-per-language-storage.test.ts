@@ -1,12 +1,16 @@
 /**
- * A reload that would turn per-language storage on or off is refused, and the running site keeps
- * the config it was serving: its tables were laid out for the choice it started with.
+ * A reload reads `experimental.perLanguageStorage` as the start does: as a deprecated setting that
+ * chooses nothing. Every installation keeps its translatable fields per language, so a reloaded
+ * config that sets it either way leaves the running site's layout as it was and refuses nothing.
+ *
+ * The plausible broken reloads: one that still adopts the setting (turning the layout off under a
+ * running site whose tables are laid out per language), and one that still refuses the reload.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  _resetPerLanguageStorage,
   perLanguageStorageEnabled,
-  setPerLanguageStorage,
 } from "../../domains/i18n/per-language-storage";
 import { consoleLogger } from "../../shared/types";
 import { reloadNextlyConfig } from "../reload-config";
@@ -30,12 +34,12 @@ const reloadGlobals = globalThis as unknown as {
 afterEach(() => {
   vi.restoreAllMocks();
   loadConfig.mockReset();
-  setPerLanguageStorage(false);
+  _resetPerLanguageStorage();
   delete reloadGlobals.__nextly_reloadInFlight;
   delete reloadGlobals.__nextly_reloadQueued;
 });
 
-/** What the reload told the developer it refused, if anything. */
+/** What the reload warned, with the setting `perLanguageStorage` in the reloaded config. */
 async function reloadWith(perLanguageStorage: boolean): Promise<string[]> {
   loadConfig.mockResolvedValue({
     config: { collections: [], perLanguageStorage },
@@ -46,31 +50,18 @@ async function reloadWith(perLanguageStorage: boolean): Promise<string[]> {
   return warn.mock.calls.map(call => String(call[0]));
 }
 
-describe("a reload and per-language storage", () => {
-  it("refuses a config that turns it on, keeping the site as it started", async () => {
-    const warnings = await reloadWith(true);
-    expect(
-      warnings.some(w =>
-        /perLanguageStorage is chosen when the site starts/.test(w)
-      )
-    ).toBe(true);
-    expect(perLanguageStorageEnabled()).toBe(false);
-  });
-
-  it("refuses a config that turns it off", async () => {
-    setPerLanguageStorage(true);
-    const warnings = await reloadWith(false);
-    expect(
-      warnings.some(w =>
-        /perLanguageStorage is chosen when the site starts/.test(w)
-      )
-    ).toBe(true);
-    expect(perLanguageStorageEnabled()).toBe(true);
-  });
-
-  it("goes on with a config that keeps it", async () => {
-    setPerLanguageStorage(true);
-    const warnings = await reloadWith(true);
-    expect(warnings.some(w => /perLanguageStorage/.test(w))).toBe(false);
-  });
+describe("a reload and the per-language storage setting", () => {
+  it.each([true, false])(
+    "keeps every translatable field per language with the setting %s, refusing nothing",
+    async setting => {
+      expect(perLanguageStorageEnabled()).toBe(true);
+      const warnings = await reloadWith(setting);
+      expect(perLanguageStorageEnabled()).toBe(true);
+      expect(warnings.some(w => /chosen when the site starts/.test(w))).toBe(
+        false
+      );
+      // The reload went through: the loader was read.
+      expect(loadConfig).toHaveBeenCalled();
+    }
+  );
 });

@@ -130,6 +130,21 @@ describeEachDialect(
       expect(copy.es).not.toHaveProperty("code");
     });
 
+    // A collection that is not translated still keeps its translatable fields per language once
+    // upgraded, so its pending change kept under no language, holding a text edit, is split as
+    // a translated one's is: the text to the default language's draft, the shared edit to the
+    // shared draft. Left whole, a later save of a shared field alone would drop the text edit.
+    it("splits an untranslated entity's pending change by the layout it is stored in", async () => {
+      const { seeded } = await legacySite();
+
+      await upgrade();
+
+      const pending = await pendingChangesOf(seeded.notes.pending);
+      expect(pending.en).toMatchObject({ title: "pending title 2" });
+      expect(pending.en).not.toHaveProperty("code");
+      expect(pending.shared).toEqual({ code: "pending-code-2" });
+    });
+
     // Where two languages changed one shared field and were saved at the same moment, nothing says
     // which save came later: neither value is kept on a guess, and nothing is changed.
     it("refuses two languages' changes to one shared field saved at the same moment, keeping both", async () => {
