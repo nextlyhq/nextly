@@ -11,7 +11,10 @@
  */
 
 import { NextlyError } from "../../errors";
-import { markWriteIntegrityFailure } from "../../shared/write-integrity";
+import {
+  isWriteIntegrityFailure,
+  markWriteIntegrityFailure,
+} from "../../shared/write-integrity";
 import {
   CORE_CONTENT_EVENT_KINDS,
   ensureCoreContentEventKinds,
@@ -183,10 +186,14 @@ let savepointSequence = 0;
  * Only the insert repeats: the write around it, and its hooks, ran once and
  * stay as they are. On PostgreSQL a failed statement aborts the transaction,
  * so each attempt runs in a savepoint and a clash rolls back to it; SQLite
- * has savepoints too. MySQL has none here and needs none: a duplicate key
- * fails the statement, not the transaction. Each retry re-reads the newest
- * number with a locking read, which sees the row the other transaction
- * committed (a plain read on MySQL would answer from a stale snapshot).
+ * and MySQL take savepoints too. Where the transaction takes none (TiDB) the
+ * insert runs plainly, and a duplicate key there fails the statement, not the
+ * transaction. A failure marked write-integrity is never retried: the
+ * savepoint could not be rolled back, so the transaction's state is unknown
+ * and it must abort before anything more runs on it. Each retry re-reads
+ * the newest number with a locking read, which sees the row the other
+ * transaction committed (a plain read on MySQL would answer from a stale
+ * snapshot).
  *
  * Three lost races in a row surface as a VersionConflictError, which an
  * interactive write retries whole.
@@ -217,6 +224,9 @@ async function insertWithRetry(
       );
       return { versionNo, retried: attempt > 1 };
     } catch (err) {
+      // The savepoint could not be rolled back, so nothing more may run on the
+      // transaction: the failure aborts it, whatever the driver reported.
+      if (isWriteIntegrityFailure(err)) throw err;
       // The only unique index on nextly_versions is the version_no sequence,
       // so a unique violation is a lost allocation race. The insert throws the
       // RAW driver error, which isUniqueViolation recognizes; anything else
