@@ -369,6 +369,7 @@ export function testDraftOf(values: TemplateFormValues): TemplateTestDraft {
     replyTo: fields.replyTo,
     providerId: fields.providerId,
     attachments: fields.attachments,
+    ...formatFields(values),
   };
 }
 
@@ -407,6 +408,13 @@ export function formValuesToUpdatePayload(
   record?: EmailTemplateRecord
 ): UpdateEmailTemplatePayload {
   const payload: UpdateEmailTemplatePayload = payloadFields(values);
+  if (values.format === "written") {
+    // Written from the blocks by the server, which takes no HTML or plain
+    // text for a written email but the ones it wrote: left out, they are
+    // written again from the blocks sent.
+    delete payload.htmlContent;
+    delete payload.plainTextContent;
+  }
   if (record && !ownsContent(record)) {
     for (const field of OWNER_FIELDS) delete payload[field];
   }

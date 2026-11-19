@@ -98,6 +98,14 @@ export class ChipNode extends DecoratorNode<string> {
   createDOM(): HTMLElement {
     const span = document.createElement("span");
     span.dataset.variable = this.__variable;
+    // Its marks, as the sent email draws them: a chip is not a text node, so
+    // the editor's text theme never reaches it.
+    span.className = [
+      this.__marks.bold ? "font-semibold" : "",
+      this.__marks.italic ? "italic" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     return span;
   }
 

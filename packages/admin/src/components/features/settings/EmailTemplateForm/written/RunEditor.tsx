@@ -15,7 +15,13 @@ import { OnChangePlugin } from "@lexical/react/LexicalOnChangePlugin";
 import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { Button } from "@nextlyhq/ui";
-import { FORMAT_TEXT_COMMAND } from "lexical";
+import {
+  CLEAR_HISTORY_COMMAND,
+  COMMAND_PRIORITY_LOW,
+  FOCUS_COMMAND,
+  FORMAT_TEXT_COMMAND,
+  type LexicalEditor,
+} from "lexical";
 import { useEffect, type JSX } from "react";
 
 import { Bold, Italic } from "@admin/components/icons";
@@ -37,8 +43,48 @@ function SyncPlugin({ value }: { value: readonly Inline[] }): null {
   const [editor] = useLexicalComposerContext();
   useEffect(() => {
     const held = editor.getEditorState().read(() => $readRuns());
-    if (!sameRuns(held, value)) editor.update(() => $setRuns(value));
+    if (!sameRuns(held, value)) {
+      editor.update(() => $setRuns(value));
+      // A value from outside (a move, an Undo) is another block's text in
+      // this place now: its own Undo must not reach back to what was here.
+      editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
+    }
   }, [editor, value]);
+  return null;
+}
+
+/**
+ * Keeps the live editor's editability on `readOnly`, which the initial
+ * config sets only once: an email turning read-only (as during a save) stops
+ * taking input at once.
+ */
+function EditablePlugin({ readOnly }: { readOnly: boolean }): null {
+  const [editor] = useLexicalComposerContext();
+  useEffect(() => {
+    editor.setEditable(!readOnly);
+  }, [editor, readOnly]);
+  return null;
+}
+
+/** Tells the body which editor was typed in last, for Insert variable. */
+function FocusPlugin({
+  onFocus,
+}: {
+  onFocus: ((editor: LexicalEditor) => void) | undefined;
+}): null {
+  const [editor] = useLexicalComposerContext();
+  useEffect(
+    () =>
+      editor.registerCommand(
+        FOCUS_COMMAND,
+        () => {
+          onFocus?.(editor);
+          return false;
+        },
+        COMMAND_PRIORITY_LOW
+      ),
+    [editor, onFocus]
+  );
   return null;
 }
 
@@ -87,6 +133,8 @@ export interface RunEditorProps {
   /** A text block's: bold and italic, and line breaks on Enter. */
   rich?: boolean;
   readOnly?: boolean;
+  /** Told when the person starts typing here, with this field's editor. */
+  onFocusEditor?: (editor: LexicalEditor) => void;
 }
 
 export function RunEditor({
@@ -96,6 +144,7 @@ export function RunEditor({
   placeholder,
   rich = false,
   readOnly = false,
+  onFocusEditor,
 }: RunEditorProps): JSX.Element {
   const initialConfig = {
     namespace: "written-run",
@@ -137,6 +186,8 @@ export function RunEditor({
       </div>
       <HistoryPlugin />
       <SyncPlugin value={value} />
+      <EditablePlugin readOnly={readOnly} />
+      <FocusPlugin onFocus={onFocusEditor} />
       <OnChangePlugin
         ignoreSelectionChange
         onChange={state => {

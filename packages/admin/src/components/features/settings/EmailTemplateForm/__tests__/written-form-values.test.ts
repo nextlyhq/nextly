@@ -16,6 +16,7 @@ import {
   formValuesToUpdatePayload,
   newEmailValues,
   templateSchemaFor,
+  testDraftOf,
   templateToFormValues,
   type TemplateFormValues,
 } from "../schema";
@@ -105,6 +106,26 @@ describe("a written email in the form", () => {
     );
     expect(payload).not.toHaveProperty("blocks");
     expect(payload).not.toHaveProperty("format");
+  });
+
+  it("leaves out its HTML and plain text on a save of a saved written email, which the server writes from its blocks", () => {
+    const payload = formValuesToUpdatePayload(
+      { ...written, htmlContent: "<h1>Paid</h1>", plainTextContent: "Paid" },
+      record({ format: "written", blocks: DOC })
+    );
+    expect(payload).not.toHaveProperty("htmlContent");
+    expect(payload).not.toHaveProperty("plainTextContent");
+    expect(payload).toMatchObject({ format: "written", blocks: DOC });
+  });
+
+  it("carries its format and blocks in a test send's draft", () => {
+    expect(testDraftOf(written)).toMatchObject({
+      format: "written",
+      blocks: DOC,
+    });
+    expect(
+      testDraftOf({ ...written, format: "code", blocks: null })
+    ).not.toHaveProperty("blocks");
   });
 
   it("needs no HTML when written, and still needs it when coded", () => {

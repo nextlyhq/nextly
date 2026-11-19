@@ -511,6 +511,9 @@ export interface SendTestTarget {
  * absent field is the stored one.
  */
 export interface TemplateTestDraft {
+  /** A written email's format and blocks, so a test sends the blocks on screen. */
+  format?: TemplateFormat;
+  blocks?: WrittenDocument | null;
   subject?: string;
   preheader?: string | null;
   htmlContent?: string;

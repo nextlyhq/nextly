@@ -32,7 +32,15 @@ import {
   DropdownMenuTrigger,
   Input,
 } from "@nextlyhq/ui";
-import { useRef, type JSX } from "react";
+import {
+  $createParagraphNode,
+  $getRoot,
+  $getSelection,
+  $isElementNode,
+  $isRangeSelection,
+  type LexicalEditor,
+} from "lexical";
+import { useRef, type JSX, type MutableRefObject } from "react";
 
 import {
   ArrowDown,
@@ -60,7 +68,13 @@ import {
   type BlockPath,
 } from "./block-model";
 import { RunEditor } from "./RunEditor";
-import type { Inline } from "./runs";
+import { ChipNode, type Inline } from "./runs";
+
+/**
+ * Puts a chip for `variable` where the person was last typing; false when
+ * no block has been typed in yet, so the caller can say where to click.
+ */
+export type InsertVariable = (variable: string) => boolean;
 
 /** Each kind's name, as a card and the Add block menu show it. */
 const KIND_NAMES: Record<BlockKind, string> = {
@@ -112,6 +126,8 @@ interface Edit {
   readOnly: boolean;
   /** The declared list variables a list block can repeat over. */
   listVariables: readonly string[];
+  /** Told which field's editor was typed in last. */
+  focused: (editor: LexicalEditor) => void;
 }
 
 /** The fields of one block, by its kind. */
@@ -134,6 +150,7 @@ function BlockFields({
           placeholder="Write a heading"
           value={block.text}
           readOnly={edit.readOnly}
+          onFocusEditor={edit.focused}
           onChange={text => set({ ...block, text: plain(text) })}
         />
       );
@@ -145,6 +162,7 @@ function BlockFields({
           placeholder="Write something."
           value={block.text}
           readOnly={edit.readOnly}
+          onFocusEditor={edit.focused}
           onChange={text => set({ ...block, text })}
         />
       );
@@ -155,6 +173,7 @@ function BlockFields({
             label="Button label"
             value={block.label}
             readOnly={edit.readOnly}
+            onFocusEditor={edit.focused}
             onChange={label => set({ ...block, label: plain(label) })}
           />
           {"url" in block.link ? (
@@ -197,6 +216,7 @@ function BlockFields({
             placeholder="Describe the image"
             value={block.alt}
             readOnly={edit.readOnly}
+            onFocusEditor={edit.focused}
             onChange={alt => set({ ...block, alt: plain(alt) })}
           />
           {block.alt.length === 0 ? (
@@ -488,6 +508,8 @@ export interface WrittenBodyProps {
   readOnly?: boolean;
   /** The declared list variables a list block can repeat over. */
   listVariables?: readonly string[];
+  /** Set to a way to put a variable where the person was last typing. */
+  insertRef?: MutableRefObject<InsertVariable | null>;
 }
 
 export function WrittenBody({
@@ -495,7 +517,32 @@ export function WrittenBody({
   onChange,
   readOnly = false,
   listVariables = [],
+  insertRef,
 }: WrittenBodyProps): JSX.Element {
+  // The field typed in last, where the Variables rail puts a chip.
+  const lastEditor = useRef<LexicalEditor | null>(null);
+  if (insertRef) {
+    insertRef.current = variable => {
+      const editor = lastEditor.current;
+      if (!editor || readOnly) return false;
+      editor.update(
+        () => {
+          const chip = new ChipNode(variable);
+          const selection = $getSelection();
+          if ($isRangeSelection(selection)) {
+            selection.insertNodes([chip]);
+            return;
+          }
+          // No caret kept: at the end of what the field holds.
+          const paragraph = $getRoot().getLastChild();
+          if ($isElementNode(paragraph)) paragraph.append(chip);
+          else $getRoot().append($createParagraphNode().append(chip));
+        },
+        { discrete: true }
+      );
+      return true;
+    };
+  }
   // The latest document, so an Undo after other edits restores into it.
   const latest = useRef(value);
   latest.current = value;
@@ -507,6 +554,9 @@ export function WrittenBody({
     current: () => latest.current,
     readOnly,
     listVariables,
+    focused: editor => {
+      lastEditor.current = editor;
+    },
   };
   return (
     <div className="flex flex-col gap-3 p-3">

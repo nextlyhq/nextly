@@ -201,8 +201,7 @@ export function CreateEmailDialog({
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                A written email can be converted to code later. A coded email
-                can&apos;t be turned into blocks.
+                A coded email can&apos;t be turned into blocks.
               </p>
             </div>
           ) : (

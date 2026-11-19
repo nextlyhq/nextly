@@ -84,6 +84,13 @@ describe("the block list's edits", () => {
     expect(restoreBlock(removed.doc, removed.removed)).toEqual(original);
   });
 
+  it("puts a block removed from a list back in the email when its list has gone", () => {
+    const removed = removeBlock(doc(A, list(B, C)), [1, 0]);
+    // The list itself removed (or moved) before Undo.
+    const withoutList = removeBlock(removed.doc, [1]).doc;
+    expect(restoreBlock(withoutList, removed.removed).blocks).toEqual([A, B]);
+  });
+
   it("leaves the document it was given unchanged", () => {
     const original = doc(A, B);
     const copy = structuredClone(original);

@@ -3,9 +3,9 @@
  * duplicated and removed (with Undo), new blocks added at the end of the
  * email or of a list, and nothing editable when the email is read-only.
  */
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useRef, useState, type MutableRefObject } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -13,7 +13,7 @@ import type {
   WrittenDocument,
 } from "@admin/services/emailTemplateApi";
 
-import { WrittenBody } from "../WrittenBody";
+import { WrittenBody, type InsertVariable } from "../WrittenBody";
 
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("@admin/components/ui", async importOriginal => ({
@@ -37,16 +37,20 @@ function Harness({
   initial,
   readOnly = false,
   seen,
+  insert,
 }: {
   initial: WrittenDocument;
   readOnly?: boolean;
   seen: (doc: WrittenDocument) => void;
+  insert?: MutableRefObject<InsertVariable | null>;
 }) {
   const [value, setValue] = useState(initial);
+  const own = useRef<InsertVariable | null>(null);
   return (
     <WrittenBody
       value={value}
       readOnly={readOnly}
+      insertRef={insert ?? own}
       onChange={next => {
         seen(next);
         setValue(next);
@@ -159,5 +163,33 @@ describe("a written email's blocks", () => {
     expect(
       screen.queryByRole("button", { name: /^Actions for this/ })
     ).toBeNull();
+  });
+
+  it("puts a variable chosen from the rail into the block last typed in", () => {
+    const insert: MutableRefObject<InsertVariable | null> = { current: null };
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    render(
+      <Harness initial={doc(heading("Hi "))} seen={seen} insert={insert} />
+    );
+    fireEvent.focus(screen.getByRole("textbox", { name: "Heading" }));
+    act(() => {
+      expect(insert.current?.("name")).toBe(true);
+    });
+    const last = seen.mock.calls[seen.mock.calls.length - 1]?.[0];
+    expect(last?.blocks[0]).toEqual({
+      type: "heading",
+      text: [
+        { type: "text", text: "Hi " },
+        { type: "chip", variable: "name" },
+      ],
+    });
+  });
+
+  it("says there is nowhere to put a variable before a block is typed in", () => {
+    const insert: MutableRefObject<InsertVariable | null> = { current: null };
+    render(
+      <Harness initial={doc(heading("Hi"))} seen={vi.fn()} insert={insert} />
+    );
+    expect(insert.current?.("name")).toBe(false);
   });
 });

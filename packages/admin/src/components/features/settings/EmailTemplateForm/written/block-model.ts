@@ -166,6 +166,13 @@ export function restoreBlock(
   removed: RemovedBlock
 ): WrittenDocument {
   const [list, index] = place(removed.path);
+  // Its list was removed or moved since: back in the email where the list
+  // was, rather than into whatever block holds that place now.
+  if (list !== undefined && doc.blocks[list]?.type !== "list") {
+    const blocks = [...doc.blocks];
+    blocks.splice(Math.min(list, blocks.length), 0, removed.block);
+    return { ...doc, blocks };
+  }
   const blocks = [...siblings(doc, list)];
   blocks.splice(Math.min(index, blocks.length), 0, removed.block);
   return withSiblings(doc, list, blocks);
