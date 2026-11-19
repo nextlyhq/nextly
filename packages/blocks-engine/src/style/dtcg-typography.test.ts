@@ -129,6 +129,83 @@ describe("a text style in the design-token file", () => {
     ).toEqual(["ts-loose"]);
   });
 
+  it("writes a size scaled from a size variable at its factor", () => {
+    const scaledSize: NamedClass = {
+      id: "ts-big",
+      slug: "big",
+      orderIndex: 7,
+      role: "text",
+      styles: {
+        base: { base: { fontSize: { $token: "font-size.h2", times: 2 } } },
+      },
+    };
+    const { file } = exported([scaledSize]);
+    const written = group(file)?.big as { $value: DtcgNode } | undefined;
+    expect(written?.$value.fontSize).toMatchObject({
+      unit: expect.any(String),
+      value: expect.any(Number),
+    });
+  });
+
+  it("keeps a part scaled from a variable of another type as Nextly data only, read back exactly", () => {
+    // A size from a number variable, a line height from a size variable and
+    // a weight past the format's range: none is a value of its part's type.
+    const odd: NamedClass[] = [
+      {
+        id: "ts-size-of-number",
+        slug: "size-of-number",
+        orderIndex: 7,
+        role: "text",
+        styles: {
+          base: {
+            base: { fontSize: { $token: "line-height.h2", times: 2 } },
+          },
+        },
+      },
+      {
+        id: "ts-line-of-size",
+        slug: "line-of-size",
+        orderIndex: 8,
+        role: "text",
+        styles: {
+          base: {
+            base: { lineHeight: { $token: "font-size.h2", times: 1.5 } },
+          },
+        },
+      },
+      {
+        id: "ts-heavy",
+        slug: "heavy",
+        orderIndex: 9,
+        role: "text",
+        styles: {
+          base: {
+            base: { fontWeight: { $token: "type.heavy", times: 3 } },
+          },
+        },
+      },
+    ];
+    const heavy: SiteToken = {
+      name: "type.heavy",
+      kind: "fontWeight",
+      values: { light: "800" },
+    };
+    const made = tokensToDtcg(
+      { tokens: [...tokens, heavy] },
+      { textStyles: odd }
+    );
+    expect(made.keptTextStyles).toEqual([
+      "ts-size-of-number",
+      "ts-line-of-size",
+      "ts-heavy",
+    ]);
+    const file = JSON.parse(JSON.stringify(made.document)) as DtcgNode;
+    expect(group(file)).toBeUndefined();
+    expect(dtcgToTokens(file).textStyles?.map(style => style.styles)).toEqual(
+      odd.map(style => style.styles)
+    );
+  });
+
   it("never sits where a variable could: no variable's name starts with a capital", () => {
     const { file } = exported([eyebrow]);
     // Every variable path is lower case, so `textStyles` names no variable's group.
