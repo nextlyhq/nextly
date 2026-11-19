@@ -6,9 +6,10 @@
  *
  * A kill is made by letting the step at the kill point run and then never return: no `catch` or
  * `finally` of the save runs, as none would in a process that was killed there. Each write point
- * of the save in turn: the definition file, a migration file, a statement of the file run, the
- * ledger's record of it and the registry row. After each, the row and the marker are there and
- * describe the save. A save that ends, written or withdrawn whole, leaves neither; one that ends
+ * of the save in turn, in the order the save writes them: a migration file, its snapshot, the
+ * definition file, a statement of the file run, the ledger's record of it and the registry row.
+ * After each, the row and the marker are there and describe the save, and the definition is as it
+ * was until the save's own write of it: a save stopped before then leaves it untouched. A save that ends, written or withdrawn whole, leaves neither; one that ends
  * with part of it kept and nothing recording what (a MySQL save stopped part-way) keeps both. A
  * record already standing, from a process that stopped, stays as it was through a later save.
  *
@@ -504,20 +505,34 @@ async function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
   }
 }
 
-/** The kill points, each naming the write it stops after. */
+/**
+ * The kill points, each naming the write it stops after, in the order the save writes them, and
+ * whether the definition is still as it was there: the save writes it once its migration files
+ * and snapshots are in place.
+ */
 const KILL_POINTS: ReadonlyArray<{
   name: string;
   arm(t: TestNextly): (point: string) => boolean;
+  definitionKept: boolean;
 }> = [
-  {
-    name: "the definition file",
-    arm: () => point => point === `file:${join(basePath, DEFINITION)}`,
-  },
   {
     name: "a migration file",
     arm: () => point =>
       point.startsWith(`file:${join(basePath, HISTORY)}`) &&
       point.endsWith(".sql"),
+    definitionKept: true,
+  },
+  {
+    name: "a migration file's snapshot",
+    arm: () => point =>
+      point.startsWith(`file:${join(basePath, HISTORY)}`) &&
+      point.endsWith(".snapshot.json"),
+    definitionKept: true,
+  },
+  {
+    name: "the definition file",
+    arm: () => point => point === `file:${join(basePath, DEFINITION)}`,
+    definitionKept: false,
   },
   {
     name: "a statement of the file run",
@@ -526,6 +541,7 @@ const KILL_POINTS: ReadonlyArray<{
       return point =>
         point.startsWith("statement:") && adding("alpha").test(point);
     },
+    definitionKept: false,
   },
   {
     name: "the ledger's record of the file",
@@ -533,10 +549,12 @@ const KILL_POINTS: ReadonlyArray<{
       stopAtLedger();
       return point => point === "ledger:markApplied";
     },
+    definitionKept: false,
   },
   {
     name: "the registry row",
     arm: () => point => point === "registry",
+    definitionKept: false,
   },
 ];
 
@@ -556,7 +574,7 @@ describe.each(getConfiguredTestDialects())(
     describe.each(PATHS)("$name", path => {
       it.each(KILL_POINTS)(
         "a kill after $name leaves the row and the marker, both naming the save",
-        async ({ arm }) => {
+        async ({ arm, definitionKept }) => {
           const t = await boot();
           await path.create([text("heading")]);
           const definitionBefore = definitionText();
@@ -573,6 +591,19 @@ describe.each(getConfiguredTestDialects())(
             await reachedKill(reached),
             "the save never reached the kill point"
           ).toBe("reached");
+
+          // The definition is replaced only once the migration files and snapshots are in place.
+          if (definitionKept) {
+            expect(
+              definitionText(),
+              "the definition, before the save's write of it"
+            ).toBe(definitionBefore);
+          } else {
+            expect(
+              definitionText(),
+              "the definition, after the save's write of it"
+            ).toContain('"alpha"');
+          }
 
           const row = await recordRow(t, path);
           const marker = recordMarker(path);
