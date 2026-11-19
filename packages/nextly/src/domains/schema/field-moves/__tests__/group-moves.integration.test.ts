@@ -451,6 +451,33 @@ describe.each(getConfiguredTestDialects())(
       expect(await required()).toBe(false);
     });
 
+    it("stops undoing a required field's move where an entry made since holds no value for it, before anything changes", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text", required: true };
+      await createPosts(t, SLUG, { fields: [summary, group("meta", [NOTE])] });
+      await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one", summary: "First" },
+      });
+      await save(
+        t,
+        [group("meta", [NOTE, summary])],
+        [{ from: ["summary"], to: ["meta", "summary"] }]
+      );
+      // An entry whose group was left out after the move: nothing for the restored column.
+      await run(
+        t,
+        `UPDATE ${q(TABLE)} SET ${q("meta")} = NULL WHERE ${q("slug")} = 'one'`
+      );
+      const groups = await storedGroups(t);
+      const columns = await columnsOf(t);
+
+      await expect(migrateDown(t)).rejects.toThrow(/needs_a_value_summary/);
+
+      expect(await storedGroups(t)).toEqual(groups);
+      expect(await columnsOf(t)).toEqual(columns);
+    });
+
     it("undoes a move into a nested group with nextly migrate:down, each group as it was before", async () => {
       const t = await boot(dialect);
       const summary: Field = { name: "summary", type: "text" };
@@ -1117,7 +1144,8 @@ describe.each(getConfiguredTestDialects())(
         options: { variant: "short" },
         validation: { maxLength: 40 },
       };
-      const kept = [views, featured, price, headline];
+      const published: Field = { name: "published", type: "date" };
+      const kept = [views, featured, price, headline, published];
       const inside = [group("meta", [NOTE, ...kept])];
       const outside = [...kept, group("meta", [NOTE])];
       const out = kept.map(field => ({
@@ -1164,6 +1192,9 @@ describe.each(getConfiguredTestDialects())(
               ["views", 2147483648],
               ["price", 1.239],
               ["headline", "x".repeat(100)],
+              // A time with no offset, which PostgreSQL would read in its session's zone.
+              ["published", "2026-07-17T10:00:00"],
+              ["published", "2026-02-30"],
             ] as [string, unknown][])),
       ];
 
@@ -1229,6 +1260,7 @@ describe.each(getConfiguredTestDialects())(
           featured: true,
           price: 1.23,
           headline: "y".repeat(40),
+          published: "2026-07-17T10:00:00+05:00",
         });
         await migrateFolder(t);
         const [row] = await run<Record<string, unknown>>(

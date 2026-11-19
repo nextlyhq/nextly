@@ -117,7 +117,7 @@ function placed(
     // Into a group: copied before the column is dropped; back after the way down adds it again.
     return {
       up: { first: way.up, last: [] },
-      down: { first: back.stop, last: way.down },
+      down: { first: [...back.stop, ...beside.downFirst], last: way.down },
     };
   }
   if (move.to.kind === "column") {
@@ -145,6 +145,8 @@ interface Beside {
   undo: string[];
   /** Stops run first on the way up: a required field's entries without a value. */
   first: string[];
+  /** The same stop on the way back, where the column it restores is required. */
+  downFirst: string[];
 }
 
 function besideOf(
@@ -152,7 +154,7 @@ function besideOf(
   request: FieldMoveRequest,
   target: MoveColumn,
   args: {
-    after: readonly FieldDefinition[];
+    before: readonly FieldDefinition[];
     mediaUses?: { kind: "collection" | "single"; slug: string };
     filledColumns?: readonly string[];
   }
@@ -168,9 +170,21 @@ function besideOf(
     !(args.filledColumns ?? []).includes(to.column)
       ? missingValuesStop(target, from, to.column)
       : [];
+  // The way back restores the definition before the save: its column is required again where
+  // the field was, and the group is nullable where it was, whatever this save made of either.
+  const downFirst =
+    from.kind === "column" &&
+    to.kind === "json" &&
+    rowFieldIsRequired(args.before, from.column)
+      ? missingValuesStop(target, to, from.column)
+      : [];
   const undo =
     to.kind === "json"
-      ? emptiedContainers(to, target, !groupIsRequired(args.after, to.column))
+      ? emptiedContainers(
+          to,
+          target,
+          !rowFieldIsRequired(args.before, to.column, "group")
+        )
       : [];
   return {
     up: uses
@@ -181,17 +195,22 @@ function besideOf(
       : [],
     undo,
     first,
+    downFirst,
   };
 }
 
-/** Whether the group whose column is `column` is required, so its column is never NULL. */
-function groupIsRequired(
+/**
+ * Whether the field on the row whose column is `column` (a group, with `kind`) is required, so its
+ * column is never NULL.
+ */
+function rowFieldIsRequired(
   fields: readonly FieldDefinition[],
-  column: string
+  column: string,
+  kind?: "group"
 ): boolean {
   return fieldsStoredOnRow(fields).some(
     field =>
-      field.type === "group" &&
+      (kind === undefined || field.type === kind) &&
       toSnakeCase(field.name) === column &&
       field.required === true
   );

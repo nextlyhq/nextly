@@ -520,6 +520,30 @@ function stopWhereNot(
   ];
 }
 
+/**
+ * An ISO date, alone or with a time and the offset it was written at (`ISO_DATE`, as the save's
+ * check reads it), in the regular expressions PostgreSQL and MySQL share.
+ */
+const SQL_ISO_DATE =
+  "'^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]{1,3})?)?(Z|[+-][0-9]{2}:[0-9]{2}))?$'";
+
+/**
+ * PostgreSQL's rule for a date it keeps as the same instant, as `movesAsTheSameDate` judges it:
+ * an ISO date, or one with a time and its offset (a time with none would be read in the session's
+ * zone); a year other than 0, a month and day that exist, a time of day that exists, and an
+ * offset from -13:59 to +14:00. Each step guards the next, since a cast of a day that does not
+ * exist is an error rather than an answer.
+ */
+function pgDateKept(text: string): string {
+  const part = (from: number, length: number) =>
+    `substr(${text}, ${from}, ${length})`;
+  const lastDay = `extract(day from (date_trunc('month', (${part(1, 7)} || '-01')::date) + interval '1 month' - interval '1 day'))`;
+  const time = `(length(${text}) = 10 OR (${part(12, 2)} <= '23' AND ${part(15, 2)} <= '59' AND (${part(17, 1)} <> ':' OR ${part(18, 2)} <= '59')))`;
+  const offset = `right(${text}, 6)`;
+  const offsetKept = `(length(${text}) = 10 OR right(${text}, 1) = 'Z' OR (substr(${offset}, 5, 2) <= '59' AND ((left(${offset}, 1) = '+' AND substr(${offset}, 2, 5) <= '14:00') OR (left(${offset}, 1) = '-' AND substr(${offset}, 2, 5) <= '13:59'))))`;
+  return `(CASE WHEN ${text} ~ ${SQL_ISO_DATE} AND ${part(1, 4)} <> '0000' AND ${part(6, 2)} BETWEEN '01' AND '12' THEN ${part(9, 2)} >= '01' AND ${part(9, 2)}::int <= ${lastDay} AND ${time} AND ${offsetKept} ELSE FALSE END)`;
+}
+
 /** A JSON number's text, as each dialect's cast reads it; no backslash, so one spelling fits all. */
 const SQL_JSON_NUMBER = "'^-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$'";
 const SQL_WHOLE_NUMBER = "'^-?[0-9]{1,10}$'";
@@ -549,6 +573,8 @@ const KEPT_TESTS: Record<
           : `(CASE WHEN ${text} ~ ${SQL_JSON_NUMBER} THEN ${numeric} = round(${numeric}, ${target.scale}) AND abs(${numeric}) < power(10::numeric, ${target.precision - target.scale}) ELSE FALSE END)`;
       case "boolean":
         return `(${type} = 'boolean' OR (${type} = 'number' AND ${text} IN ('0', '1')) OR (${type} = 'string' AND ${text} IN ('true', 'false')))`;
+      case "timestamp":
+        return `(${type} = 'string' AND ${pgDateKept(text)})`;
       default:
         return widthTest(target, `char_length(${text})`, undefined);
     }
@@ -569,9 +595,10 @@ const KEPT_TESTS: Record<
       case "boolean":
         return `(${type} = 'BOOLEAN' OR (${type} = 'INTEGER' AND ${text} IN ('0', '1')) OR (${type} = 'STRING' AND ${exact} IN ('true', 'false')))`;
       case "timestamp": {
-        // Whole seconds, at an instant its TIMESTAMP holds; a form it cannot read stops it too.
+        // An ISO date, or one with a time and its offset; whole seconds, at an instant its
+        // TIMESTAMP holds. A day or time that does not exist reads as NULL, which stops it too.
         const instant = MYSQL_READS.timestamp?.(text, text, target) ?? text;
-        return `(CASE WHEN ${text} REGEXP '[.][0-9]*[1-9]' THEN FALSE ELSE ${instant} BETWEEN '1970-01-01 00:00:01' AND '2038-01-19 03:14:07' END)`;
+        return `(CASE WHEN NOT (${text} REGEXP ${SQL_ISO_DATE}) OR ${text} REGEXP '[.][0-9]*[1-9]' THEN FALSE ELSE ${instant} BETWEEN '1970-01-01 00:00:01' AND '2038-01-19 03:14:07' END)`;
       }
       default:
         return widthTest(target, `CHAR_LENGTH(${text})`, `LENGTH(${text})`);

@@ -50,6 +50,44 @@ describe("planEntityMoves", () => {
     ]);
   });
 
+  it("stops the way back first where the column it restores is required and an entry holds no value", () => {
+    const planned = planEntityMoves({
+      ...base,
+      before: [text("subtitle", { required: true }), group("meta", [])],
+      after: [group("meta", [text("subtitle", { required: true })])],
+      moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
+    });
+    expect(planned.down.first.join("\n")).toContain(
+      `"nextly_unfilled_subtitle" ("needs_a_value_subtitle" INTEGER NOT NULL)`
+    );
+    // An optional field asks for no such stop.
+    const optional = planEntityMoves({
+      ...base,
+      before: [text("subtitle"), group("meta", [])],
+      after: [group("meta", [text("subtitle")])],
+      moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
+    });
+    expect(optional.down.first).toEqual([]);
+  });
+
+  it("leaves a group the way back restores as required with its empty object, not NULL", () => {
+    // Required before the save and optional after: the way back makes it required again first.
+    const planned = planEntityMoves({
+      ...base,
+      before: [text("subtitle"), group("meta", [], { required: true })],
+      after: [group("meta", [text("subtitle")])],
+      moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
+    });
+    expect(planned.down.last.join("\n")).not.toContain(`SET "meta" = NULL`);
+    const optional = planEntityMoves({
+      ...base,
+      before: [text("subtitle"), group("meta", [])],
+      after: [group("meta", [text("subtitle")], { required: true })],
+      moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
+    });
+    expect(optional.down.last.join("\n")).toContain(`SET "meta" = NULL`);
+  });
+
   it("copies a field out of a group after the file adds its column, then clears the key", () => {
     const planned = planEntityMoves({
       ...base,

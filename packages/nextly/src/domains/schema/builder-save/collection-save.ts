@@ -3004,9 +3004,9 @@ async function refuseUnkeptValues(
     const kept = keptValuesOf(refill, dialect);
     if (kept === undefined) continue;
     const unkept = await unkeptEntries(deps, table, refill.source, kept.keeps);
-    if (unkept.length === 0) continue;
-    const count = unkept.length;
-    const named = unkept.slice(0, NAMED_ENTRIES).join(", ");
+    if (unkept.count === 0) continue;
+    const { count } = unkept;
+    const named = unkept.first.join(", ");
     const more =
       count > NAMED_ENTRIES ? ` and ${count - NAMED_ENTRIES} more` : "";
     throw NextlyError.validation({
@@ -3023,20 +3023,21 @@ async function refuseUnkeptValues(
 }
 
 /**
- * The ids of the entries whose group holds a value at `source` its column would not keep
- * (`keeps`), read a page at a time in id order.
+ * How many entries' groups hold a value at `source` its column would not keep (`keeps`), and the
+ * first ids of them a refusal names, read a page at a time in id order.
  */
 async function unkeptEntries(
   deps: CollectionSaveDeps,
   table: string,
   source: { column: string; keys: readonly string[] },
   keeps: KeptValues["keeps"]
-): Promise<string[]> {
+): Promise<{ count: number; first: string[] }> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const held = holdsValueAt(source.column, source.keys, dialect);
   const value = heldValueAt(source.column, source.keys, dialect);
   const id = sql.identifier("id");
-  const unkept: string[] = [];
+  // Counted, with only the ids a refusal names kept: a table of millions holds no list of them.
+  const unkept = { count: 0, first: [] as string[] };
   // The last id read, as the driver gave it, so the next page starts past it whatever its type.
   let after: unknown;
   for (;;) {
@@ -3051,7 +3052,10 @@ async function unkeptEntries(
       sql`SELECT ${id} AS id, ${sql.raw(value.type)} AS type, ${sql.raw(value.text)} AS text FROM ${sql.identifier(table)} WHERE ${sql.raw(held)}${past} ORDER BY ${id} LIMIT ${DATE_CHECK_PAGE}`
     );
     for (const row of rows) {
-      if (!keeps(row)) unkept.push(String(row.id));
+      if (keeps(row)) continue;
+      unkept.count += 1;
+      if (unkept.first.length < NAMED_ENTRIES)
+        unkept.first.push(String(row.id));
     }
     if (rows.length < DATE_CHECK_PAGE) return unkept;
     after = rows[rows.length - 1].id;
