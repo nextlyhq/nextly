@@ -4,11 +4,13 @@
  *
  * The version under review is the part's newest saved version (an autosave is
  * not one): a language's own newest, never a newer shared-fields row its list
- * also holds; the shared part's, the document's newest in any language. It is
+ * also holds; the shared part's, the one its review state names
+ * (`reviewedVersionNo`, the document's newest in any language). It is
  * compared with the part's last approval where it had one, so a reviewer sees
  * only what changed since they, or a colleague, approved it; else with what is
  * published of the part. The server resolves both from the part's whole
- * history rather than from the one page of it a list holds.
+ * history rather than from the one page of it a list holds, the shared part's
+ * across languages, over the shared fields alone.
  *
  * @module components/features/entries/review/review-pair
  */
@@ -28,6 +30,11 @@ export type ReviewPair =
        * its comparison, where one did.
        */
       seededBy?: string;
+      /**
+       * `shared` where the pair is the shared part's: its two versions may be
+       * in two languages, and only the shared fields are compared.
+       */
+      part?: "shared";
     }
   /**
    * Nothing to compare with: the version under review is all new. `reason`
@@ -52,14 +59,9 @@ export type ReviewPlan =
   | { kind: "none" };
 
 /**
- * The plan for a part (`part`: its language, or null for the shared part),
- * from its versions newest first and the version number its current approval
- * was given for (null where it has none).
- *
- * A language's version under review is its own newest. The shared part's is
- * the document's newest in any language, as the server's review reads it:
- * every language's version carries the shared fields (its comparison is
- * `sharedPlan`'s).
+ * The plan for a language (`part`), from its versions newest first and the
+ * version number its current approval was given for (null where it has none).
+ * Its version under review is its own newest.
  *
  * Its comparison is always the server's, which reads the approval the part
  * was last given even where an edit withdrew it since (the review state then
@@ -68,7 +70,7 @@ export type ReviewPlan =
  */
 export function reviewPlan(
   versions: readonly VersionMeta[],
-  part: string | null,
+  part: string,
   approvedVersionNo: number | null
 ): ReviewPlan {
   const saved = versions.filter(
@@ -76,92 +78,40 @@ export function reviewPlan(
       version.versionNo !== null && !version.isAutosave
   );
   if (saved.length === 0) return { kind: "none" };
-  const newest =
-    part === null
-      ? saved[0]
-      : saved.find(version => (version.locale ?? null) === part);
-  if (
-    newest !== undefined &&
-    approvedVersionNo !== null &&
-    approvedVersionNo >= newest.versionNo
-  ) {
-    return { kind: "unchanged", to: newest.versionNo };
-  }
-  return { kind: "server", to: newest?.versionNo };
+  const newest = saved.find(version => (version.locale ?? null) === part);
+  return planFor(newest?.versionNo, approvedVersionNo);
 }
 
 /**
- * The shared part's comparison, found in one language's own versions: the
- * history compares within one language, and the shared part's version under
- * review (the document's newest, in any language) carries the shared fields
- * in its own language.
- *
- * Its baseline is that language's newest version numbered at or before the
- * shared part's approved version, or, with none, at or before the document's
- * last published version: never one saved after, so the comparison may show
- * more than the shared fields changed since, never less. Where that language
- * has no such version, the whole version is shown as new.
+ * The plan for the shared part, from the version its review state names as
+ * under review (`reviewedVersionNo`; null before anything is saved) and the
+ * version its current approval was given for. Its comparison is the server's,
+ * of the shared fields alone, across languages.
  */
-export type SharedPlan =
-  | { kind: "none" }
-  | { kind: "unchanged"; to: number }
-  | {
-      kind: "pair";
-      from: number;
-      to: number;
-      since: "approved" | "published";
-      /** The language compared within; null for the shared fields' own rows. */
-      within: string | null;
-    }
-  | { kind: "first"; to: number; within: string | null }
-  /** The baseline may be on a later page of the history: read it first. */
-  | { kind: "more" };
+export function sharedReviewPlan(
+  reviewedVersionNo: number | null,
+  approvedVersionNo: number | null
+): ReviewPlan {
+  return reviewedVersionNo === null
+    ? { kind: "none" }
+    : planFor(reviewedVersionNo, approvedVersionNo);
+}
 
 /**
- * The plan for the shared part, from the document's versions newest first
- * (every language's, as many pages as are read), whether they are all of
- * them (`complete`), and the shared part's current approval.
+ * A version under review (`to`; absent where the server takes the part's
+ * newest) judged against its approval: unchanged where the approval is of it
+ * or later, else the server's comparison.
  */
-export function sharedPlan(
-  versions: readonly VersionMeta[],
-  complete: boolean,
-  approval: { versionNo: number; at: string } | null
-): SharedPlan {
-  const saved = versions.filter(
-    (version): version is VersionMeta & { versionNo: number } =>
-      version.versionNo !== null && !version.isAutosave
-  );
-  const newest = saved[0];
-  if (newest === undefined) return { kind: "none" };
-  const to = newest.versionNo;
-  if (approval !== null && approval.versionNo >= to) {
+function planFor(
+  to: number | undefined,
+  approvedVersionNo: number | null
+): ReviewPlan {
+  if (
+    to !== undefined &&
+    approvedVersionNo !== null &&
+    approvedVersionNo >= to
+  ) {
     return { kind: "unchanged", to };
   }
-  const within = newest.locale ?? null;
-  // Cut off by version number, one sequence per document in every language:
-  // two versions saved in the same second share a time, and a cut by time
-  // could take a draft saved after the publish as the baseline, leaving out
-  // the change it made.
-  const cutoff =
-    approval?.versionNo ??
-    saved.find(version => version.status === "published")?.versionNo;
-  const baseline =
-    cutoff === undefined
-      ? undefined
-      : saved.find(
-          version =>
-            version.versionNo !== to &&
-            (version.locale ?? null) === within &&
-            version.versionNo <= cutoff
-        );
-  if (baseline !== undefined) {
-    return {
-      kind: "pair",
-      from: baseline.versionNo,
-      to,
-      since: approval === null ? "published" : "approved",
-      within,
-    };
-  }
-  return complete ? { kind: "first", to, within } : { kind: "more" };
+  return { kind: "server", to };
 }
