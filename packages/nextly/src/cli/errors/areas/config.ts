@@ -46,6 +46,43 @@ function missingModule(error: NextlyError): string | undefined {
     : undefined;
 }
 
+/**
+ * What Node could not load, where it is a path inside a package that IS installed: Node's ES
+ * module loader names the file it looked for (`…/node_modules/next/headers`) rather than the
+ * import, when a package without an `exports` map is imported by a subpath. Undefined for a
+ * package that is not installed, which Node names by its import.
+ */
+interface InstalledPathMiss {
+  /** The installed package, e.g. `next` or `@scope/name`. */
+  readonly pkg: string;
+  /** The import as written, e.g. `next/headers`. */
+  readonly specifier: string;
+  /** The import Node suggests instead, e.g. `next/headers.js`, where it suggests one. */
+  readonly suggestion?: string;
+}
+
+function installedPathMiss(error: NextlyError): InstalledPathMiss | undefined {
+  const missing = missingModule(error);
+  if (missing === undefined) return undefined;
+  // The LAST `node_modules` segment holds the package (the greedy `^.*` reaches past an outer
+  // one, as in a plugin's own nested or pnpm-stored dependency); its scope is one more segment.
+  const inPackage =
+    /^.*[\\/]node_modules[\\/]((?:@[^\\/]+[\\/])?[^\\/]+)[\\/](.+)$/.exec(
+      missing
+    );
+  if (inPackage === null) return undefined;
+  const pkg = inPackage[1].replace(/\\/g, "/");
+  const specifier = `${pkg}/${inPackage[2].replace(/\\/g, "/")}`;
+  const message = (error.cause as { message?: unknown }).message;
+  const suggestion =
+    typeof message === "string"
+      ? /Did you mean to import "([^"]+)"\?/.exec(message)?.[1]
+      : undefined;
+  return suggestion === undefined
+    ? { pkg, specifier }
+    : { pkg, specifier, suggestion };
+}
+
 /** esbuild's wording for an import it could not find. */
 const isUnresolved = (message: BuildMessage) =>
   message.text.startsWith("Could not resolve");
@@ -144,11 +181,31 @@ export const CONFIG_CODES = defineCodes({
         code: "INVALID_INPUT",
         reason: "load-error",
         when: error => missingModule(error) !== undefined,
-        describe: error => ({
-          what: `\`${configFile(error)}\` imports something that could not be found.`,
-          why: `\`${missingModule(error) ?? "a package"}\` is not installed in the project.`,
-          next: "Install the package it names, or correct the import, then run the command again.",
-        }),
+        describe: error => {
+          const what = `\`${configFile(error)}\` imports something that could not be found.`;
+          // A path inside a package that is installed: saying it "is not installed" sends the
+          // reader to install what they already have.
+          const miss = installedPathMiss(error);
+          if (miss?.suggestion !== undefined) {
+            return {
+              what,
+              why: `\`${miss.pkg}\` is installed, but Node can't load \`${miss.specifier}\` from it as written: the package doesn't export that path, so Node needs the file's extension, \`${miss.suggestion}\`.`,
+              next: `Import \`${miss.suggestion}\` instead, or move that import out of the configuration, then run the command again.`,
+            };
+          }
+          if (miss !== undefined) {
+            return {
+              what,
+              why: `\`${miss.pkg}\` is installed, but it has no file at \`${miss.specifier}\`.`,
+              next: "Correct the import's path, then run the command again.",
+            };
+          }
+          return {
+            what,
+            why: `\`${missingModule(error) ?? "a package"}\` is not installed in the project.`,
+            next: "Install the package it names, or correct the import, then run the command again.",
+          };
+        },
       },
       {
         code: "INVALID_INPUT",
