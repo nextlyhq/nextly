@@ -584,12 +584,12 @@ describe.each(getConfiguredTestDialects())(
     async function recordOf(
       t: TestNextly,
       path: SavePath
-    ): Promise<{ definitionAfter?: string } | undefined> {
+    ): Promise<{ definitionAfter?: string; files?: string[] } | undefined> {
       const entry = await new MetaService(t.adapter, consoleLogger).getEntry(
         `builder-save-in-progress:${path.kind}:${path.slug}`
       );
       return entry.present
-        ? (entry.value as { definitionAfter?: string })
+        ? (entry.value as { definitionAfter?: string; files?: string[] })
         : undefined;
     }
 
@@ -995,6 +995,7 @@ describe.each(getConfiguredTestDialects())(
             const t = await boot();
             await path.create(t, [text("heading"), number("old_note")]);
             await path.store?.(t, { heading: "Hello", old_note: 7 });
+            const folderBefore = filesBelow(history());
             const failed = failStatement(t, adding(path.table, "beta"));
             let overtaken = false;
             // The definition's write once the statement has failed: the settle writes it after its
@@ -1037,6 +1038,18 @@ describe.each(getConfiguredTestDialects())(
               (await recordOf(t, path))?.definitionAfter,
               "the record's definition, put back"
             ).toContain('"beta"');
+            // Nor does it name the replacement left in the folder as the save's.
+            const replacement = filesBelow(history()).filter(
+              f => f.endsWith(".sql") && !folderBefore.includes(f)
+            );
+            expect(
+              replacement.length,
+              "the replacement left in place"
+            ).toBeGreaterThan(0);
+            expect(
+              (await recordOf(t, path))?.files ?? [],
+              "the record's files"
+            ).not.toEqual(expect.arrayContaining([replacement[0]]));
           } finally {
             settleStall.at = undefined;
             restoreBounds();

@@ -507,9 +507,12 @@ function startedSaveOf(
             files: [...(record.files ?? []), ...names],
           })),
     rewriting: async next => {
+      // Everything the rewrite and the files written after it change, so the record put back
+      // describes the stop alone: a replacement left in the folder is not named as the save's.
       const was = {
         definitionAfter: entry.record.definitionAfter,
         filesAt: entry.record.filesAt,
+        files: entry.record.files,
       };
       await amendRecord(entry, meta, key, record => ({ ...record, ...next }));
       return () =>

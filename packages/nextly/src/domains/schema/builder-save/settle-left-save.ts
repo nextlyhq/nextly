@@ -503,6 +503,18 @@ async function settleAll(
     return "all";
   }
   const saved = savedEntity(record.definitionAfter, record.kind, record.slug);
+  if (saved === undefined) {
+    // A record that keeps no definition it can read (one from before the saved text was kept)
+    // says nothing of the entity's shape: its row is neither brought up nor removed, and the
+    // record stays. Only a definition read whole and without the entity says it was deleted.
+    deps.logger.warn(
+      `A Builder save of the ${described(record)} applied whole before it stopped, and its files are now recorded applied, but its record does not keep the definition it saved, so its registry row is left as it is. Its record stays.`
+    );
+    notes.push(
+      "the saved definition is not kept; the registry row is left as it is"
+    );
+    return "all";
+  }
   if (record.kind === "collection") {
     // A collection's registry row is written by its own service, which this step cannot reach
     // yet. Where the row already holds the saved fields (a retry's push wrote it), there is nothing
@@ -873,6 +885,15 @@ function entityTables(record: LeftSave): string[] {
   return [];
 }
 
+/** Whether a definition's text reads as a definition. */
+function definitionReads(text: string): boolean {
+  try {
+    return parseUiSchema(JSON.parse(text)).success;
+  } catch {
+    return false;
+  }
+}
+
 /** The entity of `kind` `slug` in a definition's text, as written; null where absent. */
 function rawEntity(
   text: string | null,
@@ -898,13 +919,18 @@ function rawEntity(
   return (found as Record<string, unknown> | undefined) ?? null;
 }
 
-/** The entity as the saved definition holds it, for its registry row. */
+/**
+ * The entity as the saved definition holds it, for its registry row: null where the definition,
+ * read whole, holds no such entity (the save deleted it), and undefined where there is no
+ * definition to read (a record from before the saved text was kept) or it cannot be read.
+ */
 function savedEntity(
   text: string | undefined,
   kind: AddressKind,
   slug: string
-): SavedEntity | null {
-  const entity = rawEntity(text ?? null, kind, slug);
+): SavedEntity | null | undefined {
+  if (text === undefined || !definitionReads(text)) return undefined;
+  const entity = rawEntity(text, kind, slug);
   if (entity === null) return null;
   return {
     fields: Array.isArray(entity.fields) ? entity.fields : [],

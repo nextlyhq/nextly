@@ -673,6 +673,41 @@ describe.each(getConfiguredTestDialects())(
     // A save that applied whole, stopped before its record cleared, where later migrations have
     // applied since (another host's save, say): the settle clears the record and leaves the
     // registry row as those later ones left it.
+    // A record from before the saved definition was kept says nothing of the entity's shape: a
+    // save of it that applied whole keeps its registry row and its record, rather than reading the
+    // missing definition as a delete and removing the row.
+    it("keeps the registry row and the record of an older save without its saved definition", async () => {
+      const t = await boot();
+      await created(t);
+      const realDelete = MetaService.prototype.delete;
+      vi.spyOn(MetaService.prototype, "delete").mockImplementation(
+        async function (this: MetaService, key: string) {
+          if (key === RECORD_KEY) await stopHere("clear");
+          return realDelete.call(this, key);
+        }
+      );
+      await stopSave(
+        t,
+        [text("heading"), text("alpha")],
+        point => point === "clear"
+      );
+      vi.mocked(MetaService.prototype.delete).mockRestore();
+      // The record as one written before the saved definition was kept.
+      const { definitionAfter: _kept, ...older } = (await recordRow(t)) as {
+        definitionAfter?: string;
+      } & Record<string, unknown>;
+      await new MetaService(t.adapter, consoleLogger).set(RECORD_KEY, older);
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["all"]);
+      expect(await recordRow(t), "the record stays").toBeDefined();
+      expect(await registryFieldNames(t), "the registry row stays").toEqual([
+        "heading",
+        "alpha",
+      ]);
+    }, 300_000);
+
     it("clears a save that later migrations moved past without writing its registry row again", async () => {
       const t = await boot();
       await created(t);
