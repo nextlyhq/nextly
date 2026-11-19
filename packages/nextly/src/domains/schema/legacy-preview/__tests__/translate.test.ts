@@ -6,7 +6,7 @@
 // counting is mocked.
 
 import type { SQL } from "drizzle-orm";
-import { SQLiteSyncDialect } from "drizzle-orm/sqlite-core";
+import { SQLiteDialect } from "drizzle-orm/sqlite-core";
 import { afterEach, describe, it, expect, vi } from "vitest";
 
 import type { ClassifierEvent } from "../../pipeline/resolution/types";
@@ -312,7 +312,7 @@ interface CountTable {
   nulls: Record<string, number | Error>;
 }
 
-const sqliteDialect = new SQLiteSyncDialect();
+const sqliteDialect = new SQLiteDialect();
 
 function countingDb(tables: Record<string, CountTable>) {
   const queries: string[] = [];
