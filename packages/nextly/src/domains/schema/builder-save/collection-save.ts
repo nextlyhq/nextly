@@ -603,6 +603,8 @@ async function refuseSaveTypeChanges(
   const renamed = new Map(
     (save.renamedFields ?? []).map(r => [r.from, r.to] as const)
   );
+  // A field group keeps its fields on its component rows, where a many-to-many has a column.
+  const componentRow = kind.kind === "fieldGroup" ? { componentRow: true } : {};
   // Asked only of a save that changes a field's type, so no other save reads its folder.
   const changes = fieldTypeChangesOf({
     previous,
@@ -610,6 +612,7 @@ async function refuseSaveTypeChanges(
     renamed,
     dialect,
     builtBy: kind.builtBy,
+    ...componentRow,
   });
   if (changes.length === 0) return;
   await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
@@ -623,6 +626,7 @@ async function refuseSaveTypeChanges(
     // No consent is taken here: a lossy type change is refused until the save clears the
     // consented values before it converts the column.
     builtBy: kind.builtBy,
+    ...componentRow,
   });
 }
 
