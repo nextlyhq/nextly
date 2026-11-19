@@ -41,3 +41,6 @@ number with no space between them, so "Problems" and "3" read as one word, "Prob
 the item's name ("Problems: 3") never says: axe's Label in Name check failed it, and so would a
 person using speech input who says what they see. A space now separates the two, for counts and
 badges alike.
+
+On a phone, a word too long for a problem's card, such as an environment variable a message
+names, now breaks inside the card instead of running past its edge.
