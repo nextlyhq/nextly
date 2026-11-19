@@ -699,9 +699,16 @@ describe.each(getConfiguredTestDialects())(
             id: "carol",
           });
 
+          // Its steps too, by name, label and kind: a list takes the workflow's one step of a kind
+          // in bulk (Submit for review, Send back), and never an approval.
           expect(held.workflow).toEqual({
             slug: "editorial",
             label: "Editorial",
+            steps: editorial.steps.map(step => ({
+              name: step.name,
+              label: step.label,
+              kind: step.kind,
+            })),
           });
           expect(free.workflow).toBeNull();
 

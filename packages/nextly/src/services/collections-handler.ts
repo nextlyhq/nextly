@@ -5,7 +5,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { getHookRegistry } from "@nextly/hooks/hook-registry";
 
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
-import { currentRequestCaller } from "../auth/caller-scope";
 import type { RequestActor } from "../auth/request-actor";
 import type { FieldConfig } from "../collections/fields/types";
 import { container } from "../di/container";
@@ -665,20 +664,7 @@ export class CollectionsHandler {
      */
     slugDenylist?: string[];
   }) {
-    const result = await this.metadataService.listCollections(options);
-    // The workflow that holds each collection's publishing, by the single read's own helper, for a
-    // signed-in reader alone: the admin leads its Content panel with "Waiting for my review" where
-    // any workflow holds content. A read with no signed-in caller (a script, the Direct API) is
-    // told nothing of workflows, not even a null key.
-    if (currentRequestCaller() !== undefined && Array.isArray(result.data)) {
-      for (const item of result.data) {
-        item.workflow = attachedWorkflowSummary(
-          "collection",
-          typeof item.slug === "string" ? item.slug : ""
-        );
-      }
-    }
-    return result;
+    return this.metadataService.listCollections(options);
   }
 
   /**
