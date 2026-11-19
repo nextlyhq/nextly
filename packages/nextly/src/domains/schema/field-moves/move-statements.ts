@@ -294,7 +294,7 @@ const ISO_DATE =
  * 2038-01-19 03:14:07 UTC and refuses a value outside them, part-way through the file.
  */
 const MYSQL_FIRST_INSTANT = Date.parse("1970-01-01T00:00:01Z");
-const MYSQL_LAST_INSTANT = Date.parse("2038-01-19T03:14:07.999Z");
+const MYSQL_LAST_INSTANT = Date.parse("2038-01-19T03:14:07Z");
 
 /**
  * Whether a date a group holds is copied into a date column as the same instant the entry reads:
@@ -315,8 +315,9 @@ export function movesAsTheSameDate(
   // PostgreSQL's date input has no year 0: the year before 1 is written `0001 BC`.
   if (dialect === "postgresql" && at("year") === 0) return false;
   if (at("hour") > 23 || at("minute") > 59 || at("second") > 59) return false;
-  // SQLite's date column keeps whole seconds: milliseconds would be dropped by the copy.
-  if (dialect === "sqlite" && at("fraction") !== 0) return false;
+  // SQLite's date column keeps whole seconds, and so does MySQL's TIMESTAMP, which has no
+  // fractional digits: the copy would drop or round the milliseconds.
+  if (dialect !== "postgresql" && at("fraction") !== 0) return false;
   if (!offsetReadable(written.sign, at("offsetHour"), at("offsetMinute"))) {
     return false;
   }

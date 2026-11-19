@@ -433,20 +433,20 @@ describe("movesAsTheSameDate", () => {
       "2024-02-29T23:59:59-13:59",
       "2026-07-17T00:00:00+14:00",
     ]) {
-      for (const dialect of ["postgresql", "mysql"] as const) {
-        expect(movesAsTheSameDate(value, dialect), `${value} ${dialect}`).toBe(
-          true
-        );
-      }
+      expect(movesAsTheSameDate(value, "postgresql"), value).toBe(true);
     }
   });
 
-  it("refuses on SQLite a date with milliseconds, which its column keeps as whole seconds", () => {
+  it("refuses on SQLite and MySQL a date with milliseconds, which their columns keep as whole seconds", () => {
     for (const value of [
       "2026-07-17T10:00:05.123Z",
       "2026-07-17T10:00:05.1+05:30",
     ]) {
-      expect(movesAsTheSameDate(value, "sqlite"), value).toBe(false);
+      for (const dialect of ["sqlite", "mysql"] as const) {
+        expect(movesAsTheSameDate(value, dialect), `${value} ${dialect}`).toBe(
+          false
+        );
+      }
     }
     // Whole seconds, written with milliseconds or without, are kept as they are.
     for (const value of [
@@ -456,7 +456,11 @@ describe("movesAsTheSameDate", () => {
       "2026-07-17T10:00:05.000Z",
       "2026-07-17T10:00:05.0+05:30",
     ]) {
-      expect(movesAsTheSameDate(value, "sqlite"), value).toBe(true);
+      for (const dialect of ["sqlite", "mysql"] as const) {
+        expect(movesAsTheSameDate(value, dialect), `${value} ${dialect}`).toBe(
+          true
+        );
+      }
     }
   });
 
@@ -498,7 +502,7 @@ describe("movesAsTheSameDate", () => {
     for (const value of [
       "1970-01-01T00:00:01Z",
       "2038-01-19T03:14:07Z",
-      "2038-01-19T03:14:07.999Z",
+      "2038-01-19T03:14:07.000Z",
       // Local times outside the range, at instants inside it.
       "1970-01-01T05:00:01+05:00",
       "2038-01-19T08:14:07+05:00",

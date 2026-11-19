@@ -33,6 +33,7 @@ import {
   placeOf,
   type FieldMoveRequest,
   type PlannedMove,
+  type StoragePlace,
 } from "./check-move";
 import { fieldsThatLeft } from "./move-candidates";
 import { moveDataStatements, type MoveColumn } from "./move-statements";
@@ -584,8 +585,11 @@ export function planEntityMoves(args: {
     refuseMadeRequired(request, move, args.before);
     refuseUnplaceable(request, move, columns);
     refuseSystemColumn(request, move, systemBefore);
-    // A field moving between places on one level (a group with no name) keeps its column.
+    // A field moving between places on one level (a group with no name) keeps its column, and
+    // one whose group only changes its spelling (`seoMeta` to `seo_meta`) keeps its column and
+    // key: a copy onto itself, then the clear of the place it left, would delete every value.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
+    if (sameJsonPlace(move.from, move.to)) continue;
     const target = moveColumn(move, args.table, args.dialect);
     const statements = placed(move, target);
     for (const way of ["up", "down"] as const) {
@@ -612,6 +616,17 @@ function refuseSystemColumn(
   throw refused(
     request,
     `Every entry already keeps its own ${move.to.column} while no field is named ${move.to.column}, and moving ${name} there would write over it. Rename ${name} inside the group first, then move it out.`
+  );
+}
+
+/** Whether two places are one key of one JSON column, each read as the database stores it. */
+function sameJsonPlace(a: StoragePlace, b: StoragePlace): boolean {
+  return (
+    a.kind === "json" &&
+    b.kind === "json" &&
+    a.column === b.column &&
+    a.keys.length === b.keys.length &&
+    a.keys.every((key, at) => key === b.keys[at])
   );
 }
 

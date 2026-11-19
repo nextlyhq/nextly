@@ -566,7 +566,7 @@ async function writeSave(
   // A move that cannot keep its values is refused here, before the definition is written.
   const planned = plannedMovesOf(deps, save, plan.table);
   await refuseEmptyRequiredRefills(deps, planned, plan.table);
-  await refuseUnreadableDates(deps, planned, plan.table);
+  await refuseUnkeptValues(deps, planned, plan.table);
   await settledRows(deps, save, plan.table);
   // The translations table is judged before anything is written wherever the change reaches it:
   // the file's statements are planned from the history's record of it, and a push changes it too,
@@ -755,7 +755,7 @@ export async function previewCollectionSave(
     const conversions = plan.adoption?.conversions ?? [];
     const planned = plannedMovesOf(deps, save, plan.table);
     await refuseEmptyRequiredRefills(deps, planned, plan.table);
-    await refuseUnreadableDates(deps, planned, plan.table);
+    await refuseUnkeptValues(deps, planned, plan.table);
     const moved = await moveSentencesOf(deps, plan.table, planned);
     return {
       adopts: plan.adoption !== null,
@@ -2119,71 +2119,120 @@ async function refuseEmptyRequiredRefills(
   }
 }
 
-/** How many entries a date check reads at a time. */
+/** How many entries a check of moved values reads at a time. */
 const DATE_CHECK_PAGE = 500;
 
-/** How many of the entries holding an unreadable date a refusal names. */
+/** How many of the entries holding a value their column would not keep a refusal names. */
 const NAMED_ENTRIES = 3;
 
 /**
  * What a refused date must be, past an ISO date, for each dialect's column to keep it as the same
- * date (`movesAsTheSameDate`): MySQL's TIMESTAMP holds only its own range, SQLite whole seconds.
+ * date (`movesAsTheSameDate`): MySQL's TIMESTAMP holds whole seconds in its own range, SQLite
+ * whole seconds.
  */
 const DATES_KEPT: Record<SupportedDialect, string> = {
   postgresql: "",
   mysql:
-    " from 1970-01-01T00:00:01Z to 2038-01-19T03:14:07Z, the dates MySQL's column holds",
+    " in whole seconds, from 1970-01-01T00:00:01Z to 2038-01-19T03:14:07Z, the dates MySQL's column holds",
   sqlite: " in whole seconds",
 };
 
 /**
- * Refuses a date moved out of a group while some entry's group holds one the copy would not keep
- * as the same instant (`movesAsTheSameDate`): a form it does not read, or an instant its column
- * does not hold. It names the field and the entries, read before anything is written. The copy
- * would otherwise write nothing for that entry on SQLite, and stop part-way on MySQL.
+ * What a value moved out of a group must be for the column it moves to to keep it, by the
+ * column's kind: `keeps` judges one value as read out of the group, and `ask` says what to write
+ * instead. A kind not named keeps every value the copy reads.
  */
-async function refuseUnreadableDates(
+interface KeptValues {
+  what: string;
+  keeps: (row: { type: unknown; text: unknown }) => boolean;
+  ask: (each: string) => string;
+}
+
+/** The whole numbers an integer column holds on PostgreSQL (int4) and MySQL (int). */
+const INT_RANGE = { least: -2147483648, most: 2147483647 } as const;
+
+/** What `kind`'s column keeps on `dialect`, where it keeps less than the group can hold. */
+function keptValuesOf(
+  kind: string,
+  dialect: SupportedDialect
+): KeptValues | undefined {
+  if (kind === "timestamp") {
+    return {
+      what: "a date",
+      keeps: row => readsAsTheSameDate(row, dialect),
+      ask: each =>
+        `Write ${each} as an ISO date${DATES_KEPT[dialect]}, such as 2026-07-17 or 2026-07-17T10:00:00Z`,
+    };
+  }
+  // SQLite's integer holds every whole number a JSON value from JavaScript can.
+  if (kind === "integer" && dialect !== "sqlite") {
+    return {
+      what: "a number",
+      keeps: row => isWholeNumberInRange(String(row.text)),
+      ask: each =>
+        `Write ${each} as a whole number from ${INT_RANGE.least} to ${INT_RANGE.most}`,
+    };
+  }
+  return undefined;
+}
+
+/** Whether a value's text is a whole number an integer column holds, as the copy casts it. */
+function isWholeNumberInRange(text: string): boolean {
+  if (!/^-?\d{1,10}$/.test(text)) return false;
+  const value = Number(text);
+  return value >= INT_RANGE.least && value <= INT_RANGE.most;
+}
+
+/**
+ * Refuses a field moved out of a group while some entry's group holds a value its column would
+ * not keep as the same value (`keptValuesOf`): a date in a form the copy does not read or at an
+ * instant its column does not hold, or a number outside an integer column's range. It names the
+ * field and the entries, read before anything is written. The copy would otherwise write nothing
+ * for that entry on SQLite, roll the file back on PostgreSQL, and stop part-way on MySQL.
+ */
+async function refuseUnkeptValues(
   deps: CollectionSaveDeps,
   planned: EntityMoves,
   table: string
 ): Promise<void> {
+  const dialect = deps.adapter.getCapabilities().dialect;
   for (const refill of planned.refilledColumns) {
-    if (refill.kind !== "timestamp") continue;
-    const unreadable = await unreadableDates(deps, table, refill.source);
-    if (unreadable.length === 0) continue;
-    const count = unreadable.length;
-    const named = unreadable.slice(0, NAMED_ENTRIES).join(", ");
+    const kept = keptValuesOf(refill.kind, dialect);
+    if (kept === undefined) continue;
+    const unkept = await unkeptEntries(deps, table, refill.source, kept.keeps);
+    if (unkept.length === 0) continue;
+    const count = unkept.length;
+    const named = unkept.slice(0, NAMED_ENTRIES).join(", ");
     const more =
       count > NAMED_ENTRIES ? ` and ${count - NAMED_ENTRIES} more` : "";
-    const each = count === 1 ? "it" : "each";
-    const kept = DATES_KEPT[deps.adapter.getCapabilities().dialect];
     throw NextlyError.validation({
       errors: [
         {
           path: refill.field,
           code: "FIELD_MOVE_REFUSED",
-          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} a date for ${refill.field} its own column would not keep as the same date (${named}${more}). Write ${each} as an ISO date${kept}, such as 2026-07-17 or 2026-07-17T10:00:00Z, then move the field.`,
+          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} ${kept.what} for ${refill.field} its own column would not keep as the same ${kept.what.slice(2)} (${named}${more}). ${kept.ask(count === 1 ? "it" : "each")}, then move the field.`,
         },
       ],
-      logContext: { table, column: refill.column, unreadable: count },
+      logContext: { table, column: refill.column, unkept: count },
     });
   }
 }
 
 /**
- * The ids of the entries whose group holds a value at `source` that is not a date the copy reads
- * as the same instant, read a page at a time in id order.
+ * The ids of the entries whose group holds a value at `source` its column would not keep
+ * (`keeps`), read a page at a time in id order.
  */
-async function unreadableDates(
+async function unkeptEntries(
   deps: CollectionSaveDeps,
   table: string,
-  source: { column: string; keys: readonly string[] }
+  source: { column: string; keys: readonly string[] },
+  keeps: KeptValues["keeps"]
 ): Promise<string[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const held = holdsValueAt(source.column, source.keys, dialect);
   const value = heldValueAt(source.column, source.keys, dialect);
   const id = sql.identifier("id");
-  const unreadable: string[] = [];
+  const unkept: string[] = [];
   // The last id read, as the driver gave it, so the next page starts past it whatever its type.
   let after: unknown;
   for (;;) {
@@ -2198,9 +2247,9 @@ async function unreadableDates(
       sql`SELECT ${id} AS id, ${sql.raw(value.type)} AS type, ${sql.raw(value.text)} AS text FROM ${sql.identifier(table)} WHERE ${sql.raw(held)}${past} ORDER BY ${id} LIMIT ${DATE_CHECK_PAGE}`
     );
     for (const row of rows) {
-      if (!readsAsTheSameDate(row, dialect)) unreadable.push(String(row.id));
+      if (!keeps(row)) unkept.push(String(row.id));
     }
-    if (rows.length < DATE_CHECK_PAGE) return unreadable;
+    if (rows.length < DATE_CHECK_PAGE) return unkept;
     after = rows[rows.length - 1].id;
   }
 }

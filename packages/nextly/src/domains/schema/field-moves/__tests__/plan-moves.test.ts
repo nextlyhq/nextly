@@ -632,6 +632,33 @@ describe("planEntityMoves", () => {
     ).not.toThrow();
   });
 
+  it("writes nothing for a move whose group only changes its spelling, keeping the same column and key", () => {
+    // `seoMeta` and `seo_meta` are one column: copying the key onto itself, then clearing the
+    // place it left, would delete every value.
+    const planned = planEntityMoves({
+      ...base,
+      before: [group("seoMeta", [text("summary")])],
+      after: [group("seo_meta", [text("summary")])],
+      moves: [{ from: ["seoMeta", "summary"], to: ["seo_meta", "summary"] }],
+    });
+    expect([
+      ...planned.up.first,
+      ...planned.up.last,
+      ...planned.down.first,
+      ...planned.down.last,
+    ]).toEqual([]);
+    expect(planned.movedColumns).toEqual([]);
+    expect(planned.refilledColumns).toEqual([]);
+    // A key that does change within the column still moves.
+    const nested = planEntityMoves({
+      ...base,
+      before: [group("meta", [group("inner", [text("summary")])])],
+      after: [group("meta", [group("inner", []), text("summary")])],
+      moves: [{ from: ["meta", "inner", "summary"], to: ["meta", "summary"] }],
+    });
+    expect(nested.up.first.length + nested.up.last.length).toBeGreaterThan(0);
+  });
+
   it("refuses a group that takes the column of a JSON field it replaces, under a name of another spelling", () => {
     // `seoMeta` and `seo_meta` share one column: the JSON field's keys would stay in the group.
     const json = (name: string) =>

@@ -833,6 +833,35 @@ describe.each(getConfiguredTestDialects())(
       ).toBe(farDates.late[1]);
     });
 
+    it("keeps every value where a move's group only changes its spelling, in one column", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      await createPosts(t, SLUG, {
+        fields: [group("seoMeta", [NOTE, summary])],
+      });
+      await t.nextly.create({
+        collection: SLUG,
+        data: {
+          title: "One",
+          slug: "one",
+          seoMeta: { note: "n", summary: "kept" },
+        },
+      });
+      // `seoMeta` and `seo_meta` are one column, so the field's key stays where it is.
+      await save(
+        t,
+        [group("seo_meta", [NOTE, summary])],
+        [{ from: ["seoMeta", "summary"], to: ["seo_meta", "summary"] }]
+      );
+      const [row] = await run<{ held: unknown }>(
+        t,
+        `SELECT ${q("seo_meta")} AS held FROM ${q(TABLE)} WHERE ${q("slug")} = 'one'`
+      );
+      const held =
+        typeof row?.held === "string" ? JSON.parse(row.held) : row?.held;
+      expect(held).toEqual({ note: "n", summary: "kept" });
+    });
+
     it("clears a key the destination group kept, where the group the field leaves is not there at all", async () => {
       const t = await boot(dialect);
       const summary: Field = { name: "summary", type: "text" };
@@ -1168,8 +1197,37 @@ describe.each(getConfiguredTestDialects())(
         expect(await readAll(t)).toEqual(before);
       });
 
+      // SQLite's integer holds every whole number a JSON value from JavaScript can.
+      it.runIf(dialect !== "sqlite")(
+        "a number out of a group its integer column does not hold, naming only that entry",
+        async () => {
+          const t = await boot(dialect);
+          await createPosts(t, SLUG, { fields: INSIDE });
+          const ids = new Map<string, string>();
+          for (const [slug, views] of [
+            ["over", 2147483648],
+            ["most", 2147483647],
+            ["least", -2147483648],
+          ] as const) {
+            const { item } = await t.nextly.create({
+              collection: SLUG,
+              data: { title: slug, slug, meta: { views } },
+            });
+            ids.set(slug, String((item as { id: unknown }).id));
+          }
+          const before = await readAll(t);
+          await expectRefused(
+            t,
+            OUTSIDE,
+            OUT,
+            `1 entry holds a number for views its own column would not keep as the same number (${ids.get("over")}). Write it as a whole number from -2147483648 to 2147483647, then move the field.`
+          );
+          expect(await readAll(t)).toEqual(before);
+        }
+      );
+
       it.runIf(dialect === "mysql")(
-        "a date out of a group MySQL's TIMESTAMP column does not hold, naming the entries",
+        "a date out of a group MySQL's TIMESTAMP column does not hold, or holds rounded, naming the entries",
         async () => {
           const t = await boot(dialect);
           await createPosts(t, SLUG, { fields: INSIDE });
@@ -1177,6 +1235,8 @@ describe.each(getConfiguredTestDialects())(
           for (const [slug, published] of [
             ["early", "1960-01-01T00:00:00.000Z"],
             ["late", "2038-01-19T03:14:08.000Z"],
+            // Inside the range, but with milliseconds its TIMESTAMP would round away.
+            ["fraction", "2026-07-17T10:00:05.123Z"],
           ]) {
             const { item } = await t.nextly.create({
               collection: SLUG,
@@ -1189,7 +1249,7 @@ describe.each(getConfiguredTestDialects())(
             t,
             OUTSIDE,
             OUT,
-            `2 entries hold a date for published its own column would not keep as the same date (${ids.sort().join(", ")}). Write each as an ISO date from 1970-01-01T00:00:01Z to 2038-01-19T03:14:07Z`
+            `3 entries hold a date for published its own column would not keep as the same date (${ids.sort().join(", ")}). Write each as an ISO date in whole seconds, from 1970-01-01T00:00:01Z to 2038-01-19T03:14:07Z`
           );
           expect(await readAll(t)).toEqual(before);
         }
