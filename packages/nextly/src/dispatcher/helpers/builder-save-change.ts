@@ -142,7 +142,10 @@ export async function writeBuilderSchemaChange(
   // against the live table; only where the answer is used, a save the writer runs.
   const runsFile =
     deps.applies && fileRoad !== undefined && !(await fileRoad.pushWhen());
-  if (runsFile) await fileRoad.questions?.();
+  // Outside development the push runs after the files are written (`appliedAfter`) and asks only of
+  // the main table's columns, while the translations table's and the link tables' drops follow it:
+  // the questions are asked there too, before anything is written, as the collection's road asks.
+  if (runsFile || !deps.applies) await fileRoad?.questions?.();
   const { save } = saveOfSchemaChange({
     ...change,
     row: {

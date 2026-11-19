@@ -348,8 +348,9 @@ function togglesHasMany(
   currentFields: FieldDefinition[],
   newFields: FieldDefinition[]
 ): boolean {
-  const before = currentFields.find(f => f.name === name);
-  const after = newFields.find(f => f.name === name);
+  // The row's fields, a field inside a group with no name among them, as the diff reads them.
+  const before = fieldsStoredOnRow(currentFields).find(f => f.name === name);
+  const after = fieldsStoredOnRow(newFields).find(f => f.name === name);
   if (!before || !after) return false;
   return (before.hasMany === true) !== (after.hasMany === true);
 }
@@ -386,9 +387,12 @@ async function countLinksDropped(
   currentFields: FieldDefinition[],
   newFields: FieldDefinition[]
 ): Promise<Map<string, LinksDropped>> {
-  const afterByName = new Map(newFields.map(field => [field.name, field]));
+  // The row's fields, a field inside a group with no name among them, as the diff reads them.
+  const afterByName = new Map(
+    fieldsStoredOnRow(newFields).map(field => [field.name, field])
+  );
   const dropped = new Map<string, LinksDropped>();
-  for (const before of currentFields) {
+  for (const before of fieldsStoredOnRow(currentFields)) {
     const after = afterByName.get(before.name);
     const direction = after && linkMoveOf(before, after);
     if (!after || !direction) continue;
@@ -412,9 +416,10 @@ async function countLinksDropped(
 /**
  * Which way a kept relationship's links move, if they do: into a link table, out of one, or to a
  * new one for another target. Kept a many-to-many and pointed the same way, its link table is
- * carried (`sameRelationTarget`, the save's own pairing), so no link moves.
+ * carried (`sameRelationTarget`, the save's own pairing), so no link moves. The dialog's file road
+ * asks the same of a save before it runs (`refuseUnansweredDialogQuestions`).
  */
-function linkMoveOf(
+export function linkMoveOf(
   before: FieldDefinition,
   after: FieldDefinition
 ): LinksDropped["direction"] | null {

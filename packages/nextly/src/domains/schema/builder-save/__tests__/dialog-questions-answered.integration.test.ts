@@ -454,7 +454,14 @@ for (const dialect of getConfiguredTestDialects()) {
       type: "relationship",
       options: { relationType: "manyToMany", target: "tags" },
     };
+    // One link, kept in the row's own column.
+    const pick = {
+      name: "pick",
+      type: "relationship",
+      options: { target: "tags" },
+    };
     const link = junctionTableNameFor("dc_posts", related as never);
+    let tagId: string;
 
     beforeEach(async () => {
       basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
@@ -479,15 +486,26 @@ for (const dialect of getConfiguredTestDialects()) {
         {} as ServiceContainer,
         "createCollection",
         {},
-        { name: "posts", label: "posts", fields: [text("heading"), related] }
+        { name: "categories", label: "categories", fields: [text("name")] }
+      );
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "posts",
+          label: "posts",
+          fields: [text("heading"), related, pick],
+        }
       );
       const tag = (await t.nextly.create({
         collection: "tags",
         data: { name: "first" },
       } as never)) as unknown as { item: { id: unknown } };
+      tagId = String(tag.item.id);
       await t.nextly.create({
         collection: "posts",
-        data: { heading: "Hello", related: [String(tag.item.id)] },
+        data: { heading: "Hello", related: [tagId], pick: tagId },
       } as never);
     });
 
@@ -522,9 +540,21 @@ for (const dialect of getConfiguredTestDialects()) {
         fields: [
           text("heading"),
           { name: "related", type: "component", component: "card" },
+          pick,
         ],
       },
-      { change: "removed", fields: [text("heading")] },
+      { change: "removed", fields: [text("heading"), pick] },
+      {
+        change: "pointed at another collection",
+        fields: [
+          text("heading"),
+          {
+            ...related,
+            options: { relationType: "manyToMany", target: "categories" },
+          },
+          pick,
+        ],
+      },
     ])(
       "refuses the relationship $change unconfirmed, keeping its links, and goes through once confirmed by name",
       async ({ fields }) => {
@@ -547,6 +577,147 @@ for (const dialect of getConfiguredTestDialects()) {
       },
       60_000
     );
+
+    // A single link moved into a link table drops its column and starts an empty table: nothing
+    // carries the link over, so its drop is confirmed by name too.
+    it("refuses a single link moved into a link table unconfirmed, keeping its link, and goes through once confirmed by name", async () => {
+      const fields = [
+        text("heading"),
+        related,
+        { ...pick, options: { relationType: "manyToMany", target: "tags" } },
+      ];
+      const held = async () =>
+        (await exec<{ pick: unknown }>(t, "SELECT pick FROM dc_posts")).map(
+          row => String(row.pick)
+        );
+
+      const refused = await save(fields, {}).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(String(refused)).toMatch(/cancelled/);
+      expect(await held()).toEqual([tagId]);
+
+      await save(fields, { resolutions: { pick: { action: "confirm_drop" } } });
+    }, 60_000);
+
+    // The admin's road: Allow multiple turned off makes the many-to-many a single link. The
+    // dialog's preview classes the change destructive and warns of the links it drops; the
+    // dialog confirms by name each change it classed destructive, and the save goes through,
+    // dropping the links as the preview said.
+    it("saves Allow multiple turned off once the dialog confirms what its preview warned of", async () => {
+      const fields = [
+        text("heading"),
+        { name: "related", type: "relationship", options: { target: "tags" } },
+        pick,
+      ];
+      const answer = await dispatchCollections(
+        {} as ServiceContainer,
+        "previewSchemaChanges",
+        { collectionName: "posts" },
+        { fields }
+      );
+      const body = (
+        answer instanceof Response ? await answer.json() : answer
+      ) as {
+        data?: unknown;
+        changes?: { changed: { name: string; classification: string }[] };
+      };
+      const preview = (body.data ?? body) as {
+        changes: { changed: { name: string; classification: string }[] };
+        warnings: string[];
+      };
+      const destructive = preview.changes.changed.filter(
+        change => change.classification === "destructive"
+      );
+      expect(destructive.map(change => change.name)).toEqual(["related"]);
+      expect(preview.warnings.join(" ")).toMatch(/related/);
+
+      await save(fields, {
+        resolutions: Object.fromEntries(
+          destructive.map(change => [
+            change.name,
+            { action: "confirm_drop" as const },
+          ])
+        ),
+      });
+
+      expect(await links()).toBe(0);
+    }, 60_000);
+  });
+}
+
+// A field-group field keeps its values as rows of the field group's own table. Pointed at another
+// field group, the field reads from that group's table, and the rows it had stay where they are.
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a field-group field pointed at another field group (${dialect})`, () => {
+    let t: TestNextly;
+    let basePath: string;
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+      });
+      for (const slug of ["card", "plaque"]) {
+        await dispatchComponents(
+          "createComponent",
+          {},
+          { slug, label: slug, fields: [text("line")] }
+        );
+      }
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "posts",
+          label: "posts",
+          fields: [
+            text("heading"),
+            { name: "meta", type: "component", component: "card" },
+          ],
+        }
+      );
+      await t.nextly.create({
+        collection: "posts",
+        data: { heading: "Hello", meta: { line: "kept" } },
+      } as never);
+    });
+
+    afterEach(async () => {
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    it("keeps the rows the field had in its first field group's table", async () => {
+      const rows = async () =>
+        (await exec<{ line: unknown }>(t, "SELECT line FROM comp_card")).map(
+          row => String(row.line)
+        );
+      expect(await rows()).toEqual(["kept"]);
+
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "posts" },
+        {
+          fields: [
+            text("heading"),
+            { name: "meta", type: "component", component: "plaque" },
+          ],
+          confirmed: true,
+          schemaVersion: await versionOf(t, "dynamic_collections", "posts"),
+        }
+      );
+
+      expect(await rows()).toEqual(["kept"]);
+    }, 60_000);
   });
 }
 
@@ -731,6 +902,22 @@ for (const dialect of getConfiguredTestDialects()) {
         (error: unknown) => error
       );
       expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+      expect(await companionColumns()).toContain("teaser");
+    }, 60_000);
+
+    // Outside development the save's push runs after its files, asking only of the main table, and
+    // the translations table's drop follows it: the questions are asked there too, before anything
+    // is written.
+    it("refuses removing it unconfirmed outside development, keeping every language", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+
+      const refused = await save({}).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+      expect(String(refused)).toMatch(/cancelled/);
       expect(await companionColumns()).toContain("teaser");
     }, 60_000);
 

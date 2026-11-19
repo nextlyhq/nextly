@@ -18,6 +18,7 @@ import { isFieldLocalized } from "../../i18n/classify-fields";
 import { appLocalization } from "../../i18n/configured-locales";
 import { offeredCompanionRename } from "../../i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import { linkMoveOf } from "../legacy-preview/translate";
 import { previewDesiredSchema } from "../pipeline/preview";
 import {
   BrowserPromptDispatcher,
@@ -124,10 +125,11 @@ export async function refuseUnansweredDialogQuestions(args: {
       !answeredAsOffered(toSnakeCase(field.name)) &&
       !confirmedByName(field)
   );
-  // A many-to-many leaving its link table, removed or kept by name without one, takes the table
-  // and every link with it, which the preview, reading the entity's own columns, does not see: its
-  // drop is confirmed by the field's name, as the dialog confirms a removed field.
-  const unconfirmedLinks = manyToManyLeavingLinkTable(
+  // A relationship whose links go with a link table, removed or kept by name with its links moving
+  // into, out of or to another link table, takes every link with it, which the preview, reading
+  // the entity's own columns, does not ask about: its drop is confirmed by the field's name, as the
+  // dialog confirms each change it warns of.
+  const unconfirmedLinks = relationshipsDroppingLinks(
     args.oldFields,
     args.newFields,
     args.builtBy
@@ -165,8 +167,8 @@ export async function refuseUnansweredDialogQuestions(args: {
  * its column and what it holds, as a removed field does. Whether a field has a column is asked of
  * the row it sits on, by its builder's own rule (`columnDescriptorAt`): a field group's row keeps a
  * many-to-many in a column of its own, where a collection keeps it in a link table. A relationship
- * that now keeps its links in a link table is left out: the save carries its links there rather
- * than losing them.
+ * that now keeps its links in a link table is asked of as a move of its links
+ * (`relationshipsDroppingLinks`), confirmed by its name.
  */
 function fieldsLosingTheirColumn(
   oldFields: readonly FieldDefinition[],
@@ -194,11 +196,13 @@ function fieldsLosingTheirColumn(
 }
 
 /**
- * The many-to-many relationships, as they were, that leave their link table: removed, or kept by
- * name but no longer kept in one. Only a collection's or a Single's row keeps one there; a field
- * group's row keeps a many-to-many in a column of its own, which `fieldsLosingTheirColumn` asks of.
+ * The relationships, as they were, whose links the save drops by a link table: a many-to-many
+ * removed, and one kept by name whose links move into, out of or to another link table
+ * (`linkMoveOf`, the rule the dialog's preview warns by), none of which carries a link over. Only a
+ * collection's or a Single's row keeps a link table; a field group's row keeps a many-to-many in a
+ * column of its own, which `fieldsLosingTheirColumn` asks of.
  */
-function manyToManyLeavingLinkTable(
+function relationshipsDroppingLinks(
   oldFields: readonly FieldDefinition[],
   newFields: readonly FieldDefinition[],
   builtBy: ColumnOrigin
@@ -208,9 +212,10 @@ function manyToManyLeavingLinkTable(
     fieldsStoredOnRow(newFields).map(field => [field.name, field] as const)
   );
   return fieldsStoredOnRow(oldFields).filter(field => {
-    if (!usesJunctionTable(field)) return false;
     const kept = after.get(field.name);
-    return kept === undefined || !usesJunctionTable(kept);
+    return kept === undefined
+      ? usesJunctionTable(field)
+      : linkMoveOf(field, kept) !== null;
   });
 }
 
