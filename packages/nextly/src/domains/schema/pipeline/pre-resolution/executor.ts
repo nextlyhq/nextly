@@ -81,11 +81,13 @@ export async function executePreResolutionOps(
    */
   leadingStatements: readonly string[] = [],
   /**
-   * Told after each leading statement and each op finishes, as it finishes. On MySQL and SQLite
-   * each commits as it runs, so a run stopped part-way knows how many stay applied; the count this
-   * returns is told only once every one has finished.
+   * Told of each statement it runs, as it starts and once it has finished: every leading
+   * statement, each of an op's statements (a reference-list conversion is three), and each
+   * conversion after the renames. On MySQL and SQLite each commits as it runs, so a run stopped
+   * part-way knows exactly what stays applied; the count this returns is told only once every one
+   * has finished.
    */
-  onFinished: () => void = () => undefined
+  record: RanStatements = NO_RECORD
 ): Promise<number> {
   const preOps = ops.filter(
     op => isPreResolutionOp(op) || isMysqlStringNarrowing(op, dialect)
@@ -104,13 +106,11 @@ export async function executePreResolutionOps(
   await assertNarrowingsFit(txOrDb, ordered, dialect);
 
   for (const statement of leadingStatements) {
-    await runRaw(txOrDb, statement, dialect);
-    onFinished();
+    await runTold(txOrDb, statement, dialect, record);
   }
 
   for (const op of ordered) {
-    await runOrderedOp(txOrDb, op, dialect);
-    onFinished();
+    await runOrderedOp(txOrDb, op, dialect, record);
   }
 
   // A rename moves the column; it does not change what the column IS. When the two sides differ, the
@@ -129,7 +129,7 @@ export async function executePreResolutionOps(
   for (const op of ordered) {
     if (op.type !== "rename_column") continue;
     for (const conversion of conversionForRename(op, dialect)) {
-      await runConversion(txOrDb, conversion, dialect);
+      await runConversion(txOrDb, conversion, dialect, record);
     }
   }
 
@@ -140,31 +140,60 @@ export async function executePreResolutionOps(
 async function runOrderedOp(
   txOrDb: unknown,
   op: Operation,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  record: RanStatements
 ): Promise<void> {
   if (isMysqlStringNarrowing(op, dialect)) {
     await runInStrictMysqlSession(
       txOrDb,
-      generateSQL(withLiveNullability(op), dialect)
+      generateSQL(withLiveNullability(op), dialect),
+      record
     );
     return;
   }
   for (const statement of statementsForOp(op, dialect)) {
-    await runRaw(txOrDb, statement, dialect);
+    await runTold(txOrDb, statement, dialect, record);
   }
+}
+
+/**
+ * What a caller recording an apply's statements is told: each statement's text as it starts and
+ * once it has run, so a failure counts only the ones that ran.
+ */
+export interface RanStatements {
+  starting(statement: string): void;
+  finished(statement: string): void;
+}
+
+const NO_RECORD: RanStatements = {
+  starting: () => undefined,
+  finished: () => undefined,
+};
+
+/** `runRaw`, telling `record` as the statement starts and once it has run. */
+async function runTold(
+  txOrDb: unknown,
+  statement: string,
+  dialect: SupportedDialect,
+  record: RanStatements
+): Promise<void> {
+  record.starting(statement);
+  await runRaw(txOrDb, statement, dialect);
+  record.finished(statement);
 }
 
 /** A rename's type change; a MySQL string narrowing runs strict, as its own narrowings do. */
 async function runConversion(
   txOrDb: unknown,
   conversion: Operation,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  record: RanStatements
 ): Promise<void> {
   const statement = generateSQL(conversion, dialect);
   if (isMysqlStringNarrowing(conversion, dialect)) {
-    await runInStrictMysqlSession(txOrDb, statement);
+    await runInStrictMysqlSession(txOrDb, statement, record);
   } else {
-    await runRaw(txOrDb, statement, dialect);
+    await runTold(txOrDb, statement, dialect, record);
   }
 }
 
@@ -533,8 +562,10 @@ function withLiveNullability(op: Operation): Operation {
  */
 async function runInStrictMysqlSession(
   txOrDb: unknown,
-  statement: string
+  statement: string,
+  record: RanStatements
 ): Promise<void> {
+  // The session's mode set and put back change nothing stored, so only the statement is told.
   await runRaw(txOrDb, "SET @nextly_sql_mode = @@SESSION.sql_mode", "mysql");
   await runRaw(
     txOrDb,
@@ -542,7 +573,7 @@ async function runInStrictMysqlSession(
     "mysql"
   );
   try {
-    await runRaw(txOrDb, statement, "mysql");
+    await runTold(txOrDb, statement, "mysql", record);
   } finally {
     await runRaw(txOrDb, "SET SESSION sql_mode = @nextly_sql_mode", "mysql");
   }

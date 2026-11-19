@@ -167,7 +167,10 @@ import {
 } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
-import { executePreResolutionOps } from "./pre-resolution/executor";
+import {
+  executePreResolutionOps,
+  type RanStatements,
+} from "./pre-resolution/executor";
 import {
   PromptCancelledError,
   TTYRequiredError,
@@ -186,6 +189,7 @@ import type {
   PromptDispatcher,
   RenameCandidate,
   RenameDetector,
+  StatementRecord,
 } from "./pushschema-pipeline-interfaces";
 import { withRecordedShapes } from "./recorded-shapes";
 import { builtByFor } from "./registered-collections";
@@ -512,7 +516,7 @@ export interface PushSchemaPipelineTestHooks {
     ops: Operation[],
     dialect: SupportedDialect,
     leadingStatements?: readonly string[],
-    onFinished?: () => void
+    record?: RanStatements
   ) => Promise<number>;
   // Test seam: inject a pre-built resolvedOps array to bypass the diff +
   // resolution pipeline. Lets unit tests exercise the scope-reduction and
@@ -926,6 +930,17 @@ export class PushSchemaPipeline {
       let nextIsSchema = false;
       let finishedEarlier = 0;
       const oneByOne = dialect !== "postgresql";
+      // What runs its statements itself (pre-cleanup, a consented clearing) tells the record the
+      // same way, as each starts and once it has run (`StatementRecord`).
+      const ranHere: StatementRecord = {
+        starting: schema => {
+          nextIsSchema = schema;
+        },
+        finished: schema => {
+          finishedThisTry.push(schema);
+          nextIsSchema = false;
+        },
+      };
       // On MySQL and SQLite with every statement handed over one at a time, the record says what
       // stays: the tries that ended waiting, and what this try finished that has committed.
       if (oneByOne) {
@@ -1601,15 +1616,17 @@ export class PushSchemaPipeline {
           liftedKeysOwed = constraints.liftRestores;
           try {
             const leading = [...constraints.before, ...moves.statements];
-            // Counted as each statement finishes: on MySQL and SQLite each commits as it runs, so a
-            // try that ends waiting part-way names the ones that stay applied.
+            // Counted as each statement finishes, every statement the phase runs (an op may run
+            // several, as a MySQL reference-list conversion does): on MySQL and SQLite each commits
+            // as it runs, so a try that ends waiting, or an apply that fails, part-way names exactly
+            // the ones that stay applied.
             let told = 0;
-            // The leading statements run first, then each rename or drop, a schema statement.
+            // For an executor that tells nothing (a stand-in): the leading statements, then each
+            // rename or drop, a schema statement.
             const schemaAt = (index: number): boolean =>
               index < leading.length
                 ? isSchemaStatement(leading[index] ?? "")
                 : true;
-            nextIsSchema = schemaAt(0);
             const preResolved = await preResExecutor(
               tx,
               withoutSqliteDropsLeftToRebuild(
@@ -1620,20 +1637,27 @@ export class PushSchemaPipeline {
               ),
               dialect,
               leading,
-              () => {
-                finishedThisTry.push(schemaAt(told));
-                told += 1;
-                nextIsSchema = schemaAt(told);
+              {
+                starting: statement => {
+                  nextIsSchema = isSchemaStatement(statement);
+                },
+                finished: statement => {
+                  finishedThisTry.push(isSchemaStatement(statement));
+                  told += 1;
+                  nextIsSchema = false;
+                },
               }
             );
-            // An executor that does not tell each one (a stand-in) is counted once it returns, as
-            // it reports itself: each rename or drop once.
-            for (
-              let index = told;
-              index < leading.length + preResolved;
-              index += 1
-            ) {
-              finishedThisTry.push(schemaAt(index));
+            // An executor that tells nothing (a stand-in) is counted once it returns, as it reports
+            // itself: each leading statement, and each rename or drop once.
+            if (told === 0) {
+              for (
+                let index = 0;
+                index < leading.length + preResolved;
+                index += 1
+              ) {
+                finishedThisTry.push(schemaAt(index));
+              }
             }
           } catch (err) {
             // A refusal is not a failed statement. The pre-resolution phase can decline to start —
@@ -1662,15 +1686,7 @@ export class PushSchemaPipeline {
               clearing: dispatchResult.clearing,
               // Each of its statements recorded as it runs, as the executor's are: a failure counts
               // only the ones that ran (`statementsKept`).
-              statements: {
-                starting: schema => {
-                  nextIsSchema = schema;
-                },
-                finished: schema => {
-                  finishedThisTry.push(schema);
-                  nextIsSchema = false;
-                },
-              },
+              statements: ranHere,
             });
           } catch (err) {
             // PromptCancelledError from abort is not a DDL failure — let it
@@ -2120,6 +2136,7 @@ export class PushSchemaPipeline {
               dialect,
               events: classificationResult.events,
               clearing: dispatchResult.clearing,
+              statements: ranHere,
             });
           }
           if (dialect === "postgresql") await assertSchemaLockHeld();
