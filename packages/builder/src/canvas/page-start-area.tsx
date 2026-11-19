@@ -221,10 +221,14 @@ function StarterTile({
       <button
         type="button"
         className="nx-page-start__tile"
+        // Named by its title alone: a picture of a page draws words of its
+        // own (a form's labels, a heading), which would otherwise run into
+        // the name before the title.
+        aria-labelledby={`${id}-title`}
         onClick={() => onStarter?.(starter.id)}
       >
         {starter.picture}
-        <span>{starter.title}</span>
+        <span id={`${id}-title`}>{starter.title}</span>
       </button>
     );
   }

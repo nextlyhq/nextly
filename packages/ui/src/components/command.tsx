@@ -8,8 +8,16 @@ import {
 } from "cmdk";
 import { Search } from "lucide-react";
 import {
+  createContext,
   forwardRef,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
   type ElementRef,
+  type ReactNode,
+  type SetStateAction,
   type ComponentPropsWithoutRef,
   type HTMLAttributes,
   type ForwardRefExoticComponent,
@@ -271,6 +279,34 @@ const CommandInput: ForwardRefExoticComponent<
 );
 CommandInput.displayName = "CommandInput";
 
+/**
+ * What a `CommandEmpty` inside a `CommandList` hands the list: `hold` while it
+ * is mounted, so the list draws its status line, and `say`, the message the
+ * line reads while a search finds nothing. `null` outside a list.
+ */
+interface EmptyNotice {
+  readonly hold: Dispatch<SetStateAction<number>>;
+  readonly say: Dispatch<SetStateAction<ReactNode>>;
+}
+
+const EmptyNoticeContext = createContext<EmptyNotice | null>(null);
+
+/** Says `notice` from the list's status line while it is mounted. */
+function SayEmpty({
+  say,
+  notice,
+}: {
+  say: EmptyNotice["say"];
+  notice: ReactNode;
+}): null {
+  useEffect(() => {
+    // A function, so a node is never taken for an updater.
+    say(() => notice);
+    return () => say(null);
+  }, [say, notice]);
+  return null;
+}
+
 /** @experimental */
 export type CommandListProps = ComponentPropsWithoutRef<
   typeof CommandPrimitive.List
@@ -285,19 +321,44 @@ const CommandList: ForwardRefExoticComponent<
   PropsWithoutRef<CommandListProps> &
     RefAttributes<ElementRef<typeof CommandPrimitive.List>>
 > = forwardRef<ElementRef<typeof CommandPrimitive.List>, CommandListProps>(
-  ({ className, ...props }, ref) => (
-    <CommandPrimitive.List
-      ref={ref}
-      className={cn(
-        // Scroll
-        "max-h-[400px] overflow-y-auto overflow-x-hidden",
-        // Spacing
-        "p-2",
-        className
-      )}
-      {...props}
-    />
-  )
+  ({ className, children, ...props }, ref) => {
+    // How many `CommandEmpty`s the list holds, and what one says while a
+    // search finds nothing.
+    const [emptyHeld, holdEmpty] = useState(0);
+    const [emptyNotice, setEmptyNotice] = useState<ReactNode>(null);
+    const notice = useMemo<EmptyNotice>(
+      () => ({ hold: holdEmpty, say: setEmptyNotice }),
+      []
+    );
+    return (
+      <>
+        <CommandPrimitive.List
+          ref={ref}
+          className={cn(
+            // Scroll
+            "max-h-[400px] overflow-y-auto overflow-x-hidden",
+            // Spacing
+            "p-2",
+            className
+          )}
+          {...props}
+        >
+          <EmptyNoticeContext.Provider value={notice}>
+            {children}
+          </EmptyNoticeContext.Provider>
+        </CommandPrimitive.List>
+        {/* The empty message, said outside the list, where a status may be;
+            mounted with the `CommandEmpty`, before it has anything to say, so
+            its first words are announced. A list without one, whose caller
+            draws and says its own, gets no second status line. */}
+        {emptyHeld > 0 ? (
+          <p role="status" data-slot="command-empty-status" className="sr-only">
+            {emptyNotice}
+          </p>
+        ) : null}
+      </>
+    );
+  }
 );
 CommandList.displayName = "CommandList";
 
@@ -309,19 +370,49 @@ export type CommandEmptyProps = ComponentPropsWithoutRef<
 /**
  * CommandEmpty - Empty state message when no results found.
  * Centered text with muted color per design spec.
+ *
+ * A message of plain text inside a `CommandList` is drawn in the list but hidden from screen
+ * readers, and the list says it from its own status line outside the list. The list is a
+ * `listbox`, which may own only options and their groups: the library gives the message
+ * `role="presentation"`, set after the props it is given, so the list would own its words, and
+ * axe-core's `aria-required-children` fails a list a search found nothing in. A message holding
+ * anything else, a "Try again" button say, stays where it is, so what it holds can still be
+ * reached; so does one outside a list.
  * @experimental
  */
 const CommandEmpty: ForwardRefExoticComponent<
   PropsWithoutRef<CommandEmptyProps> &
     RefAttributes<ElementRef<typeof CommandPrimitive.Empty>>
 > = forwardRef<ElementRef<typeof CommandPrimitive.Empty>, CommandEmptyProps>(
-  (props, ref) => (
-    <CommandPrimitive.Empty
-      ref={ref}
-      className="py-8 px-4 text-center text-sm text-muted-foreground"
-      {...props}
-    />
-  )
+  ({ children, "aria-hidden": ariaHidden, ...props }, ref) => {
+    const notice = useContext(EmptyNoticeContext);
+    // Said from the list's line only when it is words alone: a copy of a
+    // control there would be one nobody can see.
+    const words =
+      typeof children === "string" || typeof children === "number"
+        ? String(children)
+        : null;
+    const sayer = words === null ? undefined : notice?.say;
+    const hold = sayer === undefined ? undefined : notice?.hold;
+    useEffect(() => {
+      if (hold === undefined) return undefined;
+      hold(count => count + 1);
+      return () => hold(count => count - 1);
+    }, [hold]);
+    return (
+      <CommandPrimitive.Empty
+        ref={ref}
+        className="py-8 px-4 text-center text-sm text-muted-foreground"
+        aria-hidden={ariaHidden ?? (sayer === undefined ? undefined : true)}
+        {...props}
+      >
+        {children}
+        {/* Mounted only while the library draws the message, so the status
+            line speaks exactly while the list is empty. */}
+        {sayer === undefined ? null : <SayEmpty say={sayer} notice={words} />}
+      </CommandPrimitive.Empty>
+    );
+  }
 );
 CommandEmpty.displayName = "CommandEmpty";
 
