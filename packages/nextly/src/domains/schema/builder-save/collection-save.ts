@@ -368,6 +368,7 @@ export async function writeCollectionSave(
       // the history does not describe would meet statements written for
       // another one.
       runsFile: deps.applies && options.appliedBy === undefined,
+      pushes: deps.applies && options.appliedBy !== undefined,
     });
     // Once a push has run, the database changed outside the files: they stay.
     let pushed = false;
@@ -515,7 +516,12 @@ export async function prepareCollectionSave(
 async function writeSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  options: { historyChecked?: boolean; runsFile?: boolean }
+  options: {
+    historyChecked?: boolean;
+    runsFile?: boolean;
+    /** The change is applied by a push (`appliedBy`), which reaches the translations table too. */
+    pushes?: boolean;
+  }
 ): Promise<{
   files: SaveFiles;
   names: readonly string[];
@@ -532,7 +538,10 @@ async function writeSave(
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
   await settledRows(deps, save, plan.table);
-  if (options.runsFile === true) {
+  // The translations table is judged before anything is written wherever the change reaches it:
+  // the file's statements are planned from the history's record of it, and a push changes it too,
+  // after which only the main table is compared (`recordWhatWasPushed`).
+  if (options.runsFile === true || options.pushes === true) {
     await refuseCompanionDrift(deps, save, plan.table);
   }
 
