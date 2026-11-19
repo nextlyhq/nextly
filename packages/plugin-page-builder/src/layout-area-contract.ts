@@ -35,6 +35,17 @@ export const MAX_AREA_COMPONENTS = 50;
 /** Where a set's area is given a component. */
 export const LAYOUT_AREA_ROUTE_PATH = "/layouts/:id/areas/:area";
 
+/**
+ * Where a header or footer is created for the site default's empty area: the
+ * starter's design copied into a new component, published, and put there.
+ */
+export const DEFAULT_AREA_ROUTE_PATH = "/default-layout/areas/:area";
+
+/** The path a header or footer is created for the default's `area` at. */
+export function defaultAreaPath(area: LayoutArea): string {
+  return DEFAULT_AREA_ROUTE_PATH.replace(":area", area);
+}
+
 /** The path the components marked for `area` are read from. */
 export function areaComponentsPath(
   area: LayoutArea,
@@ -95,4 +106,24 @@ export interface WrittenArea {
   readonly set: { readonly id: string; readonly title: string };
   readonly area: LayoutArea;
   readonly component: { readonly id: string; readonly title: string };
+}
+
+/**
+ * Where a new header (or footer) component is made for a set's picker: the
+ * starter's design, marked for the area and published, and nothing else
+ * written. The picker puts it in the set's form, which the set's own Save and
+ * Publish store.
+ */
+export const AREA_COMPONENT_ROUTE_PATH = "/layouts/areas/:area/component";
+
+/** The path a new component for `area` is made at. */
+export function areaComponentPath(area: LayoutArea): string {
+  return AREA_COMPONENT_ROUTE_PATH.replace(":area", area);
+}
+
+/** The component the route made. */
+export interface CreatedAreaComponent {
+  readonly id: string;
+  readonly title: string;
+  readonly area: LayoutArea;
 }

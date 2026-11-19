@@ -20,6 +20,7 @@
  * @module domains/email/retention-config
  */
 
+import { processGlobal } from "../../shared/process-global";
 import {
   CALENDAR_COLUMN_MAX_OFFSET_MS,
   resolveRetentionWindow,
@@ -158,7 +159,10 @@ export function resolveEmailRetentionConfig(
  * keep. Passes read through {@link activeEmailRetention} so a save takes effect
  * immediately, mirroring the audit and webhook policies.
  */
-let publishedEmailRetention: ResolvedEmailRetentionConfig | undefined;
+/** One per process: see {@link processGlobal}. */
+const published = processGlobal("emailRetention", () => ({
+  policy: undefined as ResolvedEmailRetentionConfig | undefined,
+}));
 
 /**
  * Publish a reloaded policy. `undefined` restores whatever was built in.
@@ -171,7 +175,7 @@ let publishedEmailRetention: ResolvedEmailRetentionConfig | undefined;
 export function setEmailRetention(
   policy: ResolvedEmailRetentionConfig | undefined
 ): void {
-  publishedEmailRetention = policy;
+  published.policy = policy;
 }
 
 /**
@@ -204,7 +208,7 @@ export function emailRetentionAfterTransform(
 export function activeEmailRetention(
   built: ResolvedEmailRetentionConfig | undefined
 ): ResolvedEmailRetentionConfig | undefined {
-  return publishedEmailRetention ?? built;
+  return published.policy ?? built;
 }
 
 /**

@@ -13,8 +13,8 @@
       "compiled": 3
     },
     "docs/api-reference/direct-api.mdx": {
-      "samples": 45,
-      "compiled": 44
+      "samples": 46,
+      "compiled": 45
     },
     "docs/api-reference/rest-api.mdx": {
       "samples": 3,
@@ -125,7 +125,7 @@
       "compiled": 3
     },
     "docs/guides/email.mdx": {
-      "samples": 11,
+      "samples": 14,
       "compiled": 7
     },
     "docs/guides/isr-caching.mdx": {
@@ -141,15 +141,15 @@
       "compiled": 2
     },
     "docs/guides/routing-and-seo.mdx": {
-      "samples": 16,
-      "compiled": 14
+      "samples": 17,
+      "compiled": 15
     },
     "docs/jobs/index.mdx": {
       "samples": 5,
       "compiled": 5
     },
     "docs/localization/index.mdx": {
-      "samples": 7,
+      "samples": 8,
       "compiled": 5
     },
     "docs/notices/index.mdx": {
@@ -157,24 +157,32 @@
       "compiled": 1
     },
     "docs/page-builder/compose-through-the-api.mdx": {
-      "samples": 3,
-      "compiled": 3
+      "samples": 4,
+      "compiled": 4
     },
     "docs/page-builder/contributed-blocks.mdx": {
       "samples": 11,
       "compiled": 5
     },
+    "docs/page-builder/custom-css.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
     "docs/page-builder/editor.mdx": {
-      "samples": 2,
-      "compiled": 0
+      "samples": 4,
+      "compiled": 2
+    },
+    "docs/page-builder/forms.mdx": {
+      "samples": 1,
+      "compiled": 1
     },
     "docs/page-builder/index.mdx": {
       "samples": 12,
       "compiled": 10
     },
     "docs/page-builder/layouts.mdx": {
-      "samples": 1,
-      "compiled": 1
+      "samples": 2,
+      "compiled": 2
     },
     "docs/page-builder/locked-areas.mdx": {
       "samples": 2,
@@ -192,13 +200,17 @@
       "samples": 4,
       "compiled": 4
     },
+    "docs/page-builder/starter-pages.mdx": {
+      "samples": 4,
+      "compiled": 3
+    },
     "docs/permissions/index.mdx": {
       "samples": 11,
       "compiled": 7
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 32,
-      "compiled": 19
+      "samples": 34,
+      "compiled": 20
     },
     "docs/plugins/api-reference.mdx": {
       "samples": 37,
@@ -443,9 +455,9 @@
     "docs/api-reference/direct-api.mdx": {
       "#9 error TS18004: No value exists in scope for the shorthand property 'id'. Either declare one or provide an initializer.": 2,
       "#9 error TS18047: 'page' is possibly 'null'.": 1,
-      "suppressed #44 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
-      "suppressed #44 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
-      "suppressed #44 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
+      "suppressed #45 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
+      "suppressed #45 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
+      "suppressed #45 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
       "suppressed #10 error TS2322: Type 'unknown' is not assignable to type 'string'.": 2,
       "suppressed #14 error TS2322: Type 'unknown' is not assignable to type 'string'.": 2,
       "suppressed #15 error TS2322: Type 'unknown' is not assignable to type 'string'.": 2,
@@ -453,7 +465,7 @@
       "context #9 error TS18004: No value exists in scope for the shorthand property 'id'. Either declare one or provide an initializer.": 2,
       "context #9 error TS18047: 'page' is possibly 'null'.": 1,
       "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #44 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #45 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/database/mysql.mdx": {
       "#6 error TS2304: Cannot find name 'orderData'.": 1,
@@ -494,10 +506,6 @@
       "reader-name #1 error TS2304: Cannot find name 'Media'.": 1,
       "reader-name #2 error TS2552: Cannot find name 'MyCollection'. Did you mean 'HTMLCollection'?": 1
     },
-    "docs/guides/email.mdx": {
-      "implicit-any #4 error TS7006: Parameter 'data' implicitly has an 'any' type.": 3,
-      "reader-file #5 error TS2307: Cannot find module '@/nextly' or its corresponding type declarations.": 1
-    },
     "docs/guides/routing-and-seo.mdx": {
       "implicit-any #7 error TS7006: Parameter 'entry' implicitly has an 'any' type.": 1,
       "reader-name #3 error TS2304: Cannot find name 'Page'.": 1,
@@ -517,12 +525,12 @@
       "reader-file #11 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "uninstalled #31 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "uninstalled #33 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '../../../types/generated/plugin-admin-imports.generated'.": 1,
-      "reader-file #28 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #2 error TS2307: Cannot find module '../../../types/generated/plugin-admin-components.generated' or its corresponding type declarations.": 1
+      "reader-file #2 error TS2307: Cannot find module '../../../types/generated/plugin-admin-components.generated' or its corresponding type declarations.": 1,
+      "reader-file #30 error TS2307: Cannot find module './widgets' or its corresponding type declarations.": 1
     },
     "docs/plugins/commerce/index.mdx": {
       "uninstalled #0 error TS2307: Cannot find module '@nextlyhq/plugin-commerce' or its corresponding type declarations.": 1,
@@ -587,6 +595,9 @@
     "docs/getting-started/project-structure.mdx": {
       "reader-file #2 error TS2307: Cannot find module '../db/schemas/collections/zod' or its corresponding type declarations.": 1
     },
+    "docs/guides/email.mdx": {
+      "reader-file #8 error TS2307: Cannot find module '@/nextly' or its corresponding type declarations.": 1
+    },
     "docs/jobs/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module './jobs/send-digest' or its corresponding type declarations.": 1
     },
@@ -596,6 +607,9 @@
     "docs/page-builder/contributed-blocks.mdx": {
       "reader-file #1 error TS2307: Cannot find module './blocks' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module './blocks' or its corresponding type declarations.": 1
+    },
+    "docs/page-builder/custom-css.mdx": {
+      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/page-builder/index.mdx": {
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
@@ -608,6 +622,9 @@
     },
     "docs/page-builder/site-code.mdx": {
       "reader-file #1 error TS2882: Cannot find module or type declarations for side-effect import of '@/nextly/cached-read'.": 1
+    },
+    "docs/page-builder/starter-pages.mdx": {
+      "reader-file #1 error TS2307: Cannot find module './app/starter-pages' or its corresponding type declarations.": 1
     },
     "docs/plugins/api-reference.mdx": {
       "reader-file #28 error TS2307: Cannot find module './Invoice' or its corresponding type declarations.": 1

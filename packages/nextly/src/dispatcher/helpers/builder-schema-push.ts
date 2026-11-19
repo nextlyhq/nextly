@@ -22,6 +22,7 @@ import {
   leavingFieldConstraints,
 } from "../../domains/i18n/migration/field-leaves-translation-rules";
 import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
+import type { FirstQuestionWatch } from "../../domains/schema/builder-save/landing-push";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
@@ -58,13 +59,16 @@ export function builderSchemaPush(args: {
   /** Recorded on the journal row, so the entity's history finds it under its own kind. */
   kind: "single" | "component";
   resolutions: ConstructorParameters<typeof BrowserPromptDispatcher>;
+  /** Notes a push refused at its first question, which ran no statement (`landingPush`). */
+  firstQuestion?: FirstQuestionWatch;
 }): (desired: DesiredSchema) => Promise<PipelineResult> {
   const { dialect, db } = args;
+  const answering = new BrowserPromptDispatcher(...args.resolutions);
   const pipeline = new PushSchemaPipeline({
     executor: new DrizzleStatementExecutor(dialect, db),
     renameDetector: new RegexRenameDetector(),
     classifier: new RealClassifier(),
-    promptDispatcher: new BrowserPromptDispatcher(...args.resolutions),
+    promptDispatcher: args.firstQuestion?.watching(answering) ?? answering,
     preRenameExecutor: noopPreRenameExecutor,
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,

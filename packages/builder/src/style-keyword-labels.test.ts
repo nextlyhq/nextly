@@ -142,6 +142,8 @@ describe("the keywords a menu offers", () => {
     expect(dropped).toEqual([
       "grid-auto-flow: dense row",
       "grid-auto-flow: dense column",
+      // A stored Browser default draws the plus, and reads as it.
+      "--nx-pb-disclosure-icon: browser",
     ]);
   });
 

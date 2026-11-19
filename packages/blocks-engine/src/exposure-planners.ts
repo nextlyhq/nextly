@@ -49,7 +49,8 @@ import {
 import { isPlainRecord } from "./plain-record";
 import { exposureTypeForProp } from "./prop-exposure";
 import type { RetiredExposures } from "./retired-exposures";
-import { boundedOwnKeys } from "./safe-record";
+import { settingBindingIssues } from "./setting-bindings";
+import { withSettingDefaults } from "./setting-defaults";
 import { contentPropsOf } from "./slot-lock";
 import type { SlotDefaultSource } from "./tree";
 import {
@@ -57,6 +58,7 @@ import {
   isErrorIssue,
   type ValidationIssue,
 } from "./validation";
+import { variantPrunes } from "./variant-prune";
 
 /**
  * The prop path a `visibility` exposure stores.
@@ -223,6 +225,13 @@ export function planExposeProperty(
   const exposed = draft.exposed ?? [];
   const id = mintId(label, takenIds(exposed, sources.retired));
   draft.exposed = [...exposed, { id, label, ...pointed }];
+  const broken = newFollowerErrors(
+    definition,
+    draft,
+    limits,
+    sources.definitions
+  );
+  if (broken.length > 0) return { problem: "invalid-exposure", issues: broken };
   return finished(draft, id, NOTHING_RETIRED, [], limits);
 }
 
@@ -290,12 +299,31 @@ export function planRetargetExposure(
   if (keepsValues(current, pointed)) {
     exposed[at] = { id, label: current.label, ...pointed };
     draft.exposed = exposed;
+    const broken = newFollowerErrors(
+      definition,
+      draft,
+      limits,
+      sources.definitions
+    );
+    if (broken.length > 0) {
+      return { problem: "invalid-exposure", issues: broken };
+    }
     return finished(draft, id, NOTHING_RETIRED, [], limits);
   }
 
   const fresh = mintId(current.label, takenIds(exposed, sources.retired));
+  // A new type is a new setting, which a block following the old one may not
+  // fit: each keeps what it showed, and follows nothing.
+  draft.nodes = withSettingDefaults(draft, id, limits).nodes;
   exposed[at] = { id: fresh, label: current.label, ...pointed };
   draft.exposed = exposed;
+  const broken = newFollowerErrors(
+    definition,
+    draft,
+    limits,
+    sources.definitions
+  );
+  if (broken.length > 0) return { problem: "invalid-exposure", issues: broken };
   return retiring(draft, fresh, id, limits);
 }
 
@@ -317,6 +345,8 @@ export function planRemoveExposure(
   const at = exposureIndex(draft, id);
   if (at === undefined) return { problem: "unknown-exposure" };
 
+  // Each block following it keeps what it showed, and follows nothing.
+  draft.nodes = withSettingDefaults(draft, id, limits).nodes;
   draft.exposed = (draft.exposed ?? []).filter((_, i) => i !== at);
   return retiring(draft, id, id, limits);
 }
@@ -549,27 +579,25 @@ function mintId(label: string, taken: ReadonlySet<string>): string {
   }
 }
 
-/** Take a field's value out of every variant, saying which lost one. */
+/**
+ * Take a field's value out of every variant of the draft, saying which lost
+ * one, as `variantPrunes` states it for every removal of a field.
+ */
 function pruneVariants(
   definition: ComponentDocument,
   id: string
 ): PrunedVariant[] {
   const variants = definition.variants;
-  if (!isPlainRecord(variants)) return [];
-  const pruned: PrunedVariant[] = [];
-  for (const key of boundedOwnKeys(variants, MAX_ENVELOPE_ENTRIES) ?? []) {
-    const variant: unknown = variants[key];
-    if (!isPlainRecord(variant) || !isPlainRecord(variant.overrides)) continue;
-    const overrides = variant.overrides;
-    if (!Object.hasOwn(overrides, id)) continue;
-    delete overrides[id];
-    pruned.push({
-      variant: key,
-      label: typeof variant.label === "string" ? variant.label : key,
-      emptied: boundedOwnKeys(overrides, 0) !== null,
-    });
-  }
-  return pruned;
+  if (variants === undefined) return [];
+  return variantPrunes(variants, new Set([id])).map(prune => {
+    const variant = variants[prune.variant];
+    if (variant !== undefined) variant.overrides = prune.overrides;
+    return {
+      variant: prune.variant,
+      label: prune.label,
+      emptied: prune.emptied,
+    };
+  });
 }
 
 /**
@@ -594,6 +622,29 @@ function retiring(
   const pruned = pruneVariants(draft, gone);
   const retired = { properties: [gone], slots: [] };
   return finished(draft, id, retired, pruned, limits);
+}
+
+/**
+ * The errors the save's follower check finds in an edited definition that
+ * the definition had not: a setting put on a prop that follows one, or a
+ * setting whose followers can't hold what it now holds, which the save would
+ * refuse. One the definition held already is not this edit's.
+ */
+function newFollowerErrors(
+  before: BlockDocument,
+  after: ComponentDocument,
+  limits: DocumentLimits,
+  /** The block definitions, which the save judges each follower's prop by. */
+  definitions: SlotDefaultSource
+): ValidationIssue[] {
+  const key = (issue: ValidationIssue): string =>
+    `${issue.path}\u0000${issue.message}`;
+  const errors = (doc: BlockDocument): ValidationIssue[] =>
+    settingBindingIssues(doc, limits, definitions).filter(
+      issue => issue.severity === "error"
+    );
+  const had = new Set(errors(before).map(key));
+  return errors(after).filter(issue => !had.has(key(issue)));
 }
 
 /** The edit, or the envelope errors that would refuse its save. */

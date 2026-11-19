@@ -10,7 +10,6 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
-import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors/nextly-error";
 import {
   assertValidExistingFieldGroupConfig,
@@ -185,30 +184,23 @@ export function createFieldGroupsNamespace(
       const fieldsTyped = args.fields as unknown as FieldConfig[];
       const schemaHash = calculateSchemaHash(fieldsTyped);
 
-      // Canonical resolution: an explicit tableName is honored verbatim;
-      // otherwise the slug is normalized before the comp_ prefix so a dashed
-      // slug maps to the same table the schema layer creates. The explicit form
-      // goes through the same reserved-storage rules as a code-first dbName,
-      // because a name pointing at framework tables would let a later delete
-      // drop storage this component does not own.
       // Validated for slug format and reserved names. Two slugs that collapse
       // to one table are caught by defineConfig for code-first components and
-      // by the unique index on dynamic_components.table_name here.
+      // by the service's own address check here.
       assertValidFieldGroupConfig({
         slug: args.slug,
         label: { singular: args.label },
         fields: fieldsTyped,
       });
-      const tableName = resolveComponentTableName(args.slug);
 
       // Through the service that owns the table and the row together. Writing the row here
-      // directly is what made this path answer success for a field group whose comp_ table was
-      // never created, leaving the registry describing storage that did not exist.
+      // directly is what made this path answer success for a field group whose table was never
+      // created, leaving the registry describing storage that did not exist. The service also
+      // names the table, under the naming the site's storage is on.
       const { record, migrationStatus } =
         await ctx.fieldGroupMetadataService.createFieldGroup({
           slug: args.slug,
           label: args.label,
-          tableName,
           description: args.description,
           fields: fieldsTyped,
           admin: args.admin,

@@ -189,6 +189,28 @@ describe("the panel's check and the save's rule", () => {
 });
 
 describe("a field that becomes no column", () => {
+  // A field-group field's name is what its group's rows point back to it by, in a parent-pointer
+  // column of 255 characters on PostgreSQL and MySQL. A longer name would be saved and then every
+  // entry write refused, so the rule and the save refuse it, column or not.
+  it("refuses a name longer than the parent pointer keeps, column or not", () => {
+    const place = {
+      surface: "single",
+      nested: false,
+      producesColumn: false,
+    } as const;
+    expect(fieldNameProblem("a".repeat(255), place)).toBeNull();
+    expect(fieldNameProblem("a".repeat(256), place)).toMatchObject({
+      kind: "name-too-long",
+      code: "INVALID_FIELD_NAME",
+    });
+    expect(() =>
+      assertValidFieldsPayload(
+        [{ name: "a".repeat(256), type: "component", component: "card" }],
+        { kind: "single", stored: [] }
+      )
+    ).toThrow();
+  });
+
   // A field-group reference keeps its values in the field group's own table, so a name past the
   // longest column a database keeps whole names no column, and both the rule and the save take it.
   it("takes a top-level name longer than a column may be, where only a column would break", () => {

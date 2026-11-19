@@ -101,7 +101,10 @@ export interface RegisteredEntity {
 }
 
 /** The registry statuses whose definition the database already has. */
-const DEFINITION_APPLIED = new Set(["applied", "synced"]);
+export const DEFINITION_APPLIED: ReadonlySet<string> = new Set([
+  "applied",
+  "synced",
+]);
 
 /** A stored field list, as the registry holds it: JSON text or a parsed list. */
 function fieldsOf(raw: unknown): FieldDefinition[] {

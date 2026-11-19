@@ -27,6 +27,7 @@ import { useMemo } from "react";
 import {
   deliveryRow,
   holdsUnsettledQueued,
+  isUnsettled,
   mergeNewestFirst,
   queuedRow,
   sourcesFor,
@@ -36,9 +37,13 @@ import {
 } from "@admin/components/features/email-hub/activity/activity-model";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import {
+  getDeliveryDetail,
+  getQueuedEmailDetail,
   getQueuedEmailOverdue,
   listDeliveryActivity,
   listQueuedEmailActivity,
+  type DeliveryDetail,
+  type QueuedEmailDetail,
   type QueuedEmailOverdue,
 } from "@admin/services/emailActivityApi";
 
@@ -67,6 +72,8 @@ const emailActivityKeys = {
   list: (sources: Sources) =>
     [...emailActivityKeys.all(), "list", sources] as const,
   overdue: () => [...emailActivityKeys.all(), "overdue"] as const,
+  detail: (source: "delivery" | "queued", id: string) =>
+    [...emailActivityKeys.all(), "detail", source, id] as const,
 };
 
 /**
@@ -243,5 +250,49 @@ export function useQueuedEmailOverdue(
     queryFn: getQueuedEmailOverdue,
     refetchInterval: OVERDUE_POLL_MS,
     enabled: options.enabled ?? true,
+  });
+}
+
+/** Which sheet is open: a delivery record, or a queued email, by id. */
+export interface OpenActivity {
+  source: "delivery" | "queued";
+  id: string;
+}
+
+/** A sheet's detail, as the server answers it for that kind of row. */
+export type ActivityDetail =
+  | { source: "delivery"; detail: DeliveryDetail }
+  | { source: "queued"; detail: QueuedEmailDetail };
+
+/**
+ * The detail of the row whose sheet is open, read only while one is. A
+ * queued email that can still change by itself is read again as the list
+ * is, so its state and timeline stay true while the sheet stays open.
+ */
+export function useActivityDetail(
+  open: OpenActivity | null
+): UseQueryResult<ActivityDetail, Error> {
+  return useQuery<ActivityDetail, Error>({
+    queryKey: open
+      ? emailActivityKeys.detail(open.source, open.id)
+      : [...emailActivityKeys.all(), "detail", "none"],
+    queryFn: async () => {
+      if (!open) throw new Error("No sheet is open.");
+      return open.source === "delivery"
+        ? { source: "delivery", detail: await getDeliveryDetail(open.id) }
+        : { source: "queued", detail: await getQueuedEmailDetail(open.id) };
+    },
+    enabled: open !== null,
+    // Never fresh, so a sheet reads its email again whenever it opens, also
+    // when the same sheet closes and reopens on a row without remounting: a
+    // cached detail may say an email is still retrying after the list has
+    // seen it settle.
+    staleTime: 0,
+    refetchInterval: current => {
+      const data = current.state.data;
+      return data?.source === "queued" && isUnsettled(data.detail.state)
+        ? UNSETTLED_POLL_MS
+        : false;
+    },
   });
 }

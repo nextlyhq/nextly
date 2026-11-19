@@ -78,13 +78,13 @@ describe("an Accordion's icon", () => {
     expect(out).toContain(`${ICON} { display: none }`);
   });
 
-  it("restores the browser's marker for Browser default, over a row set elsewhere", () => {
-    // A block default of Chevron makes the summary a row with no marker; set
-    // on the node, Browser default rolls both back to the browser's own.
+  it("draws a stored Browser default as the plus, in the title row", () => {
+    // Browser default is no longer offered; a site that chose it keeps a
+    // value the validator accepts, and it draws exactly what Plus draws.
     const out = written({ disclosureIcon: "browser" });
-    expect(out).toContain(`${ICON} { display: none }`);
-    expect(out).toContain("> details > summary { display: revert }");
-    expect(out).toContain("> details > summary { list-style: revert }");
+    const plus = written({ disclosureIcon: "plus" });
+    expect(out).toEqual(plus.map(each => each.replace(": plus", ": browser")));
+    expect(out.join("\n")).not.toContain("revert");
   });
 
   it("expands a keyword stored in any spelling the validator accepts", () => {

@@ -5,8 +5,10 @@ import type React from "react";
 import { useEffect, useState } from "react";
 
 import {
+  AdminBusy,
   AdminNoRole,
   AdminUnavailable,
+  type ServerBusyWait,
 } from "@admin/components/guards/AdminPending";
 import { ROUTES } from "@admin/constants/routes";
 import {
@@ -22,6 +24,7 @@ import {
 import {
   getCurrentUserId,
   invalidateSessionCache,
+  SessionUnavailableError,
 } from "@admin/lib/auth/session";
 import {
   announceSignedOut,
@@ -84,6 +87,7 @@ function RedirectNotice({ destination }: { destination: string }) {
 /** What the guard draws: one answer, read from the session's state. */
 type GuardScreen =
   | "unavailable"
+  | "busy"
   | "no-role"
   | "screen"
   | "frame"
@@ -92,7 +96,8 @@ type GuardScreen =
 
 /**
  * Which of the guard's screens the session's state calls for, in order: a
- * server that could not answer, a confirmed session, then, while nothing is
+ * server that could not answer (busy, when it was up and asked the admin to
+ * wait), a confirmed session, then, while nothing is
  * decided, the frame for a browser that has signed in here and the sign-in
  * form for any other, the form kept in place once the server says there is no
  * session, and otherwise the move to where the answer sends the visitor.
@@ -100,6 +105,8 @@ type GuardScreen =
 function guardScreen(state: {
   /** The server could not answer, after the query's own retries. */
   unavailable: boolean;
+  /** A server that refused with a 429, and how long it asked to wait. */
+  busy: ServerBusyWait | null;
   settled: boolean;
   confirmed: boolean;
   /** The confirmed session's account holds a role. */
@@ -107,7 +114,9 @@ function guardScreen(state: {
   signedInHere: boolean;
   signInInPlace: boolean;
 }): GuardScreen {
-  if (state.unavailable) return "unavailable";
+  if (state.unavailable) {
+    return state.busy === null ? "unavailable" : "busy";
+  }
   // A session the server confirmed, of an account with no role: nothing here
   // is its to do, so it is told so instead of being shown the staff screens.
   if (state.confirmed) return state.hasRole ? "screen" : "no-role";
@@ -129,6 +138,27 @@ interface GuardReading {
   isAuthenticated: boolean | null;
   /** The signed-in account's email, for the no-role screen. */
   email: string | null;
+  /** The busy server's refusal, for the busy screen. */
+  busy: ServerBusyWait | null;
+}
+
+/**
+ * Whether the query's error is a busy server's 429 with the wait it named.
+ * The error itself is the wait, so each refusal keeps its own identity.
+ */
+function isBusyRefusal(
+  error: unknown
+): error is SessionUnavailableError & ServerBusyWait {
+  return (
+    error instanceof SessionUnavailableError &&
+    error.status === 429 &&
+    error.retryAfterSeconds !== null
+  );
+}
+
+/** The busy server's refusal the query failed with, or null for any other failure. */
+function busyRefusal(error: unknown): ServerBusyWait | null {
+  return isBusyRefusal(error) ? error : null;
 }
 
 /**
@@ -144,7 +174,8 @@ function readGuard(
   query: ReturnType<typeof useAuthSession>,
   signedInHere: boolean
 ): GuardReading {
-  const { data, status, fetchStatus } = query;
+  const { data, status, fetchStatus, error } = query;
+  const busy = busyRefusal(error);
   const session = status === "success" ? data : undefined;
   const redirect = session ? redirectFor(session) : null;
   // A visitor already on the sign-in form stays on it when the server says
@@ -155,6 +186,7 @@ function readGuard(
   return {
     screen: guardScreen({
       unavailable: status === "error" && fetchStatus !== "fetching",
+      busy,
       settled: session !== undefined,
       confirmed: session !== undefined && redirect === null,
       // Only a session that says it holds no role is role-less: one that does
@@ -167,6 +199,7 @@ function readGuard(
     signInInPlace,
     isAuthenticated: session ? session.isAuthenticated : null,
     email: session?.email ?? null,
+    busy,
   };
 }
 
@@ -214,10 +247,8 @@ export function PrivateRoute({
   // Read once per visit: it chooses the first screen, and the answer below
   // decides everything after it.
   const [signedInHere] = useState(hasSignedInHere);
-  const { screen, redirect, signInInPlace, isAuthenticated, email } = readGuard(
-    query,
-    signedInHere
-  );
+  const { screen, redirect, signInInPlace, isAuthenticated, email, busy } =
+    readGuard(query, signedInHere);
 
   useDeviceMemory(isAuthenticated);
 
@@ -254,6 +285,7 @@ export function PrivateRoute({
       onCheckRoleAgain={() => void checkRoleAgain()}
       onSignOut={() => void logout()}
       email={email}
+      busy={busy}
       destination={redirect?.destination ?? "login"}
     />
   );
@@ -271,6 +303,7 @@ function GuardScreenView({
   onCheckRoleAgain,
   onSignOut,
   email,
+  busy,
   destination,
 }: {
   screen: GuardScreen;
@@ -281,12 +314,21 @@ function GuardScreenView({
   onSignOut: () => void;
   /** The signed-in account's email, for the no-role screen. */
   email: string | null;
+  /** The busy server's refusal, for the busy screen. */
+  busy: ServerBusyWait | null;
   /** Where a settled answer that is not a session sends the visitor. */
   destination: string;
 }): React.JSX.Element {
   switch (screen) {
     case "unavailable":
       return <AdminUnavailable onRetry={onRetry} />;
+    case "busy":
+      // Chosen only with a refusal in hand; the check keeps the type honest.
+      return busy ? (
+        <AdminBusy wait={busy} onRetry={onRetry} />
+      ) : (
+        <AdminUnavailable onRetry={onRetry} />
+      );
     case "no-role":
       return (
         <AdminNoRole

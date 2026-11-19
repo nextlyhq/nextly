@@ -29,12 +29,12 @@ import {
 } from "./plain-layout";
 import { DraftInput, useApply, useLayoutTiers } from "./plain-layout-controls";
 import { SegmentChoices } from "./segment-choices";
-import type { ParentLayout } from "./style-inspector";
 import { SettingSlot } from "./settings-filter";
 import {
   StyleTargetContext,
   type StyleFieldSurroundings,
 } from "./style-field-surroundings";
+import type { ParentLayout } from "./style-inspector";
 
 /** How the selected block's parent lays it out, lent by the Style panel. */
 export const ParentArrangementContext: React.Context<ParentLayout | undefined> =

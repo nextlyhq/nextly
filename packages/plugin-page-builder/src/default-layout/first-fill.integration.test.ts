@@ -44,6 +44,7 @@ import { pageBuilder } from "../plugin";
 import { ensureDefaultLayout } from "./ensure-default";
 import { fillMarkStore, type FillMarkStore } from "./fill-mark";
 import { fillDefaultOnFirstPublish } from "./first-fill";
+import { OWN_SET_COMPONENT_CONTEXT_KEY } from "./first-fill-hook";
 import { PAGE_BUILDER_SETTINGS_SLUG } from "./settings-single";
 import { starterRecordStore, type StarterRecord } from "./starter-record";
 import type { StarterParts } from "./starter-seed";
@@ -285,6 +286,38 @@ describe.each(getConfiguredTestDialects())(
         header: { component: header, tell: AUTHOR.id },
         footer: { component: footer, tell: AUTHOR.id },
       });
+    });
+
+    it("fills nothing for a header made for a set of its own, and still fills for the next first header", async () => {
+      const t = await boot();
+      const record = await starter();
+      const before = areasOf(await main(t));
+      expect(before.header).toBe(record.header.id);
+
+      // Published by a person, as a set's own "Create a header" makes it.
+      await t.nextly.create({
+        collection: COMPONENTS_SLUG,
+        data: {
+          title: "Landing header",
+          slug: "landing-header",
+          content: documentOf("landing-header-node", "Landing header"),
+          area: "header",
+          status: "published",
+        },
+        overrideAccess: true,
+        user: AUTHOR,
+        context: { [OWN_SET_COMPONENT_CONTEXT_KEY]: true },
+      });
+      expect(areasOf(await main(t))).toEqual(before);
+      expect((await marks().read()).header).toBeUndefined();
+
+      // The hook still runs for an ordinary first header, so the case above
+      // reached it and was told apart, not missed.
+      const header = await component(t, "Acme header", {
+        area: "header",
+        status: "published",
+      });
+      expect(areasOf(await main(t)).header).toBe(header);
     });
 
     it("waits for a draft header's publish, and counts a component marked as the header after it was published", async () => {

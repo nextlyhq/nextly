@@ -65,6 +65,7 @@ import {
   type RegionMarkPlacement,
 } from "./canvas-region-placement";
 import {
+  boxInFrameViewport,
   canvasContentRect,
   canvasRootFrom,
   onScreenBandOf,
@@ -192,7 +193,6 @@ export function CanvasRegionFrame({
       {...{ [CHROME_ATTRIBUTE]: "", [REGION_ATTRIBUTE]: region.area }}
       {...(selected ? { [REGION_SELECTED_ATTRIBUTE]: "" } : {})}
       role="button"
-      aria-label={region.label}
       aria-pressed={selected}
       tabIndex={0}
       onClick={choose}
@@ -205,7 +205,10 @@ export function CanvasRegionFrame({
       // hover cue changes no state and so runs no effect.
       onPointerEnter={() => markScheme(frame.current)}
     >
-      <div className="nx-canvas-region__content" inert>
+      {/* Its drawn content is a picture of the region, not its name: hidden
+          from a screen reader, and named by the text after it. Not an
+          aria-label, which would have to hold every word the content draws. */}
+      <div className="nx-canvas-region__content" inert aria-hidden="true">
         <RegionContent
           document={region.document}
           definitions={region.definitions}
@@ -213,6 +216,7 @@ export function CanvasRegionFrame({
           sheet={sheet}
         />
       </div>
+      <span className="nx-canvas-region__name">{region.label}</span>
       <span
         ref={tag}
         className="nx-canvas-region__tag"
@@ -494,4 +498,120 @@ function markPlaceOf(
       width: size.width,
     }),
   };
+}
+
+/** The attribute on a band drawn where an area has no region, naming the area. */
+export const EMPTY_REGION_ATTRIBUTE = "data-nx-region-empty";
+
+/** A rectangle in the editor's own coordinates, where a menu opens from. */
+export interface EmptyRegionAnchor {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * What the host has the band say and offer where an area has no region: why
+ * the area is empty, and either the two ways to fill it or who to ask.
+ * @experimental Settles with the site's empty header and footer.
+ */
+export interface EmptyRegionBandProps {
+  /** The area has nothing yet, and what that means for the site's pages. */
+  readonly sentence: string;
+  readonly actions:
+    | {
+        /** Fill it with a new one, as "Create a header" says. */
+        readonly create: string;
+        readonly onCreate: () => void;
+        /** Choose one already made, as "Use a component" says. */
+        readonly use: string;
+        /**
+         * Open the choice, from the button's place in the editor's own
+         * coordinates: the menu is drawn there, over the canvas.
+         */
+        readonly onUse: (anchor: EmptyRegionAnchor) => void;
+        /** While a choice is being written: both wait. */
+        readonly busy?: boolean;
+      }
+    | {
+        /** For someone who may not fill it: who can. */
+        readonly ask: string;
+      };
+}
+
+/**
+ * The band drawn in an area's place on the canvas while the page's header &
+ * footer set has nothing there: a dashed box saying so, with the host's ways
+ * to fill it. Drawn in the editor's canvas alone, in the region's place and
+ * never in the page: a visitor's page draws nothing there.
+ *
+ * Its buttons are the frame's own, styled by the frame's sheet with the
+ * values the editor hands it, since the editor's stylesheet does not reach
+ * into the frame. The choice it opens is the host's, drawn over the canvas
+ * in the editor's document, from the button's place mapped there.
+ */
+export function EmptyRegionBand({
+  area,
+  band,
+}: {
+  readonly area: RegionArea;
+  readonly band: EmptyRegionBandProps;
+}): JSX.Element {
+  const canvas = useCanvasFrame();
+  const { actions } = band;
+  // The button's box in the frame, mapped corner by corner to the editor's
+  // coordinates, as a context menu opened in the frame is.
+  const anchorOf = (element: HTMLElement): EmptyRegionAnchor => {
+    const box = boxInFrameViewport(element);
+    const start = canvas.toHost({ x: box.x, y: box.y });
+    const end = canvas.toHost({
+      x: box.x + box.width,
+      y: box.y + box.height,
+    });
+    return {
+      x: start.x,
+      y: start.y,
+      width: end.x - start.x,
+      height: end.y - start.y,
+    };
+  };
+  return (
+    <div
+      className="nx-canvas-region-empty"
+      {...{ [CHROME_ATTRIBUTE]: "", [EMPTY_REGION_ATTRIBUTE]: area }}
+      role="group"
+      aria-label={area === "header" ? "Site header" : "Site footer"}
+      // A press here is the band's, never a selection on the canvas.
+      onPointerDown={event => event.stopPropagation()}
+      onClick={event => event.stopPropagation()}
+      onDoubleClick={event => event.stopPropagation()}
+    >
+      <p className="nx-canvas-region-empty__sentence">{band.sentence}</p>
+      {"ask" in actions ? (
+        <p className="nx-canvas-region-empty__ask">{actions.ask}</p>
+      ) : (
+        <div className="nx-canvas-region-empty__actions">
+          <button
+            type="button"
+            data-nx-region-empty-action="create"
+            disabled={actions.busy === true}
+            onClick={() => actions.onCreate()}
+          >
+            {actions.create}
+          </button>
+          <button
+            type="button"
+            data-nx-region-empty-action="use"
+            aria-haspopup="listbox"
+            disabled={actions.busy === true}
+            onClick={event => actions.onUse(anchorOf(event.currentTarget))}
+          >
+            {actions.use}
+            <span aria-hidden="true"> ▾</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
