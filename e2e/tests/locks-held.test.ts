@@ -98,12 +98,12 @@ const WRITERS: {
   {
     lock: "reviewWorkflow",
     what: "works the review workflow",
-    // Its settings written directly, or anything through the workflow
-    // helpers, which sign in people holding its steps and reset its settings.
+    // Its settings route named at all (Settings › Workflows writes them
+    // through the screen, then reads them back there), or anything through
+    // the workflow helpers, which sign in people holding its steps and reset
+    // its settings.
     writes: source =>
-      (source.includes("/settings") &&
-        source.includes("workflows/") &&
-        /\.patch\(/.test(source)) ||
+      /\/workflows\/[a-z-]+\/settings/.test(source) ||
       /from\s+["'][./]*support\/workflow["']/.test(source),
   },
   {
@@ -249,6 +249,11 @@ test("recognises each kind of write it is there for", () => {
   expect(
     WRITERS.find(w => w.lock === "reviewWorkflow")?.writes(
       'await page.request.patch("/admin/api/workflows/review/settings", { data });'
+    )
+  ).toBe(true);
+  expect(
+    WRITERS.find(w => w.lock === "reviewWorkflow")?.writes(
+      'const SETTINGS = "/admin/api/workflows/review/settings";'
     )
   ).toBe(true);
   // Another support module whose name starts the same is not the workflow's.
