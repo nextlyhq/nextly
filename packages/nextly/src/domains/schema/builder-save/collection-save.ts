@@ -1910,7 +1910,8 @@ function pushTargetOf(
       entity === null
         ? []
         : translatedColumnNames({
-            fields: entity.fields,
+            // The definition file's fields, read as the save's other checks read them.
+            fields: entity.fields as unknown as FieldDefinition[],
             entityLocalized: translated,
             dialect: deps.adapter.getCapabilities().dialect,
             builtBy: kindOf(save).builtBy,
