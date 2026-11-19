@@ -479,6 +479,20 @@ describe("the table at each width", () => {
     }
   );
 
+  it.each([358, 664, 1046])(
+    "at %ipx lets a problem's words break inside a long word, so none runs past its card",
+    width => {
+      // A message can name an environment variable, a word too long for a
+      // phone's card; without a break inside it, it runs past the edge.
+      atWidth(width);
+      serving(LIST);
+      render(<SeoProblemsPage />);
+      for (const words of screen.getAllByText("No public address")) {
+        expect(words).toHaveClass("[overflow-wrap:anywhere]");
+      }
+    }
+  );
+
   it("keeps every column for the cards a narrow screen draws instead", () => {
     // Below the table's own 28rem the list is drawn as cards, each naming
     // every column, so nothing is folded there.

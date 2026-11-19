@@ -227,7 +227,10 @@ function columnsFor(
           // columns their room, and wraps within it.
           <div className={`flex flex-col gap-0.5 ${PROBLEM_MEASURE[layout]}`}>
             <span className="font-semibold">{row.title}</span>
-            <span className="text-sm text-muted-foreground">
+            {/* A long word, such as an environment variable a message
+                names, breaks inside itself rather than running past a
+                phone's card. */}
+            <span className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
               {/* One problem says what is wrong; several, what they share. */}
               {row.problems.length === 1 && only !== undefined
                 ? only.what
