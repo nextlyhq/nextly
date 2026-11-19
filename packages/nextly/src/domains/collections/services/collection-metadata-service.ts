@@ -1306,6 +1306,9 @@ export class CollectionMetadataService extends BaseService {
         ReturnType<DynamicCollectionService["updateCollectionMetadata"]>
       >;
       let writtenInSave = false;
+      // A failure after the change and its migration were saved without the save writer: the row
+      // still records them, and this is the answer once it has.
+      let loadFailure: NextlyError | undefined;
       if (writerDeps !== undefined) {
         const refused = await this.writeUpdate(
           writerDeps,
@@ -1463,27 +1466,28 @@ export class CollectionMetadataService extends BaseService {
             // Without the save writer nothing is recorded yet, so the update is answered as failed
             // with no row written. With it, the change and its row were recorded together, and
             // only this process's view of the table could not be brought up to them.
-            // Its status is its code's (`NEXTLY_MIGRATION_APPLY_FAILED`), never one chosen here.
+            // Without the save writer the change has been pushed and its migration saved by now,
+            // so the row records them too, marked failed, as it always has: a row left on the old
+            // fields would have a later save built from it drop the new column. The update is then
+            // answered as the failure it is, with its code's status (`NEXTLY_MIGRATION_APPLY_FAILED`).
             if (!writtenInSave) {
-              return failureOf(
-                NextlyError.is(migrationError)
-                  ? migrationError
-                  : new NextlyError({
-                      code: "NEXTLY_MIGRATION_APPLY_FAILED",
-                      publicMessage: "The schema change could not be applied.",
-                      logMessage:
-                        migrationError instanceof Error
-                          ? migrationError.message
-                          : String(migrationError),
-                      logContext: {
-                        reason: "update-not-brought-up",
-                        slug: params.collectionName,
-                      },
-                      ...(migrationError instanceof Error
-                        ? { cause: migrationError }
-                        : {}),
-                    })
-              );
+              updateArtifacts.metadataUpdates.migrationStatus = "failed";
+              loadFailure = new NextlyError({
+                code: "NEXTLY_MIGRATION_APPLY_FAILED",
+                publicMessage:
+                  "The schema change and its migration were saved, but the server could not load the collection's new shape, so its record is marked failed.",
+                logMessage:
+                  migrationError instanceof Error
+                    ? migrationError.message
+                    : String(migrationError),
+                logContext: {
+                  reason: "update-not-brought-up",
+                  slug: params.collectionName,
+                },
+                ...(migrationError instanceof Error
+                  ? { cause: migrationError }
+                  : {}),
+              });
             }
           }
 
@@ -1519,6 +1523,8 @@ export class CollectionMetadataService extends BaseService {
           this.dialect
         );
       }
+
+      if (loadFailure !== undefined) return failureOf(loadFailure);
 
       // Ensure CRUD permissions exist for the collection (idempotent)
       await this.seedPermissionsForCollection(params.collectionName);
