@@ -51,6 +51,7 @@ import {
   toPluralLabel,
   toSingularLabel,
 } from "../../../shared/lib/pluralization";
+import type { FieldGroupRegistryName } from "../../field-groups/storage/resolve-storage-names";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
@@ -393,14 +394,28 @@ export function singleRowValues(entity: UiSchemaEntity): SingleRowValues {
   };
 }
 
-/** The values of the component registry row for a manifest entity. Pure. */
-export function componentRowValues(entity: UiSchemaEntity): ComponentRowValues {
-  const keys = keysOf(STORAGE_FORMAT.registryTable, entity.slug);
+/**
+ * The values of the component registry row for a manifest entity. Pure.
+ *
+ * `registryTable` is the field-group registry the row is written to, under the name the site's
+ * storage holds it: the table the row names follows from it (`registry-row-keys`). Absent, the
+ * legacy registry.
+ */
+export function componentRowValues(
+  entity: UiSchemaEntity,
+  registryTable: FieldGroupRegistryName = STORAGE_FORMAT.registryTable,
+  /**
+   * The table the group's registry row already names, where it has one: a row is never repointed
+   * at a derived name, which would address storage the group does not have.
+   */
+  storedTableName?: string
+): ComponentRowValues {
+  const keys = keysOf(registryTable, entity.slug);
   return {
     id: keys.id,
     slug: entity.slug,
     label: singular(entity),
-    tableName: keys.table_name,
+    tableName: storedTableName ?? keys.table_name,
     fields: storedFields(entity),
     source: "ui",
     localized: entity.localized === true,
@@ -562,9 +577,13 @@ export function buildSingleMetadataUpsert(
 
 export function buildComponentMetadataUpsert(
   entity: UiSchemaEntity,
-  dialect: Dialect
+  dialect: Dialect,
+  /** The field-group registry the row is upserted into (`componentRowValues`). */
+  registryTable: FieldGroupRegistryName = STORAGE_FORMAT.registryTable,
+  /** The table the row already names, where it has one (`componentRowValues`). */
+  storedTableName?: string
 ): string {
-  const row = componentRowValues(entity);
+  const row = componentRowValues(entity, registryTable, storedTableName);
   const columns: Column[] = [
     { name: "id", value: sqlStr(row.id, dialect) },
     { name: "slug", value: sqlStr(row.slug, dialect) },
@@ -597,5 +616,5 @@ export function buildComponentMetadataUpsert(
   columns.push(...timestampColumns(dialect));
   columns.push(...adminColumns(row.admin, dialect));
   columns.push(...descriptionColumns(row.description, dialect));
-  return buildUpsert(STORAGE_FORMAT.registryTable, columns, dialect);
+  return buildUpsert(registryTable, columns, dialect);
 }

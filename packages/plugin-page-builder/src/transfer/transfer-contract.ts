@@ -141,6 +141,14 @@ export interface TransferFile {
   readonly classes: readonly NamedClass[];
   /** The variables the file's styles use, with the values the source site gives them. */
   readonly tokens: readonly SiteToken[];
+  /**
+   * The custom-property prefix the source site writes its variables under,
+   * which a `var()` in the file's CSS names one by. Written only where it
+   * isn't the default (`--site-`), so a file from a site on the default reads
+   * in a Nextly that predates it; a file without one was written under the
+   * default. An import points each such `var()` at its own prefix.
+   */
+  readonly tokenPrefix?: string;
   readonly breakpoints: readonly TransferBreakpoint[];
   readonly media: readonly TransferMedia[];
   /** Every block type the file's documents use, sorted. */

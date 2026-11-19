@@ -295,6 +295,35 @@ describe("restoreClasses", () => {
     expect(after.restored).toBe(0);
   });
 
+  it("takes out an override remade since, while it equals the code's class as the site now draws it", () => {
+    // The strip recorded the override across one fluid range; the site's
+    // range changed since, which remade the override's size and the code's
+    // class as the site draws it alike. It holds nothing the site edited.
+    const recorded = splitClass(coded, ids);
+    const drawnNow = {
+      ...coded,
+      styles: {
+        base: {
+          base: { color: "#1", fontSize: "remade" },
+          mobile: { color: "#8" },
+        },
+      },
+    };
+    const remade = stripClass(drawnNow, ids);
+    const restored = restoreClasses(
+      [remade],
+      [drawnNow as never],
+      {
+        classes: { "c-code": recorded.removed ?? {} },
+        overridden: ["c-code"],
+        overrides: { "c-code": recorded.entry },
+      },
+      ids
+    );
+    expect(restored.value).toEqual([]);
+    expect(restored.restored).toBe(1);
+  });
+
   it("keeps an override the author changed since, filling only what it lacks", () => {
     const fromCode = splitClass(coded, ids);
     const edited = {

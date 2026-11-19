@@ -16,6 +16,8 @@ export const NEW_PAGE_WORDS = {
   headerFooter: "Header & footer",
   startFrom: "Start from",
   blank: "Blank",
+  /** Under a starter the site can't use, above the server's reason. */
+  notAvailable: "Not available on this site",
   savedAsDraft: "Saved as a draft.",
   visibleAtOnce: "Visitors can see it as soon as it is created.",
   cancel: "Cancel",

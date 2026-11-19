@@ -21,3 +21,18 @@ export interface StarterPagesResponse {
   readonly items: readonly NewPageStarter[];
   readonly meta: PaginationMeta;
 }
+
+/**
+ * @experimental The sentence a page made from a starter the site can't use is
+ * refused with, and the editor says when one is chosen: the starter by name,
+ * then the reason the pickers show under it, where one is known. Here, free of
+ * server imports, so the server's refusal and the editor's notice are one
+ * sentence.
+ */
+export function starterUnavailableSentence(
+  label: string,
+  reason?: string
+): string {
+  const sentence = `The starter page "${label}" isn't available on this site.`;
+  return reason === undefined ? sentence : `${sentence} ${reason}`;
+}
