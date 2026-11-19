@@ -101,12 +101,16 @@ test("a reviewer opens a submitted note at its changes and approves what they re
     await step(page, id, "submit");
     await step(page, id, "approve");
     const published = await page.request.patch(`${NOTES}/${id}`, {
-      data: { status: "published" },
+      // A write names the version it changes; seeding replaces whatever is stored.
+      data: { status: "published", _overwrite: true },
     });
     expect(published.ok(), await published.text()).toBe(true);
     await expectStage(page, id, null);
     const changed = await page.request.patch(`${NOTES}/${id}`, {
-      data: { summary: `The summary under review, ${stamp}.` },
+      data: {
+        summary: `The summary under review, ${stamp}.`,
+        _overwrite: true,
+      },
     });
     expect(changed.ok(), await changed.text()).toBe(true);
     await step(page, id, "submit");

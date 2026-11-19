@@ -44,8 +44,10 @@ async function written(
   locale: string,
   data: { title?: string; summary?: string }
 ): Promise<void> {
+  // A write names the version it changes; this one replaces whatever is
+  // stored, as seeding does.
   const saved = await page.request.patch(`${PAGES}/${id}?locale=${locale}`, {
-    data,
+    data: { ...data, _overwrite: true },
   });
   expect(saved.ok(), await saved.text()).toBe(true);
 }
