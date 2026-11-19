@@ -551,7 +551,10 @@ export class CollectionMetadataService extends BaseService {
    * migration, recorded the same way. A refusal or failure comes back as the
    * result the caller returns. `writeRow`, the update's registry write, runs in
    * the transaction that records the files, so a failed write takes their
-   * record back with it and the update answers that it failed part way.
+   * record back with it and the update answers that it failed part way. A push
+   * that stopped part way is settled to what of it applied (`onSettled`): the
+   * same write records the fields that landed, and `settled` is told them, so
+   * the caller can bring the running shape to them.
    */
   private async writeUpdate(
     deps: CollectionSaveDeps,
@@ -571,7 +574,8 @@ export class CollectionMetadataService extends BaseService {
     },
     update: UpdateSettings,
     push: ((onLanded: () => void) => Promise<void>) | undefined,
-    writeRow: () => Promise<void>
+    writeRow: (applied?: FieldDefinition[]) => Promise<void>,
+    settled: (applied: FieldDefinition[]) => void
   ): Promise<MetadataServiceResult | undefined> {
     // A push that fails after changing the database keeps the update's files, recorded applied
     // nowhere, and its failure tells the admin so; one that fails before withdraws them.
@@ -618,7 +622,20 @@ export class CollectionMetadataService extends BaseService {
           junctions: relations.junctions,
           keys: relations.keys,
         },
-        { appliedBy, inLastTransaction: writeRow }
+        {
+          appliedBy,
+          inLastTransaction: () => writeRow(),
+          // A push stopped part way, settled: the row records the fields that landed, as the
+          // collection apply's does (`appliedFieldsOf`), in the settle's own transaction.
+          onSettled: async report => {
+            const { appliedFieldsOf } = await import(
+              "../../schema/builder-save/stopped-save"
+            );
+            const applied = appliedFieldsOf(beforeFields, fields, report);
+            await writeRow(applied);
+            settled(applied);
+          },
+        }
       );
       pushed.throwIfFailed(written.files, written.checked);
       return undefined;
@@ -1309,6 +1326,8 @@ export class CollectionMetadataService extends BaseService {
       // A failure after the change and its migration were saved without the save writer: the row
       // still records them, and this is the answer once it has.
       let loadFailure: NextlyError | undefined;
+      // Where the save writer settled a push that stopped part way: the fields that landed.
+      let settledFields: FieldDefinition[] | undefined;
       if (writerDeps !== undefined) {
         const refused = await this.writeUpdate(
           writerDeps,
@@ -1317,24 +1336,52 @@ export class CollectionMetadataService extends BaseService {
           updateArtifacts,
           body,
           updateArtifacts.migrationSQL ? pushUpdate : undefined,
-          async () => {
+          async (applied?: FieldDefinition[]) => {
             // The row and the stored schema version in one transaction, joined to the record of
-            // the files (`writeRegistryRows`): recorded applied, as the files are.
+            // the files (`writeRegistryRows`): recorded applied, as the files are. A settled stop
+            // records the fields that landed rather than those asked for.
             updatedInSave = await writeRegistryRows(this.adapter, () =>
               this.collectionService.updateCollectionMetadata(
                 params.collectionName,
                 {
                   ...updateArtifacts.metadataUpdates,
-                  ...(updateArtifacts.migrationSQL
+                  ...(applied === undefined ? {} : { fields: applied }),
+                  ...(updateArtifacts.migrationSQL || applied !== undefined
                     ? { migrationStatus: "applied" as const }
                     : {}),
                 }
               )
             );
             writtenInSave = true;
+          },
+          applied => {
+            settledFields = applied;
           }
         );
-        if (refused !== undefined) return refused;
+        if (refused !== undefined) {
+          // A settled stop is answered as the failure it is, with this process's running shape
+          // brought to what landed first, so a write or read through the API reaches it.
+          if (settledFields !== undefined) {
+            const wasLocalized =
+              (before as { localized?: boolean }).localized === true;
+            const isLocalized =
+              body.localized !== undefined
+                ? body.localized === true
+                : wasLocalized;
+            const wasStatus = (before as { status?: boolean }).status === true;
+            const hasStatus =
+              body.status !== undefined ? body.status === true : wasStatus;
+            await this.registerRuntimeSchema(before.tableName, settledFields, {
+              hasStatus,
+              localized: storesPerLanguage({ localized: isLocalized }),
+              companionStatus: publishesPerLanguage({
+                localized: isLocalized,
+                status: hasStatus,
+              }),
+            });
+          }
+          return refused;
+        }
       }
 
       // If the data table changed, persist the SQL migration. No Drizzle
