@@ -359,15 +359,35 @@ async function runUpdate(
   realReconcileCalls.count = 0;
   adapter = makeAdapter(dialect, { mainTableExists, onStatement });
   const registry = wireRegistry(options.existing ?? existingSingle());
-  const result = await dispatchSingles(
-    "updateSingleSchema",
-    { slug: "page" },
-    payload
-  );
+  // A migration that failed past its change is answered as a failure once its row is written;
+  // any other failure is raised to the case.
+  let result: unknown;
+  let failedAnswer: string | undefined;
+  try {
+    result = await dispatchSingles(
+      "updateSingleSchema",
+      { slug: "page" },
+      payload
+    );
+  } catch (error) {
+    if (
+      !NextlyError.is(error) ||
+      !error.publicMessage.includes("was saved, but its migration failed")
+    ) {
+      throw error;
+    }
+    failedAnswer = error.publicMessage;
+  }
   const written = registry.updateSingle.mock.calls[0]?.[1] as
     | { migrationStatus?: string }
     | undefined;
-  return { registry, result, sql: executed.join("\n"), written };
+  return {
+    registry,
+    result,
+    failedAnswer,
+    sql: executed.join("\n"),
+    written,
+  };
 }
 
 beforeEach(() => {
@@ -499,7 +519,7 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     // DROPPED, and only then does clearing the transition marker refuse a dotted slug. Raise there
     // and the companion is gone while the row still says the single is localized, so every later
     // read targets a table that is not there — with nothing recording the state.
-    const { written } = await runUpdate(
+    const { written, failedAnswer } = await runUpdate(
       { localized: false },
       {
         existing: existingSingle({ localized: true }),
@@ -510,6 +530,9 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     );
 
     expect(written?.migrationStatus).toBe("failed");
+    expect(failedAnswer, "answered as failed").toContain(
+      "its translations table did not follow the change"
+    );
   });
 
   it.each([
@@ -528,7 +551,7 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
       // Retracting is the claim that holds for both: no longer describable from here. The rebuild
       // in `ensure-runtime-table.ts` then PROBES the database for where the columns physically
       // live, which is the fact any bound shape would have been guessing.
-      const { written } = await runUpdate(
+      const { written, failedAnswer } = await runUpdate(
         { localized: true },
         {
           existing: existingSingle({ localized: false }),
@@ -538,6 +561,9 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
       );
 
       expect(written?.migrationStatus).toBe("failed");
+      expect(failedAnswer, "answered as failed").toContain(
+        "its translations table did not follow the change"
+      );
       // The rows must reach DIFFERENT states, or the parameterization is decoration: "before" must
       // not have run the reconcile at all, "after" must have run it to completion.
       expect(realReconcileCalls.count).toBe(when === "before" ? 0 : 1);
@@ -568,13 +594,16 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     // A create that got its `CREATE TABLE` through and then failed on an index leaves the table
     // PRESENT but incomplete. Every later save takes the alter branch, and an ALTER re-establishes
     // nothing it does not mention, so the missing artifact stays missing.
-    const { sql, written } = await runUpdate(
+    const { sql, written, failedAnswer } = await runUpdate(
       { fields: [{ name: "heading", type: "text" }] },
       { existing: existingSingle({ migrationStatus: "failed" }) }
     );
 
     expect(sql).not.toMatch(/ALTER TABLE/i);
     expect(written?.migrationStatus).toBe("failed");
+    expect(failedAnswer, "answered as failed").toContain(
+      "an earlier change to it did not finish"
+    );
   });
 
   it("leaves a failed single failed even when its alter runs statements", async () => {
@@ -582,7 +611,7 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     // DESCRIBES instead. An unrelated field edit against the same incomplete table emits a real
     // ALTER and runs it — plenty of statements, none of them anywhere near the index that never
     // got created. Counting statements would clear the one durable record that something is wrong.
-    const { sql, written } = await runUpdate(
+    const { sql, written, failedAnswer } = await runUpdate(
       {
         fields: [
           { name: "heading", type: "text" },
@@ -594,6 +623,9 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
 
     expect(sql, "the alter really did run").toMatch(/ALTER TABLE/i);
     expect(written?.migrationStatus).toBe("failed");
+    expect(failedAnswer, "answered as failed").toContain(
+      "an earlier change to it did not finish"
+    );
   });
 
   it("clears a failed single when the save rebuilds the whole table", async () => {

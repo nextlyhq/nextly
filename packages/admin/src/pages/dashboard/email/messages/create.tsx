@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import {
-  DEFAULT_VALUES,
+  newEmailValues,
   EmailTemplateForm,
   formValuesToCreatePayload,
   templateToFormValues,
@@ -42,6 +42,12 @@ export default function CreateEmailTemplatePage(): JSX.Element {
     const name = new URLSearchParams(window.location.search).get("name");
     return name?.trim() ? name.trim() : null;
   });
+  // How a blank email is made: written in blocks when the dialog said so.
+  const [givenFormat] = useState<"written" | "code">(() =>
+    new URLSearchParams(window.location.search).get("format") === "written"
+      ? "written"
+      : "code"
+  );
 
   // Support duplicating an existing template via ?duplicate=<id>. One-shot: the
   // URL param doesn't change while this page is mounted.
@@ -63,19 +69,15 @@ export default function CreateEmailTemplatePage(): JSX.Element {
 
   const initialValues = useMemo(() => {
     if (!duplicateTemplate) {
-      if (!givenName) return undefined;
-      return {
-        ...DEFAULT_VALUES,
-        name: givenName,
-        slug: generateSlug(givenName),
-      };
+      if (!givenName && givenFormat === "code") return undefined;
+      return newEmailValues(givenName ?? "", givenFormat);
     }
     const values = templateToFormValues(duplicateTemplate);
     values.name = givenName ?? `${values.name} (Copy)`;
     values.slug = givenName ? generateSlug(givenName) : `${values.slug}-copy`;
     values.isActive = false;
     return values;
-  }, [duplicateTemplate, givenName]);
+  }, [duplicateTemplate, givenName, givenFormat]);
 
   const handleSubmit = useCallback(
     (values: TemplateFormValues) => {

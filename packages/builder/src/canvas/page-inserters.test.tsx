@@ -299,6 +299,14 @@ describe("an empty page", () => {
       .join(" ");
     expect(described).toContain("Not available on this site");
     expect(described).toContain(reason);
+    // The note and reason sit over the picture, inside its box, and the title
+    // follows the box: the tile is a picture and a title, as tall as one the
+    // site can use, with the reason still there to read.
+    const box = tile.querySelector(".nx-page-start__tile-picture");
+    expect(box?.textContent).toContain("Not available on this site");
+    expect(box?.textContent).toContain(reason);
+    expect(box?.textContent).not.toContain("Contact");
+    expect(tile.lastElementChild?.textContent).toBe("Contact");
     // Pressing it, by pointer or by Enter (a button's click), starts nothing.
     fireEvent.click(tile);
     expect(onStarter).not.toHaveBeenCalled();
