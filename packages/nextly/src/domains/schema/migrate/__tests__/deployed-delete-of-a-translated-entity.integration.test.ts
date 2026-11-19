@@ -456,15 +456,12 @@ describe.each(getConfiguredTestDialects())(
       expect(deleted.code, deleted.said).toBeUndefined();
 
       // The file drops the translations table first; the listing reads it beside its table,
-      // each with the rows it held before the run.
+      // each of the entity's tables with its rows and the translations table as its table's.
       const lines = deleted.said.split("\n").map(line => line.trim());
-      const at = lines.findIndex(line =>
-        line.startsWith(`- table ${notes.table} (`)
-      );
+      const at = lines.indexOf(`- table ${notes.table} (1 row)`);
       expect(at, deleted.said).toBeGreaterThanOrEqual(0);
-      expect(lines[at], deleted.said).toMatch(/ \([1-9]\d* rows?\)$/);
       expect(lines[at + 1], deleted.said).toBe(
-        `- table ${notes.table}_locales (2 rows)`
+        `- table ${notes.table}_locales (2 rows), belonging to ${notes.table}`
       );
     }, 180_000);
 
