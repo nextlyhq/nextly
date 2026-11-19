@@ -27,7 +27,10 @@ import {
   configuredBesideRows,
   configuredTable,
 } from "../../shared/address-rule";
-import { isFieldGroupFieldType } from "../field-groups/storage/field-group-field-type";
+import {
+  fieldGroupSlugList,
+  isFieldGroupFieldType,
+} from "../field-groups/storage/field-group-field-type";
 
 import { siblingNameClash, type SiblingClashKind } from "./field-rules";
 import {
@@ -52,10 +55,11 @@ export interface SiblingClash {
   /**
    * The stored value both fields read and write, where they share one: at the
    * top level the column both become (both must have a column), or, for two
-   * field-group references, the instance rows both are stored as, which are
-   * keyed by the field's name (`_parent_field`, compared without regard to
-   * case as MySQL compares it); inside a group or a repeater the key of its
-   * value, which only one exact name shares.
+   * field-group references of a field group in common, the instance rows both
+   * are stored as in its table, which are keyed by the field's name
+   * (`_parent_field`, compared without regard to case as MySQL compares it);
+   * inside a group or a repeater the key of its value, which only one exact
+   * name shares.
    */
   shared: { column: string } | { key: string } | { parentField: string } | null;
 }
@@ -127,14 +131,32 @@ function sharedValue(
   ) {
     return { column };
   }
-  // Two field-group references store their instances in one table, each row keyed by the field's
-  // name, which MySQL compares without regard to case: two names equal ignoring case share rows.
+  return sharedInstanceRows(a, b);
+}
+
+/**
+ * The instance rows two top-level field-group references share, if any. Two references of one
+ * field group store their instances in that group's table, each row keyed by the field's name,
+ * which MySQL compares without regard to case: two names equal ignoring case that reference a
+ * group in common share rows. References to different groups keep theirs in different tables.
+ */
+function sharedInstanceRows(
+  a: NamedField,
+  b: NamedField
+): { parentField: string } | null {
   const parentField = a.name.toLowerCase();
   return isFieldGroupFieldType(a.type) &&
     isFieldGroupFieldType(b.type) &&
-    parentField === b.name.toLowerCase()
+    parentField === b.name.toLowerCase() &&
+    referenceAGroupInCommon(a, b)
     ? { parentField }
     : null;
+}
+
+/** Whether two field-group references name a field group in common (`fieldGroupSlugList`). */
+function referenceAGroupInCommon(a: NamedField, b: NamedField): boolean {
+  const groups = new Set(fieldGroupSlugList(a));
+  return fieldGroupSlugList(b).some(slug => groups.has(slug));
 }
 
 /**

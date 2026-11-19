@@ -360,22 +360,23 @@ const RECORDED_UNDER = {
 } as const;
 
 /**
- * The sibling-field check (`assertMigrationSiblingFields`), unless the judged entity is one the
- * input holds (`held`): that entity is described as the database already stands, not written, and
- * its pairs are judged where its definition is written.
+ * The sibling-field check (`assertMigrationSiblingFields`). Where the judged entity is one the
+ * input holds (`held`), described as the database already stands, a pair sharing a stored value
+ * that it held is kept, since its definition is judged where it is written; any pair it did not
+ * hold, such as one an extension adds, is refused.
  */
 function assertSiblingsUnlessHeld(
   input: { judged?: JudgedEntity; held?: readonly HeldEntity[] },
   ...check: Parameters<typeof assertMigrationSiblingFields>
 ): void {
   const { judged, held = [] } = input;
-  if (
+  const describesHeld =
     judged !== undefined &&
-    held.some(h => h.kind === judged.kind && h.entity.slug === judged.slug)
-  ) {
-    return;
-  }
-  assertMigrationSiblingFields(...check);
+    held.some(h => h.kind === judged.kind && h.entity.slug === judged.slug);
+  const [merged, latest, logger] = check;
+  assertMigrationSiblingFields(merged, latest, logger, {
+    heldSharingAs: describesHeld ? "existing" : "refused",
+  });
 }
 
 /** `merged` narrowed to the judged entity, or whole without one. */

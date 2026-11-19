@@ -267,6 +267,21 @@ describe("judgeSiblingFields", () => {
     ]);
   });
 
+  // References to different field groups keep their instances in different tables: one name on
+  // both shares nothing, so held it stays and new it is refused only as a name used twice.
+  it("leaves two field-group references of one name sharing nothing where they name different groups", () => {
+    const pair = [
+      { name: "cta", type: "component", component: "hero" },
+      { name: "cta", type: "component", component: "banner" },
+    ];
+    expect(siblingClashes(pair)[0].shared).toBeNull();
+    expect(judgeSiblingFields(pair, pair)).toEqual({
+      refused: [],
+      existing: siblingClashes(pair),
+      heldSharing: [],
+    });
+  });
+
   // Two field-group references keep their instances in one table, each row keyed by the field's
   // name, compared without regard to case: two of one name share those rows.
   it("refuses two field-group references of one name, held or not, as sharing their rows", () => {

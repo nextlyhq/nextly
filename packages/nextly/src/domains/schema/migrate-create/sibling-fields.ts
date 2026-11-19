@@ -57,14 +57,26 @@ function previousFields(
   return Array.isArray(settings?.fields) ? settings.fields : [];
 }
 
+/** How the migrate check takes a pair sharing a stored value that the entity already had. */
+export interface MigrationSiblingOptions {
+  /**
+   * `"refused"` (the default), as every pair sharing a stored value is; `"existing"` only where the
+   * entities judged describe the database as it already stands (a Builder save describing the
+   * entity before it), so a pair it held stays, and any pair it did not hold is still refused.
+   */
+  heldSharingAs?: "refused" | "existing";
+}
+
 /**
  * Judges every merged entity's sibling fields against the latest snapshot
- * (`null` when there is none): `refused` for each new pair, `existing` for
- * each pair the entity already had.
+ * (`null` when there is none): `refused` for each new pair, and each pair
+ * sharing a stored value, `existing` for each pair the entity already had
+ * (`options.heldSharingAs`).
  */
 export function judgeMigrationSiblingFields(
   merged: MigrationEntities,
-  latest: LatestSnapshot
+  latest: LatestSnapshot,
+  options: MigrationSiblingOptions = {}
 ): { refused: EntitySiblingClash[]; existing: EntitySiblingClash[] } {
   const kinds: Array<[SiblingEntityKind, Entities]> = [
     ["collection", merged.collections],
@@ -75,23 +87,46 @@ export function judgeMigrationSiblingFields(
   const existing: EntitySiblingClash[] = [];
   for (const [kind, list] of kinds) {
     for (const declared of list) {
-      const entity = { kind, slug: declared.slug };
-      const previous = previousFields(latest, kind, declared);
-      // Held without its fields: every pair is taken as it is.
-      const judged = judgeSiblingFields(
-        declared.fields,
-        previous === undefined ? declared.fields : previous,
-        // Configuration's entities are `define*` output; the Builder's come from its manifest.
-        {
-          definedInCode:
-            declared.settings?.source === "code" ? kind : undefined,
-        }
-      );
-      for (const clash of judged.refused) refused.push({ entity, clash });
-      for (const clash of judged.existing) existing.push({ entity, clash });
+      const judged = judgeDeclared(kind, declared, latest, options);
+      refused.push(...judged.refused);
+      existing.push(...judged.existing);
     }
   }
   return { refused, existing };
+}
+
+/** One merged entity's pairs, judged as {@link judgeMigrationSiblingFields} judges each. */
+function judgeDeclared(
+  kind: SiblingEntityKind,
+  declared: Entities[number],
+  latest: LatestSnapshot,
+  options: MigrationSiblingOptions
+): { refused: EntitySiblingClash[]; existing: EntitySiblingClash[] } {
+  const entity = { kind, slug: declared.slug };
+  const previous = previousFields(latest, kind, declared);
+  // Held without its fields: every pair is taken as it is.
+  const judged = judgeSiblingFields(
+    declared.fields,
+    previous === undefined ? declared.fields : previous,
+    // Configuration's entities are `define*` output; the Builder's come from its manifest.
+    {
+      definedInCode: declared.settings?.source === "code" ? kind : undefined,
+    }
+  );
+  // A pair sharing a stored value that the entity held, kept where the entities judged describe
+  // the database as it stands.
+  const keptHeld = new Set(
+    options.heldSharingAs === "existing" ? judged.heldSharing : []
+  );
+  return {
+    refused: judged.refused
+      .filter(clash => !keptHeld.has(clash))
+      .map(clash => ({ entity, clash })),
+    existing: [...judged.existing, ...keptHeld].map(clash => ({
+      entity,
+      clash,
+    })),
+  };
 }
 
 /**
@@ -102,9 +137,10 @@ export function judgeMigrationSiblingFields(
 export function assertMigrationSiblingFields(
   merged: MigrationEntities,
   latest: LatestSnapshot,
-  logger: { error(message: string): void }
+  logger: { error(message: string): void },
+  options: MigrationSiblingOptions = {}
 ): void {
-  const { refused } = judgeMigrationSiblingFields(merged, latest);
+  const { refused } = judgeMigrationSiblingFields(merged, latest, options);
   if (refused.length === 0) return;
   for (const { entity, clash } of refused) {
     logger.error(siblingClashMessage(entity, clash));
