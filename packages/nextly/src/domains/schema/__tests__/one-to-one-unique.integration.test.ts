@@ -206,7 +206,9 @@ async function apply(
   fields: unknown[],
   localized?: boolean,
   /** The dialog's answers to the renames the preview paired, as it sends them. */
-  renameResolutions?: unknown[]
+  renameResolutions?: unknown[],
+  /** The dialog's confirmations by field name, of each change its preview warned drops values. */
+  resolutions?: Record<string, { action: "confirm_drop" }>
 ) {
   const result = await builder(
     "applySchemaChanges",
@@ -217,6 +219,7 @@ async function apply(
       schemaVersion: await schemaVersion(t),
       ...(localized === undefined ? {} : { localized }),
       ...(renameResolutions === undefined ? {} : { renameResolutions }),
+      ...(resolutions === undefined ? {} : { resolutions }),
     }
   );
   clearRegistryRowCache();
@@ -1072,7 +1075,10 @@ describeEachDialect(
         },
       ]);
 
-      await apply(t, profileFields("oneToOne"));
+      // Its links leave the link table, which the dialog warns of and confirms by name.
+      await apply(t, profileFields("oneToOne"), undefined, undefined, {
+        person: { action: "confirm_drop" },
+      });
 
       const ada = await aPerson(t, "Ada");
       await aProfile(t, ada);
