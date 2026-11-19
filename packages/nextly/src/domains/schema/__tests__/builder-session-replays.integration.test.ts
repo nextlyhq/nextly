@@ -390,7 +390,8 @@ for (const dialect of getConfiguredTestDialects()) {
 
     /**
      * A save of settings alone writes one file, naming `setting` of `slug`, whose UP writes the
-     * registry row and nothing else: no table changed, and no entry written.
+     * registry row and Nextly's own schema version (`nextly_meta`) and nothing else: no table
+     * changed, and no entry written.
      */
     function expectSettingsOnly(
       written: WrittenFile[],
@@ -408,7 +409,7 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(writes.length, file?.text).toBeGreaterThan(0);
       for (const statement of writes) {
         expect(statement.slice(0, 120)).toMatch(
-          /^INSERT INTO [`"]?(dynamic_collections|dynamic_singles|dynamic_components)[`"]?[\s(]/i
+          /^INSERT INTO [`"]?(dynamic_collections|dynamic_singles|dynamic_components|nextly_meta)[`"]?[\s(]/i
         );
       }
     }
