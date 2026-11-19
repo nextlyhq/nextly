@@ -220,6 +220,60 @@ async function fillRefusedByTrigger(
   });
 }
 
+/** `authors`, and `posts` relating to it by `author`, to one entry or to many. */
+function postsRelating(
+  postsTable: string,
+  authorsTable: string,
+  hasMany: boolean
+): DesiredSchema {
+  return {
+    collections: {
+      authors: {
+        slug: "authors",
+        tableName: authorsTable,
+        fields: [{ name: "name", type: "text" }] as never,
+      },
+      posts: {
+        slug: "posts",
+        tableName: postsTable,
+        fields: [
+          {
+            name: "author",
+            type: "relationship",
+            relationTo: "authors",
+            hasMany,
+          },
+        ] as never,
+      },
+    },
+    singles: {},
+    components: {},
+  };
+}
+
+/** A pipeline that classifies for real and asks nothing it is not answered. */
+function classifyingPipeline(db: unknown): PushSchemaPipeline {
+  clearCachedSnapshot();
+  clearLiveSnapshots();
+  return new PushSchemaPipeline({
+    executor: new DrizzleStatementExecutor("mysql", db),
+    renameDetector: new RegexRenameDetector(),
+    classifier: new RealClassifier(),
+    promptDispatcher: {
+      dispatch: () =>
+        Promise.resolve({
+          confirmedRenames: [],
+          resolutions: [],
+          proceed: true,
+        }),
+    },
+    preRenameExecutor: noopPreRenameExecutor,
+    preCleanupExecutor: new RealPreCleanupExecutor(),
+    migrationJournal: noopMigrationJournal,
+    notifier: noopNotifier,
+  });
+}
+
 describe.skipIf(!MYSQL_URL)("a failed apply's kept statements (mysql)", () => {
   const tableName = `${MYSQL.prefix}_kept_page`;
   // Made in `beforeAll`: a skipped describe still runs its body, where an unset URL would throw.
@@ -320,6 +374,72 @@ describe.skipIf(!MYSQL_URL)("a failed apply's kept statements (mysql)", () => {
       expect(Number((rows as { n: unknown }[])[0]?.n)).toBe(1);
     } finally {
       await pool.promise().query(`DROP TABLE IF EXISTS \`${orderTable}\``);
+    }
+  });
+
+  // A relationship switched from one entry to many is one operation of three statements on MySQL:
+  // the column made text, its values rewritten as lists, the column made the list type. The first
+  // commits as it runs, so where the second is refused, one statement stays. Its key is dropped
+  // first, so no lifted key runs before it and counts.
+  it("counts each statement of an operation that runs several, where a later one fails", async () => {
+    const postsTable = `${MYSQL.prefix}_kept_posts`;
+    const authorsTable = `${MYSQL.prefix}_kept_authors`;
+    const drop = async () => {
+      await pool.promise().query(`DROP TABLE IF EXISTS \`${postsTable}\``);
+      await pool.promise().query(`DROP TABLE IF EXISTS \`${authorsTable}\``);
+    };
+    await drop();
+    try {
+      const target = {
+        db,
+        dialect: "mysql" as const,
+        source: "code" as const,
+        promptChannel: "terminal" as const,
+        databaseName,
+      };
+      const made = await classifyingPipeline(db).apply({
+        ...target,
+        desired: postsRelating(postsTable, authorsTable, false),
+      });
+      expect(made.success, JSON.stringify(made.error)).toBe(true);
+      const [keys] = await pool
+        .promise()
+        .query(
+          `SELECT CONSTRAINT_NAME AS name FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'author' AND REFERENCED_TABLE_NAME IS NOT NULL`,
+          [postsTable]
+        );
+      for (const { name } of keys as { name: string }[]) {
+        await pool
+          .promise()
+          .query(`ALTER TABLE \`${postsTable}\` DROP FOREIGN KEY \`${name}\``);
+      }
+      const run = (statement: string) => pool.promise().query(statement);
+      await insertRowWithoutTotal("mysql", db, postsTable, run);
+      // A value for the rewrite to change: a row holding no author is left as it is.
+      await run(`UPDATE \`${postsTable}\` SET \`author\` = 'an-author'`);
+      await run(
+        `CREATE TRIGGER \`${postsTable}_refuse\` BEFORE UPDATE ON \`${postsTable}\` FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'refused by a trigger'`
+      );
+
+      const result = await classifyingPipeline(db).apply({
+        ...target,
+        desired: postsRelating(postsTable, authorsTable, true),
+      });
+
+      expect(result.success, JSON.stringify(result.error)).toBe(false);
+      // Positive control: the values' rewrite reached the database, which refused it.
+      expect(JSON.stringify(result.error)).toContain("refused by a trigger");
+      expect(result.statementsKept).toBe(1);
+      // The statement that stayed: the column is text now.
+      const [columns] = await pool
+        .promise()
+        .query(
+          `SELECT DATA_TYPE AS t FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'author'`,
+          [postsTable]
+        );
+      expect((columns as { t: string }[])[0]?.t).toBe("text");
+    } finally {
+      await drop();
     }
   });
 });
