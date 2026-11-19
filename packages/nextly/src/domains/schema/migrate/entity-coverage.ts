@@ -39,16 +39,22 @@ export interface CoveredEntity extends EntityRef {
   table: string;
   /** Every table it owns, its main table first (`collectionOwnTables`). */
   tables: readonly string[];
+  /**
+   * Set for an entity no consent reaches through its owner (a plugin's, or
+   * Nextly's own). It is kept only so that its main table is no other
+   * entity's: it owns no other table, and its main table names nothing else.
+   */
+  excluded?: true;
 }
 
 /** The registry sources whose entities an app migration retires: the app's code and the Schema Builder. */
 const COVERED_SOURCES: ReadonlySet<string> = new Set(["code", "ui", "builder"]);
 
 /**
- * The entity a registry row describes, or undefined for one a consent never
- * reaches through its owner (a plugin's, or Nextly's own). Its fields may be
- * stored as text; fields that cannot be read name no junction table, so the
- * entity owns less, never a guessed table.
+ * The entity a registry row describes. One a consent never reaches through
+ * its owner (a plugin's, or Nextly's own) is `excluded`, with its main table
+ * alone. Its fields may be stored as text; fields that cannot be read name no
+ * junction table, so the entity owns less, never a guessed table.
  */
 export function coveredEntity(row: {
   kind: EntityRef["kind"];
@@ -56,9 +62,15 @@ export function coveredEntity(row: {
   tableName: string;
   fields?: unknown;
   source?: unknown;
-}): CoveredEntity | undefined {
+}): CoveredEntity {
   if (typeof row.source === "string" && !COVERED_SOURCES.has(row.source)) {
-    return undefined;
+    return {
+      kind: row.kind,
+      slug: row.slug,
+      table: row.tableName,
+      tables: [row.tableName],
+      excluded: true,
+    };
   }
   return {
     kind: row.kind,
@@ -103,31 +115,24 @@ export interface EntityOwners {
  * `lower_case_table_names=0`) a table differing only in case is another table,
  * owned by nobody. Without a rule, names are compared exactly, which can only
  * refuse more. A table more than one entity claims, or one that is any
- * entity's main table, has no owner besides itself; and a main table more
- * than one entity names is no entity's.
+ * entity's main table, an excluded one's included, has no owner besides
+ * itself; and a main table more than one entity names, or an excluded
+ * entity's, is no entity's.
  */
 export function entityOwners(
   entities: readonly CoveredEntity[],
   options: { identifierCase?: IdentifierCase } = {}
 ): EntityOwners {
   const keyOf = tableKey(entities, options.identifierCase ?? "preserve");
-  // A main table more than one registry row names belongs to none of them, so a drop of it is
-  // covered only where it is named, and lists no entity's shared rows on another's behalf.
-  const named = new Map<string, CoveredEntity[]>();
-  for (const entity of entities) {
-    const key = keyOf(entity.table);
-    named.set(key, [...(named.get(key) ?? []), entity]);
-  }
-  const mains = new Map<string, CoveredEntity>();
-  for (const [key, claimants] of named) {
-    if (claimants.length === 1) mains.set(key, claimants[0]);
-  }
+  const mains = soleMains(entities, keyOf);
+  // Every main table, an excluded entity's too, is no other entity's to own.
+  const mainKeys = new Set(entities.map(entity => keyOf(entity.table)));
   const claims = new Map<string, CoveredEntity[]>();
   for (const entity of entities) {
     // Each table once per entity: a field declared twice names its junction twice.
     const owned = new Set(entity.tables.slice(1).map(keyOf));
     for (const key of owned) {
-      if (named.has(key)) continue;
+      if (mainKeys.has(key)) continue;
       claims.set(key, [...(claims.get(key) ?? []), entity]);
     }
   }
@@ -138,6 +143,29 @@ export function entityOwners(
       return claimed?.length === 1 ? claimed[0] : undefined;
     },
   };
+}
+
+/**
+ * Each main table one entity alone names, to that entity. A main table more
+ * than one registry row names belongs to none of them, so a drop of it is
+ * covered only where it is named, and lists no entity's shared rows on
+ * another's behalf; nor does an excluded entity's, which no consent reaches
+ * through its owner.
+ */
+function soleMains(
+  entities: readonly CoveredEntity[],
+  keyOf: (table: string) => string
+): Map<string, CoveredEntity> {
+  const named = new Map<string, CoveredEntity[]>();
+  for (const entity of entities) {
+    const key = keyOf(entity.table);
+    named.set(key, [...(named.get(key) ?? []), entity]);
+  }
+  const mains = new Map<string, CoveredEntity>();
+  for (const [key, [only, ...others]] of named) {
+    if (others.length === 0 && only.excluded !== true) mains.set(key, only);
+  }
+  return mains;
 }
 
 /**
@@ -214,8 +242,10 @@ const REGISTRIES = [
 
 /**
  * The collections and Singles the database's registries record, read on the
- * run's own connection. A registry that is absent or cannot be read adds no
- * entity, so its tables are covered only where they are named.
+ * run's own connection. An absent registry adds no entity. A registry that is
+ * there but cannot be read makes the read cover no entity at all: from the
+ * other registry alone, an entity could claim a table the unread one's entity
+ * would have disputed. Every table is then covered only where it is named.
  */
 export async function readCoveredEntities(
   db: unknown,
@@ -246,20 +276,21 @@ export async function readCoveredEntities(
         sql`SELECT ${sql.identifier("slug")}, ${sql.identifier("table_name")}, ${sql.identifier("fields")}, ${sql.identifier("source")} FROM ${sql.identifier(registry.table)}`
       );
     } catch {
-      continue;
+      return [];
     }
     for (const row of rows) {
       if (typeof row.slug !== "string" || typeof row.table_name !== "string") {
         continue;
       }
-      const entity = coveredEntity({
-        kind: registry.kind,
-        slug: row.slug,
-        tableName: row.table_name,
-        fields: row.fields,
-        source: row.source,
-      });
-      if (entity !== undefined) entities.push(entity);
+      entities.push(
+        coveredEntity({
+          kind: registry.kind,
+          slug: row.slug,
+          tableName: row.table_name,
+          fields: row.fields,
+          source: row.source,
+        })
+      );
     }
   }
   return entities;

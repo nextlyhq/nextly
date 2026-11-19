@@ -15,6 +15,7 @@ import { identifierCaseRules } from "../../utils/resolve-catalog-name";
 import {
   coveredEntity,
   entityOwners,
+  readCoveredEntities,
   withOwners,
   type CoveredEntity,
 } from "../entity-coverage";
@@ -100,18 +101,45 @@ describe("what an entity owns", () => {
     expect(unreadable?.tables).toEqual(["dc_posts", "dc_posts_locales"]);
   });
 
-  it("leaves out a plugin's entities and Nextly's own", () => {
+  it("keeps a plugin's entities and Nextly's own only as a main table, owning nothing", () => {
     for (const source of ["plugin:seo", "built-in"]) {
-      expect(
-        coveredEntity({
-          kind: "collection",
-          slug: "x",
-          tableName: "dc_x",
-          source,
-          fields: [],
-        })
-      ).toBeUndefined();
+      const excluded = coveredEntity({
+        kind: "collection",
+        slug: "x",
+        tableName: "dc_x",
+        source,
+        fields: [manyToMany("tags", "tags")],
+      });
+      expect(excluded).toEqual({
+        kind: "collection",
+        slug: "x",
+        table: "dc_x",
+        tables: ["dc_x"],
+        excluded: true,
+      });
+      // No consent reaches it through an owner: its main table is no entity's.
+      expect(entityOwners([excluded as CoveredEntity]).mainOf("dc_x")).toBe(
+        undefined
+      );
     }
+  });
+
+  it("gives no entity a table that a plugin's entity has as its main table", () => {
+    // The plugin's main table is spelled as `posts`' explicit junction table.
+    const plugin = coveredEntity({
+      kind: "collection",
+      slug: "seo",
+      tableName: "posts_related_pages",
+      source: "plugin:seo",
+      fields: [],
+    }) as CoveredEntity;
+    expect(entityOwners([posts]).ownerOf("posts_related_pages")).toBe(posts);
+    const owners = entityOwners([posts, plugin]);
+    expect(owners.ownerOf("posts_related_pages")).toBeUndefined();
+    expect(owners.mainOf("posts_related_pages")).toBeUndefined();
+    // A main table an app entity and a plugin's entity both name is neither's.
+    const twin = { ...plugin, table: "dc_posts", tables: ["dc_posts"] };
+    expect(entityOwners([posts, twin]).mainOf("dc_posts")).toBeUndefined();
   });
 });
 
@@ -277,6 +305,55 @@ describe("a run's deletions with the entities they remove", () => {
     expect(coverRunDeletions([[table("dc_other")]], owners)).toEqual([
       [table("dc_other")],
     ]);
+  });
+});
+
+describe("reading the entities from the registries", () => {
+  const sqlite = new SQLiteDialect();
+  /** A SQLite connection holding both registries, one row each, failing to read `failing`. */
+  const registries = (failing?: string) => ({
+    all: (query: SQL) => {
+      const { sql: text } = sqlite.sqlToQuery(query);
+      if (text.includes("sqlite_master"))
+        return [{ name: "dynamic_collections" }, { name: "dynamic_singles" }];
+      const registry = /FROM "([^"]+)"/.exec(text)?.[1];
+      if (registry === failing) throw new Error("registry unreadable");
+      return registry === "dynamic_collections"
+        ? [
+            {
+              slug: "posts",
+              table_name: "dc_posts",
+              fields: [],
+              source: "code",
+            },
+          ]
+        : [
+            {
+              slug: "home",
+              table_name: "single_home",
+              fields: [],
+              source: "code",
+            },
+          ];
+    },
+  });
+
+  it("reads every entity both registries record", async () => {
+    const entities = await readCoveredEntities(registries(), "sqlite");
+    expect(entities.map(entity => entity.table)).toEqual([
+      "dc_posts",
+      "single_home",
+    ]);
+  });
+
+  it("covers no entity when a registry it holds cannot be read", async () => {
+    // A partial set would let one entity claim a table only the unread
+    // registry's entity could have disputed: every table is then named itself.
+    for (const failing of ["dynamic_collections", "dynamic_singles"]) {
+      expect(await readCoveredEntities(registries(failing), "sqlite")).toEqual(
+        []
+      );
+    }
   });
 });
 

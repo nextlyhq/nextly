@@ -4018,7 +4018,8 @@ function provenanceOf(entry: RecordedEntitySettings): string {
  * A declared entity's fields are the config's and the snapshot's together, so a junction whose
  * field the config just removed is still known as the entity's; and one whose recorded table
  * differs from its declared one is also known by the recorded table, which the migration drops,
- * with the recorded fields, which then belong to that table alone.
+ * with the recorded fields, which then belong to that table alone. A plugin's entity, or Nextly's
+ * own, is kept `excluded`, so its main table is still no other entity's.
  */
 export function coveredEntitiesOf(
   args: GenerateArgs,
@@ -4069,9 +4070,7 @@ export function coveredEntitiesOf(
         })
       );
     }
-    return entities.filter(
-      (entity): entity is CoveredEntity => entity !== undefined
-    );
+    return entities;
   };
   return [
     ...of(
