@@ -9,9 +9,16 @@
  * just changed, and the rule that only a manager may change it never sees the
  * change.
  *
- * The second judgement is of the values as sent, not as the write has since
- * changed them, and a refusal from it is told on the transaction's one
- * connection, with nothing left to read on the pool.
+ * So an overwrite holds the version it was judged against, and compares it
+ * under the row lock as a `_rev` is: one that moved means another save landed,
+ * and the values are judged again on the pool, against the Single as it is
+ * now, in a new attempt; at most three, then refused with nothing saved. Only
+ * the judgement and the transaction run again, never the hooks before them,
+ * and nothing after the commit runs until one attempt commits. A save of
+ * another language, which leaves this language as it was, moves nothing.
+ * Judged again of the values as sent, not as the write has since changed
+ * them, and never inside the transaction, so a validator's read of the pool
+ * waits on no connection the transaction holds.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -45,6 +52,27 @@ const EDITOR = { id: "editor-1", email: "editor@example.com" };
 let between: (() => Promise<void>) | undefined;
 
 /**
+ * Runs on every judgement of the code `"first"`, at the same point: another
+ * writer that lands a save each time this one is judged.
+ */
+let everyJudgement: (() => Promise<void>) | undefined;
+
+/** Each code value the validator judged, in order. */
+let judged: unknown[] = [];
+
+/**
+ * Whether the validator also reads the Single through the Direct API, on the
+ * pool, as the page builder's validator reads the site's shared styles.
+ */
+let readsPool = false;
+
+/** The code each Single-level hook was handed, in order. */
+let heard: { beforeChange: unknown[]; afterChange: unknown[] } = {
+  beforeChange: [],
+  afterChange: [],
+};
+
+/**
  * Code only a manager may change: an unchanged value passes for anyone, as
  * the Page Builder's page code does.
  */
@@ -68,9 +96,17 @@ const guardedCodePlugin = definePlugin({
             stored !== undefined &&
             stored.kind === "value" &&
             stored.value === value;
+          judged.push(value);
+          if (readsPool) {
+            await current?.nextly.findSingle({
+              slug: SLUG,
+              overrideAccess: true,
+            });
+          }
           const land = between;
           between = undefined;
           if (land) await land();
+          if (value === "first" && everyJudgement) await everyJudgement();
           const user = args.req.user as { id?: string } | undefined;
           return unchanged || user?.id === MANAGER.id
             ? true
@@ -98,19 +134,53 @@ let current: TestNextly | undefined;
 
 afterEach(async () => {
   between = undefined;
+  everyJudgement = undefined;
+  readsPool = false;
+  judged = [];
+  heard = { beforeChange: [], afterChange: [] };
   await current?.destroy();
   current = undefined;
 });
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+/**
+ * The site, the code set to `"first"` by the manager. `localized` keeps the
+ * headline per language, in English and Spanish, the code shared.
+ */
+async function boot(
+  dialect: TestDialect,
+  { localized = false }: { localized?: boolean } = {}
+): Promise<TestNextly> {
   current = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
     plugins: [guardedCodePlugin],
+    ...(localized
+      ? { localization: { locales: ["en", "es"], defaultLocale: "en" } }
+      : {}),
     singles: [
       defineSingle({
         slug: SLUG,
+        ...(localized ? { localized: true } : {}),
+        // What a save's hooks were handed, to show a retry runs them once.
+        hooks: {
+          beforeChange: [
+            context => {
+              heard.beforeChange.push(
+                (context.data as { code?: unknown } | undefined)?.code
+              );
+              return context.data;
+            },
+          ],
+          afterChange: [
+            context => {
+              heard.afterChange.push(
+                (context.data as { code?: unknown } | undefined)?.code
+              );
+              return context.data;
+            },
+          ],
+        },
         fields: [
-          text({ name: "headline" }),
+          text({ name: "headline", ...(localized ? { localized: true } : {}) }),
           pluginField({ name: "code", type: "guarded-code" }),
           // Stored as a hash longer than the length allowed of what is sent.
           password({ name: "secret", maxLength: 32 }),
@@ -120,6 +190,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   });
   // The code as it starts, set by the manager.
   await save(current, MANAGER, "first");
+  judged = [];
+  heard = { beforeChange: [], afterChange: [] };
   return current;
 }
 
@@ -162,16 +234,78 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedCode(site)).toBe("managers");
     });
 
-    it("keeps the same overwrite when the writer may change the code", async () => {
-      // The control: judged again under the lock, a writer allowed to change
-      // the code still overwrites, so the refusal above is the rule, not the
-      // lock refusing every overwrite in a race.
+    it("judges an overwrite again when its Single moved, writes it, and runs its hooks once", async () => {
+      // The control: a writer allowed to change the code still overwrites in
+      // the race, so the refusal above is the rule, not every overwrite in a
+      // race refused.
       const site = await boot(dialect);
       between = async () => {
         await save(site, MANAGER, "managers");
       };
       await save(site, MANAGER, "first");
       expect(await storedCode(site)).toBe("first");
+      // Judged twice: once against "first", and again against "managers".
+      expect(judged.filter(value => value === "first")).toHaveLength(2);
+      // Its hooks before the write, and after the commit, ran once each.
+      expect(heard.beforeChange.filter(code => code === "first")).toHaveLength(
+        1
+      );
+      expect(heard.afterChange.filter(code => code === "first")).toHaveLength(
+        1
+      );
+    });
+
+    it("refuses an overwrite whose Single moves on every attempt, saving nothing", async () => {
+      const site = await boot(dialect);
+      let landed = 0;
+      everyJudgement = async () => {
+        landed += 1;
+        await save(site, MANAGER, `managers-${landed}`);
+      };
+      await expect(save(site, MANAGER, "first")).rejects.toMatchObject({
+        code: "CONFLICT",
+        message:
+          "Another save kept changing this page while yours was being checked, so nothing was saved. Try again.",
+      });
+      // Three attempts, each judged once, and nothing of this save kept.
+      expect(judged.filter(value => value === "first")).toHaveLength(3);
+      expect(await storedCode(site)).toBe("managers-3");
+      expect(heard.afterChange.filter(code => code === "first")).toHaveLength(
+        0
+      );
+    });
+
+    it("judges an overwrite once when only another language changed in between", async () => {
+      const site = await boot(dialect, { localized: true });
+      between = async () => {
+        await site.nextly.updateSingle({
+          slug: SLUG,
+          data: { headline: "Hola", _overwrite: true },
+          locale: "es",
+          user: MANAGER,
+          overrideAccess: true,
+        });
+      };
+      await site.nextly.updateSingle({
+        slug: SLUG,
+        data: { code: "first", headline: "Hello", _overwrite: true },
+        locale: "en",
+        user: MANAGER,
+        overrideAccess: true,
+      });
+      expect(judged.filter(value => value === "first")).toHaveLength(1);
+      expect(await storedCode(site)).toBe("first");
+    });
+
+    it("writes an overwrite judged again by a validator that reads the pool, on one connection", async () => {
+      const site = await boot(dialect);
+      readsPool = true;
+      between = async () => {
+        await save(site, MANAGER, "managers");
+      };
+      await save(site, MANAGER, "first");
+      expect(await storedCode(site)).toBe("first");
+      expect(judged.filter(value => value === "first")).toHaveLength(2);
     });
 
     it("judges a password again as it was sent, not as the hash the write stores", async () => {

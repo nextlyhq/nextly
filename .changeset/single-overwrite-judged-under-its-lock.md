@@ -29,10 +29,20 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A Single save that no version check covers (one sent with `_overwrite: true`,
-or with no `_rev`) is now judged again on the Single's row as committed, under
-its lock, before it is written. Judged only before its transaction, such a save
-could replace what another writer stored in between with a value judged
-against the row as it stood before, so a rule such as "only a manager may
-change the page's code" never saw the change it was undoing. A save that
+A Single save sent with `_overwrite: true` is no longer written over another
+save that landed after its values were checked. Checked only before its
+transaction, such a save could replace what another writer stored in between
+with a value judged against the Single as it stood before, so a rule such as
+"only a manager may change the page's code" never saw the change it was
+undoing.
+
+The save now notes the Single's version before its values are checked, and
+compares it under the row lock, as a `_rev` is compared. If it moved, the
+values are checked again against the Single as it is now, and written in a
+new attempt. After three attempts the save is refused with a 409 and nothing
+saved. Only the check and the write run again: the hooks before them run once,
+and nothing after the commit runs until one attempt commits. A save of another
+language, which leaves this one as it was, causes no retry. Checks never run
+inside the save's transaction, so a field type's validator that reads through
+the pool doesn't wait on the connection the transaction holds. A save that
 carries `_rev` is unchanged: its version check refuses that race already.

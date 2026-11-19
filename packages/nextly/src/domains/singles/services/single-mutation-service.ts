@@ -20,7 +20,10 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  TransactionContext,
+  TransactionOptions,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import {
   askEachLanguage,
@@ -300,13 +303,16 @@ import {
 import {
   assertVersionNamesEvery,
   certainlyStale,
+  type DecodedVersion,
   type DocumentRevisionState,
   givenOf,
   judgedLanguage,
   judgedLanguageStates,
   languagesJudged,
+  movedSinceJudged,
   type PartState,
   poolRevisionReader,
+  readDocumentRevision,
   refuseIfLanguageMoved,
   refuseIfMainMoved,
   releaseRunExemptFor,
@@ -314,6 +320,7 @@ import {
   staleVersionErrorFor,
   type VersionCheck,
   versionCheckFor,
+  versionOfRevision,
 } from "../../versions/stale-version";
 import {
   resolveComponentFieldMap,
@@ -575,6 +582,16 @@ function fieldsWrittenIn(
  * makes it. Kept as one value so the judgement before the transaction and the
  * one under the row lock are the same call.
  */
+/**
+ * How many times an overwrite is judged and written while its Single keeps
+ * moving between the two, before it is refused with nothing saved.
+ */
+const OVERWRITE_JUDGEMENT_ATTEMPTS = 3;
+
+/** What an overwrite refused that way is told. */
+const OVERWRITE_KEPT_CHANGING =
+  "Another save kept changing this page while yours was being checked, so nothing was saved. Try again.";
+
 interface SaveJudgement {
   slug: string;
   data: Record<string, unknown>;
@@ -597,12 +614,6 @@ interface SaveJudgement {
    * stored fraction under one is the row's own content, not this save's.
    */
   storedProvenancePaths?: ReadonlySet<string>;
-}
-
-/** The issues a save was refused for, and the values they were found in. */
-interface SaveIssues {
-  readonly issues: ValidationIssue[];
-  readonly view: Record<string, unknown>;
 }
 
 /**
@@ -2401,57 +2412,18 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
-   * {@link saveIssues} on the row as committed: the Single's main row locked
-   * first, then the same judgement with every stored read on `tx`.
-   *
-   * The lock is taken before any read the judgement makes, so on MySQL's
-   * repeatable read the reads that follow see the row as last committed
-   * rather than a snapshot from before another writer's save. Every write to
-   * a Single takes this lock, so none can land between the judgement and the
-   * write it guards.
-   *
-   * The issues found are returned as found, not as the caller may be told
-   * them: telling them asks the read gate and field rules, whose reads are on
-   * the pool, where they would wait for the connection this transaction
-   * holds. The caller refuses with them once the transaction has ended.
-   */
-  private async saveIssuesUnderLock(
-    tx: TransactionContext,
-    row: { readonly tableName: string; readonly id: string },
-    judgement: SaveJudgement
-  ): Promise<SaveIssues> {
-    await tx.selectOne(row.tableName, {
-      where: this.whereEq("id", row.id),
-      forUpdate: true,
-    });
-    return this.saveIssues({ ...judgement, tx });
-  }
-
-  /**
    * Refuse a save whose values break the Single's declared rules: the same
    * gate the collection write paths run. Singles updates are PATCH
    * semantics, so absent keys stay untouched and provided keys must hold. An
    * issue on a field the caller may not read is told without naming it or
    * its value.
+   *
+   * Judged on the pool, never inside the save's transaction: a field type's
+   * validator may read what another Single defines (the page builder's
+   * shared styles, say), and inside the transaction that read would wait on
+   * the pool for the connection the transaction holds.
    */
   private async assertSaveValid(args: SaveJudgement): Promise<void> {
-    const found = await this.saveIssues(args);
-    if (found.issues.length > 0) throw await this.saveRefusal(found, args);
-  }
-
-  /**
-   * The issues the Single's declared rules find in a save, unredacted, and
-   * the values they were found in; see {@link assertSaveValid}.
-   */
-  private async saveIssues(
-    args: SaveJudgement & {
-      /**
-       * The transaction the judgement reads stored values on: absent before
-       * one opens, when it reads on the pool.
-       */
-      tx?: TransactionContext;
-    }
-  ): Promise<SaveIssues> {
     const { slug, fieldConfigs } = args;
     const validationView = relationshipValidationView(args.data, fieldConfigs);
     const judgedIssues = await validateEntryData(
@@ -2464,20 +2436,16 @@ export class SingleMutationService extends BaseService {
           ? { storedProvenancePaths: args.storedProvenancePaths }
           : {}),
         // A component inside a group or repeater is judged here, since no
-        // component write reaches it. Its schema read on the connection the
-        // judgement reads on: the pool, or the transaction.
+        // component write reaches it.
         componentFields: await containedComponentResolver(
           fieldConfigs,
           async componentSlug =>
             (await this.fieldGroupDataService?.getComponentFields(
-              componentSlug,
-              args.tx?.getDrizzle()
+              componentSlug
             )) ?? null
         ),
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
-        // On the pool before the transaction opens, and on the transaction
-        // under the row lock, so a stored read sees the row as committed.
         write: {
           ...storedFieldRead.entryWriteContext({
             kind: "single",
@@ -2485,17 +2453,11 @@ export class SingleMutationService extends BaseService {
             ...(args.writeLocale === undefined
               ? {}
               : { locale: args.writeLocale }),
-            connection: args.tx
-              ? {
-                  db: args.tx,
-                  executor: args.tx.getDrizzle(),
-                  defaultLocale: this.localization?.defaultLocale ?? null,
-                }
-              : {
-                  db: this.adapter,
-                  executor: undefined,
-                  defaultLocale: this.localization?.defaultLocale ?? null,
-                },
+            connection: {
+              db: this.adapter,
+              executor: undefined,
+              defaultLocale: this.localization?.defaultLocale ?? null,
+            },
           }),
           // Who the write is made as, from the reader its access is judged
           // by, as a collection entry's write is told it.
@@ -2503,24 +2465,11 @@ export class SingleMutationService extends BaseService {
         },
       }
     );
-    return { issues: judgedIssues, view: validationView };
-  }
-
-  /**
-   * The refusal of a save for `found`, told as the reader may be told it:
-   * an issue on a field they may not read is told without naming it or its
-   * value. Read on the pool, so asked outside any transaction.
-   */
-  private async saveRefusal(
-    found: SaveIssues,
-    args: SaveJudgement
-  ): Promise<NextlyError> {
-    const { slug } = args;
-    const validationIssues = await issuesTheReaderMaySee(found.issues, {
+    const validationIssues = await issuesTheReaderMaySee(judgedIssues, {
       kind: "single",
       slug,
-      document: found.view,
-      fields: args.fieldConfigs,
+      document: validationView,
+      fields: fieldConfigs,
       fieldGroups: this.fieldGroupDataService,
       entryId: args.entryId,
       // A Single the reader may not read is shown to them in no part.
@@ -2531,7 +2480,32 @@ export class SingleMutationService extends BaseService {
         }),
       reader: args.reader,
     });
-    return NextlyError.validation({ errors: validationIssues });
+    if (validationIssues.length > 0) {
+      throw NextlyError.validation({ errors: validationIssues });
+    }
+  }
+
+  /**
+   * The Single's version as an overwrite is about to be judged on it, read on
+   * the pool BEFORE the judgement, so a save that lands after the read moves
+   * it: compared under the row lock with the version as committed then
+   * (`staleParts`, as a `_rev` is), a version that moved means the values
+   * were judged against a Single that has since changed. Its own row and the
+   * languages the save is judged on, as `_rev` names them; undefined where
+   * the Single has no row yet.
+   */
+  private async versionJudgedAgainst(row: {
+    readonly table: string;
+    readonly id: string;
+    readonly languages?: { table: string; locales: readonly string[] };
+  }): Promise<DecodedVersion | undefined> {
+    const state = await readDocumentRevision(poolRevisionReader(this.adapter), {
+      dialect: this.adapter.dialect,
+      table: row.table,
+      id: row.id,
+      ...(row.languages ? { languages: row.languages } : {}),
+    });
+    return state === undefined ? undefined : versionOfRevision(state);
   }
 
   /**
@@ -3250,11 +3224,11 @@ export class SingleMutationService extends BaseService {
       // 6.2. Enforce the schema's declared rules on the server — the same
       // gate the collection write paths run. Singles updates are PATCH
       // semantics: absent keys stay untouched, provided keys must hold.
-      // Kept, so a save the version check does not cover is judged again by
-      // the same call under the row lock (see the transaction below). The
-      // values judged are a copy: the write changes its own data in place
-      // before then (a password hashed, components extracted), and the second
-      // judgement is of the values as sent, as the first was.
+      // Kept, so an overwrite whose Single moved before its write can be
+      // judged again (see the transaction below). The values judged are a
+      // copy: the write changes its own data in place before then (a
+      // password hashed, components extracted), and a judgement again is of
+      // the values as sent, as the first was.
       const saveJudgement: SaveJudgement = {
         slug,
         data: detachData(currentData),
@@ -3274,6 +3248,20 @@ export class SingleMutationService extends BaseService {
           grants: writeGrants,
         },
       };
+      // An overwrite carries no version of its own to be refused by, so the
+      // version it is judged against is read here, before the judgement, and
+      // compared under the row lock: one that moved means another save landed
+      // after these values were judged, and they are judged again rather
+      // than written over a Single they were never judged against.
+      const judgedRow = {
+        table: singleMeta.tableName,
+        id: String(documentId),
+        ...(judgedLanguages ? { languages: judgedLanguages } : {}),
+      };
+      let judgedVersion =
+        versionCheck.kind === "overwrite"
+          ? await this.versionJudgedAgainst(judgedRow)
+          : undefined;
       await this.assertSaveValid(saveJudgement);
 
       // 6.3. A publish promotes the held pending change, and that content has
@@ -3750,11 +3738,41 @@ export class SingleMutationService extends BaseService {
         this.hookRegistry,
         hookCollection
       );
-      // The issues a save was refused for under its row lock, told as the
-      // caller may be told them once the transaction has ended: what they may
-      // be told is read on the pool, which inside the transaction would wait
-      // for the connection the transaction holds.
-      let refusedUnderLock: SaveIssues | undefined;
+      // Set by an attempt whose overwrite found its Single moved since the
+      // values were judged (see the check after the row lock).
+      let judgedVersionMoved = false;
+      // The save's transaction, run again for an overwrite whose Single moved
+      // after its values were judged: judged again, on the pool, against the
+      // Single as it is now, then written in a new attempt; at most
+      // OVERWRITE_JUDGEMENT_ATTEMPTS times, then refused with nothing saved.
+      // Only the judgement and the transaction run again: the hooks before
+      // them ran once and are not repeated, and nothing after the commit runs
+      // until one attempt commits.
+      const transact = async <T>(
+        work: (tx: TransactionContext) => Promise<T>,
+        retries: TransactionOptions
+      ): Promise<T> => {
+        for (let attempt = 1; ; attempt += 1) {
+          judgedVersionMoved = false;
+          try {
+            return await this.adapter.transaction(work, retries);
+          } catch (error) {
+            if (!judgedVersionMoved) throw error;
+            if (attempt >= OVERWRITE_JUDGEMENT_ATTEMPTS) {
+              throw NextlyError.conflict({
+                message: OVERWRITE_KEPT_CHANGING,
+                logContext: {
+                  slug,
+                  reason: "overwrite-kept-changing",
+                  attempt,
+                },
+              });
+            }
+          }
+          judgedVersion = await this.versionJudgedAgainst(judgedRow);
+          await this.assertSaveValid(saveJudgement);
+        }
+      };
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
@@ -3765,7 +3783,7 @@ export class SingleMutationService extends BaseService {
         // phase. Its branching is that pipeline's own; it comes down by moving
         // phases into units of their own, as `assemblesSaveDocuments` is.
         // fallow-ignore-next-line complexity
-        updatedRows = await this.adapter.transaction(async tx => {
+        updatedRows = await transact(async tx => {
           // This attempt's component values. A publish merges the held
           // draft's into them, and a retry after a lost race must start again
           // from the caller's own values: the draft may have moved on since.
@@ -3845,27 +3863,6 @@ export class SingleMutationService extends BaseService {
                 reason: "single row missing after auto-create",
               },
             });
-          }
-
-          // A save no version check covers (`_overwrite`, or no `_rev`) is
-          // judged again on the row as committed, under its lock. Its values
-          // were judged on the pool before this transaction, against the row
-          // as it stood then; another writer's save in between (a manager's
-          // page code, say) would otherwise be replaced by a value judged
-          // against what it replaced, its permission never asked. A save
-          // carrying `_rev` is refused for that race by its version check.
-          // A refusal found here ends the transaction, and is told once it
-          // has ended (see the catch below).
-          if (versionCheck.kind !== "judge") {
-            const found = await this.saveIssuesUnderLock(
-              tx,
-              { tableName: singleMeta.tableName, id: existingDoc.id },
-              saveJudgement
-            );
-            if (found.issues.length > 0) {
-              refusedUnderLock = found;
-              throw NextlyError.validation({ errors: [] });
-            }
           }
 
           // TOCTOU-safe transition enforcement: reclassify the publish/unpublish
@@ -4019,6 +4016,25 @@ export class SingleMutationService extends BaseService {
             },
             staleWrite
           );
+          // An overwrite's values were judged on the pool against the Single
+          // as it stood then. Another save in between (a manager's page code,
+          // say) would otherwise be replaced by values judged against what it
+          // replaced, its permission never asked. So the version they were
+          // judged against is compared with the Single as committed now, as a
+          // `_rev` is; one that moved ends this attempt, and the save is
+          // judged again on the pool (see the loop below). A row this save
+          // inserted moved for no one else.
+          if (
+            versionCheck.kind === "overwrite" &&
+            !insertedHere &&
+            movedSinceJudged(judgedVersion, mainBefore)
+          ) {
+            judgedVersionMoved = true;
+            throw NextlyError.conflict({
+              message: OVERWRITE_KEPT_CHANGING,
+              logContext: { slug, reason: "overwrite-judged-version-moved" },
+            });
+          }
           // A conditional write is judged here, under the lock, against the
           // value as committed now (a row it inserted, as absent); a refused
           // one writes nothing. Thrown as is, and unwrapped below.
@@ -6501,9 +6517,6 @@ export class SingleMutationService extends BaseService {
           return rows;
         }, versionConflictRetries());
       } catch (error) {
-        if (refusedUnderLock !== undefined) {
-          throw await this.saveRefusal(refusedUnderLock, saveJudgement);
-        }
         // A field rule that could not run keeps its own answer, read through
         // the chain before the unwrap below: that answer's cause is the rule's
         // own error, which the unwrap would otherwise throw in its place.
