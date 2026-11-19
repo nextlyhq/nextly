@@ -110,16 +110,12 @@ export async function translatePipelinePreviewToLegacy(
   // Compared by the row's fields, so a field removed from a group with no name is listed, and
   // counted, as its column goes; a save that compares the confirmed counts compares it the same way
   // (`deletionHoldOf`).
-  const diff = computeFieldDiff(
-    currentFields,
-    newFields,
-    {
-      localized: storesPerLanguage({ localized }),
-      newLocalized: storesPerLanguage({
-        localized: context.requestedLocalized ?? localized,
-      }),
-    }
-  );
+  const diff = computeFieldDiff(currentFields, newFields, {
+    localized: storesPerLanguage({ localized }),
+    newLocalized: storesPerLanguage({
+      localized: context.requestedLocalized ?? localized,
+    }),
+  });
 
   if (!diff.hasChanges) {
     return {

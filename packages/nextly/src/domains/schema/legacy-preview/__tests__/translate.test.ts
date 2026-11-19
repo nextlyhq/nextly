@@ -793,7 +793,11 @@ describe("a many-to-many leaving its link table", () => {
   it("counts the links a many-to-many inside a group with no name drops, as one beside it", async () => {
     const { db, queries } = linkCountDb(2);
     const inAGroup = (field: FieldDefinition) =>
-      ({ type: "group", label: "Links", fields: [field] }) as unknown as FieldDefinition;
+      ({
+        type: "group",
+        label: "Links",
+        fields: [field],
+      }) as unknown as FieldDefinition;
     const result = await leaving(
       inAGroup(manyToMany({ junctionTable: "post-tag-links" })),
       inAGroup(singleLink),
