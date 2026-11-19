@@ -14,14 +14,21 @@ import type {
   StyleOrigin,
   StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_TOKEN_PREFIX,
+  SITE_TEXT_LABELS,
+  siteTextRoleOf,
+} from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { fieldLabel } from "./inspector";
 import type { SharedStyleRow } from "./shared-style-library";
+import { siteDefaultSource } from "./site-default-source";
 import { stateLabel } from "./state-switcher";
-import type {
-  ProvenanceAnswer,
-  EditedAddress,
+import {
+  TokenPrefixContext,
+  type ProvenanceAnswer,
+  type EditedAddress,
 } from "./style-field-surroundings";
 import {
   breakpointSource,
@@ -76,6 +83,12 @@ export function SharedValueLine({
   }
   const under = styleBeneath(target.worn, answer, address);
   if (under === undefined) return null;
+  // A text style is the block's own typographic choice, so a value over it
+  // reads as a change from it: "Changed from Eyebrow".
+  const words =
+    under.text === true
+      ? `Changed from\u00a0${under.name}`
+      : `Set on this block\u00a0·\u00a0overrides\u00a0${under.name}`;
   return (
     <div
       className="nx-style-inspector__shared-line"
@@ -85,9 +98,7 @@ export function SharedValueLine({
        * The separator is held to the words on either side by no-break spaces,
        * so a wrap falls between other words and never leaves it ending a line.
        */}
-      <span data-shared-line-text="">
-        {`Set on this block\u00a0·\u00a0overrides\u00a0${under.name}`}
-      </span>
+      <span data-shared-line-text="">{words}</span>
       <button
         type="button"
         className="nx-style-inspector__breakpoint-action"
@@ -166,7 +177,13 @@ export function ProvenanceDot({
   /** The control's own descendant selector, to tell its rules from a sibling's. */
   descendant: string | undefined;
 }): React.JSX.Element | null {
-  const described = describeProvenance(answer?.provenance, editing, descendant);
+  const tokenPrefix = React.useContext(TokenPrefixContext);
+  const described = describeProvenance(
+    answer?.provenance,
+    editing,
+    descendant,
+    tokenPrefix
+  );
   if (described === null) return null;
   return (
     <>
@@ -235,7 +252,9 @@ export function ProvenanceDot({
 export function describeProvenance(
   provenance: StyleProvenance | undefined,
   editing: EditedAddress,
-  controlDescendant?: string
+  controlDescendant?: string,
+  /** The prefix the compile wrote variables under, to name a site default. */
+  tokenPrefix: string = DEFAULT_TOKEN_PREFIX
 ):
   | { kind: "authored"; text: string }
   | { kind: "inherited"; text: string; source: string }
@@ -246,6 +265,19 @@ export function describeProvenance(
   }
   if (provenance.kind !== "inherited") return null;
   const { from, entry } = provenance;
+  // A Site text row is named as the row: "From Site text: Heading 2", in the
+  // sentence and the caption alike, since the row is where it is changed.
+  const row = siteTextRowOf(from, entry);
+  if (row !== undefined) {
+    const words = `From Site text: ${row}`;
+    return { kind: "inherited", text: words, source: words };
+  }
+  // A block default reading a site setting is named as the setting: "Site
+  // default: Section spacing", and "Site default" in brief.
+  const siteDefault = siteDefaultSource(from, entry, tokenPrefix);
+  if (siteDefault !== undefined) {
+    return { kind: "inherited", text: siteDefault, source: "Site default" };
+  }
   // A shared style is named as the source the author chose for the block,
   // "From Card"; every other tier is inherited.
   const lead = from.kind === "class" ? "From" : "Inherited from";
@@ -254,6 +286,20 @@ export function describeProvenance(
     text: `${lead} ${originName(from, entry, editing, controlDescendant)}`,
     source: `From ${originBrief(from, entry, editing, controlDescendant)}`,
   };
+}
+
+/**
+ * The Site text row a declaration came from, by its label ("Heading 2"), or
+ * `undefined` for any other: the element tier writes a row's values and its
+ * own defaults (a margin, a heading's weight), and only the first are a row's.
+ */
+function siteTextRowOf(
+  origin: StyleOrigin,
+  entry: StyleTraceEntry
+): string | undefined {
+  if (origin.kind !== "element") return undefined;
+  const role = siteTextRoleOf(origin.tag, entry.property);
+  return role === undefined ? undefined : SITE_TEXT_LABELS[role];
 }
 
 /**
@@ -290,7 +336,7 @@ function originBrief(
 function briefSubject(origin: StyleOrigin, editing: EditedAddress): string {
   switch (origin.kind) {
     case "class":
-      return editing.sharedStyleName?.(origin.slug) ?? `.${origin.slug}`;
+      return className(origin, editing);
     case "blockType":
       return origin.type === editing.blockType
         ? "block defaults"
@@ -304,6 +350,19 @@ function briefSubject(origin: StyleOrigin, editing: EditedAddress): string {
     case "node":
       return enclosingName(editing, origin.id);
   }
+}
+
+/**
+ * A class as the author knows it: a shared style by its name ("Card"), a
+ * text style said to be one ("text style: Eyebrow"), each by its class name
+ * where the panel does not know its name.
+ */
+function className(
+  origin: Extract<StyleOrigin, { kind: "class" }>,
+  editing: EditedAddress
+): string {
+  const name = editing.sharedStyleName?.(origin.slug) ?? `.${origin.slug}`;
+  return origin.role === "text" ? `text style: ${name}` : name;
 }
 
 /** An enclosing block as the Layers panel names it, or in general words. */
@@ -331,7 +390,7 @@ function originSubject(
 ): string {
   switch (origin.kind) {
     case "class":
-      return editing.sharedStyleName?.(origin.slug) ?? `.${origin.slug}`;
+      return className(origin, editing);
     case "blockType":
       /*
        * The same problem the `node` case has, and it arrives by the same route:

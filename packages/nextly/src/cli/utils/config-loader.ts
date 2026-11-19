@@ -29,7 +29,7 @@ import {
   defineConfig,
   type SanitizedNextlyConfig,
 } from "../../collections/config/define-config";
-import { assertCollectionOpensIn } from "../../collections/config/opens-in";
+import { assertOpensIn } from "../../collections/config/opens-in";
 import type { NextlyServiceConfig } from "../../di/register";
 import { emailRetentionAfterTransform } from "../../domains/email/retention-config";
 import { judgeFieldGroupCyclesAtStart } from "../../domains/field-groups/field-group-cycles";
@@ -816,11 +816,12 @@ async function loadConfigInternal(
       publishWithheldScopeFields(new Map());
     }
 
-    // Where each collection opens its entries, judged as the boot judges it
-    // (register.ts) whether or not a plugin is configured: a view named with
-    // no plugin to declare it is refused here too, so a command does not
-    // build or migrate an application whose start would refuse it.
-    assertCollectionOpensIn(config.collections, config.plugins ?? []);
+    // Where each collection opens its entries, and each Single, judged as the
+    // boot judges it (register.ts) whether or not a plugin is configured: a
+    // view named with no plugin to declare it is refused here too, so a
+    // command does not build or migrate an application whose start would
+    // refuse it.
+    assertOpensIn(config.collections, config.plugins ?? [], config.singles);
 
     // Field groups placed in a cycle are judged over code and the Builder's field groups whether
     // or not a plugin is configured, as the boot judges them, so a command does not pass what a

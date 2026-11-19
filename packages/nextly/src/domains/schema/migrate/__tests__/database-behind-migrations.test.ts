@@ -8,9 +8,11 @@ import { describe, expect, it } from "vitest";
 
 import type { TableSpec } from "../../pipeline/diff/types";
 import {
+  appliedPluginSnapshots,
   appOwnedTables,
   missingFromDatabase,
 } from "../database-behind-migrations";
+import type { PluginMigration } from "../plugin/plugin-migration";
 
 const column = (name: string) => ({
   name,
@@ -62,5 +64,114 @@ describe("the database-behind check over an applied snapshot", () => {
     const applied = [{ migration: "0001_create", ...appOwnedTables(file) }];
     const live = new Map([["dc_posts", new Set(["id", "title"])]]);
     expect(missingFromDatabase(applied, live)).toEqual([]);
+  });
+
+  it("names each column the app added to a table Nextly makes again bare, when that table is missing whole", () => {
+    const core = {
+      snapshot: {
+        tables: [
+          table("dc_posts", ["id", "title"]),
+          // Nextly's own table, held whole because the app contributes to it.
+          table("users", ["id", "email", "app_flag", "app_note"]),
+        ],
+      },
+      contributions: { users: { columns: ["app_flag", "app_note"], ...NONE } },
+    };
+    const applied = [
+      {
+        migration: "0001_create",
+        ...appOwnedTables(core),
+        // The core reconcile makes `users` again, without the app's columns.
+        remade: new Set(["users"]),
+      },
+    ];
+    const live = new Map([["dc_posts", new Set(["id", "title"])]]);
+    expect(missingFromDatabase(applied, live)).toEqual([
+      { table: "users", column: "app_flag", createdBy: "0001_create" },
+      { table: "users", column: "app_note", createdBy: "0001_create" },
+    ]);
+  });
+
+  describe("a plugin's applied modules", () => {
+    const both = <T>(value: T) => ({
+      postgresql: value,
+      mysql: value,
+      sqlite: value,
+    });
+    const module = (
+      name: string,
+      own: TableSpec[],
+      extra: Partial<PluginMigration> = {}
+    ): PluginMigration =>
+      ({
+        name,
+        snapshot: both({ tables: own }),
+        ...extra,
+      }) as unknown as PluginMigration;
+    const init = module("001_init", [table("fx__things", ["id"])]);
+    const next = module("002_label", [table("fx__things", ["id", "label"])], {
+      // A dependency's table, held whole for the column this plugin added.
+      contributed: both({
+        tables: [table("dep__orders", ["id", "total", "fx_mark"])],
+      }),
+      contributions: both({
+        dep__orders: { columns: ["fx_mark"], ...NONE },
+      }),
+    });
+    const pending = module("003_later", [
+      table("fx__things", ["id", "label", "later"]),
+    ]);
+    const snapshots = (migrations: PluginMigration[]) =>
+      appliedPluginSnapshots({
+        pluginName: "@acme/fx",
+        migrations,
+        isApplied: key => !key.endsWith("/003_later"),
+        dialect: "postgresql",
+      });
+
+    it("names what the newest applied module records, by the module that made it, and nothing of a pending one", () => {
+      const live = new Map([
+        ["fx__things", new Set(["id"])],
+        ["dep__orders", new Set(["id"])],
+      ]);
+      expect(
+        missingFromDatabase(snapshots([init, next, pending]), live)
+      ).toEqual([
+        {
+          table: "fx__things",
+          column: "label",
+          createdBy: "plugin:@acme/fx/002_label",
+        },
+        // Its own column on the dependency's table; `total` is the dependency's.
+        {
+          table: "dep__orders",
+          column: "fx_mark",
+          createdBy: "plugin:@acme/fx/002_label",
+        },
+      ]);
+    });
+
+    it("reads the columns of a module that does not record them from what it added to the other owner's table", () => {
+      // As a module generated before `contributions` was recorded: the
+      // dependency's table before and after, and nothing saying whose.
+      const unrecorded = {
+        ...next,
+        contributions: undefined,
+        contributedBefore: both({
+          tables: [table("dep__orders", ["id", "total"])],
+        }),
+      } as unknown as PluginMigration;
+      const live = new Map([
+        ["fx__things", new Set(["id", "label"])],
+        ["dep__orders", new Set(["id"])],
+      ]);
+      expect(missingFromDatabase(snapshots([init, unrecorded]), live)).toEqual([
+        {
+          table: "dep__orders",
+          column: "fx_mark",
+          createdBy: "plugin:@acme/fx/002_label",
+        },
+      ]);
+    });
   });
 });

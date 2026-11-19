@@ -81,7 +81,7 @@ async function entitiesToMove(context: UpgradeStepContext): Promise<ToMove[]> {
       publicMessage:
         `The translatable values of ${unresolved.join("; ")} are both on the main table and in ` +
         `its translations table, and nothing records which is current. Run ` +
-        `\`nextly migrate --repair-localization\` once, then the upgrade again. Nothing was changed.`,
+        `\`nextly migrate --repair-localization\` once. Nothing was changed.`,
       logContext: { entities: unresolved },
     });
   }

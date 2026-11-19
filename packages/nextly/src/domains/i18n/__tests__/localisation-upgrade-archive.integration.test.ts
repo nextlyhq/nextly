@@ -8,14 +8,15 @@
  */
 import { afterEach, expect, it, vi } from "vitest";
 
-import { previewUpgrade, runUpgrade } from "../../../cli/commands/upgrade";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { ensureI18nArchive } from "../migration/ensure-archive";
 import { _resetPerLanguageStorage } from "../per-language-storage";
 
 import {
   bootSite,
+  migrateData,
   openUpgradeDatabase,
+  previewMigrateData,
   SITE,
   type UpgradeDatabase,
 } from "./helpers/localisation-upgrade-fixture";
@@ -68,14 +69,14 @@ describeEachDialect(
       await archiveOfUnknownKind();
       const deps = { adapter: database!.adapter as never, config: SITE };
 
-      const plan = await previewUpgrade({ confirmBackedUp: true }, deps);
+      const plan = await previewMigrateData(deps.adapter, deps.config);
       expect(plan.report?.check).toContainEqual(
         expect.stringMatching(
           /old-posts[\s\S]*i18n:restore --collection old-posts --kind/
         )
       );
 
-      await runUpgrade({ confirmBackedUp: true }, deps);
+      await migrateData(deps.adapter, deps.config);
       expect(await archivedRows()).toBe(2);
     });
   }

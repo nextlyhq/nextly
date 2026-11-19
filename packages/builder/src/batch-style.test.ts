@@ -12,14 +12,23 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_LIMITS,
+  type AnyBlockDefinition,
+  type BlockDocument,
+  type BlockNode,
+  type NamedClass,
+  type NodeStyles,
+} from "@nextlyhq/blocks-engine";
 
 import {
   batchStyleClearOps,
+  batchStylePasteOps,
   batchStyleWriteOps,
+  batchStyleWritesOps,
   sharedValueAt,
 } from "./batch-style";
-import { applyOp } from "./ops";
+import { applyOp, applyOps } from "./ops";
 import type { StyleAddress } from "./style-values";
 
 const AT: StyleAddress = {
@@ -225,6 +234,40 @@ describe("the ops that change a whole selection", () => {
      */
     expect(colourOf(working, "a")).toBe("red");
     expect(colourOf(working, "b")).toBeUndefined();
+  });
+
+  it("writes different values at sibling paths as ONE op per block, so one undo takes both back", () => {
+    /*
+     * Two parts of one value set together (the top and the bottom of a
+     * padding, each its own size). Built as two single writes from one
+     * before-state, the second op's whole envelope would drop the first's
+     * value: one op per block, carrying both, is what keeps them and costs
+     * one history entry.
+     */
+    const before = doc(padNode("a", { inlineStart: "4px" }));
+    const { ops, refused } = batchStyleWritesOps(before.nodes, [
+      { address: { ...PAD, path: ["blockStart"] }, value: "8px" },
+      { address: { ...PAD, path: ["blockEnd"] }, value: "16px" },
+    ]);
+    expect(refused).toBeUndefined();
+    expect(ops).toHaveLength(1);
+    const applied = applyOps(before, ops, DEFAULT_LIMITS);
+    const padding = (
+      applied.document.nodes[0]?.styles as {
+        base: { base: { padding: Record<string, string> } };
+      }
+    ).base.base.padding;
+    expect(padding).toEqual({
+      inlineStart: "4px",
+      blockStart: "8px",
+      blockEnd: "16px",
+    });
+    // Its one inverse is the one undo step, and it restores both at once.
+    expect(applied.inverses).toHaveLength(1);
+    const [inverse] = applied.inverses;
+    if (inverse === undefined) throw new Error("no inverse");
+    const undone = applyOp(applied.document, inverse, DEFAULT_LIMITS).document;
+    expect(undone.nodes[0]?.styles).toEqual(before.nodes[0]?.styles);
   });
 
   it("clears across the selection, skipping blocks with nothing to clear", () => {
@@ -550,6 +593,216 @@ describe("the ops that change a whole selection", () => {
     } as never);
     expect(refused).toBeUndefined();
     expect(ops).toHaveLength(1);
+  });
+});
+
+/** Text styles, a shared style and two block styles, as the site holds them. */
+const eyebrow: NamedClass = {
+  id: "t-eyebrow",
+  slug: "eyebrow",
+  label: "Eyebrow",
+  orderIndex: 4,
+  role: "text",
+  styles: { base: { base: { fontSize: "12px" } } } as NodeStyles,
+};
+const display: NamedClass = {
+  id: "t-display",
+  slug: "display",
+  label: "Display",
+  orderIndex: 3,
+  role: "text",
+  styles: { base: { base: { fontSize: "64px" } } } as NodeStyles,
+};
+const card: NamedClass = {
+  id: "c-card",
+  slug: "card",
+  orderIndex: 0,
+  styles: { base: { base: { color: "blue" } } } as NodeStyles,
+};
+const bigHeading: NamedClass = {
+  id: "look:acme/heading:big",
+  slug: "heading-big",
+  orderIndex: 1,
+  blockType: "acme/heading",
+  styles: { base: { base: { fontSize: "40px" } } } as NodeStyles,
+};
+const smallHeading: NamedClass = {
+  id: "look:acme/heading:small",
+  slug: "heading-small",
+  orderIndex: 2,
+  blockType: "acme/heading",
+  styles: { base: { base: { fontSize: "18px" } } } as NodeStyles,
+};
+const LIBRARY = [eyebrow, display, card, bigHeading, smallHeading];
+
+/** A heading takes text and colour; an image takes neither. */
+const DEFINITIONS: Record<string, AnyBlockDefinition> = {
+  "acme/heading": {
+    name: "acme/heading",
+    label: "Heading",
+    supports: { typography: true, color: true, spacing: true },
+  } as unknown as AnyBlockDefinition,
+  "acme/image": {
+    name: "acme/image",
+    label: "Image",
+    supports: { spacing: true, border: true },
+  } as unknown as AnyBlockDefinition,
+};
+const definitions = (type: string): AnyBlockDefinition | undefined =>
+  DEFINITIONS[type];
+
+/** A block of one type with its own values, classes and words. */
+function styled(
+  id: string,
+  type: string,
+  styles: NodeStyles | undefined,
+  classes?: string[]
+): BlockNode {
+  return {
+    id,
+    type,
+    version: 1,
+    props: { text: `words of ${id}` },
+    ...(styles === undefined ? {} : { styles }),
+    ...(classes === undefined ? {} : { classes }),
+  } as unknown as BlockNode;
+}
+
+/** A source heading's look: colours and sizes on two devices and on hover. */
+const SOURCE_STYLES = {
+  base: {
+    base: { color: "red", fontSize: "32px", padding: "8px" },
+    mobile: { fontSize: "20px" },
+  },
+  hover: { base: { color: "darkred" } },
+} as unknown as NodeStyles;
+
+describe("pasting one block's style onto many", () => {
+  it("gives every target the source's values on every device and state, and its styles, as one group", () => {
+    const before = doc(
+      styled("a", "acme/heading", {
+        base: { base: { color: "green", letterSpacing: "1px" } },
+      } as unknown as NodeStyles),
+      styled("b", "acme/heading", undefined, [smallHeading.id, display.id])
+    );
+    const { ops, skipped } = batchStylePasteOps(
+      before.nodes,
+      {
+        styles: SOURCE_STYLES,
+        classes: [bigHeading.id, eyebrow.id, card.id],
+      },
+      { library: LIBRARY, definitions }
+    );
+    expect(skipped).toEqual([]);
+    expect(ops).toHaveLength(2);
+    const applied = applyOps(before, ops, DEFAULT_LIMITS);
+    for (const each of applied.document.nodes) {
+      // The target's own values are replaced, not merged into.
+      expect(each.styles).toEqual(SOURCE_STYLES);
+      expect(each.classes).toEqual([bigHeading.id, eyebrow.id, card.id]);
+    }
+    // Content is never copied.
+    expect(applied.document.nodes.map(each => each.props)).toEqual([
+      { text: "words of a" },
+      { text: "words of b" },
+    ]);
+    // One undo step puts both back.
+    let undone = applied.document;
+    for (const inverse of [...applied.inverses].reverse()) {
+      undone = applyOp(undone, inverse, DEFAULT_LIMITS).document;
+    }
+    expect(undone.nodes).toEqual(before.nodes);
+  });
+
+  it("puts the source's text style Eyebrow in place of the target's Display", () => {
+    const before = doc(
+      styled("t", "acme/heading", undefined, [card.id, display.id])
+    );
+    const { ops } = batchStylePasteOps(
+      before.nodes,
+      { styles: undefined, classes: [eyebrow.id] },
+      { library: LIBRARY, definitions }
+    );
+    const after = applyOps(before, ops, DEFAULT_LIMITS).document;
+    expect(after.nodes[0]?.classes).toEqual([eyebrow.id]);
+  });
+
+  it("clears the target's text style when the source wears none", () => {
+    const before = doc(
+      styled(
+        "t",
+        "acme/heading",
+        { base: { base: { color: "green" } } } as unknown as NodeStyles,
+        [display.id]
+      )
+    );
+    const { ops } = batchStylePasteOps(
+      before.nodes,
+      { styles: undefined, classes: [] },
+      { library: LIBRARY, definitions }
+    );
+    const after = applyOps(before, ops, DEFAULT_LIMITS).document;
+    expect(after.nodes[0]).not.toHaveProperty("classes");
+    expect(after.nodes[0]).not.toHaveProperty("styles");
+  });
+
+  it("writes only the blocks: every op updates a target's own styles and classes", () => {
+    const targets = [
+      styled("a", "acme/heading", undefined, [display.id]),
+      styled("b", "acme/image", undefined),
+    ];
+    const { ops } = batchStylePasteOps(
+      targets,
+      { styles: SOURCE_STYLES, classes: [card.id, eyebrow.id] },
+      { library: LIBRARY, definitions }
+    );
+    expect(ops.length).toBeGreaterThan(0);
+    for (const op of ops) {
+      expect(op.kind).toBe("update");
+      if (op.kind !== "update") continue;
+      expect(["a", "b"]).toContain(op.id);
+      expect(
+        Object.keys(op.patch).every(
+          key => key === "styles" || key === "classes"
+        )
+      ).toBe(true);
+    }
+  });
+
+  it("skips what a target does not support, and counts each setting skipped", () => {
+    const before = doc(
+      styled("i", "acme/image", {
+        base: { base: { borderRadius: "4px" } },
+      } as unknown as NodeStyles)
+    );
+    const { ops, skipped } = batchStylePasteOps(
+      before.nodes,
+      // Colour, size on two devices and hover colour: four settings an
+      // image has no place for; the padding it keeps. A heading's block
+      // style and a text style don't apply to it either.
+      {
+        styles: SOURCE_STYLES,
+        classes: [bigHeading.id, eyebrow.id, card.id],
+      },
+      { library: LIBRARY, definitions }
+    );
+    expect(skipped).toEqual([{ nodeId: "i", type: "acme/image", count: 6 }]);
+    const after = applyOps(before, ops, DEFAULT_LIMITS).document;
+    expect(after.nodes[0]?.styles).toEqual({
+      base: { base: { padding: "8px" } },
+    });
+    // The shared style is worn by any block.
+    expect(after.nodes[0]?.classes).toEqual([card.id]);
+  });
+
+  it("asks for nothing when a target already looks like the source", () => {
+    const { ops, skipped } = batchStylePasteOps(
+      [styled("a", "acme/heading", SOURCE_STYLES, [card.id])],
+      { styles: SOURCE_STYLES, classes: [card.id] },
+      { library: LIBRARY, definitions }
+    );
+    expect(ops).toEqual([]);
+    expect(skipped).toEqual([]);
   });
 });
 

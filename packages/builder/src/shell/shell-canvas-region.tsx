@@ -11,7 +11,6 @@ import * as React from "react";
 
 import { useCanvasFrame } from "../canvas/canvas-frame-context";
 import { CANVAS_FRAME_BOX_ATTRIBUTE } from "../canvas/geometry-dom";
-import { CANVAS_GUTTER } from "../shell-state";
 
 /**
  * The canvas's region: a named `section`, never `<main>`.
@@ -117,25 +116,13 @@ function CanvasRegion({
       }}
       aria-label="Canvas"
       /*
-       * Padded, so the page floats inside the region rather than
-       * meeting its edges. The frame is then visible on every side at
-       * every width — without it the page fills the region whenever
-       * it is not scaled down, and the edge this gap exists to show
-       * has nowhere to appear.
-       *
-       * Safe against the fit: the canvas frame observes this element's
-       * CONTENT box, so padding narrows the room the page is fitted into
-       * and the scale follows it. A padding the measurement
-       * could not see would size the page to the region and paint it
-       * over the gap.
-       *
-       * Taken from the constant the panel's own minimum is derived
-       * from, rather than written as a utility class. The gap is
-       * spent out of this panel, so a class here and a number there
-       * would let the two drift and put the floor back inside the
-       * editing surface.
+       * Unpadded, so the page meets the region's edges and reads as the page
+       * rather than a card inside a box. The frame is fitted into this
+       * element's content box, so at the region's width it touches the
+       * panels' dividers, and a narrower frame is centred in the well with
+       * its hairline edge. Where the frame meets the region, the region
+       * clips that edge, so it never doubles a divider.
        */
-      style={{ padding: CANVAS_GUTTER }}
       className="nx-canvas-scroller h-full overflow-auto"
     >
       {children}
@@ -155,9 +142,9 @@ function drawsSomething(node: React.ReactNode): boolean {
 /**
  * The canvas panel's contents: the strip, where the host gives one, above the
  * canvas's region rather than inside it (the region is what scrolls, so the
- * strip stays pinned while the page scrolls under it, inset by the canvas's
- * own gutter so its edges line up with the page's), then the region, with the
- * checklist floated over it.
+ * strip stays pinned while the page scrolls under it, its edges on the
+ * region's as the page's are), then the region, with the checklist floated
+ * over it.
  */
 export function CanvasPanelBody({
   canvasStrip,
@@ -173,22 +160,10 @@ export function CanvasPanelBody({
   return (
     <div className="flex h-full flex-col">
       {!drawsSomething(canvasStrip) ? null : (
-        <div
-          className="nx-canvas-strip-slot shrink-0"
-          style={{
-            paddingTop: CANVAS_GUTTER,
-            paddingInline: CANVAS_GUTTER,
-          }}
-        >
-          {canvasStrip}
-        </div>
+        <div className="nx-canvas-strip-slot shrink-0">{canvasStrip}</div>
       )}
       {/* The canvas's region: see `CanvasRegion`. */}
       <div className="relative min-h-0 flex-1">
-        {/*
-          The same gutter on every side, a strip above or not: a block's badge
-          drawn just above the first block has the room it has without one.
-        */}
         <CanvasRegion regionRef={regionRef}>{children}</CanvasRegion>
         {checklist === undefined ? null : (
           // The positioner takes no pointer events, so it cannot swallow a

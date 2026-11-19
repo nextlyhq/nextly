@@ -280,6 +280,20 @@ export function writtenVersionDigest(
     .digest("hex");
 }
 
+/**
+ * A saved version's digest: its text, or for a written one its subject,
+ * preheader and blocks, so blocks that write the same HTML are told apart.
+ * Ownership compares versions by it, and a delivery records it.
+ */
+export function storedVersionDigest(
+  version: EmailTemplateVersion,
+  blocks: WrittenDocument | null | undefined
+): string {
+  return blocks
+    ? writtenVersionDigest(version, blocks)
+    : versionDigest(version);
+}
+
 /** Whether two versions would deliver the same email. */
 export function sameVersion(
   a: EmailTemplateVersion,

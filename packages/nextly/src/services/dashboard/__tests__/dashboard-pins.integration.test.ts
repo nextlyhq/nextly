@@ -7,7 +7,9 @@
  * written at once at 19 keep exactly 20; that a pin whose target is gone costs
  * nothing and is removed by a read; that a pin its
  * reader may no longer read is hidden and kept, and shown again when access
- * returns; that deleting an entry, several entries or a Single takes every
+ * returns, is counted to its reader without naming its target, and frees its
+ * place once they remove it, which removes only their own closed pins and asks
+ * again, at removal, whether each is closed; that deleting an entry, several entries or a Single takes every
  * reader's pins of it, and no others, also inside a transaction the caller
  * holds on a pool of one connection; and that before `nextly migrate` creates
  * the table, pins read as none, a pin is refused naming the command, and a
@@ -181,9 +183,12 @@ describe.each(getConfiguredTestDialects())(
       for (const id of ids.slice(0, MAX_PINS_PER_READER)) {
         await pins.pin(ana, entry(id));
       }
+      // In plain words: what the limit is, and what to do.
       await expect(
         pins.pin(ana, entry(ids[MAX_PINS_PER_READER]!))
-      ).rejects.toThrow(`at most ${MAX_PINS_PER_READER}`);
+      ).rejects.toThrow(
+        `You can keep up to ${MAX_PINS_PER_READER} pins. Unpin one first.`
+      );
       // Already pinned: not a new pin, so not refused.
       await expect(pins.pin(ana, entry(ids[0]!))).resolves.toBeUndefined();
       expect(await pins.list(ana)).toHaveLength(MAX_PINS_PER_READER);
@@ -209,6 +214,99 @@ describe.each(getConfiguredTestDialects())(
 
       refused.delete("pn-ben");
       expect((await pins.list(ben)).map(pin => pin.title)).toEqual(["First"]);
+    });
+
+    it("counts the pins its reader may no longer read, naming none, and removing them frees their places", async () => {
+      const t = await boot();
+      const ben = as(await userWhoMay(t, "pn-ben", "read", [NOTES, OTHER]));
+      const gated = await note(t, "Gated plan");
+      const pins = dashboardPinsService();
+      await pins.pin(ben, entry(gated));
+      const others: string[] = [];
+      for (let i = 1; i < MAX_PINS_PER_READER; i++) {
+        const created = await t.nextly.create({
+          collection: OTHER,
+          data: { title: `Other ${i}` },
+        });
+        others.push(String(created.item.id));
+        await pins.pin(ben, {
+          targetType: "collection",
+          targetSlug: OTHER,
+          entryId: others.at(-1)!,
+        });
+      }
+      // The control: while Ben may read it, it is shown, and none is unreadable.
+      const before = await pins.read(ben);
+      expect(before.shown).toHaveLength(MAX_PINS_PER_READER);
+      expect(before.unreadableCount).toBe(0);
+
+      refused.add("pn-ben");
+      const after = await pins.read(ben);
+      expect(after.shown).toHaveLength(MAX_PINS_PER_READER - 1);
+      // 🔴 How many, and nothing a closed pin names: no title, no target.
+      expect(after.unreadableCount).toBe(1);
+      expect(JSON.stringify(after)).not.toContain("Gated plan");
+      expect(JSON.stringify(after)).not.toContain(gated);
+
+      // It still holds a place: at the limit, a new pin is refused.
+      const fresh = (
+        await t.nextly.create({ collection: OTHER, data: { title: "Fresh" } })
+      ).item.id;
+      const freshPin = {
+        targetType: "collection" as const,
+        targetSlug: OTHER,
+        entryId: String(fresh),
+      };
+      await expect(pins.pin(ben, freshPin)).rejects.toThrow(
+        `You can keep up to ${MAX_PINS_PER_READER} pins. Unpin one first.`
+      );
+
+      // Removed on the server, as "Remove them" asks: the place is free, and
+      // every pin he may still read stays.
+      await expect(pins.removeUnreadable(ben)).resolves.toBe(1);
+      const left = await pins.read(ben);
+      expect(left.unreadableCount).toBe(0);
+      expect(left.shown).toHaveLength(MAX_PINS_PER_READER - 1);
+      await expect(pins.pin(ben, freshPin)).resolves.toBeUndefined();
+    });
+
+    it("removes only the caller's own closed pins, asking again at removal whether each is closed", async () => {
+      const t = await boot();
+      const ana = as(await superAdminUser(t, "pn-ana"));
+      const ben = as(await userWhoMay(t, "pn-ben", "read", [NOTES]));
+      const cal = as(await userWhoMay(t, "pn-cal", "read", [NOTES]));
+      const gated = await note(t, "Gated plan");
+      const second = await note(t, "Second plan");
+      const pins = dashboardPinsService();
+      for (const reader of [ana, ben, cal])
+        await pins.pin(reader, entry(gated));
+      await pins.pin(ben, entry(second));
+
+      // Closed to Ben and Cal alike; Ana still reads it.
+      refused.add("pn-ben");
+      refused.add("pn-cal");
+      expect((await pins.read(ben)).unreadableCount).toBe(2);
+
+      // 🔴 Access returns before he presses "Remove them": nothing is closed
+      // at removal, so nothing goes.
+      refused.delete("pn-ben");
+      await expect(pins.removeUnreadable(ben)).resolves.toBe(0);
+      expect(await stored(t)).toEqual(
+        [
+          `pn-ana:${NOTES}/${gated}`,
+          `pn-ben:${NOTES}/${gated}`,
+          `pn-ben:${NOTES}/${second}`,
+          `pn-cal:${NOTES}/${gated}`,
+        ].sort()
+      );
+
+      // Closed again: both his pins go, and Ana's and Cal's of the same
+      // entry stay, Cal's though it is closed to her too.
+      refused.add("pn-ben");
+      await expect(pins.removeUnreadable(ben)).resolves.toBe(2);
+      expect(await stored(t)).toEqual(
+        [`pn-ana:${NOTES}/${gated}`, `pn-cal:${NOTES}/${gated}`].sort()
+      );
     });
 
     it("deletes every reader's pins of a deleted entry, deleted entries and a deleted Single, and no others", async () => {
@@ -339,7 +437,7 @@ describe.each(getConfiguredTestDialects())(
       const refusal = results.find(result => result.status === "rejected");
       expect(
         ((refusal as PromiseRejectedResult).reason as Error).message
-      ).toContain(`at most ${MAX_PINS_PER_READER}`);
+      ).toContain(`You can keep up to ${MAX_PINS_PER_READER} pins.`);
       expect(await stored(t)).toHaveLength(MAX_PINS_PER_READER);
     });
 

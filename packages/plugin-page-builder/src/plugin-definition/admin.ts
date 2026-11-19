@@ -12,6 +12,8 @@ import {
   BUILDER_VIEW_PATH,
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
+  NEW_PAGE_DIALOG_COMPONENT,
+  OPEN_IN_BUILDER,
   REMOVE_LAYOUT_ACTION_COMPONENT,
   SINGLE_SHOWN_ON_SECTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
@@ -89,12 +91,27 @@ export function adminContributions(def: Definition): PluginAdminContributions {
     // The editor is a full-screen view of the document, offered wherever a
     // blocks field is used — including collections the Schema Builder adds
     // later — and opened by the field's card at that address.
+    //
+    // It opens first wherever a collection's main field is a blocks field
+    // (Pages, and any collection laid out the same way, the Schema Builder's
+    // included): a click on such an entry lands in the builder, on that
+    // field, and the form is "Open as form" in the builder's menu and "Edit
+    // details" in the row's. A collection that says `opensIn: "form"` keeps
+    // the form. Where an entry opens elsewhere, the admin offers this view as
+    // "Open in builder".
     documentViews: [
       {
         path: BUILDER_VIEW_PATH,
         fieldType: BLOCKS_TYPE,
         component: BUILDER_VIEW_COMPONENT,
         label: "Page Builder",
+        opensFirst: "mainField",
+        openLabel: OPEN_IN_BUILDER,
+        // "+ New" on such a list opens the New page dialog: a title, an
+        // address made from it, the header & footer, then straight into the
+        // builder on the saved draft. A collection whose field holds no pages
+        // (only components or patterns) is handed to its create form.
+        createDialog: NEW_PAGE_DIALOG_COMPONENT,
       },
     ],
     // "Remove Layout…" in a Layout's document bar, beside History: the one
@@ -103,13 +120,14 @@ export function adminContributions(def: Definition): PluginAdminContributions {
     // form; the component draws only on a saved Layout's own.
     entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
     // The editor's Settings dialog, where other plugins may add a tab
-    // beside the page's or the design's own settings.
+    // beside the page's or the design's own settings, and a block drawn
+    // where the builder shows the page's search result.
     places: [
       {
         name: PAGE_BUILDER_SETTINGS_PLACE,
         description:
-          "A tab in the Page Builder's Settings dialog, beside the page's or the design's own settings.",
-        accepts: ["tab"],
+          "A tab in the Page Builder's Settings dialog, beside the page's or the design's own settings; or a block drawn where the builder shows the page's search result.",
+        accepts: ["tab", "block"],
       },
     ],
     // An entry's own design, where an author meets it.

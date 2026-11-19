@@ -17,10 +17,31 @@ import {
 } from "../../../domains/i18n/config/stored-languages";
 import type { LaidOutEntity } from "../../../domains/i18n/per-language-storage-layout";
 import { storedLanguageReader } from "../../../domains/i18n/stored-language-reader";
+import { NextlyError } from "../../../errors/nextly-error";
 import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
 import type { ColumnOrigin } from "../../../domains/schema/services/field-column-descriptor";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
-import type { UpgradeStepContext } from "../upgrade-step";
+import type { UpgradeSite, UpgradeStepContext } from "../upgrade-step";
+
+/**
+ * The site a run of the data steps judges by, from the configuration the command loaded: its
+ * languages and the entities it declares.
+ */
+export function upgradeSiteOf(config: {
+  localization?: UpgradeSite["localization"];
+  collections?: UpgradeSite["collections"];
+  singles?: UpgradeSite["singles"];
+  fieldGroups?: UpgradeSite["fieldGroups"];
+}): UpgradeSite {
+  return {
+    ...(config.localization === undefined
+      ? {}
+      : { localization: config.localization }),
+    collections: config.collections ?? [],
+    singles: config.singles ?? [],
+    fieldGroups: config.fieldGroups ?? [],
+  };
+}
 
 /** The site's languages in its order, its default first among equals. */
 export interface SiteLanguages {
@@ -53,11 +74,15 @@ export async function configuredLanguages(
 ): Promise<SiteLanguages> {
   const declared = context.site?.localization;
   if (declared) {
+    // A configuration read through the loader holds each code in standard form; the codes it
+    // wrote the earlier way are named beside them (`olderCodes`), and read back as written here.
+    const asWritten = (code: string) =>
+      declared.olderCodes?.find(older => older.to === code)?.from ?? code;
     return {
       codes: declared.locales.map(locale =>
-        typeof locale === "string" ? locale : locale.code
+        asWritten(typeof locale === "string" ? locale : locale.code)
       ),
-      defaultLocale: declared.defaultLocale,
+      defaultLocale: asWritten(declared.defaultLocale),
     };
   }
   const stored = localizationFromStoredLanguages(
@@ -104,7 +129,8 @@ const PENDING_CHANGE_COLUMNS = [
 /**
  * Whether the version history is laid out as this release keeps it: the steps that rewrite
  * pending changes read and write its newer columns, which an earlier release's table lacks until
- * `nextly migrate` adds them. Where it is not, those steps wait for a second `nextly upgrade`.
+ * `nextly migrate`'s migrations add them. Where it is not, those steps refuse
+ * (`assertVersionHistoryReady`) rather than skip.
  */
 export async function versionHistoryReady(
   context: UpgradeStepContext
@@ -120,6 +146,42 @@ export async function versionHistoryReady(
     (tables[0]?.columns ?? []).map(column => column.name)
   );
   return PENDING_CHANGE_COLUMNS.every(column => present.has(column));
+}
+
+/**
+ * Refuses, naming the repair, where the version history is not laid out as this release keeps it
+ * (`versionHistoryReady`) yet holds pending changes a localisation step would rewrite: keying,
+ * splitting or recoding them writes the newer columns, which only `nextly migrate`'s migrations
+ * add. Nothing is skipped in silence, and nothing is changed. A database with no pending change
+ * has nothing for those steps to do, and passes.
+ */
+export async function assertVersionHistoryReady(
+  context: UpgradeStepContext
+): Promise<void> {
+  if (!(await context.adapter.tableExists(VERSIONS_TABLE))) return;
+  if (await versionHistoryReady(context)) return;
+  const adapter = context.adapter as unknown as DrizzleAdapter;
+  // Read with the columns every release's table has.
+  const pending = await adapter.select<{ id: string }>(VERSIONS_TABLE, {
+    columns: ["id"],
+    where: {
+      and: [
+        { column: "versionNo", op: "IS NULL" },
+        { column: "status", op: "=", value: "draft" },
+      ],
+    },
+    limit: 1,
+  });
+  if (pending.length === 0) return;
+  throw new NextlyError({
+    code: "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED",
+    publicMessage:
+      "The version history holds pending changes but is not laid out as this release keeps it " +
+      `(it lacks ${PENDING_CHANGE_COLUMNS.join(", ")}). Run \`nextly migrate\` without --step, ` +
+      "so its migrations add them before its data steps key and split the pending changes. " +
+      "Nothing was changed.",
+    logContext: { table: VERSIONS_TABLE },
+  });
 }
 
 /**

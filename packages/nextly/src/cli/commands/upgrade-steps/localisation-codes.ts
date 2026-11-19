@@ -33,7 +33,11 @@ import { TRANSLATION_PROVENANCE_TABLE } from "../../../schemas/translation-prove
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
 
-import { configuredLanguages, siteEntities } from "./localisation-site";
+import {
+  assertVersionHistoryReady,
+  configuredLanguages,
+  siteEntities,
+} from "./localisation-site";
 
 const VERSION_PINS_TABLE = "nextly_version_pins";
 const RELEASE_MEMBERS_TABLE = "nextly_release_members";
@@ -79,7 +83,7 @@ function collision(colliding: [string, string[]][]): NextlyError {
     code: "NEXTLY_LANGUAGE_CODES_COLLIDE",
     publicMessage:
       `The configuration names ${named}: one language under two codes once written in standard ` +
-      `form. Keep one of them in the configuration and run the upgrade again. Nothing was changed.`,
+      `form. Keep one of them in the configuration and run \`nextly migrate\` again. Nothing was changed.`,
     logContext: { colliding: colliding.map(([standard]) => standard) },
   });
 }
@@ -121,6 +125,8 @@ async function conversionsToRun(
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const conversions = conversionsOf((await configuredLanguages(context)).codes);
   if (conversions.length === 0) return [];
+  // Rewriting a version's languages writes the newer columns: only on a history laid out for them.
+  await assertVersionHistoryReady(context);
   const tables = await translationTables(context);
   const pending: CodeConversion[] = [];
   for (const conversion of conversions) {

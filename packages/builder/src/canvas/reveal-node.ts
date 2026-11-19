@@ -25,17 +25,7 @@
  * @module reveal-node
  */
 import { nodeElement } from "./canvas";
-
-/**
- * Whether the reader asked the system for less motion, asked of the window the
- * root belongs to — a frame's window answers for the frame.
- */
-function prefersReducedMotion(root: Document | HTMLElement): boolean {
-  const owner = "defaultView" in root ? root : root.ownerDocument;
-  const view = owner.defaultView;
-  if (view === null || typeof view.matchMedia !== "function") return false;
-  return view.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
+import { prefersReducedMotion } from "./reduced-motion";
 
 /**
  * Scroll the block `id` into view inside `root`.
@@ -47,10 +37,15 @@ function prefersReducedMotion(root: Document | HTMLElement): boolean {
  * @param root - the canvas: its root element, or the document of the frame it
  *   draws in
  * @param id - the block's id, as the document stores it
+ * @param options - `instant` jumps rather than scrolling smoothly
  * @returns whether the block was found; `false` scrolls nothing, which is what
  *   an address naming a block the page no longer has should do
  */
-export function revealNode(root: Document | HTMLElement, id: string): boolean {
+export function revealNode(
+  root: Document | HTMLElement,
+  id: string,
+  { instant = false }: { readonly instant?: boolean } = {}
+): boolean {
   // A frame's document is searched from its root element, which holds all of
   // it; `nodeElement` compares ids rather than building a selector from them.
   const scope = "documentElement" in root ? root.documentElement : root;
@@ -59,7 +54,9 @@ export function revealNode(root: Document | HTMLElement, id: string): boolean {
   element.scrollIntoView({
     block: "nearest",
     inline: "nearest",
-    behavior: prefersReducedMotion(root) ? "auto" : "smooth",
+    // Instant where the caller is about to measure or focus at the block's
+    // new place, which a smooth scroll would still be moving towards.
+    behavior: instant || prefersReducedMotion(root) ? "auto" : "smooth",
   });
   return true;
 }

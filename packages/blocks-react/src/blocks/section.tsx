@@ -6,7 +6,12 @@
  *
  * @module blocks/library/section
  */
-import { type BlockDefinition, defineBlock } from "@nextlyhq/blocks-engine";
+import {
+  type BlockDefinition,
+  defineBlock,
+  PADDING_PRESET_PROP,
+  type PropSchema,
+} from "@nextlyhq/blocks-engine";
 
 import type { PageContext } from "../context";
 
@@ -22,62 +27,99 @@ import type { ContainerProps } from "./container";
 import { htmlTagProp } from "./html-tags";
 import { sectionLooks } from "./looks";
 
+/** What a Section stores: a container's settings and its padding preset. */
+export interface SectionProps extends ContainerProps {
+  /**
+   * Compact or Roomy padding, each from its own pair of the site's spacing
+   * variables. Left out, Normal: the type's own padding, so a Section that
+   * never picked one stores and renders exactly as before. The page compile
+   * writes it (`padding-preset.ts` in the engine); the render does not read
+   * it.
+   */
+  paddingPreset?: "compact" | "roomy";
+}
+
+/**
+ * Padding: Compact, Normal or Roomy, drawn above the spacing box in Style ›
+ * Spacing. Normal is never stored: choosing it removes the prop.
+ */
+const PADDING_PRESET: PropSchema = {
+  label: "Padding",
+  type: "select",
+  options: ["compact", "normal", "roomy"],
+  optionLabels: { compact: "Compact", normal: "Normal", roomy: "Roomy" },
+  group: "style",
+  section: "spacing",
+  // What each choice writes, under the site's default variable prefix.
+  code: {
+    compact:
+      "padding: var(--site-space-section-y-compact) var(--site-space-gutter-compact)",
+    normal: "padding: var(--site-space-section-y) var(--site-space-gutter)",
+    roomy:
+      "padding: var(--site-space-section-y-roomy) var(--site-space-gutter-roomy)",
+  },
+};
+
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
-export const section: BlockDefinition<ContainerProps, PageContext> =
-  defineBlock({
-    name: "core/section",
-    version: 1,
-    // What an author reads, in the Add panel and the block card: one plain
-    // line. What the block does, for whoever maintains it: A page region.
-    // Renders a landmark element, and opts into the site's content width once
-    // the site stylesheet defines it.
-    description: "A full-width band of the page.",
-    // Palette metadata. The category is imported rather than spelled here so
-    // nineteen blocks cannot drift into nineteen headings; keywords are what
-    // let a search for a word the description never uses still find this.
-    editor: {
-      label: "Section",
-      icon: "section",
-      category: LAYOUT,
-      keywords: ["container", "wrapper", "band", "region"],
-      // Its looks, offered as tiles on a block already on the page.
-      variations: sectionLooks(),
-    },
-    props: {
-      as: htmlTagProp(["section", "header", "footer", "main"]),
-      ...CONTENT_WIDTH_PROPS,
-    },
-    defaultProps: { as: "section", contained: true },
-    example: { props: { as: "section", contained: true } },
-    slots: {
-      // Named children with no allow-list: a page region holds whatever a page
-      // holds, so no starting block is more correct than none. A section that
-      // arrives empty is not therefore an invisible one — the editor draws a box
-      // for any container whose slot is empty, which covers every unrestricted
-      // container rather than only the ones that thought to declare a default.
-      children: {},
-    },
-    // A band pads itself: room above and below its content and a gutter beside
-    // it, each a site token so a site retunes every section in one place. The
-    // values grow with the viewport (see `space.section-y` and `space.gutter`).
-    baseStyles: {
+export const section: BlockDefinition<SectionProps, PageContext> = defineBlock<
+  SectionProps,
+  PageContext
+>({
+  name: "core/section",
+  version: 1,
+  // What an author reads, in the Add panel and the block card: one plain
+  // line. What the block does, for whoever maintains it: A page region.
+  // Renders a landmark element, and opts into the site's content width once
+  // the site stylesheet defines it.
+  description: "A full-width band of the page.",
+  // Palette metadata. The category is imported rather than spelled here so
+  // nineteen blocks cannot drift into nineteen headings; keywords are what
+  // let a search for a word the description never uses still find this.
+  editor: {
+    label: "Section",
+    icon: "section",
+    category: LAYOUT,
+    keywords: ["container", "wrapper", "band", "region"],
+    // Its looks, offered as tiles on a block already on the page.
+    variations: sectionLooks(),
+  },
+  props: {
+    as: htmlTagProp(["section", "header", "footer", "main"]),
+    ...CONTENT_WIDTH_PROPS,
+    [PADDING_PRESET_PROP]: PADDING_PRESET,
+  },
+  defaultProps: { as: "section", contained: true },
+  example: { props: { as: "section", contained: true } },
+  slots: {
+    // Named children with no allow-list: a page region holds whatever a page
+    // holds, so no starting block is more correct than none. A section that
+    // arrives empty is not therefore an invisible one — the editor draws a box
+    // for any container whose slot is empty, which covers every unrestricted
+    // container rather than only the ones that thought to declare a default.
+    children: {},
+  },
+  // A band pads itself: room above and below its content and a gutter beside
+  // it, each a site token so a site retunes every section in one place. The
+  // values grow with the viewport (see `space.section-y` and `space.gutter`).
+  // This is Normal; Compact and Roomy take its place from their own pairs.
+  baseStyles: {
+    base: {
       base: {
-        base: {
-          padding: {
-            blockStart: { $token: "space.section-y" },
-            blockEnd: { $token: "space.section-y" },
-            inlineStart: { $token: "space.gutter" },
-            inlineEnd: { $token: "space.gutter" },
-          },
+        padding: {
+          blockStart: { $token: "space.section-y" },
+          blockEnd: { $token: "space.section-y" },
+          inlineStart: { $token: "space.gutter" },
+          inlineEnd: { $token: "space.gutter" },
         },
       },
     },
-    childGap: CONTAINER_CHILD_GAP,
-    supports: CONTAINER_SUPPORTS,
-    // What it is as HTML follows the tag it renders.
-    contentModel: containerContentModel,
-    render: renderContainer,
-  });
+  },
+  childGap: CONTAINER_CHILD_GAP,
+  supports: CONTAINER_SUPPORTS,
+  // What it is as HTML follows the tag it renders.
+  contentModel: containerContentModel,
+  render: renderContainer,
+});

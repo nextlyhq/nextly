@@ -6,7 +6,9 @@
  * the write sees them, and these pin the three properties that make that true:
  * it reads on the write's own transaction, so a row an earlier entry of the same
  * batch wrote is seen; `draft` is the working draft a preview shows; and it is
- * scoped to the validator's own field type, refused by name otherwise.
+ * scoped to the validator's own field type, refused by name otherwise. A
+ * field of several entries is read by the same rules, in one query for the
+ * rows and one for their working drafts.
  */
 import { getTableName } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -259,6 +261,43 @@ async function bootLanguages(dialect: TestDialect): Promise<TestNextly> {
     localization: { locales: ["en", "de", "fr"], defaultLocale: "en" },
   });
   return current;
+}
+
+/** Several-entry reads as validation on the pool does, scoped to `type`. */
+function poolReaderOf(
+  t: TestNextly,
+  type: string,
+  defaultLocale = null as string | null
+) {
+  const connection: StoredFieldConnection = {
+    db: t.adapter as unknown as VersionsDbApi,
+    executor: undefined,
+    defaultLocale,
+  };
+  const write = entryWriteContext({
+    kind: "collection",
+    slug: "plain",
+    connection,
+  });
+  return (target: Parameters<typeof write.readStoredOf>[1]) =>
+    write.readStoredOf(type, target);
+}
+
+/** The tables each select on the adapter reads, in order, while `run` runs. */
+async function tablesSelected(
+  t: TestNextly,
+  run: () => Promise<unknown>
+): Promise<string[]> {
+  const adapter = t.adapter as unknown as {
+    select(table: string, ...rest: unknown[]): Promise<unknown>;
+  };
+  const select = vi.spyOn(adapter, "select");
+  try {
+    await run();
+    return select.mock.calls.map(([table]) => table);
+  } finally {
+    select.mockRestore();
+  }
 }
 
 /** Reads as validation on the pool does, for a site whose default is English. */
@@ -590,6 +629,205 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
     });
   });
 
+  describe("reading one field of several entries", () => {
+    it("answers each entry as a read of it alone does, by id, and leaves out an id that names none", async () => {
+      const t = await boot(dialect);
+      const ids = [
+        await created(t, "plain", { title: "a", body: { v: 1 } }),
+        await created(t, "plain", { title: "b", body: { v: 2 } }),
+        await created(t, "plain", { title: "c" }),
+      ];
+      const one = poolReader(t, "probe");
+      const many = await poolReaderOf(
+        t,
+        "probe"
+      )({
+        collection: "plain",
+        ids: [...ids, "nope"],
+        field: "body",
+        form: "published",
+      });
+
+      expect([...many.keys()].sort()).toEqual([...ids].sort());
+      for (const id of ids) {
+        expect(many.get(id)).toEqual(
+          await one({
+            collection: "plain",
+            id,
+            field: "body",
+            form: "published",
+          })
+        );
+      }
+      expect(many.get(ids[0] ?? "")).toEqual({
+        kind: "value",
+        value: { v: 1 },
+      });
+    });
+
+    it("answers each spelling of an id as a read of that spelling alone does", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "plain", { title: "a", body: { v: 1 } });
+      // The database decides whether another spelling names the same entry:
+      // MySQL compares ids without regard to case, the others exactly.
+      const spellings = [id, id.toUpperCase(), ` ${id}`, `${id} `].filter(
+        (spelling, at, all) => all.indexOf(spelling) === at
+      );
+      const one = poolReader(t, "probe");
+      const many = await poolReaderOf(
+        t,
+        "probe"
+      )({
+        collection: "plain",
+        ids: spellings,
+        field: "body",
+        form: "published",
+      });
+
+      for (const spelling of spellings) {
+        const alone = await one({
+          collection: "plain",
+          id: spelling,
+          field: "body",
+          form: "published",
+        });
+        expect(many.get(spelling) ?? { kind: "absent" }, spelling).toEqual(
+          alone
+        );
+        // An entry left out answers absent alone, and one answered is one
+        // the database found by that spelling.
+        expect(many.has(spelling), spelling).toBe(alone.kind !== "absent");
+      }
+      expect(many.get(id)).toEqual({ kind: "value", value: { v: 1 } });
+    });
+
+    it("reads a working draft saved through another spelling of the id, as the database matched it", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "drafted", {
+        title: "a",
+        body: { v: "live" },
+        status: "published",
+      });
+      const other = await created(t, "drafted", {
+        title: "b",
+        body: { v: "other" },
+        status: "published",
+      });
+      // MySQL finds the entry by another spelling of its id, and the draft is
+      // kept under the spelling the save named; the others find no entry.
+      const saved = await t.nextly
+        .update({
+          collection: "drafted",
+          id: id.toUpperCase(),
+          data: { body: { v: "pending" }, _overwrite: true },
+          overrideAccess: true,
+        })
+        .then(
+          () => true,
+          () => false
+        );
+      expect(saved).toBe(dialect === "mysql");
+      const shown = { kind: "value", value: { v: saved ? "pending" : "live" } };
+
+      expect(
+        await poolReader(
+          t,
+          "probe"
+        )({
+          collection: "drafted",
+          id,
+          field: "body",
+          form: "draft",
+        })
+      ).toEqual(shown);
+      const many = await poolReaderOf(
+        t,
+        "probe"
+      )({
+        collection: "drafted",
+        ids: [id, other],
+        field: "body",
+        form: "draft",
+      });
+      expect(many.get(id)).toEqual(shown);
+      expect(many.get(other)).toEqual({ kind: "value", value: { v: "other" } });
+    });
+
+    it("reads the pending working drafts as `draft`, in one query for the rows and one for the drafts", async () => {
+      const t = await boot(dialect);
+      const pending = await created(t, "drafted", {
+        title: "a",
+        body: { v: "live a" },
+        status: "published",
+      });
+      const settled = await created(t, "drafted", {
+        title: "b",
+        body: { v: "live b" },
+        status: "published",
+      });
+      await t.nextly.update({
+        collection: "drafted",
+        id: pending,
+        data: { body: { v: "pending a" }, _overwrite: true },
+        overrideAccess: true,
+      });
+      const read = poolReaderOf(t, "probe");
+      const ask = (form: "published" | "draft") =>
+        read({
+          collection: "drafted",
+          ids: [pending, settled],
+          field: "body",
+          form,
+        });
+
+      let drafts: ReadonlyMap<string, PluginStoredValue> = new Map();
+      const tables = await tablesSelected(t, async () => {
+        drafts = await ask("draft");
+      });
+      const live = await ask("published");
+
+      expect(drafts.get(pending)).toEqual({
+        kind: "value",
+        value: { v: "pending a" },
+      });
+      expect(drafts.get(settled)).toEqual({
+        kind: "value",
+        value: { v: "live b" },
+      });
+      expect(live.get(pending)).toEqual({
+        kind: "value",
+        value: { v: "live a" },
+      });
+      expect(live.get(settled)).toEqual({
+        kind: "value",
+        value: { v: "live b" },
+      });
+      expect(tables.filter(table => table.endsWith("drafted"))).toHaveLength(1);
+      expect(tables.filter(table => table === "nextly_versions")).toHaveLength(
+        1
+      );
+    });
+
+    it("refuses, by name, a field of another type, whichever entries it names", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "plain", { title: "a", extra: { v: 1 } });
+
+      await expect(
+        poolReaderOf(
+          t,
+          "probe"
+        )({ collection: "plain", ids: [id], field: "extra", form: "published" })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      // Naming no entry at all is refused the same: the field is the question.
+      await expect(
+        poolReaderOf(
+          t,
+          "probe"
+        )({ collection: "plain", ids: [], field: "extra", form: "published" })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    });
+  });
+
   describe("the entry a validator is told it is judging", () => {
     it("is the caller's own id on a create where the collection accepts one", async () => {
       const t = await boot(dialect);
@@ -705,6 +943,114 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
           )
         ).toEqual(["body"]);
       }
+    });
+
+    it("reads a localized field of several entries in the language asked for, with no fallback", async () => {
+      const t = await bootLanguages(dialect);
+      const ids = [
+        await created(t, "worded", { title: "a", body: { said: "en a" } }),
+        await created(t, "worded", { title: "b", body: { said: "en b" } }),
+      ];
+      await t.nextly.update({
+        collection: "worded",
+        id: ids[0] ?? "",
+        locale: "de",
+        data: { body: { said: "de a" }, _overwrite: true },
+        overrideAccess: true,
+      } as never);
+      const read = poolReaderOf(t, "probe", "en");
+      const at = (locale: string) =>
+        read({
+          collection: "worded",
+          ids,
+          field: "body",
+          form: "published",
+          locale,
+        });
+
+      const german = await at("de");
+      const english = await at("en");
+
+      expect(german.get(ids[0] ?? "")).toEqual({
+        kind: "value",
+        value: { said: "de a" },
+      });
+      expect(german.get(ids[1] ?? "")).toEqual({ kind: "absent" });
+      expect(english.get(ids[0] ?? "")).toEqual({
+        kind: "value",
+        value: { said: "en a" },
+      });
+      expect(english.get(ids[1] ?? "")).toEqual({
+        kind: "value",
+        value: { said: "en b" },
+      });
+    });
+
+    it("reads a translation saved through another spelling of the id, as the database matched it", async () => {
+      const t = await bootLanguages(dialect);
+      const id = await created(t, "worded", {
+        title: "a",
+        body: { said: "en a" },
+      });
+      const other = await created(t, "worded", {
+        title: "b",
+        body: { said: "en b" },
+      });
+      await t.nextly.update({
+        collection: "worded",
+        id: other,
+        locale: "de",
+        data: { body: { said: "de b" }, _overwrite: true },
+        overrideAccess: true,
+      } as never);
+      // MySQL finds the entry by another spelling of its id, and the
+      // translation is kept under the spelling the save named; the others
+      // find no entry.
+      const saved = await t.nextly
+        .update({
+          collection: "worded",
+          id: id.toUpperCase(),
+          locale: "de",
+          data: { body: { said: "de a" }, _overwrite: true },
+          overrideAccess: true,
+        } as never)
+        .then(
+          () => true,
+          () => false
+        );
+      expect(saved).toBe(dialect === "mysql");
+      const shown = saved
+        ? { kind: "value", value: { said: "de a" } }
+        : { kind: "absent" };
+
+      expect(
+        await languagesReader(
+          t,
+          "probe"
+        )({
+          collection: "worded",
+          id,
+          field: "body",
+          form: "published",
+          locale: "de",
+        } as never)
+      ).toEqual(shown);
+      const many = await poolReaderOf(
+        t,
+        "probe",
+        "en"
+      )({
+        collection: "worded",
+        ids: [id, other],
+        field: "body",
+        form: "published",
+        locale: "de",
+      });
+      expect(many.get(id)).toEqual(shown);
+      expect(many.get(other)).toEqual({
+        kind: "value",
+        value: { said: "de b" },
+      });
     });
 
     it("reads a language's value as stored, whatever that language's status", async () => {

@@ -121,6 +121,31 @@ describe("the canvas's page context", () => {
     expect(result.current).toBe(first);
   });
 
+  it("is made afresh for a new round of picked forms, so a Form changed in its own tab is drawn again", () => {
+    const { result, rerender } = renderHook(
+      ({ round }: { round: number }) =>
+        useCanvasPageContext(
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          round
+        ),
+      { initialProps: { round: 0 } }
+    );
+    const first = result.current;
+    rerender({ round: 0 });
+    expect(result.current).toBe(first);
+    rerender({ round: 1 });
+    expect(result.current).not.toBe(first);
+    const second = result.current;
+    rerender({ round: 1 });
+    expect(result.current).toBe(second);
+  });
+
   it("draws a list as an author looks at it, with entries read for the canvas", () => {
     const { result } = renderHook(() => useCanvasPageContext());
     expect(result.current.diagnostics).toBe(true);
@@ -359,8 +384,23 @@ describe("a list's sample for the binding picker", () => {
       year: "2026",
       "author.name": "Ada",
     });
-    // A value with nothing to show is left out, never shown as "null".
-    expect(sample).not.toHaveProperty("cover");
+    // A value holding nothing is said as empty, never shown as "null".
+    expect(sample).toMatchObject({ cover: { empty: true } });
+  });
+
+  it("samples the entry the author clicked, else the first", async () => {
+    await answering([
+      { id: "p1", title: "Highway 9 realignment" },
+      { id: "p2", title: "Cedar Ridge subdivision" },
+    ]);
+    const props = { collection: "posts", limit: 3, sort: "title" };
+    expect(
+      await canvasListSample(props, "en", "clicked-reader", NO_ENTRY, 1)
+    ).toMatchObject({ title: "Cedar Ridge subdivision" });
+    // An entry the list no longer shows reads the first.
+    expect(
+      await canvasListSample(props, "en", "clicked-reader", NO_ENTRY, 5)
+    ).toMatchObject({ title: "Highway 9 realignment" });
   });
 
   it("reads through the canvas's own read of the list, so asking again reads nothing new", async () => {

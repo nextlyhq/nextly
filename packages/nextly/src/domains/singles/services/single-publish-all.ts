@@ -397,9 +397,11 @@ interface PublishOutcome {
    * the update hooks run once it commits. Absent where none will run.
    */
   hookDocuments?: {
+    /** The language a run is for: one whose pending change went live. */
+    locale?: string;
     data: Record<string, unknown>;
     previous: Record<string, unknown>;
-  };
+  }[];
 }
 
 /**
@@ -572,17 +574,23 @@ export class SinglePublishAllService extends BaseService {
                 plan.slug
               )
             : new Map<string, string | null>();
+        const mainStatus = (plan.existingDoc as { status?: unknown }).status;
         await refusePublishEarly({
           scope: { kind: "single", slug: plan.slug },
           entryId: plan.existingDoc.id,
           direction: "publish",
-          parts: this.gatePartsOf(plan),
+          parts: this.gatePartsOf(
+            plan,
+            await this.languagesPublishMovesOn(this.adapter, plan, {
+              prior: statuses,
+              mainStatus,
+            })
+          ),
           live: {
             languages: [...statuses]
               .filter(([, status]) => status === "published")
               .map(([locale]) => locale),
-            shared:
-              (plan.existingDoc as { status?: unknown }).status === "published",
+            shared: mainStatus === "published",
           },
           caller: publishCallerOf(options),
           ...(options.actor === undefined ? {} : { actor: options.actor }),
@@ -662,9 +670,20 @@ export class SinglePublishAllService extends BaseService {
       // back. A hook's failure is recorded, not thrown: the publish stands.
       const hookDocuments = outcome.hookDocuments;
       if (hookDocuments !== undefined) {
-        await this.afterCommit(() =>
-          this.runUpdateHooks(hookCall, hookDocuments)
-        );
+        await this.afterCommit(async () => {
+          for (const documents of hookDocuments) {
+            const run = () => this.runUpdateHooks(hookCall, documents);
+            // A run for one language's pending change is told that language,
+            // as a publish of that language alone is; a move of statuses alone
+            // is told every language it moved.
+            await (documents.locale === undefined
+              ? run()
+              : withRuleLanguage(
+                  { locale: documents.locale, locales: [documents.locale] },
+                  run
+                ));
+          }
+        });
       }
 
       return {
@@ -998,12 +1017,16 @@ export class SinglePublishAllService extends BaseService {
           message: `Single "${slug}" has no document to unpublish`,
         };
       }
-      // The hooks an update runs once it is durable, as a publish runs them.
+      // The hooks an update runs once it is durable, as a publish runs them:
+      // one run, over the documents of a move of statuses alone, told every
+      // language it moved.
       const hookDocuments = outcome.hookDocuments;
       if (hookDocuments !== undefined) {
-        await this.afterCommit(() =>
-          this.runUpdateHooks(hookCall, hookDocuments)
-        );
+        await this.afterCommit(async () => {
+          for (const documents of hookDocuments) {
+            await this.runUpdateHooks(hookCall, documents);
+          }
+        });
       }
       return {
         success: true,
@@ -1201,8 +1224,10 @@ export class SinglePublishAllService extends BaseService {
         })
       : false;
     await this.runInTransactionPhase(tx, documents, options.user);
+    // An unpublish puts no pending change live, so its hooks run once, over
+    // the documents in the default language, named for no one language.
     const hookDocuments = plan.runsUpdateHooks
-      ? await this.publishDocuments(tx, documents)
+      ? [await this.publishDocuments(tx, documents)]
       : undefined;
     return {
       documentVanished: false,
@@ -1327,19 +1352,56 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * The parts a publish moves, as the publish gate is told them early and under the lock: every
-   * language the site has where it moves them all, the chosen ones otherwise, and the shared part
-   * where it moves.
+   * The parts a publish moves, as the publish gate is told them early and under the lock: the
+   * `languages` it moves where the Single keeps a status per language, and the shared part where
+   * it moves. An untranslated Single moves its shared part alone, whatever languages the site has.
    */
-  private gatePartsOf(plan: PublishPlan): PublishPart[] {
-    const configured =
-      this.localization?.locales.map(locale => locale.code) ?? [];
+  private gatePartsOf(
+    plan: PublishPlan,
+    languages: readonly string[]
+  ): PublishPart[] {
     return [
-      ...(plan.parts === undefined ? configured : [...plan.parts.locales]).map(
-        locale => ({ kind: "language" as const, locale })
-      ),
+      ...(plan.companionPublishable ? languages : []).map(locale => ({
+        kind: "language" as const,
+        locale,
+      })),
       ...(movesShared(plan.parts) ? [{ kind: "shared" as const }] : []),
     ];
+  }
+
+  /**
+   * The languages a publish tells (`languagesTold`), within the parts it moves, as `reader` reads
+   * its pending changes: on the pool for the publish gate's early answer, on the transaction under
+   * the row lock for its verdict. Each language that goes live, and each already live whose
+   * pending change goes live. A language holding nothing, or live with no change, is left as it is
+   * and is not among them, so the gate judges no language the publish does not move, as a
+   * collection entry's publish is judged. None where the Single keeps no status per language.
+   */
+  private async languagesPublishMovesOn(
+    reader: TransactionContext | DrizzleAdapter,
+    plan: PublishPlan,
+    args: {
+      /** Each stored translation's status before the publish, as `reader` read it. */
+      prior: ReadonlyMap<string, string | null>;
+      /** The Single's own status before the publish, on its main row. */
+      mainStatus: unknown;
+    }
+  ): Promise<string[]> {
+    if (!plan.companion || !plan.companionPublishable) return [];
+    const pending = await this.pendingChanges(reader, plan);
+    return languagesTold({
+      configured: new Set(this.localization?.locales.map(l => l.code) ?? []),
+      defaultLocale: this.localization?.defaultLocale ?? "",
+      prior: args.prior,
+      promoted: new Set(
+        pending.flatMap(change =>
+          change.locale === null ? [] : [change.locale]
+        )
+      ),
+      mainStatus: args.mainStatus,
+    })
+      .filter(language => movesLanguage(plan.parts, language.locale))
+      .map(language => language.locale);
   }
 
   /**
@@ -1362,7 +1424,13 @@ export class SinglePublishAllService extends BaseService {
       scope: { kind: "single", slug: plan.slug },
       entryId: plan.existingDoc.id,
       direction: "publish",
-      parts: this.gatePartsOf(plan),
+      parts: this.gatePartsOf(
+        plan,
+        await this.languagesPublishMovesOn(tx, plan, {
+          prior: under.priorCompanionStatuses,
+          mainStatus: under.lockedRow.status,
+        })
+      ),
       live: {
         languages: [...under.priorCompanionStatuses]
           .filter(([, status]) => status === "published")
@@ -2300,15 +2368,42 @@ export class SinglePublishAllService extends BaseService {
     // as the in-transaction phase and the events read it: in the default
     // language, as the publish committed it. Read again rather than shared
     // with those, which hand theirs to code that may change it.
-    const hookDocuments = plan.runsUpdateHooks
-      ? await this.publishDocuments(tx, {
-          plan,
-          lockedRow,
-          publishedRow: written.publishedRow,
-          priorComponents,
-          priorCompanionValues,
-        })
-      : undefined;
+    // One document for each language whose pending change went live, as a
+    // publish of that language alone hands its update hooks; otherwise one, in
+    // the default language, for a move of statuses alone.
+    const promotedLanguages = [
+      ...new Set(
+        pending.flatMap(change =>
+          change.locale === null ? [] : [change.locale]
+        )
+      ),
+    ];
+    let hookDocuments:
+      | {
+          locale?: string;
+          data: Record<string, unknown>;
+          previous: Record<string, unknown>;
+        }[]
+      | undefined;
+    if (plan.runsUpdateHooks) {
+      const documentArgs = {
+        plan,
+        lockedRow,
+        publishedRow: written.publishedRow,
+        priorComponents,
+        priorCompanionValues,
+      };
+      hookDocuments = [];
+      if (promotedLanguages.length === 0) {
+        hookDocuments.push(await this.publishDocuments(tx, documentArgs));
+      }
+      for (const locale of promotedLanguages) {
+        hookDocuments.push({
+          locale,
+          ...(await this.publishDocuments(tx, { ...documentArgs, locale })),
+        });
+      }
+    }
 
     // The gate's verdict finishes once the parts are written, on this transaction before it
     // commits: a verdict that no longer holds throws, and the whole publish rolls back.
@@ -3590,13 +3685,16 @@ export class SinglePublishAllService extends BaseService {
       publishedRow: Record<string, unknown>;
       priorComponents: Map<string, Record<string, unknown>>;
       priorCompanionValues: Map<string, Record<string, unknown>>;
+      /** The language the documents are read in; the default language when absent. */
+      locale?: string;
     }
   ): Promise<{
     data: Record<string, unknown>;
     previous: Record<string, unknown>;
   }> {
     const { plan, lockedRow, publishedRow } = args;
-    const defaultLocale = this.localization?.defaultLocale;
+    // Named for the default language it reads when no language is asked.
+    const defaultLocale = args.locale ?? this.localization?.defaultLocale;
     const defaultCompanionValues =
       plan.companion && plan.companionPublishable && defaultLocale !== undefined
         ? await readCompanionLocaleValues(
@@ -3800,14 +3898,20 @@ export class SinglePublishAllService extends BaseService {
             ? (["single.updated"] as const)
             : (["single.updated", "single.published"] as const);
       for (const type of types) {
-        const localeRecorded = await recordMutationEvent(tx, {
-          type,
-          resource: { ...resource, locale },
-          data,
-          previous,
-          fields: webhookFields,
-          actor: plan.actor,
-        });
+        // This language's events name it alone, as the after-hook run for
+        // its change is told it.
+        const localeRecorded = await withRuleLanguage(
+          { locale, locales: [locale] },
+          () =>
+            recordMutationEvent(tx, {
+              type,
+              resource: { ...resource, locale },
+              data,
+              previous,
+              fields: webhookFields,
+              actor: plan.actor,
+            })
+        );
         recorded = localeRecorded || recorded;
       }
     }

@@ -89,7 +89,6 @@ import {
   type GeneratePluginMigrationResult,
 } from "../../domains/schema/migrate-create/generate-plugin";
 import { PromptCancelledError } from "../../domains/schema/migrate-create/prompt-renames";
-import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type {
   ContributedElements,
   TableSpec,
@@ -741,11 +740,7 @@ export async function runMigrateCreate(
     (Object.keys(record.app).length > 0 ||
       Object.keys(record.plugins).length > 0);
   const declaresPermissions =
-    ownsAny(permissions) ||
-    ownsAny(
-      (await loadLatestSnapshot(resolve(migrationsDir, "meta")))?.data
-        .permissions
-    );
+    ownsAny(permissions) || ownsAny(inputs.latest?.data.permissions);
   // A project with no tables has no translated field to record, and says so as any recording run
   // with nothing to record does, rather than suggesting --blank, which --record-snapshot refuses.
   if (nothing && options.recordSnapshot === true)
@@ -784,6 +779,8 @@ export async function runMigrateCreate(
       collections,
       singles,
       components,
+      // The starting point the inputs were checked against, read once.
+      previous: inputs.latest,
       metadataUpserts,
       previousMetadataUpserts,
       permissions,

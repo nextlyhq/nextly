@@ -1,14 +1,13 @@
 /**
- * `nextly upgrade` — bring an existing database up to date (spec §4.10).
+ * `nextly upgrade`: what is left of the command that brought an existing
+ * database up to date.
  *
- * The upgrade is a list of steps (`upgrade-steps/index.ts`), each idempotent:
- * moving the migration records into `nextly_schema_events`, then hashing the
- * passwords stored before this release. Each step in turn says how much it
- * would change and, when that is above 0, runs and reports its count; the
- * backup is confirmed before the first step with work, and the upgrade says
- * there is nothing to do only when no step had anything. The orchestration (`runUpgrade`) is a
- * plain async function taking an adapter-like dependency so it is testable
- * without the CLI shell.
+ * Its steps over stored data are run by `nextly migrate` once its migrations
+ * have applied, and the conversion of translated date columns kept with a
+ * time zone by `nextly i18n:convert-zoned-dates`. Run for that work, the
+ * command changes nothing, names both, and ends as a failure, so a pipeline
+ * still calling it learns where the work went. `--reconcile-core` is still
+ * here: the core reconcile alone, as `runReconcileCore` makes it.
  *
  * @module cli/commands/upgrade
  * @since v0.0.3-alpha (Plan B)
@@ -35,9 +34,8 @@ import {
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { withMigrateLock } from "../../domains/schema/pipeline/locks";
-import { NextlyError } from "../../errors";
 import { reportDryRun, type DryRunChange, type DryRunPlan } from "../dry-run";
-import { exitWithError, failWithError } from "../errors";
+import { CliError, exitWithError, failWithError } from "../errors";
 import { createContext } from "../program";
 import {
   createCliAdapter,
@@ -52,7 +50,6 @@ import {
   readDataLossConsent,
   type AcceptDataLossOption,
 } from "../utils/data-loss-consent";
-import { askYesInTerminal } from "../utils/prompt-cancelled";
 
 import {
   assertAppHistoryHolds,
@@ -61,209 +58,27 @@ import {
   migrateExitCode,
 } from "./migrate";
 import { dryRunRefusalOf } from "./migrate-create";
-import type {
-  RunUpgradeOptions,
-  UpgradeAdapter,
-  UpgradeReport,
-  UpgradeSite,
-  UpgradeStep,
-  UpgradeStepContext,
-} from "./upgrade-step";
-import { UPGRADE_STEPS } from "./upgrade-steps";
+import type { UpgradeAdapter } from "./upgrade-step";
 import { judgeCoreDeletions } from "./upgrade-steps/core-upgrade-consent";
 
-export type { RunUpgradeOptions, UpgradeAdapter } from "./upgrade-step";
+export type { UpgradeAdapter } from "./upgrade-step";
 
 interface UpgradeLogger {
   info?: (msg: string) => void;
   warn?: (msg: string) => void;
 }
 
-export interface RunUpgradeDeps {
-  adapter: UpgradeAdapter;
-  logger?: UpgradeLogger;
-  /** When true and no --confirm-backed-up, prompt via `promptConfirm`. */
-  isTTY?: boolean;
-  /** Interactive backup confirmation (TTY only). Returns true to proceed. */
-  promptConfirm?: () => Promise<boolean>;
-  /** The steps to run, in order: every upgrade step unless a test narrows it. */
-  steps?: readonly UpgradeStep[];
-  /** How long a held schema lock is waited for, in milliseconds. Absent, about a minute. */
-  lockWaitMs?: number;
-  /**
-   * The site's configuration: its languages and the entities it declares, which the steps that
-   * bring content into the site's model judge by. The CLI loads it as every command does.
-   */
-  config?: UpgradeSite;
-}
-
-async function confirmBackup(
-  options: RunUpgradeOptions,
-  deps: RunUpgradeDeps
-): Promise<void> {
-  if (options.force || options.confirmBackedUp) return;
-  if (deps.isTTY && deps.promptConfirm) {
-    const ok = await deps.promptConfirm();
-    if (ok) return;
-    throw new NextlyError({
-      code: "NEXTLY_UPGRADE_IN_PROGRESS",
-      publicMessage: "Upgrade cancelled by operator.",
-      // The two refusals share a code; the reason tells the CLI's error apart.
-      logContext: { reason: "cancelled" },
-    });
-  }
-  throw backupNotConfirmed();
-}
-
-/** The refusal of an upgrade with work whose backup nobody confirmed, or can. */
-function backupNotConfirmed(): NextlyError {
-  return new NextlyError({
-    code: "NEXTLY_UPGRADE_IN_PROGRESS",
-    publicMessage:
-      "Refusing to upgrade without a confirmed backup. Re-run with " +
-      "`--confirm-backed-up` (CI/non-TTY) after backing up your database.",
-    logContext: { reason: "backup-not-confirmed" },
+/**
+ * How `nextly upgrade` ends, having changed nothing, when it is run for the
+ * database work it used to do: each part of that work, and the command that
+ * does it now.
+ */
+export function upgradeWorkMoved(): CliError {
+  return new CliError("UPGRADE_WORK_MOVED", {
+    what: "`nextly upgrade` no longer changes the database, and changed nothing.",
+    why: "`nextly migrate` now hashes passwords stored before this release, removes passwords kept in version history and converts roles holding a retired manage permission, once its migrations have applied. `nextly i18n:convert-zoned-dates` converts translated date columns kept with a time zone.",
+    next: "Run `nextly migrate` (`nextly migrate --backup-confirmed` where no terminal is attached). Once the release serves every instance, run `nextly i18n:convert-zoned-dates` if a start or `nextly migrate` named such a column.",
   });
-}
-
-/** What each step is handed: the database, the command's options and its log. */
-function stepContext(
-  options: RunUpgradeOptions,
-  deps: Pick<RunUpgradeDeps, "adapter" | "logger" | "config">
-): UpgradeStepContext {
-  const { adapter } = deps;
-  return {
-    adapter,
-    db: adapter.getDrizzle(),
-    dialect: adapter.getCapabilities().dialect,
-    options,
-    ...(deps.config === undefined ? {} : { site: deps.config }),
-    log: msg => deps.logger?.info?.(msg),
-    warn: msg => deps.logger?.warn?.(msg),
-  };
-}
-
-/**
- * Run the upgrade's steps. Idempotent: a second run on an upgraded database
- * finds every step with nothing to do, and says so.
- */
-export async function runUpgrade(
-  options: RunUpgradeOptions,
-  deps: RunUpgradeDeps
-): Promise<void> {
-  const { adapter } = deps;
-  const context = stepContext(options, deps);
-  const { dialect } = context;
-  const steps = deps.steps ?? UPGRADE_STEPS;
-
-  await withMigrateLock(
-    adapter as unknown as DrizzleAdapter,
-    dialect,
-    async () => {
-      // Each step is brought up to date before the next is asked, so a step
-      // reads what the steps before it have repaired. The backup is confirmed
-      // once, before the first step that has work.
-      const idle: string[] = [];
-      let confirmed = false;
-      for (const step of steps) {
-        const pending = await step.pending(context);
-        if (pending === 0) {
-          idle.push(step.title);
-          continue;
-        }
-        if (!confirmed) {
-          await confirmBackup(options, deps);
-          confirmed = true;
-        }
-        for (const title of idle.splice(0)) {
-          context.log(`${title}: nothing to do`);
-        }
-        const changed = await step.run(context);
-        context.log(`${step.title}: ${String(changed)}`);
-      }
-      if (!confirmed) {
-        context.log("Already upgraded. Nothing to do.");
-        return;
-      }
-      for (const title of idle) context.log(`${title}: nothing to do`);
-
-      context.log(
-        "Done. You can now run `pnpm run dev` or `pnpm nextly migrate`."
-      );
-    },
-    { command: "nextly upgrade", mode: "wait", waitMs: deps.lockWaitMs }
-  );
-}
-
-/**
- * `nextly upgrade --dry-run`: each step's pending work, counted by the step's
- * own `pending` against the database as it stands, read-only, with no backup
- * question and no lock. A real run counts each step once the steps before it
- * have run, so a note says these counts are all taken first.
- *
- * Refused where the real run would be: a step whose count refuses stops the
- * plan there, as it stops the run; and with work to do, a backup nobody
- * confirmed and nobody can be asked about refuses before the first step runs,
- * so that is the refusal named then.
- */
-export async function previewUpgrade(
-  options: RunUpgradeOptions,
-  deps: Pick<RunUpgradeDeps, "adapter" | "isTTY" | "steps" | "config">
-): Promise<DryRunPlan> {
-  const context = stepContext(options, deps);
-  const changes: DryRunChange[] = [];
-  const idle: string[] = [];
-  // What the steps that move content list of it, each step's lists in step order.
-  const report: UpgradeReport = { move: [], conflicts: [], check: [] };
-  let refusal: string | undefined;
-  for (const step of deps.steps ?? UPGRADE_STEPS) {
-    let pending: number;
-    try {
-      pending = await step.pending(context);
-    } catch (error) {
-      refusal = dryRunRefusalOf(error);
-      if (refusal === undefined) throw error;
-      break;
-    }
-    if (pending === 0) idle.push(step.title);
-    else changes.push(stepChange(step.title, pending));
-    // Asked of every step that lists anything, with work or without: a step can have nothing to
-    // change and still something an editor should check.
-    if (step.report) {
-      const listed = await step.report(context);
-      report.move.push(...listed.move);
-      report.conflicts.push(...listed.conflicts);
-      report.check.push(...listed.check);
-    }
-  }
-  const backupConfirmed =
-    options.force === true || options.confirmBackedUp === true;
-  const notes = [
-    ...idle.map(title => `${title}: nothing to do`),
-    "Each count is taken before any step runs; a real run counts each step once the steps before it have run.",
-  ];
-  if (changes.length > 0 && !backupConfirmed) {
-    if (deps.isTTY === true) {
-      notes.push("A real run first asks whether the database is backed up.");
-    } else {
-      refusal = backupNotConfirmed().publicMessage;
-    }
-  }
-  return {
-    changes,
-    ...(refusal !== undefined ? { refusals: [refusal] } : {}),
-    notes,
-    report,
-  };
-}
-
-/**
- * A step with work as the dry run names it, in the words the real run reports
- * it with (`<title>: <count>`): a step's title starts with its verb.
- */
-function stepChange(title: string, pending: number): DryRunChange {
-  const [verb = "", ...rest] = title.split(" ");
-  return { action: verb, target: `${rest.join(" ")}: ${String(pending)}` };
 }
 
 export interface RunReconcileCoreDeps {
@@ -475,16 +290,19 @@ function coreDeletionsNeedConsent(uncovered: readonly Deletion[]): string {
 }
 
 export interface UpgradeCommandOptions {
+  /** No longer read: they confirmed the backup for the work `nextly migrate` now does. */
   confirmBackedUp?: boolean;
   force?: boolean;
+  /**
+   * No longer read: it named another table for the migration records, which
+   * `nextly migrate` now moves. Given, it is answered with a notice.
+   */
   targetTableName?: string;
   reconcileCore?: boolean;
   /** Clear a stale migrate lock before taking it (operator escape hatch). */
   forceUnlock?: boolean;
   /** Show what the upgrade would change, and change nothing. */
   dryRun?: boolean;
-  /** With `--dry-run`: print the plan as one JSON document, for scripts and CI. */
-  json?: boolean;
   /** The data-loss consent for what `--reconcile-core` deletes. */
   acceptDataLoss?: AcceptDataLossOption;
 }
@@ -571,7 +389,20 @@ export async function upgradeAction(
   const globalOpts = cmd.optsWithGlobals();
   const context = createContext(globalOpts);
 
+  // Run for the database work it used to do, a dry run of it included, the
+  // command opens no database and changes nothing: it names the commands
+  // that do that work now, and ends as a failure.
+  if (cmdOptions.reconcileCore !== true) {
+    exitWithError(context.logger, upgradeWorkMoved());
+  }
+
   const dbValidation = requireDatabaseEnv(context.logger);
+
+  if (cmdOptions.targetTableName !== undefined) {
+    context.logger.warn(
+      "upgrade's --target-table-name no longer does anything: the migration records of an earlier release are moved by `nextly migrate`, into nextly_schema_events."
+    );
+  }
 
   if (cmdOptions.dryRun === true) {
     await reportUpgradeDryRun(cmdOptions, dbValidation, context, globalOpts);
@@ -592,49 +423,27 @@ export async function upgradeAction(
   try {
     // Clear a stale lock first when --force-unlock is passed (e.g. left
     // by a crashed prior run): the lock-busy error tells operators to
-    // re-run with this flag, and both upgrade paths take the migrate lock.
+    // re-run with this flag, and the reconcile takes the migrate lock.
     await maybeForceUnlock(
       cmdOptions,
       adapter.getDrizzle(),
       adapter.getCapabilities().dialect
     );
 
-    if (cmdOptions.reconcileCore) {
-      await runReconcileCore({
-        adapter,
-        ...(await reconcileSetup(globalOpts, adapter, context.logger, true)),
-        logger: {
-          info: msg => context.logger.info(msg),
-          warn: msg => context.logger.warn(msg),
-        },
-        consent: reconcileConsent(cmdOptions, context.logger),
-        // Asked only where someone can answer. Otherwise a deletion the
-        // consent does not cover is refused before anything changes, with
-        // the consent that would cover it.
-        interactive: canPrompt(),
-        askToDelete: askToDeleteInTerminal,
-      });
-    } else {
-      await runUpgrade(
-        {
-          confirmBackedUp: cmdOptions.confirmBackedUp,
-          force: cmdOptions.force,
-          targetTableName: cmdOptions.targetTableName,
-        },
-        {
-          adapter,
-          logger: {
-            info: msg => context.logger.info(msg),
-            warn: msg => context.logger.warn(msg),
-          },
-          // The CLI's one answer to whether anyone can be asked.
-          isTTY: canPrompt(),
-          config: await siteOf(globalOpts),
-          promptConfirm: () =>
-            askYesInTerminal("Have you backed up your database? [y/N]: "),
-        }
-      );
-    }
+    await runReconcileCore({
+      adapter,
+      ...(await reconcileSetup(globalOpts, adapter, context.logger, true)),
+      logger: {
+        info: msg => context.logger.info(msg),
+        warn: msg => context.logger.warn(msg),
+      },
+      consent: reconcileConsent(cmdOptions, context.logger),
+      // Asked only where someone can answer. Otherwise a deletion the
+      // consent does not cover is refused before anything changes, with
+      // the consent that would cover it.
+      interactive: canPrompt(),
+      askToDelete: askToDeleteInTerminal,
+    });
   } catch (error) {
     // Set rather than exited, so the disconnect below still runs: 2 for an
     // edited applied file, 3 for one the folder lacks.
@@ -645,30 +454,9 @@ export async function upgradeAction(
 }
 
 /**
- * The site's configuration as the upgrade's steps read it, loaded as every command loads it: a
- * project with no configuration file is the default one, which declares no languages and no
- * entities, so the steps judge only what the database's own registries hold.
- */
-async function siteOf(globalOpts: ConfigOptions): Promise<UpgradeSite> {
-  const { config } = await loadConfig({
-    configPath: globalOpts.config,
-    cwd: globalOpts.cwd,
-    debug: globalOpts.verbose,
-  });
-  return {
-    ...(config.localization === undefined
-      ? {}
-      : { localization: config.localization }),
-    collections: config.collections ?? [],
-    singles: config.singles ?? [],
-    fieldGroups: config.fieldGroups ?? [],
-  };
-}
-
-/**
- * `nextly upgrade --dry-run`: the database opened read-only, the plan of the
- * steps (`previewUpgrade`) or of `--reconcile-core` (`previewReconcileCore`)
- * reported, and nothing changed: no lock taken, and under `--force-unlock`
+ * `nextly upgrade --reconcile-core --dry-run`: the database opened
+ * read-only, the reconcile's plan (`previewReconcileCore`) reported, and
+ * nothing changed: no lock taken, and under `--force-unlock`
  * none cleared, only named. Whether a real run could ask at a terminal is
  * the CLI's one answer to it (`canPrompt`).
  */
@@ -695,40 +483,24 @@ async function reportUpgradeDryRun(
     if (opened === undefined) return;
     adapter = opened as unknown as typeof adapter & UpgradeAdapter;
     const interactive = canPrompt();
-    const plan = cmdOptions.reconcileCore
-      ? await previewReconcileCore({
-          adapter,
-          interactive,
-          consent: reconcileConsent(cmdOptions, context.logger),
-          ...(await reconcileSetup(globalOpts, adapter, context.logger, false)),
-        })
-      : await previewUpgrade(
-          {
-            confirmBackedUp: cmdOptions.confirmBackedUp,
-            force: cmdOptions.force,
-            targetTableName: cmdOptions.targetTableName,
-          },
-          {
-            adapter,
-            isTTY: interactive,
-            config: await siteOf(globalOpts),
+    const plan = await previewReconcileCore({
+      adapter,
+      interactive,
+      consent: reconcileConsent(cmdOptions, context.logger),
+      ...(await reconcileSetup(globalOpts, adapter, context.logger, false)),
+    });
+    reportDryRun(
+      context.logger,
+      cmdOptions.forceUnlock
+        ? {
+            ...plan,
+            changes: [
+              { action: "remove", target: "any migrate lock held" },
+              ...plan.changes,
+            ],
           }
-        );
-    const reported = cmdOptions.forceUnlock
-      ? {
-          ...plan,
-          changes: [
-            { action: "remove", target: "any migrate lock held" },
-            ...plan.changes,
-          ],
-        }
-      : plan;
-    // The same plan either way: as one JSON document for a script, or as lines for a person.
-    if (cmdOptions.json === true) {
-      console.log(JSON.stringify(reported, null, 2));
-    } else {
-      reportDryRun(context.logger, reported);
-    }
+        : plan
+    );
   } catch (error) {
     // Set rather than exited, so the disconnect below still runs.
     failWithError(context.logger, error);

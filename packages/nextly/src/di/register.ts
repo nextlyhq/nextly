@@ -49,7 +49,7 @@ import type {
   SanitizedApiKeysConfig,
   SecurityConfig,
 } from "../collections/config/define-config";
-import { assertCollectionOpensIn } from "../collections/config/opens-in";
+import { assertOpensIn } from "../collections/config/opens-in";
 import type { FieldConfig } from "../collections/fields/types";
 import { loadDialectTables } from "../database/dialect-tables";
 import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
@@ -124,6 +124,7 @@ import {
   withoutDisabledBehavior,
 } from "../domains/schema/field-types/field-type-registry";
 import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
+import type { ConsentRefusal } from "../domains/schema/ownership/schema-version-check";
 import {
   listTablesAtStart,
   tableExistsAtStart,
@@ -395,6 +396,7 @@ import {
   registerWebhookServices,
   registerWorkflowComparisonBaselines,
   registerWorkflowNoticeKinds,
+  registerWorkflowPublishGate,
   resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
@@ -823,6 +825,9 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // The comparisons a review shows, "since submitted" and "since approved", registered with the
   // history's baselines so its comparison names them as it names its own.
   registerWorkflowComparisonBaselines();
+  // What a publish asks of a workflow: a part goes live only approved, or without review by
+  // someone who may, whichever door the publish came through.
+  registerWorkflowPublishGate(ctx);
 }
 
 /** How a caller registers the services. */
@@ -1125,11 +1130,18 @@ async function registerServicesOnce(
   // read. It sets an empty database up as the command does and applies what is
   // pending, so the rest of the start reads what it wrote, as a start after
   // `nextly migrate` does, and writes no bookkeeping or schema itself.
+  // The data-loss consent's refusal of those migrations, where it refused
+  // them: the start serves through it, and a plugin it leaves behind is
+  // refused below (`assertBootPluginSchemaVersions`), naming the consent.
+  let consentRefusal: ConsentRefusal | undefined;
   const migratedAtBoot = await withStartRegistrationsSetAside(
     async () =>
       await runBootMigrations(config, transformedConfig, deferredExtends, {
         adapter,
         logger: resolvedLogger,
+        onDataLossRefusal: refusal => {
+          consentRefusal = refusal;
+        },
       })
   );
   // The cache handlers read expiries from this adapter's ledger, and writes
@@ -1456,7 +1468,8 @@ async function registerServicesOnce(
             transformedConfig,
             adapter,
             adapterDrizzleDb,
-            resolvedLogger
+            resolvedLogger,
+            consentRefusal
           );
         },
       ]);
@@ -1815,10 +1828,14 @@ function validateBootContributions(
   // `defineSingle`, and a plugin must not take a page the site declares.
   assertConfiguredPublicAddresses(transformedConfig);
 
-  // Fail fast on a collection that opens its entries in a view it does not
-  // have: every link to them would lead nowhere. Asked of the merged
+  // Fail fast on a collection, or a Single, that opens in a view it does not
+  // have: every link to it would lead nowhere. Asked of the merged
   // configuration against every plugin's views, disabled ones included.
-  assertCollectionOpensIn(transformedConfig.collections, transformedPlugins);
+  assertOpensIn(
+    transformedConfig.collections,
+    transformedPlugins,
+    transformedConfig.singles
+  );
 
   // Fail fast on role-bundle collisions. Validation only here; roles are
   // re-derived + seeded (resolving permission slugs→ids) in runPostInitTasks.
@@ -3033,7 +3050,7 @@ async function runBootMigrations(
   config: NextlyServiceConfig,
   transformedConfig: NextlyServiceConfig,
   deferredExtends: DeferredExtends,
-  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger">
+  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger" | "onDataLossRefusal">
 ): Promise<boolean> {
   // `next build` runs no migration, whatever the setting: the build may point
   // at a database other deployments share, and the deploy's own `nextly
@@ -3105,7 +3122,8 @@ async function assertBootPluginSchemaVersions(
   transformedConfig: NextlyServiceConfig,
   adapter: DrizzleAdapter,
   adapterDrizzleDb: DatabaseInstance,
-  logger: Logger
+  logger: Logger,
+  consentRefusal: ConsentRefusal | undefined
 ): Promise<void> {
   const plugins = transformedConfig.plugins ?? [];
   if (plugins.length === 0) return;
@@ -3138,6 +3156,9 @@ async function assertBootPluginSchemaVersions(
     ledgerExists: () => adapter.tableExists("nextly_schema_events"),
     production: process.env.NODE_ENV === "production",
     warn: m => logger.warn?.(m),
+    // Where this start's migrations were refused for the data-loss consent,
+    // a plugin behind is behind for that, and its refusal says so.
+    ...(consentRefusal === undefined ? {} : { consentRefusal }),
   });
 }
 
@@ -3479,7 +3500,7 @@ export function bootMigrationsArgs(
   rawDb: NonNullable<NextlyServiceConfig["db"]>,
   effective: NextlyServiceConfig,
   deferredExtends: readonly unknown[],
-  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger">
+  deps: Pick<RunProdMigrationsArgs, "adapter" | "logger" | "onDataLossRefusal">
 ): RunProdMigrationsArgs {
   return {
     config: {
@@ -6407,7 +6428,7 @@ async function entitiesTheLayoutCanRefuse<T extends { tableName: string }>(
 /**
  * For each configured code the configuration writes the earlier way, a warning naming the code it
  * is read as; and a refusal while the database still stores rows under the older spelling, since
- * the site would read that language under the standard code and find nothing. `nextly upgrade`
+ * the site would read that language under the standard code and find nothing. `nextly migrate`
  * moves them. Nothing is read where the configuration writes every code in standard form.
  */
 async function refuseOlderCodesStillStored(
@@ -6445,7 +6466,7 @@ async function refuseOlderCodesStillStored(
       code: "NEXTLY_LANGUAGE_CODES_NOT_UPGRADED",
       publicMessage:
         `This database still stores content under the language code "${from}", which the site now ` +
-        `reads as "${to}". Run \`nextly upgrade\` to move it, then restart.`,
+        `reads as "${to}". Run \`nextly migrate\` to move it, then restart.`,
       logContext: { from, to, tables: holding },
     });
   }

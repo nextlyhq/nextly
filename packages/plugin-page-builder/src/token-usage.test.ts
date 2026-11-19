@@ -1,6 +1,7 @@
 import {
   DEFAULT_LIMITS,
   MAX_TOKEN_NAME_LENGTH,
+  resolveSiteTokens,
   tokenNamingProblem,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
@@ -12,6 +13,10 @@ import {
   tokenUsageIndex,
   tokenUsageOf,
   UNDETERMINED_TOKEN_ID,
+  propertyKeysAnywhere,
+  usageKeysOf,
+  variablesAsked,
+  variablesUsing,
 } from "./token-usage";
 
 const box = (id: string, styles?: unknown, children?: unknown[]) => ({
@@ -147,7 +152,7 @@ describe("which variables a stored document uses", () => {
     for (const stored of [undefined, null, 42, "not json", {}, doc([])]) {
       expect({ stored, usage: tokenUsageOf(stored, DEFAULT_LIMITS) }).toEqual({
         stored,
-        usage: { ids: [], complete: true, blocks: new Map() },
+        usage: { ids: [], properties: [], complete: true, blocks: new Map() },
       });
     }
   });
@@ -255,7 +260,10 @@ describe("which shared styles use a variable", () => {
       "not an entry",
     ];
 
-    const using = sharedStylesUsing(classes, new Set(["color.brand"]));
+    const using = sharedStylesUsing(
+      classes,
+      variablesAsked(["color.brand"], undefined)
+    );
 
     expect(Object.fromEntries(using)).toEqual({
       "color.brand": [
@@ -283,7 +291,10 @@ describe("the block types whose own default styles name a variable", () => {
       { name: "acme/plain", baseStyles: at({ color: "#fff" }) },
       { name: "acme/bare" },
     ];
-    const using = blockDefaultsUsing(blocks, new Set(["color.brand", "x"]));
+    const using = blockDefaultsUsing(
+      blocks,
+      variablesAsked(["color.brand", "x"], undefined)
+    );
     expect(using.get("color.brand")).toEqual([
       { type: "acme/button", label: "Call to action" },
       { type: "acme/card", label: "Card" },
@@ -306,7 +317,7 @@ describe("the block types whose own default styles name a variable", () => {
         // The controls: a literal gap, and a part with no default styles.
         { name: "acme/row", childGap: "1rem", parts: { cell: {} } },
       ],
-      new Set(["color.ink", "space.md"])
+      variablesAsked(["color.ink", "space.md"], undefined)
     );
     expect(using.get("color.ink")).toEqual([
       { type: "acme/figure", label: "Figure" },
@@ -321,8 +332,198 @@ describe("the block types whose own default styles name a variable", () => {
     expect(
       blockDefaultsUsing(
         [{ name: "acme/x", baseStyles: at({ color: { $token: long } }) }],
-        new Set([long])
+        variablesAsked([long], undefined)
       ).size
     ).toBe(0);
+  });
+});
+
+/** A shadow naming a colour through `var()`, as the shadow builder writes one. */
+const shadowOf = (property: string) => `0 1px 2px var(${property})`;
+
+describe("a variable named in CSS text, through var()", () => {
+  it("records a block's shadow property apart from the $token identities", () => {
+    const stored = doc(
+      [
+        box("a", at({ boxShadow: shadowOf("--site-color-ink") })),
+        box("b", at({ color: ref("color.brand") })),
+      ],
+      { styles: at({ boxShadow: shadowOf("--site-color-page") }) }
+    );
+    const usage = tokenUsageOf(stored, DEFAULT_LIMITS);
+    // `ids` is what a write naming a variable the site lacks is judged by, so
+    // a `var()` never reaches it.
+    expect(usage.ids).toEqual(["color.brand"]);
+    expect(usage.properties).toEqual(["--site-color-ink", "--site-color-page"]);
+  });
+
+  it("finds a var() in a structured value and inside a fallback, read decoded", () => {
+    const stored = doc([
+      box(
+        "a",
+        at({
+          border: { color: "var(--site-a, var(--site-colo\\72))" },
+          boxShadow: "0 0 1px v\\61 r(--site-b)",
+        })
+      ),
+    ]);
+    expect(tokenUsageOf(stored, DEFAULT_LIMITS).properties).toEqual([
+      "--site-a",
+      "--site-b",
+      "--site-color",
+    ]);
+  });
+
+  it("records no property a site variable could never be written under", () => {
+    const stored = doc([
+      box(
+        "a",
+        at({
+          // Capitals, an underscore, a name past every prefix and identity.
+          boxShadow: `var(--Site-ink), var(--site_ink), var(--${"x".repeat(400)})`,
+        })
+      ),
+    ]);
+    expect(tokenUsageOf(stored, DEFAULT_LIMITS).properties).toEqual([]);
+  });
+
+  it("indexes each property under its own key, disjoint from every identity", () => {
+    const rows = tokenUsageIndex.derive(
+      doc([
+        box(
+          "a",
+          at({
+            boxShadow: shadowOf("--site-color-ink"),
+            // A stored `$token` spelled like a property's key is no identity
+            // a site can define, so it is no row: the two kinds stay apart.
+            color: ref("var:--site-color-page"),
+            margin: ref("space.4"),
+          })
+        ),
+      ]),
+      DEFAULT_LIMITS
+    );
+    expect(rows).toEqual({
+      ids: ["space.4", "var:--site-color-ink"],
+      complete: true,
+    });
+    expect(usageKeysOf({ ids: ["a"], properties: ["--b"] })).toEqual([
+      "a",
+      "var:--b",
+    ]);
+  });
+
+  it("asks for each identity and the property the site writes it under", () => {
+    expect(variablesAsked(["color.ink", "t-accent"], undefined).keys).toEqual([
+      "color.ink",
+      "var:--site-color-ink",
+      "t-accent",
+      "var:--site-t-accent",
+    ]);
+    // A site's own prefix, and a refused one, which writes under the default.
+    expect(variablesAsked(["color.ink"], "--brand-").keys).toEqual([
+      "color.ink",
+      "var:--brand-color-ink",
+    ]);
+    expect(variablesAsked(["color.ink"], "--nx-").keys).toEqual([
+      "color.ink",
+      "var:--site-color-ink",
+    ]);
+  });
+
+  it("answers both identities a property is written under, and only those", () => {
+    // `color.ink-dark` and `color-ink.dark` both write `--site-color-ink-dark`.
+    const asked = variablesAsked(
+      ["color.ink-dark", "color-ink.dark", "color.ink"],
+      undefined
+    );
+    expect([...asked.identitiesIn(["var:--site-color-ink-dark"])]).toEqual([
+      "color.ink-dark",
+      "color-ink.dark",
+    ]);
+    expect([...asked.identitiesIn(["color.ink"])]).toEqual(["color.ink"]);
+    expect([...asked.identitiesIn(["var:--site-color-other"])]).toEqual([]);
+  });
+
+  it("counts a shared style whose shadow names a colour, under the site's prefix", () => {
+    const classes = [
+      {
+        id: "c-lifted",
+        slug: "lifted",
+        label: "Lifted",
+        styles: at({ boxShadow: shadowOf("--brand-color-ink") }),
+      },
+    ];
+    expect(
+      Object.fromEntries(
+        sharedStylesUsing(classes, variablesAsked(["color.ink"], "--brand-"))
+      )
+    ).toEqual({ "color.ink": [{ id: "c-lifted", name: "Lifted" }] });
+    // The control: under the default prefix, that property is no colour's.
+    expect(
+      sharedStylesUsing(classes, variablesAsked(["color.ink"], undefined)).size
+    ).toBe(0);
+  });
+
+  it("counts a block type whose default shadow names a colour", () => {
+    const using = blockDefaultsUsing(
+      [
+        {
+          name: "acme/card",
+          baseStyles: at({ boxShadow: shadowOf("--site-color-ink") }),
+        },
+        { name: "acme/plain", baseStyles: at({ boxShadow: shadowOf("--x") }) },
+      ],
+      variablesAsked(["color.ink"], undefined)
+    );
+    expect(Object.fromEntries(using)).toEqual({
+      "color.ink": [{ type: "acme/card", label: "Card" }],
+    });
+  });
+
+  it("counts a shadow variable whose value names a colour, but not itself", () => {
+    const tokens = resolveSiteTokens({
+      tokens: [
+        {
+          name: "color.ink",
+          kind: "color",
+          values: { light: "#111111" },
+        },
+        {
+          id: "t-lift",
+          name: "shadow.lift",
+          label: "Lift",
+          kind: "shadow",
+          values: {
+            light: shadowOf("--site-color-ink"),
+            dark: shadowOf("--site-t-lift"),
+          },
+        },
+      ],
+    });
+    const using = variablesUsing(
+      tokens,
+      variablesAsked(["color.ink", "t-lift"], undefined)
+    );
+    expect(Object.fromEntries(using)).toEqual({
+      "color.ink": [{ id: "t-lift", name: "Lift" }],
+    });
+  });
+
+  it("finds a property in any string a stored value holds, stored JSON included", () => {
+    const deep: Record<string, unknown> = { text: shadowOf("--site-deep") };
+    let nested = deep;
+    // Deeper than any recursive walk would survive.
+    for (let level = 0; level < 20_000; level += 1) nested = { inner: nested };
+    expect(
+      [
+        ...propertyKeysAnywhere([
+          { content: JSON.stringify({ a: shadowOf("--site-in-json") }) },
+          ["plain", shadowOf("--site-in-list"), 42, null],
+          nested,
+          shadowOf("--Not-a-site-one"),
+        ]),
+      ].sort()
+    ).toEqual(["var:--site-deep", "var:--site-in-json", "var:--site-in-list"]);
   });
 });

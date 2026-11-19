@@ -1,27 +1,29 @@
 /**
- * The shape of one step of `nextly upgrade`, and what each step is handed.
+ * The shape of one step over data an earlier release stored, and what each
+ * step is handed.
  *
- * `nextly upgrade` is a list of steps (see `upgrade-steps/index.ts`), each of
- * which brings one part of an existing database up to date: it counts what it
- * would change, and changes it. The steps run in order, each counted and run
- * before the next is counted, so a step may read what an earlier one repairs.
- * The upgrade asks for a backup before the first step with work, and says
- * there is nothing to do only when no step had anything.
+ * `nextly migrate` runs a list of steps once its migrations have applied
+ * (see `upgrade-steps/index.ts`), and `nextly i18n:convert-zoned-dates` runs
+ * one. Each brings one part of an existing database up to date: it counts
+ * what it would change, and changes it. The steps run in order
+ * (`data-steps.ts`), each counted and run before the next is counted, so a
+ * step may read what an earlier one repairs. The run asks for a backup
+ * before the first step with work.
  *
  * A step is idempotent: run again after it finished, its count is 0. It
  * reports counts and never a stored value.
  *
- * Its own module, apart from `upgrade.ts`, so a step imports these types
- * without importing the command that runs it.
+ * Its own module, so a step imports these types without importing the
+ * command that runs it.
  *
  * @module cli/commands/upgrade-step
  */
 
-/** The database dialects an upgrade runs on. */
+/** The database dialects the steps run on. */
 export type UpgradeDialect = "postgresql" | "mysql" | "sqlite";
 
 /**
- * Minimal adapter slice the upgrade itself needs. The CLI hands it a
+ * Minimal adapter slice a run of the steps needs. The CLI hands it a
  * DrizzleAdapter, which a step that reads content through it may rely on.
  */
 export interface UpgradeAdapter {
@@ -34,23 +36,21 @@ export interface UpgradeAdapter {
   getCapabilities: () => { dialect: UpgradeDialect };
 }
 
-export interface RunUpgradeOptions {
-  confirmBackedUp?: boolean;
-  force?: boolean;
-  /** Advanced: override the events table name on a foreign-table collision. */
-  targetTableName?: string;
-}
-
 /**
- * The site an upgrade brings its database in step with, as its configuration declares it: its
- * languages and the collections, Singles and components it declares. The Schema Builder's own
+ * The site a run of the steps brings its database in step with, as its configuration declares it:
+ * its languages and the collections, Singles and components it declares. The Schema Builder's own
  * entities are read from the database's registries by the steps that need them.
  */
 export interface UpgradeSite {
-  /** The site's languages and its default, as `localization` declares them; absent, none. */
+  /**
+   * The site's languages and its default, as `localization` declares them; absent, none. Where the
+   * configuration was read through the loader, each code is in standard form and `olderCodes`
+   * names the ones it wrote the earlier way.
+   */
   localization?: {
     locales: readonly (string | { code: string })[];
     defaultLocale: string;
+    olderCodes?: readonly { from: string; to: string }[];
   };
   collections?: readonly { slug: string; fields?: unknown }[];
   singles?: readonly { slug: string; fields?: unknown }[];
@@ -68,12 +68,11 @@ export interface UpgradeReport {
   check: string[];
 }
 
-/** What a step is handed: the database, the command's options, the site and its log. */
+/** What a step is handed: the database, the site, and the command's log. */
 export interface UpgradeStepContext {
   adapter: UpgradeAdapter;
   db: unknown;
   dialect: UpgradeDialect;
-  options: RunUpgradeOptions;
   /**
    * The site's configuration, where the command loaded it: a step that brings content into the
    * site's model needs its languages and entities. Absent, such a step has nothing to judge by.
@@ -83,23 +82,23 @@ export interface UpgradeStepContext {
   warn: (message: string) => void;
 }
 
-/** One step of `nextly upgrade`. */
+/** One step over data an earlier release stored. */
 export interface UpgradeStep {
   /**
-   * What the step does, as the operator reads it: the upgrade prints
+   * What the step does, as the operator reads it: the run prints
    * `<title>: <count>` for a step that ran.
    */
   title: string;
   /**
    * How many things the step would change now, or 0 when it has nothing to
    * do. It only reads, and runs after every earlier step has run. It may
-   * throw to stop the upgrade before this step writes anything.
+   * throw to stop the run before this step writes anything.
    */
   pending: (context: UpgradeStepContext) => Promise<number>;
   /**
    * Make the change and return how many things it changed. Called only when
    * `pending` was above 0, after the backup is confirmed, and inside the
-   * migrate lock the whole upgrade holds.
+   * migrate lock the steps are run under.
    */
   run: (context: UpgradeStepContext) => Promise<number>;
   /**

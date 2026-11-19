@@ -234,9 +234,13 @@ function LabelAndName({
   // System fields (title, slug) keep their name whatever the surface says.
   const nameDisabled =
     readOnly || field.isSystem === true || nameFixedReason !== undefined;
-  // A name the field cannot change is not the person's to fix, so it is not judged here. Every
-  // other name is, typed or followed from the label, before the input is left.
-  const problem = nameDisabled || !checkName ? null : checkName(field.name);
+  // A read-only or built-in field's name is not judged here. Every other name is, typed, followed
+  // from the label, or fixed by the surface: a fixed name the save will refuse where it now sits
+  // (its container renamed, say) still says why, which the surface's check alone decides.
+  const problem =
+    readOnly || field.isSystem === true || !checkName
+      ? null
+      : checkName(field.name);
   const describedBy = idList([
     nameHelpId,
     problem !== null && problemId,
@@ -264,15 +268,30 @@ function LabelAndName({
               })
             }
           />
+          {/* Optional: the record editor names a field with no label by its
+              name made readable, so a blank label is not a mistake. */}
           <p className="text-xs text-muted-foreground">
-            What content authors see in the record editor.
+            What content authors see in the record editor. Left blank, the name
+            is shown.
           </p>
         </div>
 
         <div className="space-y-1">
-          <Label htmlFor="field-name">Name</Label>
+          <Label htmlFor="field-name">
+            Name
+            {/* Marked where it can be typed: a field cannot be kept without a
+                name, which the problem below says the moment it is empty. In
+                the entry form's own required mark, hidden from the accessible
+                name; the input's `required` says it to assistive technology. */}
+            {!nameDisabled && (
+              <span className="text-danger-text ml-1" aria-hidden="true">
+                *
+              </span>
+            )}
+          </Label>
           <Input
             id="field-name"
+            required={!nameDisabled}
             value={field.name}
             disabled={nameDisabled}
             aria-invalid={problem !== null}

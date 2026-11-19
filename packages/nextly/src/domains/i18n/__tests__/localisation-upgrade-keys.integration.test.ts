@@ -10,7 +10,6 @@
  */
 import { afterEach, expect, it, vi } from "vitest";
 
-import { previewUpgrade, runUpgrade } from "../../../cli/commands/upgrade";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestNextly } from "../../../plugins/test-nextly";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
@@ -26,7 +25,9 @@ import { _resetPerLanguageStorage } from "../per-language-storage";
 import {
   ARTICLES,
   bootSite,
+  migrateData,
   openUpgradeDatabase,
+  previewMigrateData,
   SITE,
   type UpgradeDatabase,
 } from "./helpers/localisation-upgrade-fixture";
@@ -142,10 +143,7 @@ describeEachDialect(
     it("keys each pending change, keeping the later of two saves in one language", async () => {
       const id = await legacyArticle();
 
-      await runUpgrade(
-        { confirmBackedUp: true },
-        { adapter: database!.adapter as never, config: SITE }
-      );
+      await migrateData(database!.adapter as never, SITE);
 
       const ref = {
         scopeKind: "collection" as const,
@@ -170,10 +168,7 @@ describeEachDialect(
     it("lists the earlier save it lets go, for an editor to check", async () => {
       const id = await legacyArticle();
 
-      const plan = await previewUpgrade(
-        { confirmBackedUp: true },
-        { adapter: database!.adapter as never, config: SITE }
-      );
+      const plan = await previewMigrateData(database!.adapter as never, SITE);
 
       expect(plan.report?.check).toContainEqual(
         expect.stringMatching(

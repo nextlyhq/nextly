@@ -17,7 +17,6 @@
  */
 import { afterEach, expect, it, vi } from "vitest";
 
-import { previewUpgrade, runUpgrade } from "../../../cli/commands/upgrade";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestNextly } from "../../../plugins/test-nextly";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
@@ -30,7 +29,9 @@ import { _resetPerLanguageStorage } from "../per-language-storage";
 import {
   ARTICLES,
   bootSite,
+  migrateData,
   openUpgradeDatabase,
+  previewMigrateData,
   seedLegacyStates,
   SITE,
   whatEachReaderSees,
@@ -65,10 +66,7 @@ describeEachDialect(
 
     /** Upgrade the database as `nextly upgrade --confirm-backed-up` does, for the site's config. */
     async function upgrade(): Promise<void> {
-      await runUpgrade(
-        { confirmBackedUp: true },
-        { adapter: database!.adapter as never, config: SITE }
-      );
+      await migrateData(database!.adapter as never, SITE);
     }
 
     /** Each working draft of the entry `entryId`, by its language (`shared` for none). */
@@ -132,10 +130,7 @@ describeEachDialect(
       const { seeded } = await legacySite();
       const rowsBefore = await pendingChangesOf(seeded.articles.split);
 
-      const plan = await previewUpgrade(
-        { confirmBackedUp: true },
-        { adapter: database!.adapter as never, config: SITE }
-      );
+      const plan = await previewMigrateData(database!.adapter as never, SITE);
 
       expect(plan.report?.move.length).toBeGreaterThan(0);
       expect(plan.report?.conflicts).toEqual([
@@ -149,10 +144,7 @@ describeEachDialect(
     it("has nothing to do the second time", async () => {
       await legacySite();
       const preview = () =>
-        previewUpgrade(
-          { confirmBackedUp: true },
-          { adapter: database!.adapter as never, config: SITE }
-        );
+        previewMigrateData(database!.adapter as never, SITE);
       // The legacy site has the model's work to do, so an empty second plan is the upgrade's doing.
       expect((await preview()).report?.move.length).toBeGreaterThan(0);
 

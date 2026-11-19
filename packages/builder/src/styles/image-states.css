@@ -1,0 +1,204 @@
+/**
+ * An Image's empty state on the canvas (`canvas/image-states.tsx`): a plate
+ * over the box an Image with no picture draws, in the editor's own colours,
+ * holding "Add an image" and its choices, a missing file's Replace, a link
+ * being typed, an upload's progress, and the notes a refused file or link
+ * leaves.
+ *
+ * Positioned like `.nx-empty-container-appenders`: a layer over the canvas
+ * root's content box that takes no presses itself, each plate opting back in
+ * at the rectangle the component measured; the layer's own rule is shared
+ * with the canvas marks' in `canvas.css`. Under the canvas marks, the drop
+ * line and the toolbar, which say what is selected and what is about to
+ * happen; drawn first in the overlay for that reason.
+ *
+ * Opaque, on the editor's well: the plate covers the site's own ground,
+ * whose colour the editor does not choose, and the editor's text holds its
+ * contrast only on the editor's surfaces, in either theme.
+ */
+.nx-image-state,
+.nx-embed-state {
+  position: absolute;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 1rem;
+  pointer-events: auto;
+  /* Its own size decides what it shows, at any zoom: see the queries below. */
+  container-type: size;
+  border: 1.5px dashed var(--nx-builder-picture-edge);
+  border-radius: var(--radius-md);
+  background: var(--nx-builder-picture-ground);
+  color: var(--nx-builder-text-muted);
+  font:
+    400 0.8125rem/1.4 var(--font-sans, system-ui),
+    sans-serif;
+  text-align: center;
+  cursor: default;
+}
+
+/* An Image with a picture is drawn over only while a file is held over it,
+   or a note or an upload is shown on it: see-through, its edge and its
+   words on a plate of their own. */
+.nx-image-state[data-image-state="filled"] {
+  border-style: solid;
+  border-color: transparent;
+  background: transparent;
+  pointer-events: none;
+}
+
+.nx-image-state[data-image-state="filled"] > * {
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+}
+
+/* A file held over it: the editor's select colour, solid, so it reads as
+   "this is where it lands". */
+.nx-image-state[data-held] {
+  border-style: solid;
+  border-color: var(--nx-builder-select);
+  background: color-mix(
+    in srgb,
+    var(--nx-builder-select) 8%,
+    var(--nx-builder-picture-ground)
+  );
+}
+
+.nx-image-state[data-image-state="filled"][data-held] {
+  border-width: 2px;
+  background: color-mix(in srgb, var(--nx-builder-select) 12%, transparent);
+}
+
+/* Mid-drag of a block, the plates keep the page's shape and take nothing. */
+.nx-image-states[data-dragging] .nx-image-state,
+.nx-embed-states[data-dragging] .nx-embed-state {
+  pointer-events: none;
+}
+
+.nx-image-state__stack,
+.nx-image-state__link,
+.nx-image-state__progress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.nx-image-state__icon {
+  flex: none;
+  color: var(--nx-builder-picture-icon);
+}
+
+.nx-image-state__title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--nx-builder-text);
+}
+
+.nx-image-state__words {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nx-builder-text);
+}
+
+.nx-image-state__hint {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.nx-image-state__problem {
+  margin: 0;
+  font-weight: 500;
+  color: var(--nx-builder-destructive-text);
+}
+
+.nx-image-state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+/* The file chooser Upload opens: in the page, never seen. */
+.nx-image-state__chooser {
+  display: none;
+}
+
+.nx-image-state__link {
+  width: min(22rem, 100%);
+  align-items: stretch;
+  text-align: start;
+}
+
+.nx-image-state__link .nx-image-state__actions {
+  justify-content: flex-start;
+}
+
+.nx-image-state__address {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--nx-builder-control-height);
+  padding: 0 0.5rem;
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font: inherit;
+}
+
+.nx-image-state__address:focus-visible {
+  outline: 2px solid var(--nx-builder-select);
+  outline-offset: 1px;
+}
+
+.nx-image-state__progress {
+  width: min(16rem, 100%);
+}
+
+.nx-image-state__bar {
+  display: block;
+  width: 100%;
+  height: 0.375rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--nx-builder-text-muted) 25%, transparent);
+}
+
+.nx-image-state__bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--nx-builder-select);
+  transition: width 120ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-image-state__bar > span {
+    transition: none;
+  }
+}
+
+/* A small box keeps its choices and drops what only explains them. */
+@container (max-height: 11rem) {
+  .nx-image-state__icon,
+  .nx-image-state__hint {
+    display: none;
+  }
+}
+
+@container (max-height: 6.5rem) {
+  .nx-image-state__title {
+    display: none;
+  }
+}

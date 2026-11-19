@@ -30,9 +30,12 @@
 
 import type {
   BlockDefinition as EngineBlockDefinition,
+  BlockNode as EngineBlockNode,
   BlockRenderArgs as EngineBlockRenderArgs,
 } from "@nextlyhq/blocks-engine";
 import type { ReactNode } from "react";
+
+import type { AuthenticatedScope, AuthUser } from "./index";
 
 /**
  * The support keys a block may declare.
@@ -421,3 +424,419 @@ export type {
   NumberParam,
   TextParam,
 } from "@nextlyhq/blocks-engine";
+
+// ---------------------------------------------------------------------------
+// Form providers
+// ---------------------------------------------------------------------------
+
+/**
+ * The controls a described form field may be drawn as: plain HTML controls,
+ * so the Form block draws every provider's form with the same markup and the
+ * same style parts.
+ *
+ * @experimental The form provider contract is new; its names and shape may
+ *   change until the forms plugin and one outside provider have used it.
+ */
+export type FormFieldKind =
+  | "text"
+  | "email"
+  | "tel"
+  | "number"
+  | "url"
+  | "date"
+  | "time"
+  | "textarea"
+  | "select"
+  | "checkbox"
+  | "radio"
+  | "file"
+  | "hidden";
+
+/**
+ * One choice of a `select`, `radio` or `checkbox` field.
+ *
+ * @experimental Carried by the form provider contract's freeze.
+ */
+export interface FormFieldOption {
+  /** What is sent when it is chosen. */
+  readonly value: string;
+  /** What a visitor reads. */
+  readonly label: string;
+}
+
+/**
+ * One field of a described form, in a neutral shape the Form block draws.
+ *
+ * @experimental Carried by the form provider contract's freeze. A new field
+ *   feature needs a change here, which is why the contract stays experimental.
+ */
+export interface FormFieldDescription {
+  /**
+   * The name its answer is sent under; unique within the form. A name
+   * starting with `_` is the form receiver's own, and a form naming a field
+   * with one is not drawn.
+   */
+  readonly name: string;
+  /** What its label says. */
+  readonly label: string;
+  /** Which control is drawn. */
+  readonly kind: FormFieldKind;
+  /** Whether an empty answer is refused. */
+  readonly required?: boolean;
+  /** A line of help under the control. */
+  readonly help?: string;
+  /** Example text shown in an empty control. */
+  readonly placeholder?: string;
+  /** The choices of a `select`, `radio` or `checkbox` field. */
+  readonly options?: readonly FormFieldOption[];
+  /** The file types a `file` field takes, as the `accept` attribute. */
+  readonly accept?: string;
+  /** The smallest number or earliest date accepted. */
+  readonly min?: number;
+  /** The largest number or latest date accepted. */
+  readonly max?: number;
+  /** A pattern the answer must match, as the `pattern` attribute. */
+  readonly pattern?: string;
+  /**
+   * Opaque values the provider's own script reads (drawn as `data-*`), such
+   * as a conditional field's condition. The page builder never reads them.
+   */
+  readonly provider?: Readonly<Record<string, string>>;
+}
+
+/**
+ * What a visitor sees once a send is accepted: a message in place of the
+ * form, or another page of the same site.
+ *
+ * @experimental Carried by the form provider contract's freeze.
+ */
+export type FormAfterSending =
+  | { readonly kind: "message"; readonly message: string }
+  | {
+      readonly kind: "page";
+      /** A path of the same site; anything else sends the visitor back to the form's page. */
+      readonly href: string;
+    };
+
+/**
+ * A form as its provider describes it, for the Form block to draw.
+ *
+ * @experimental Carried by the form provider contract's freeze.
+ */
+export interface FormDescription {
+  /** The provider's own reference to the form, as stored in a block. */
+  readonly ref: string;
+  readonly title: string;
+  /** In display order. */
+  readonly fields: readonly FormFieldDescription[];
+  readonly submitText: string;
+  /** The form's own setting; a block may choose another. */
+  readonly afterSending: FormAfterSending;
+  /** How the browser sends it: `multipart` when a field takes a file. */
+  readonly encoding: "urlencoded" | "multipart";
+  /**
+   * A module the provider needs on pages drawing this form (a bot check's
+   * widget, say), and why. The page builder adds it only to those pages.
+   */
+  readonly script?: { readonly module: string; readonly reason: string };
+}
+
+/**
+ * Why a provider has no form to describe: it exists and takes no answers
+ * now (`closed`), or there is none by that reference for this reader
+ * (`missing`).
+ *
+ * @experimental Carried by the form provider contract's freeze.
+ */
+export interface FormUnavailable {
+  readonly unavailable: "closed" | "missing";
+  /** What a visitor reads in place of a closed form, as its author wrote it. */
+  readonly message?: string;
+}
+
+/**
+ * One form a provider lists for an author to pick.
+ *
+ * @experimental Carried by the form provider contract's freeze.
+ */
+export interface FormListing {
+  readonly ref: string;
+  readonly title: string;
+  readonly state: "draft" | "published" | "closed";
+  /** Where the author edits it in the admin. */
+  readonly editHref?: string;
+}
+
+/**
+ * Whom a provider reads a form as. Handed straight to `ctx.services` as its
+ * options: `public` is an anonymous visitor, with every access rule applied;
+ * `user` is a signed-in author, with their own rights.
+ *
+ * @experimental Carried by the form provider contract's freeze.
+ */
+export type FormAccess =
+  | { readonly as: "public" }
+  | {
+      readonly as: "user";
+      readonly user: AuthUser;
+      readonly authenticatedScope?: AuthenticatedScope;
+    };
+
+/**
+ * A post's answers, by field name, each with every value sent under it.
+ * Only the fields the form describes reach a provider: the receiver trims
+ * every other name, its own hidden fields among them.
+ *
+ * @experimental Carried by the form provider contract's freeze.
+ */
+export type FormAnswers = ReadonlyMap<string, readonly string[]>;
+
+/**
+ * One post, as the page builder's receiver hands it to the provider.
+ *
+ * @experimental Carried by the form provider contract's freeze.
+ */
+export interface FormPost {
+  readonly answers: FormAnswers;
+  /** The language of the page the form was sent from, when the site has several. */
+  readonly locale?: string;
+  /**
+   * The visitor's request, for the provider's own checks: its client address
+   * for a rate limit, its headers for a bot check. Its body is already read.
+   */
+  readonly request: Request;
+}
+
+/**
+ * What became of a post, as the provider says.
+ *
+ * - `sent`: accepted. `afterSending` overrides the form's own setting.
+ * - `invalid`: answers refused, each with the field it names.
+ * - `closed`: the form takes no answers now.
+ * - `failed`: anything else; the visitor is asked to try again.
+ *
+ * @experimental Carried by the form provider contract's freeze.
+ */
+export type FormAcceptResult =
+  | { readonly kind: "sent"; readonly afterSending?: FormAfterSending }
+  | {
+      readonly kind: "invalid";
+      readonly issues: readonly {
+        readonly field: string;
+        readonly message: string;
+      }[];
+    }
+  | { readonly kind: "closed"; readonly message?: string }
+  | { readonly kind: "failed" };
+
+/**
+ * A source of forms the Form block can draw and the page builder's receiver
+ * hands posts to, such as the forms plugin.
+ *
+ * Every rule about a provider's forms — which exist, how answers are
+ * checked, stored and sent, spam checks beyond the receiver's own — stays in
+ * the provider. The page builder draws what `describe` gives and passes on
+ * what a visitor sent; it knows nothing else about a provider's forms.
+ *
+ * Registered from the provider plugin's `init` through the page builder's
+ * cross-plugin `forms` service ({@link FormProviderService}).
+ *
+ * @experimental The form provider contract is new; its names and shape may
+ *   change until the forms plugin and one outside provider have used it.
+ */
+export interface FormProvider {
+  /**
+   * Stable, and stored in every block that picks one of its forms: lower
+   * case letters, digits and `-`, 1 to 64 characters. `simple` is the page
+   * builder's own and cannot be registered.
+   */
+  readonly id: string;
+  /** What authors read: "Forms" in "Fields … come from Forms." */
+  readonly label: string;
+  /** The forms an author may pick, read with the author's own rights. */
+  list(access: FormAccess): Promise<readonly FormListing[]>;
+  /**
+   * One form, for the live page (as the public: published and open forms
+   * only) and for the canvas (as the author).
+   */
+  describe(
+    ref: string,
+    options: { readonly access: FormAccess; readonly locale?: string }
+  ): Promise<FormDescription | FormUnavailable>;
+  /**
+   * Take one post. Called by the receiver in the same process, after its own
+   * spam trap, size limits and field trim; the provider applies every rule of
+   * its own.
+   */
+  accept(ref: string, post: FormPost): Promise<FormAcceptResult>;
+}
+
+/**
+ * The page builder's cross-plugin `forms` service, as a provider plugin
+ * reaches it: `ctx.services.plugins["@nextlyhq/plugin-page-builder"].forms`.
+ * Resolve it from `init`. Registering an `id` already registered throws.
+ *
+ * @experimental Carried by the form provider contract's freeze.
+ */
+export interface FormProviderService {
+  register(provider: FormProvider): void;
+}
+
+/**
+ * The group of the page builder's Page checks list a provider's findings are
+ * listed under: Accessibility, Content and data, Publishing, or Search.
+ *
+ * @experimental The page check provider contract is new; its names and shape
+ * may change before the page builder's checks are marked stable.
+ */
+export type PageCheckGroupName =
+  | "accessibility"
+  | "content"
+  | "publishing"
+  | "search";
+
+/**
+ * The page a provider is asked about: the collection and entry being edited,
+ * its language, and its blocks as the editor holds them, unsaved changes
+ * included. A provider that judges what it stores reads the saved entry, and
+ * its findings then follow the last save.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export interface PageCheckRequest {
+  readonly collection: string;
+  /** The entry; null for a page not saved yet. */
+  readonly entryId: string | null;
+  readonly locale?: string;
+  /** The page's blocks as the editor holds them, read as stored data. */
+  readonly document: unknown;
+}
+
+/**
+ * Where a finding is fixed: a block's setting, by the tab it is on and its
+ * id as the inspector names it, or a tab of Page settings, by its id.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export type PageCheckFix =
+  | {
+      readonly tab: "content" | "style" | "advanced";
+      readonly id: string;
+    }
+  | { readonly settingsTab: string };
+
+/**
+ * One problem a provider finds, in the plain words an author reads: what is
+ * wrong, why it matters, and what to do.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export interface PageCheckFinding {
+  /** The block it is about; absent for the page as a whole. */
+  readonly nodeId?: string;
+  /** Which of several problems on one block this is. */
+  readonly part?: string;
+  readonly what: string;
+  readonly why: string;
+  readonly todo: string;
+  /** Where choosing it takes the author; absent, only its block is selected. */
+  readonly fix?: PageCheckFix;
+}
+
+/**
+ * A plugin's page check: findings about the page being edited, listed in
+ * the page builder's Page checks with the built-in ones, in `group`. It runs
+ * on the server, as the person editing (`access`), and never blocks a save
+ * or a publish.
+ *
+ * @experimental The page check provider contract is new; its names and shape
+ * may change before the page builder's checks are marked stable.
+ */
+export interface PageCheckProvider {
+  /** Lower case letters, digits and `-`, unique among a site's providers. */
+  readonly id: string;
+  readonly group: PageCheckGroupName;
+  check(
+    page: PageCheckRequest,
+    options: { readonly access: Extract<FormAccess, { as: "user" }> }
+  ): Promise<readonly PageCheckFinding[]>;
+}
+
+/**
+ * The page builder's cross-plugin `pageChecks` service, as a provider plugin
+ * reaches it: `ctx.services.plugins["@nextlyhq/plugin-page-builder"].pageChecks`.
+ * Resolve it from `init`, before or after the page builder's own. Registering
+ * an `id` already registered throws.
+ *
+ * @experimental Carried by the page check provider contract.
+ */
+export interface PageCheckProviderService {
+  register(provider: PageCheckProvider): void;
+}
+
+// ---------------------------------------------------------------------------
+// Starter pages
+// ---------------------------------------------------------------------------
+
+/**
+ * One block as a page stores it: its type, version, props, styles and the
+ * blocks in its slots. What a starter page is made of.
+ *
+ * @experimental Carried by the starter page contract.
+ */
+export type { BlockNode } from "@nextlyhq/blocks-engine";
+
+/**
+ * A starter page: a ready-made page body an author can start a new page
+ * from, in the New page dialog's "Start from" and on an empty page's
+ * "or start from a page" row.
+ *
+ * A starter is copied once. Its blocks become the page's own, each with a
+ * new id, so a later change to the starter in code never reaches a page made
+ * from it, and a change on the page never reaches the starter. It fills the
+ * page's body only: the header and footer are the ones the author chose.
+ *
+ * Its preview is drawn from its blocks, in the site's own colours and fonts,
+ * so style its blocks with the site's variables (`{ $token: "color.primary" }`)
+ * rather than raw colours.
+ *
+ * A site registers its own with `pageBuilder({ starterPages })`; a plugin
+ * declares them under
+ * `contributes.declarations["@nextlyhq/plugin-page-builder"].starterPages`.
+ * Each is checked at start-up, and the site does not start while one is
+ * refused: an id that is malformed or used twice, a block the site doesn't
+ * have, a placed component, a picture or an address to load from, or blocks
+ * the page builder's own validation refuses. Leave an Image empty: the author
+ * picks the site's own picture.
+ *
+ * A starter whose blocks, variables or shared styles the site no longer has
+ * is left out of the list, never offered half-drawn.
+ *
+ * @experimental The starter page contract is new; its names and shape may
+ * change before the page builder's starter pages are marked stable.
+ */
+export interface StarterPageDefinition {
+  /**
+   * Lower case letters, digits and `-`, 1 to 64 characters, unique among a
+   * site's starter pages.
+   */
+  readonly id: string;
+  /** Its name, as the author reads it: "Landing", "About us". */
+  readonly label: string;
+  /** One short sentence saying what the page holds. */
+  readonly description: string;
+  /** The page body's blocks, top to bottom. */
+  readonly blocks: readonly EngineBlockNode[];
+}
+
+/**
+ * Declare a starter page. Returns its argument unchanged; it exists so an
+ * editor checks the shape where the starter is written.
+ *
+ * @experimental Carried by the starter page contract.
+ */
+export function defineStarterPage(
+  starter: StarterPageDefinition
+): StarterPageDefinition {
+  return starter;
+}

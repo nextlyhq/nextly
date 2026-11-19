@@ -56,6 +56,19 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import {
+  useEditorAsks,
+  type AskedSetting,
+  type SettingAsked,
+} from "./editor-asks";
+import {
+  replayStep,
+  useHistoryStacks,
+  useRestartOn,
+  type HistoryEntry,
+  type HistoryStep,
+} from "./editor-history";
+import { useFirstAdd, type FirstAdd } from "./first-add";
 import { keptLockAnswers } from "./kept-lock-answers";
 import {
   layersLockRefusalFor,
@@ -79,48 +92,8 @@ import {
   type SelectionMode,
 } from "./selection";
 
-/** How deep the undo history goes before the oldest step is dropped. */
-export const MAX_HISTORY = 100;
-
-/**
- * A change made outside the document that the editor's history takes back and
- * puts forward, such as a write to the site's shared styles.
- *
- * Each half resolves whether it took effect. A half that did not (a refused
- * or failed write) leaves the change where it was, so the step is dropped
- * rather than kept as an undo that never clears.
- */
-interface HistoryStep {
-  /** Takes the change back. */
-  readonly undo: () => Promise<boolean>;
-  /** Makes the change again. */
-  readonly redo: () => Promise<boolean>;
-}
-
-/**
- * One entry of the history: a group of the op layer's inverses, or a step
- * recorded from outside the document. Both stacks hold the entry to replay
- * next, so a step on the redo stack is the recorded one with its halves
- * swapped.
- */
-type HistoryEntry =
-  | { readonly kind: "ops"; readonly ops: readonly BuilderOp[] }
-  | {
-      readonly kind: "step";
-      readonly step: HistoryStep;
-      /** The step as recorded, kept as it moves between the stacks. */
-      readonly origin: HistoryStep;
-    };
-
-/** The step that replays `step` the other way, for the opposite stack. */
-function reversed(step: HistoryStep): HistoryStep {
-  return { undo: step.redo, redo: step.undo };
-}
-
-/** How many entries change the document, which is what a save point counts. */
-function documentEntries(stack: readonly HistoryEntry[]): number {
-  return stack.filter(entry => entry.kind === "ops").length;
-}
+// The history's bound, exported here since this is where it was always read.
+export { MAX_HISTORY } from "./editor-history";
 
 export interface EditorState {
   /** The document as it currently stands. */
@@ -205,6 +178,16 @@ export interface EditorState {
    * @experimental
    */
   recordStep: (step: HistoryStep) => () => void;
+  /**
+   * Put back what a run of typing changed, and record nothing: the document
+   * as it was before the run's first write, with the history as it was then,
+   * redo branch included. For Escape in a field that writes as the author
+   * types. Answers whether there was a run to put back: only while the run's
+   * step is the newest, so once another edit, an undo or a blur has ended
+   * the run it is an ordinary step of the history.
+   * @experimental
+   */
+  cancelTyping: (run: object) => boolean;
   canUndo: boolean;
   canRedo: boolean;
   /**
@@ -261,6 +244,16 @@ export interface EditorState {
   sortFieldAsked?: { readonly id: string; readonly seq: number };
   /** Select a list and take the author to its first sort row. */
   askSortField?: (id: string) => void;
+  /** The setting last asked for, counted per ask (`editor-asks`). @experimental */
+  settingAsked?: SettingAsked;
+  /** Select a block and take the author to one of its settings. */
+  askSetting?: (id: string, setting: AskedSetting) => void;
+  /**
+   * A block just added that asks for a choice, while the canvas draws its
+   * chooser: editor state only, never stored. See `first-add.ts`.
+   * @experimental
+   */
+  firstAdd?: FirstAdd;
 }
 
 export interface UseEditorStateArgs {
@@ -320,6 +313,15 @@ export interface UseEditorStateArgs {
    * is the one check none of them can miss, whatever a surface asked first.
    */
   onPlacementRefused?: (refusal: LocatedPlacementBreak) => void;
+  /**
+   * Which editing session this is. A different value starts the state again
+   * from `initialDocument`: nothing selected and an empty history, as a fresh
+   * mount would, while the component stays mounted. For a host that edits a
+   * second document for a while (a header in place) and drops its history
+   * when it is done. Absent, the state lives as long as the component.
+   * @experimental
+   */
+  session?: unknown;
 }
 
 /**
@@ -882,205 +884,6 @@ function heldKey(lock: NonNullable<CompositionFault["lock"]>): string {
 }
 
 /**
- * The undo and redo stacks, and the depths a render reads from them.
- *
- * READONLY groups. A recorded inverse describes the document as it stood when
- * its op ran, so nothing may append to or reorder one after the fact — the
- * history would then describe an edit that never happened. `applyOps` returns
- * them already in undo order and already frozen to the type.
- */
-function useHistoryStacks(): {
-  depths: { undo: number; redo: number; document: number };
-  push: (
-    entry: HistoryEntry,
-    into: "undo" | "redo" | "new"
-  ) => HistoryEntry | undefined;
-  pop: (from: "undo" | "redo") => HistoryEntry | undefined;
-  remove: (entry: HistoryEntry) => void;
-  withdraw: (origin: HistoryStep, dropped: HistoryEntry | undefined) => void;
-  /** A replay of the step took effect; the branch it ended is gone. */
-  settle: (origin: HistoryStep) => void;
-} {
-  const undoStack = useRef<HistoryEntry[]>([]);
-  const redoStack = useRef<HistoryEntry[]>([]);
-  // Mirrors the stack lengths so the flags below are STATE and re-render when
-  // they change. Reading `undoStack.current.length` directly would leave an
-  // undo button disabled after the first edit, because a ref mutation does not
-  // schedule a render.
-  const [depths, setDepths] = useState({ undo: 0, redo: 0, document: 0 });
-  /*
-   * Document edits dropped off the old end. The save point measures the
-   * document's position in its history, and that position does not move
-   * because the history forgets how it got there: counted in, a page saved
-   * before a run of style changes stays saved once its edit falls off.
-   */
-  const forgotten = useRef(0);
-  const sync = useCallback(() => {
-    setDepths({
-      undo: undoStack.current.length,
-      redo: redoStack.current.length,
-      document: documentEntries(undoStack.current) + forgotten.current,
-    });
-  }, []);
-  /*
-   * The redo branch a run of recorded steps ended, with those steps and the
-   * entry below the first, so that withdrawing every one of them before
-   * anything else follows gives the branch back: changes that never took
-   * effect must not cost the author their redo either. Kept while the steps
-   * are recorded one after another, and while any of them only moves between
-   * the stacks unanswered, since each change may still be refused; dropped
-   * once a replay of one takes effect or any other entry is pushed.
-   */
-  const endedBranch = useRef<StepRun | null>(null);
-  const push = useCallback(
-    (entry: HistoryEntry, into: "undo" | "redo" | "new") => {
-      let dropped: HistoryEntry | undefined;
-      endedBranch.current = runAfterPush(
-        endedBranch.current,
-        entry,
-        into,
-        undoStack.current.at(-1),
-        redoStack.current
-      );
-      if (into === "redo") {
-        redoStack.current.push(entry);
-      } else {
-        undoStack.current.push(entry);
-      }
-      if (into === "new") {
-        // Bounded from the OLD end. Dropping the newest would make the most
-        // recent edit unrepeatable, which is the one an author is most likely
-        // to want back.
-        if (undoStack.current.length > MAX_HISTORY) {
-          dropped = undoStack.current.shift();
-          if (dropped?.kind === "ops") forgotten.current += 1;
-        }
-        // A new edit invalidates the redo branch: those inverses were computed
-        // against a document that no longer exists, so replaying one would
-        // apply an edit derived from a tree that has since changed.
-        redoStack.current = [];
-      }
-      sync();
-      return dropped;
-    },
-    [sync]
-  );
-  const pop = useCallback(
-    (from: "undo" | "redo") => {
-      const entry = (from === "undo" ? undoStack : redoStack).current.pop();
-      sync();
-      return entry;
-    },
-    [sync]
-  );
-  const remove = useCallback(
-    (entry: HistoryEntry) => {
-      undoStack.current = undoStack.current.filter(held => held !== entry);
-      redoStack.current = redoStack.current.filter(held => held !== entry);
-      sync();
-    },
-    [sync]
-  );
-  /*
-   * Take a recorded step back out, wherever it sits: undone, it is on the
-   * redo stack under another entry. The entry its recording pushed off a full
-   * history comes back to the old end, since a change that never took effect
-   * must not cost the oldest edit.
-   */
-  const withdraw = useCallback(
-    (origin: HistoryStep, dropped: HistoryEntry | undefined) => {
-      const kept = (held: HistoryEntry) =>
-        held.kind !== "step" || held.origin !== origin;
-      // With the last step of the run gone, the history as it was before it
-      // began (nothing made since, and nothing else undone): the redo branch
-      // the run ended comes back with that withdrawal. While others of the
-      // run remain, one of them may yet take effect, so the branch waits.
-      const ended = endedBranch.current;
-      ended?.steps.delete(origin);
-      const last = ended !== null && ended.steps.size === 0;
-      if (last) endedBranch.current = null;
-      undoStack.current = undoStack.current.filter(kept);
-      const redo = redoStack.current.filter(kept);
-      const restore =
-        last && undoStack.current.at(-1) === ended.below && redo.length === 0
-          ? ended.branch
-          : [];
-      redoStack.current = [...redo, ...restore];
-      if (dropped !== undefined && undoStack.current.length < MAX_HISTORY) {
-        undoStack.current.unshift(dropped);
-        if (dropped.kind === "ops") forgotten.current -= 1;
-      }
-      sync();
-    },
-    [sync]
-  );
-  /*
-   * A replay of a step of the run took effect: its change and its undo are
-   * both real, so the branch the run ended is gone for good.
-   */
-  const settle = useCallback((origin: HistoryStep) => {
-    if (endedBranch.current?.steps.has(origin) === true) {
-      endedBranch.current = null;
-    }
-  }, []);
-  return { depths, push, pop, remove, withdraw, settle };
-}
-
-/** A run of recorded steps, the redo branch it ended, and what lay below it. */
-interface StepRun {
-  steps: Set<HistoryStep>;
-  below: HistoryEntry | undefined;
-  branch: HistoryEntry[];
-}
-
-/**
- * The run of recorded steps once `entry` is pushed: a new step joins the run
- * or starts one (keeping the branch it ends and what lay below), a step of
- * the run moving between the stacks keeps it, and anything else ends it.
- */
-function runAfterPush(
-  run: StepRun | null,
-  entry: HistoryEntry,
-  into: "undo" | "redo" | "new",
-  below: HistoryEntry | undefined,
-  branch: HistoryEntry[]
-): StepRun | null {
-  if (entry.kind !== "step") return null;
-  if (into !== "new") return run?.steps.has(entry.origin) === true ? run : null;
-  if (run === null) return { steps: new Set([entry.origin]), below, branch };
-  run.steps.add(entry.origin);
-  return run;
-}
-
-/**
- * Replay a recorded step and move it to the other stack at once, so a second
- * press reaches the entry before it rather than waiting on a write. Dropped
- * again if the replay did not take effect, for the reason a refused inverse is
- * not pushed back.
- */
-function replayStep(
-  { step, origin }: { step: HistoryStep; origin: HistoryStep },
-  into: "undo" | "redo",
-  push: (entry: HistoryEntry, into: "undo" | "redo") => void,
-  remove: (entry: HistoryEntry) => void,
-  settle: (origin: HistoryStep) => void
-): Promise<boolean> {
-  const moved: HistoryEntry = { kind: "step", step: reversed(step), origin };
-  push(moved, into);
-  return step.undo().then(
-    took => {
-      if (took) settle(origin);
-      else remove(moved);
-      return took;
-    },
-    () => {
-      remove(moved);
-      return false;
-    }
-  );
-}
-
-/**
  * Hold a document and the edits made to it.
  *
  * The document is state and the history is a ref: history changes on every edit
@@ -1093,13 +896,14 @@ function replayStep(
  * only when one changes, so the canvas, which draws per set, draws again only
  * then.
  */
-function useListsShowingEmpty(): {
+function useListsShowingEmpty(session: unknown): {
   listsShowingEmpty: ReadonlySet<string>;
   showListEmpty: (id: string, empty: boolean) => void;
 } {
   const [listsShowingEmpty, setListsShowingEmpty] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  useRestartOn(session, () => setListsShowingEmpty(new Set()));
   const showListEmpty = useCallback((id: string, empty: boolean) => {
     setListsShowingEmpty(current => toggled(current, id, empty));
   }, []);
@@ -1110,13 +914,14 @@ function useListsShowingEmpty(): {
  * Which lists the canvas tags as still showing what they store, and the way
  * to change it: a new map only when one changes, as for the empty state.
  */
-function useListsStillShowing(): {
+function useListsStillShowing(session: unknown): {
   listsStillShowing: ReadonlyMap<string, string>;
   tagListStillShowing: (id: string, words: string | undefined) => void;
 } {
   const [listsStillShowing, setListsStillShowing] = useState<
     ReadonlyMap<string, string>
   >(() => new Map());
+  useRestartOn(session, () => setListsStillShowing(new Map()));
   const tagListStillShowing = useCallback(
     (id: string, words: string | undefined) => {
       setListsStillShowing(current => {
@@ -1151,20 +956,18 @@ function toggled(
  * them, which are editor state and no step of the history.
  */
 export function useEditorState(args: UseEditorStateArgs): EditorState {
-  const state = useDocumentState(args);
-  const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty();
-  const { listsStillShowing, tagListStillShowing } = useListsStillShowing();
-  const [sortFieldAsked, setSortFieldAsked] =
-    useState<EditorState["sortFieldAsked"]>(undefined);
-  const { select } = state;
-  // Selecting first, so the inspector the author is taken to is the list's.
-  const askSortField = useCallback(
-    (id: string) => {
-      select(id);
-      setSortFieldAsked(current => ({ id, seq: (current?.seq ?? 0) + 1 }));
-    },
-    [select]
+  // With the step that holds a block just added while it asks for a choice.
+  const state = useFirstAdd(useDocumentState(args));
+  // Each of these belongs to the session's document, so a new session starts
+  // with none of them (`session`).
+  const { listsShowingEmpty, showListEmpty } = useListsShowingEmpty(
+    args.session
   );
+  const { listsStillShowing, tagListStillShowing } = useListsStillShowing(
+    args.session
+  );
+  // What the author asked the inspector to take them to (`editor-asks`).
+  const asks = useEditorAsks(state.select, args.session);
   return useMemo(
     () => ({
       ...state,
@@ -1172,8 +975,7 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
       showListEmpty,
       listsStillShowing,
       tagListStillShowing,
-      ...(sortFieldAsked === undefined ? {} : { sortFieldAsked }),
-      askSortField,
+      ...asks,
     }),
     [
       state,
@@ -1181,10 +983,31 @@ export function useEditorState(args: UseEditorStateArgs): EditorState {
       showListEmpty,
       listsStillShowing,
       tagListStillShowing,
-      sortFieldAsked,
-      askSortField,
+      asks,
     ]
   );
+}
+
+/**
+ * The document and its selection, started again in the render that sees
+ * `session` change (never on the first), with the history `clearHistory`
+ * forgets. During that render rather than after it, so no surface ever reads
+ * the old document under the new session: the updates are this component's
+ * own, so React drops that render and renders again at once with them.
+ */
+function useSessionDocument(
+  initialDocument: BlockDocument,
+  session: unknown,
+  clearHistory: () => void
+) {
+  const [document, setDocument] = useState<BlockDocument>(initialDocument);
+  const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
+  useRestartOn(session, () => {
+    setDocument(initialDocument);
+    setSelection(EMPTY_SELECTION);
+    clearHistory();
+  });
+  return { document, setDocument, selection, setSelection };
 }
 
 /** The document, its selection and its history: see {@link useEditorState}. */
@@ -1198,6 +1021,7 @@ function useDocumentState({
   stored,
   onPlacementRefused,
   componentName,
+  session,
 }: UseEditorStateArgs): EditorState {
   // Read at apply time rather than closed over, so a library that reloads or
   // a host that swaps its callback does not rebuild `apply` and everything
@@ -1215,8 +1039,13 @@ function useDocumentState({
   };
   const composition = useRef(atApply(host, initialDocument));
   composition.current = atApply(host, initialDocument);
-  const [document, setDocument] = useState<BlockDocument>(initialDocument);
-  const [selection, setSelection] = useState<BlockSelection>(EMPTY_SELECTION);
+  const { depths, push, pop, remove, withdrawTyping, record, settle, clear } =
+    useHistoryStacks();
+  const { document, setDocument, selection, setSelection } = useSessionDocument(
+    initialDocument,
+    session,
+    clear
+  );
 
   /**
    * The document as it stands NOW, for everything a LATER event reaches.
@@ -1253,8 +1082,6 @@ function useDocumentState({
     );
   latestDocument.current = document;
 
-  const { depths, push, pop, remove, withdraw, settle } = useHistoryStacks();
-
   /**
    * Run an op and record its inverse on the given stack.
    *
@@ -1289,7 +1116,8 @@ function useDocumentState({
   const run = useCallback(
     (
       ops: readonly BuilderOp[],
-      into: "undo" | "redo" | "new"
+      // "none": applied and recorded nowhere, for a run of typing put back.
+      into: "undo" | "redo" | "new" | "none"
     ): BlockDocument | null => {
       let group;
       try {
@@ -1373,7 +1201,7 @@ function useDocumentState({
       const applied = { document: group.document, inverse: group.inverses };
       const entry: HistoryEntry = { kind: "ops", ops: applied.inverse };
 
-      push(entry, into);
+      if (into !== "none") push(entry, into);
       // Ahead of `setDocument`, which does not take effect until the next
       // render: two ops applied in one tick must see each other, or the second
       // is folded onto the document the first already replaced.
@@ -1393,7 +1221,8 @@ function useDocumentState({
     // would rebuild these callbacks every edit for a value none of them close
     // over. Stable identity is also the point — a stale `run` is now the same
     // `run`, folding onto the tree as it stands.
-    [limits, composerNow, push]
+    // The setters too, stable, listed since they arrive from a hook here.
+    [limits, composerNow, push, setDocument, setSelection]
   );
 
   const apply = useCallback((op: BuilderOp) => run([op], "new"), [run]);
@@ -1426,13 +1255,17 @@ function useDocumentState({
   );
   const undo = useCallback(() => replay("undo"), [replay]);
   const redo = useCallback(() => replay("redo"), [replay]);
-  // Bounded and branch-ending exactly as a fresh document edit is.
-  const recordStep = useCallback(
-    (step: HistoryStep) => {
-      const dropped = push({ kind: "step", step, origin: step }, "new");
-      return () => withdraw(step, dropped);
+  // Recorded by the history, which knows the session it belongs to.
+  const recordStep = record;
+  const cancelTyping = useCallback(
+    (typingRun: object): boolean => {
+      const entry = withdrawTyping(typingRun);
+      // A typing run's step is always a document edit; the guard keeps the
+      // type honest rather than assuming it.
+      if (entry === undefined || entry.kind !== "ops") return false;
+      return run(entry.ops, "none") !== null;
     },
-    [push, withdraw]
+    [withdrawTyping, run]
   );
 
   const select = useCallback(
@@ -1440,7 +1273,8 @@ function useDocumentState({
       setSelection(current =>
         applySelection(latestDocument.current, current, id, mode)
       ),
-    []
+    // Stable setter, listed since it arrives from a hook of this module.
+    [setSelection]
   );
 
   return useMemo(
@@ -1458,6 +1292,7 @@ function useDocumentState({
       undo,
       redo,
       recordStep,
+      cancelTyping,
       canUndo: depths.undo > 0,
       canRedo: depths.redo > 0,
       limits,
@@ -1476,6 +1311,7 @@ function useDocumentState({
       undo,
       redo,
       recordStep,
+      cancelTyping,
       depths,
       limits,
     ]

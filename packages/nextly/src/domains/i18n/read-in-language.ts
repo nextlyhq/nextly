@@ -52,8 +52,44 @@ export function publishedInLanguageCondition(args: {
   localeChain: readonly string[] | null | undefined;
   mainIdColumn: unknown;
 }): SQL | undefined {
-  // A read with no language chain is one with localization off, or one of
-  // every language at once: neither asks for a language to be published.
+  const asked = languagePublicationAsked(args);
+  if (asked === undefined) return undefined;
+  const inLanguage = buildCompanionExists({
+    companionTableName: asked.companion.companionTableName,
+    mainIdColumn: args.mainIdColumn,
+    locale: asked.requested,
+    valueCondition: sql`1 = 1`,
+    // Every state the workflow calls public, as the read's own bound does.
+    statusValues: asked.publicStates,
+  });
+  if (!args.revealed?.length) return inLanguage;
+  return sql`(${inLanguage} OR ${args.mainIdColumn} IN (${sql.join(
+    args.revealed.map(id => sql`${id}`),
+    sql`, `
+  )}))`;
+}
+
+/**
+ * Whether a read asks for its language to be published, and what answers it:
+ * the language requested, the translations table and the states the workflow
+ * calls public. `undefined` where the rule keeps nothing out: a read that is
+ * not public, an entity whose one status is its only publication, or a read
+ * with no language chain (localization off, or every language at once). The
+ * one gate of {@link publishedInLanguageCondition} and
+ * {@link idsPublishedInLanguageOf}, so the query and the judgement of rows
+ * already read cannot ask different reads.
+ */
+function languagePublicationAsked(args: {
+  companion: CompanionSchema | null | undefined;
+  statusFilter: StatusFilter | null | undefined;
+  localeChain: readonly string[] | null | undefined;
+}):
+  | {
+      companion: CompanionSchema;
+      requested: string;
+      publicStates: StatusFilter["values"];
+    }
+  | undefined {
   const requested = args.localeChain?.[0];
   if (
     args.statusFilter?.isPublicRead !== true ||
@@ -62,19 +98,45 @@ export function publishedInLanguageCondition(args: {
   ) {
     return undefined;
   }
-  const inLanguage = buildCompanionExists({
-    companionTableName: args.companion.companionTableName,
-    mainIdColumn: args.mainIdColumn,
-    locale: requested,
-    valueCondition: sql`1 = 1`,
-    // Every state the workflow calls public, as the read's own bound does.
-    statusValues: args.statusFilter.values,
-  });
-  if (!args.revealed?.length) return inLanguage;
-  return sql`(${inLanguage} OR ${args.mainIdColumn} IN (${sql.join(
-    args.revealed.map(id => sql`${id}`),
-    sql`, `
-  )}))`;
+  return {
+    companion: args.companion,
+    requested,
+    publicStates: args.statusFilter.values,
+  };
+}
+
+/**
+ * Of `ids`, those published in the read's language, judged on the
+ * translations rows read with them (`companionRows`, each a row of the
+ * translations table, the requested language's among them) by the rule
+ * {@link publishedInLanguageCondition} puts in a query: the requested
+ * language's row holding a public state, or a due release revealing the
+ * document. Null where that rule keeps nothing out. For a read that took the
+ * translations in the statement that took the rows, so one state of them
+ * answers both.
+ */
+export function idsPublishedInLanguageOf(args: {
+  companion: CompanionSchema | null | undefined;
+  statusFilter: StatusFilter | null | undefined;
+  revealed?: readonly string[];
+  localeChain: readonly string[] | null | undefined;
+  ids: readonly unknown[];
+  companionRows: readonly Record<string, unknown>[];
+}): ReadonlySet<unknown> | null {
+  const asked = languagePublicationAsked(args);
+  if (asked === undefined) return null;
+  const publicStates = new Set<string>(asked.publicStates);
+  const published = new Set<string>(args.revealed ?? []);
+  for (const row of args.companionRows) {
+    if (
+      row._locale === asked.requested &&
+      typeof row._status === "string" &&
+      publicStates.has(row._status)
+    ) {
+      published.add(String(row._parent));
+    }
+  }
+  return new Set(args.ids.filter(id => published.has(String(id))));
 }
 
 /**
@@ -228,6 +290,24 @@ export function valuesBesideRow(
 ): Record<string, unknown> | undefined {
   const every = row[ALL_LOCALES_KEY];
   return isValues(every) ? every : undefined;
+}
+
+/**
+ * Withhold `languages` from every language's values beside `row`
+ * (`_allLocales`): each field's value in each of them is removed, its own
+ * fields' and its field groups' alike. How a language a read rule refuses
+ * leaves a read of every language; a row with nothing beside it is unchanged.
+ */
+export function withholdLanguages(
+  row: Record<string, unknown>,
+  languages: ReadonlySet<string> | undefined
+): void {
+  const every = valuesBesideRow(row);
+  if (!every || !languages) return;
+  for (const values of Object.values(every)) {
+    if (!isValues(values)) continue;
+    for (const code of languages) delete values[code];
+  }
 }
 
 /**

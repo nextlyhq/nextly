@@ -43,6 +43,7 @@ import { toSnakeCase } from "../../../shared/lib/case-conversion";
 import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
 
 import {
+  assertVersionHistoryReady,
   siteEntities,
   siteLanguages,
   versionHistoryReady,
@@ -81,7 +82,8 @@ async function documentsToSplit(
 ): Promise<DocumentToSplit[]> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const found: DocumentToSplit[] = [];
-  // An earlier release's version history is split once `nextly migrate` has laid it out.
+  // An earlier release's version history is split only once it is laid out as this one keeps it.
+  await assertVersionHistoryReady(context);
   if (!(await versionHistoryReady(context))) return found;
   for (const entity of await siteEntities(context)) {
     // Only collection entries and Singles keep pending changes; a component's are its parent's.

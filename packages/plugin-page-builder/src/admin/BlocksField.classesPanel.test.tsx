@@ -32,6 +32,7 @@ import {
   SHARED_STYLE_REMOVE_ROUTE_PATH,
   sharedStyleUsagePath,
 } from "../library-contract";
+import { PUBLISH_READINESS_ROUTE_PATH } from "../publish-readiness-contract";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 
@@ -158,6 +159,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -432,7 +437,11 @@ describe("the Shared styles tab reaching an author", () => {
         within(dialog).getByRole("button", { name: "Remove card" })
       );
     });
-    expect(routeWrites).toEqual([
+    // The style's own writes: Page checks also asks which parts aren't
+    // published, a separate ask that is no write of the class list.
+    expect(
+      routeWrites.filter(write => write.path !== PUBLISH_READINESS_ROUTE_PATH)
+    ).toEqual([
       { path: SHARED_STYLE_REMOVE_ROUTE_PATH, body: { ids: ["id-card"] } },
     ]);
     expect(saved).toEqual([]);

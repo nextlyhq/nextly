@@ -1,13 +1,15 @@
 /**
- * The steps of `nextly upgrade`, in the order they run.
+ * The steps over data an earlier release stored: those `nextly migrate` runs
+ * once its migrations have applied, in the order they run, and the one
+ * `nextly i18n:convert-zoned-dates` runs.
  *
  * Each brings one part of an existing database up to date, and each is
  * idempotent (see `UpgradeStep` in `../upgrade-step.ts`). A new step is a
- * module in this folder exporting an `UpgradeStep`, added to the end of this
- * list: each step is counted and run before the next is counted, so a later
+ * module in this folder exporting an `UpgradeStep`, added to the end of
+ * `MIGRATE_DATA_STEPS`: each step is counted and run before the next is counted, so a later
  * step sees what the earlier ones repaired and needs no other knowledge of
  * them. A step whose work loads much is declared here instead, loading its
- * module only when the upgrade asks it: every module this list imports loads
+ * module only when a run asks it: every module this list imports loads
  * with the CLI, and with every test of it.
  *
  * @module cli/commands/upgrade-steps
@@ -15,7 +17,6 @@
 
 import type { UpgradeStep } from "../upgrade-step";
 
-import { schemaEventsStep } from "./schema-events";
 import { storedPasswordsStep } from "./stored-passwords";
 import { versionPasswordsStep } from "./version-passwords";
 
@@ -28,14 +29,19 @@ const retiredManageStep: UpgradeStep = {
     (await import("./retired-manage")).convertRoles(context),
 };
 
-/** Converting translated date columns an earlier release made with a time zone. */
-const zonedDatesStep: UpgradeStep = {
+/**
+ * Converting translated date columns an earlier release made with a time
+ * zone: the one step of `nextly i18n:convert-zoned-dates`, run once the
+ * release serves every instance, and so never by `nextly migrate`.
+ */
+export const zonedDatesStep: UpgradeStep = {
   title: "convert translated date columns kept with a time zone",
   pending: async context =>
     (await import("./zoned-dates")).zonedDatesToConvert(context),
   run: async context =>
     (await import("./zoned-dates")).convertZonedDates(context),
 };
+
 
 /** Bringing each configured language code's rows into its standard form. */
 const localisationCodesStep: UpgradeStep = {
@@ -101,16 +107,26 @@ const localisationArchiveStep: UpgradeStep = {
     (await import("./localisation-archive")).unclaimedArchiveReport(context),
 };
 
-export const UPGRADE_STEPS: readonly UpgradeStep[] = [
-  schemaEventsStep,
-  storedPasswordsStep,
-  versionPasswordsStep,
-  retiredManageStep,
-  zonedDatesStep,
+/**
+ * The steps bringing an earlier release's content into the localisation model, in the order they
+ * must run: codes first, so every later step reads and writes the standard code; pending changes
+ * keyed before they are split, so the split sees one draft per language; values moved before the
+ * drafts are split against them; translations dated last, from the history the steps before left.
+ */
+export const LOCALISATION_DATA_STEPS: readonly UpgradeStep[] = [
   localisationCodesStep,
   localisationKeysStep,
   localisationValuesStep,
   localisationDraftsStep,
   localisationStampsStep,
   localisationArchiveStep,
+];
+
+/** The steps `nextly migrate` runs once its migrations have applied, in order. */
+export const MIGRATE_DATA_STEPS: readonly UpgradeStep[] = [
+  storedPasswordsStep,
+  versionPasswordsStep,
+  retiredManageStep,
+  // After the migrations, so the version history has every column the localisation steps write.
+  ...LOCALISATION_DATA_STEPS,
 ];

@@ -10,7 +10,6 @@
 import { sql } from "drizzle-orm";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { runUpgrade } from "../../../cli/commands/upgrade";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import { _resetPerLanguageStorage } from "../per-language-storage";
@@ -18,6 +17,7 @@ import { _resetPerLanguageStorage } from "../per-language-storage";
 import {
   BANNER,
   bootSite,
+  migrateData,
   openUpgradeDatabase,
   seedLegacyStates,
   SITE,
@@ -110,10 +110,7 @@ describeEachDialect("upgrading a Single's translation stamps", dialect => {
     await versionIn("en", "2026-08-02T10:00:00Z", 900);
     await versionIn("es", "2026-08-01T10:00:00Z", 901);
 
-    await runUpgrade(
-      { confirmBackedUp: true },
-      { adapter: database.adapter as never, config: SITE }
-    );
+    await migrateData(database.adapter as never, SITE);
 
     const after = await stamps();
     expect(after.en).not.toBeNull();

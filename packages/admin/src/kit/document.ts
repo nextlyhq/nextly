@@ -73,7 +73,31 @@ export {
  * of the entry is removed from the page rather than merely covered. Whatever
  * took the body over is the only surface left that can still show them.
  */
-export { useEntryFieldsPanel } from "../components/features/entries/EntryForm/EntryFormContext";
+export {
+  useEntryFieldsPanel,
+  useEntryFieldsLayout,
+} from "../components/features/entries/EntryForm/EntryFormContext";
+
+export type {
+  EntryFieldsGroup,
+  EntryFieldsOptions,
+  EntryFieldsPresentation,
+} from "../components/features/entries/EntryForm/EntryFieldsPanel";
+
+export type {
+  EntryContentField,
+  EntryFieldsLayout,
+  EntryFieldTab,
+} from "../components/features/entries/EntryForm/entry-fields-layout";
+
+/**
+ * How a surface covering the form shows one of its fields, so a refused
+ * save's message offers "Show me" for it.
+ */
+export {
+  useRevealField,
+  type FieldReveal,
+} from "../components/features/entries/EntryForm/field-reveal";
 
 /**
  * A field telling the form it holds work the form's values do not contain.
@@ -82,6 +106,13 @@ export { useEntryFieldsPanel } from "../components/features/entries/EntryForm/En
  * state is invisible to the dirty flag everything else is derived from.
  */
 export { useReportUnsavedWork } from "../components/features/entries/EntryForm/UnsavedWorkContext";
+
+/**
+ * Says the next leave is deliberate, so the unsaved-changes guard lets it go
+ * without asking: for a surface that has just asked the author itself.
+ * Exported for the plugin surface.
+ */
+export { useLeaveWithoutWarning } from "../components/features/entries/EntryForm/UnsavedChangesGuard";
 
 /**
  * The document's actions, for a surface drawn inside its editor: the actions
@@ -173,6 +204,25 @@ export {
   type AutosaveStatus,
 } from "../hooks/useDocumentCheckpoint";
 
+/**
+ * A session on a second document, opened from inside the view of another:
+ * its latest version, its lock, a draft save, a publish, a recovery point and
+ * letting it go, each the admin's own. Exported for the plugin surface: a
+ * view that edits another document in place (a site header from a page) has
+ * no other way to lock, save or publish it.
+ *
+ * @experimental Settles with editing a second document in place.
+ */
+export {
+  useDocumentSession,
+  type DocumentSession,
+  type DocumentSessionLock,
+  type DocumentSessionOpen,
+  type DocumentSessionOutcome,
+  type DocumentSessionRefusal,
+  type DocumentSessionTarget,
+} from "../hooks/useDocumentSession";
+
 export type { DocumentLockGates } from "../components/features/entries/EntryForm/document-lock-affordances";
 
 /**
@@ -186,3 +236,19 @@ export {
   useDocumentValues,
   type DocumentField,
 } from "../components/features/entries/EntryForm/document-values";
+
+/**
+ * Where the document being edited opens by the admin's one "open this
+ * document" rule, and its list, for a document view whose way out depends on
+ * them (@experimental).
+ */
+export {
+  useDocumentOpensIn,
+  type DocumentOpensIn,
+} from "../lib/navigation/useDocumentOpensIn";
+
+/**
+ * The pin action's id among a document's actions, for a view that offers it
+ * from its own menu through `useDocumentActions().run` (@experimental).
+ */
+export { PIN_TO_DASHBOARD_ACTION } from "../components/features/dashboard/pin-action-id";

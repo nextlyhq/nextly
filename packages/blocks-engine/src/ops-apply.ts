@@ -81,7 +81,8 @@ import {
   removeNode,
   updateNode,
 } from "./tree";
-import { documentSeoIssues } from "./validation";
+import { documentCodeIssues, documentSeoIssues } from "./validation";
+import type { ValidationIssue } from "./validation-contract";
 
 /**
  * How an op is applied, beyond the document's limits.
@@ -112,7 +113,7 @@ export interface ApplyOptions {
  * unlock.
  */
 function layersLockRefusal(
-  op: Exclude<BuilderOp, { readonly kind: "envelope" | "seo" }>,
+  op: Exclude<BuilderOp, { readonly kind: "envelope" | "seo" | "code" }>,
   lockedId: string,
   where: LayersLockBreak["where"]
 ): string {
@@ -170,12 +171,12 @@ function assertKeepsLayersLocks(
   // Refused rather than exempting the inverse from the lock: see the insert
   // branch of `applyOp`. With the lock ignored, the inverse is a remove the
   // same option lets through, so the round trip still holds.
-  if (op.kind === "insert") {
+  if (op.kind === "insert" || op.kind === "turnInto") {
     const lockedId = lockedWithin(op.node);
     if (lockedId !== undefined) {
       throw new OpError(
-        `insert: ${describe(lockedId)} arrives locked, and a locked node cannot be ` +
-          `removed — so this insert could never be undone. Unlock it before ` +
+        `${op.kind}: ${describe(lockedId)} arrives locked, and a locked node cannot be ` +
+          `removed — so this ${op.kind} could never be undone. Unlock it before ` +
           `adding it to the document.`
       );
     }
@@ -847,6 +848,12 @@ export function applyOp(
     case "seo":
       return applySeo(document, op, limits);
 
+    case "code":
+      return applyCode(document, op, limits);
+
+    case "turnInto":
+      return applyTurnInto(document, op, limits, options);
+
     default: {
       // The discriminant is exhausted above, so TypeScript never reaches this.
       // A JavaScript caller, a queued agent edit and a buffer written by a
@@ -861,6 +868,79 @@ export function applyOp(
       );
     }
   }
+}
+
+/**
+ * Apply a `turnInto` op: the block at `op.id` replaced by `op.node`, a block of
+ * another type under the same id, in the same place.
+ *
+ * Held to what `remove` and `insert` are held to, because it is both at once:
+ * the block that goes must be one an insert could put back (its inverse is
+ * this op carrying it), and the block that comes must be one an insert would
+ * take, with no id the rest of the document already uses. A block of the SAME
+ * type is refused: that is an `update`, and a history entry for it should say
+ * so.
+ */
+function applyTurnInto(
+  document: BlockDocument,
+  op: Extract<BuilderOp, { kind: "turnInto" }>,
+  limits: DocumentLimits,
+  options: ApplyOptions
+): AppliedOp {
+  const nodes = document.nodes;
+  assertNodeId(op.id, "turnInto");
+  const node = findNode(nodes, op.id);
+  const location = locateNode(nodes, op.id);
+  if (node === undefined || location === undefined) {
+    throw new OpError(
+      `turnInto: no node with id ${describe(op.id)} in the document.`
+    );
+  }
+  assertIdIsUnique(nodes, op.id, "turnInto");
+  assertNodeShape(op.node, "turnInto", limits);
+  if (op.node.id !== op.id) {
+    throw new OpError(
+      `turnInto: the new block's id ${describe(op.node.id)} is not ` +
+        `${describe(op.id)}. A block keeps its id when it is turned into ` +
+        `another type, so everything addressing it still finds it.`
+    );
+  }
+  if (op.node.type === node.type) {
+    throw new OpError(
+      `turnInto: ${describe(op.id)} is already a ${describe(node.type)}. ` +
+        `Changing its props is an update.`
+    );
+  }
+  // The block that goes is what the inverse puts back, so it must be one the
+  // same op would accept, as a remove's subtree must be insertable.
+  assertSubtreeIdsAreUnique(nodes, node, "turnInto");
+  assertNodeShape(node, "turnInto", SHAPE_ONLY_LIMITS);
+  if (location.parent !== undefined) {
+    assertIdIsUnique(nodes, location.parent.id, "turnInto");
+  }
+  assertWalkable(
+    measured(() => treeDepth([op.node]), "turnInto"),
+    "turnInto"
+  );
+  assertKeepsLayersLocks(nodes, op, options);
+  const at = positionOf(location);
+  const without = accepted(
+    nodes,
+    removeNode(nodes, op.id),
+    `turnInto: the document did not accept removing ${describe(op.id)}.`
+  );
+  const placed = accepted(
+    without,
+    insertNode(without, snapshot(op.node), at),
+    `turnInto: the document did not accept the new ${describe(op.node.type)} ` +
+      `in place of ${describe(op.id)}. It may carry an id the document ` +
+      `already uses.`
+  );
+  assertFitsCaps(document, withNodes(document, placed), "turnInto", limits);
+  return {
+    document: withNodes(document, placed),
+    inverse: { kind: "turnInto", id: op.id, node: snapshot(node) },
+  };
 }
 
 /**
@@ -928,6 +1008,27 @@ function applyEnvelope(
   };
 }
 
+/** A document setting an op writes whole: its key, and what it is called. */
+interface WholeSetting {
+  readonly key: "seo" | "code";
+  /** What the document holds there, in an op's refusal: "metadata". */
+  readonly noun: string;
+  /** Its problems, judged by its shape alone, as a save judges it. */
+  readonly issues: (value: unknown) => ValidationIssue[];
+}
+
+const SEO_SETTING: WholeSetting = {
+  key: "seo",
+  noun: "metadata",
+  issues: documentSeoIssues,
+};
+
+const CODE_SETTING: WholeSetting = {
+  key: "code",
+  noun: "page code",
+  issues: documentCodeIssues,
+};
+
 /**
  * Apply a `seo` op: write a document's metadata whole, or remove it.
  *
@@ -940,61 +1041,105 @@ function applySeo(
   op: Extract<BuilderOp, { kind: "seo" }>,
   limits: DocumentLimits
 ): AppliedOp {
-  const written: unknown = op.seo;
-  if (written !== null) assertDocumentSeo(written);
+  const { result, prior } = writeWholeSetting(
+    document,
+    SEO_SETTING,
+    op.seo,
+    limits
+  );
+  // Detached, as `envelope`'s prior values are.
+  return {
+    document: result,
+    inverse: { kind: "seo", seo: prior === undefined ? null : snapshot(prior) },
+  };
+}
+
+/**
+ * Apply a `code` op: write the code a document adds to its own page whole,
+ * or remove it, held exactly as a `seo` op is.
+ */
+function applyCode(
+  document: BlockDocument,
+  op: Extract<BuilderOp, { kind: "code" }>,
+  limits: DocumentLimits
+): AppliedOp {
+  const { result, prior } = writeWholeSetting(
+    document,
+    CODE_SETTING,
+    op.code,
+    limits
+  );
+  return {
+    document: result,
+    inverse: {
+      kind: "code",
+      code: prior === undefined ? null : snapshot(prior),
+    },
+  };
+}
+
+/**
+ * Write `setting` whole, or remove it for `null`: refused where the value is
+ * not one a save would accept or the edit changes nothing, and judged against
+ * the document's caps. Answers the document it makes and the value it
+ * replaced, which the op's inverse writes back.
+ */
+function writeWholeSetting(
+  document: BlockDocument,
+  setting: WholeSetting,
+  written: unknown,
+  limits: DocumentLimits
+): { result: BlockDocument; prior: unknown } {
+  if (written !== null) assertWholeSetting(setting, written);
   const held = document as unknown as Record<string, unknown>;
   const settingsValue = ownValue(held, "settings");
   const settings = isPlainRecord(settingsValue) ? settingsValue : {};
-  const prior = ownValue(settings, "seo");
+  const prior = ownValue(settings, setting.key);
   const unchanged =
     written === null
       ? prior === undefined
       : equalWithin(prior, written, COMPARISON_BUDGET);
   if (unchanged) {
     throw new OpError(
-      `seo: the document already holds this metadata, so the edit changes ` +
-        `nothing. A history entry for it would undo to no visible effect.`
+      `${setting.key}: the document already holds this ${setting.noun}, so ` +
+        `the edit changes nothing. A history entry for it would undo to no ` +
+        `visible effect.`
     );
   }
-  const result = withSeo(held, settings, written);
-  assertFitsCaps(document, result, "seo", limits);
-  return {
-    document: result,
-    // Detached, as `envelope`'s prior values are.
-    inverse: {
-      kind: "seo",
-      seo: prior === undefined ? null : snapshot(prior),
-    },
-  };
+  const result = withSetting(held, settings, setting.key, written);
+  assertFitsCaps(document, result, setting.key, limits);
+  return { result, prior };
 }
 
-/** Refuse a `seo` op's value that is not metadata a save would accept. */
-function assertDocumentSeo(written: unknown): void {
+/** Refuse an op's value that is not one a save would accept for `setting`. */
+function assertWholeSetting(setting: WholeSetting, written: unknown): void {
   if (!isPlainRecord(written) || !isJsonValue(written)) {
     throw new OpError(
-      `seo: ${describe(written)} is not a document's metadata. A seo op ` +
-        `carries the metadata record, or null to remove it.`
+      `${setting.key}: ${describe(written)} is not a document's ` +
+        `${setting.noun}. A ${setting.key} op carries the record, or null ` +
+        `to remove it.`
     );
   }
-  const problem = documentSeoIssues(written).find(
-    issue => issue.severity === "error"
-  );
+  const problem = setting
+    .issues(written)
+    .find(issue => issue.severity === "error");
   if (problem !== undefined) {
-    throw new OpError(`seo: ${problem.path}: ${problem.message}`);
+    throw new OpError(`${setting.key}: ${problem.path}: ${problem.message}`);
   }
 }
 
-/** The document with `written` as its metadata, or none for null. */
-function withSeo(
+/** The document with `written` at `settings[key]`, or none there for null. */
+function withSetting(
   held: Record<string, unknown>,
   settings: Record<string, unknown>,
+  key: WholeSetting["key"],
   written: unknown
 ): BlockDocument {
   const nextSettings: Record<string, unknown> = { ...settings };
-  if (written === null) delete nextSettings.seo;
-  else nextSettings.seo = snapshot(written);
+  if (written === null) delete nextSettings[key];
+  else nextSettings[key] = snapshot(written);
   const next: Record<string, unknown> = { ...held };
-  // Removed rather than left empty, so undoing a document's first metadata
+  // Removed rather than left empty, so undoing a document's first setting
   // gives back the document it was.
   if (Object.keys(nextSettings).length === 0) delete next.settings;
   else next.settings = nextSettings;

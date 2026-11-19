@@ -15,10 +15,20 @@ export const SHOWN_ON_WORDS = {
   none: "Not shown on any builder page yet",
   /** A place the reader may open, as its row reads. */
   place: (title: string, block: string): string => `${title}, ${block}`,
-  /** The places past the first ten, which open the full list. */
-  more: (count: number): string => `and ${String(count)} more`,
+  /**
+   * The places past the first ten, which open the full list; "at least"
+   * where the index's read stopped at its bound.
+   */
+  more: (count: number, floor = false): string =>
+    `and ${floor ? "at least " : ""}${String(count)} more`,
   /** The places in documents the reader may not open. */
-  hidden: (count: number): string => `and ${String(count)} you can't open`,
+  hidden: (count: number, floor = false): string =>
+    `and ${floor ? "at least " : ""}${String(count)} you can't open`,
+  /** Places only in drafts this answer didn't check the reader may open. */
+  unchecked: (count: number): string =>
+    `and ${String(count)} in unpublished drafts`,
+  /** The read stopped at its bound with nothing else to count. */
+  maybeMore: "and maybe more",
   /** A place only in another language, which the builder doesn't edit. */
   anotherLanguage: "in another language",
   /** The full list's description, and a read that failed. */

@@ -110,11 +110,13 @@ export const GET = privateToSession(
     );
     assertComparisonRequest(query);
 
+    // Asked in the language the comparison pairs in, where it names one.
     const { user, authenticatedScope } = await requireRouteVersionReadAccess(
       request,
       scopeKind,
       slug,
-      id
+      id,
+      query.locale
     );
 
     const diff = await compareDocumentVersions({

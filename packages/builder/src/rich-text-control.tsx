@@ -8,14 +8,20 @@
  */
 
 import {
+  isOneParagraphProp,
   isRichTextValue,
   richTextToPlainText,
+  toOneParagraph,
   type BlockDocument,
+  type RichTextValue,
 } from "@nextlyhq/blocks-engine";
+import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
 import type { ContentControlProps, ContentServices } from "./content-services";
 import { propLabel } from "./inspector";
+import { FULL_EDITOR_WORDS, RichTextFullEditor } from "./rich-text-full-editor";
+import { joinTyping } from "./typing-run";
 
 /** The live attachment of the shared editor to this field, while focused. */
 interface RichTextSession {
@@ -25,6 +31,17 @@ interface RichTextSession {
   /** Keep this attachment against anything else asking for the editor. */
   hold(): void;
 }
+
+/** Said where the host has no editor for the panel: where it is edited. */
+function canvasOnlyNote(oneParagraph: boolean): string {
+  return oneParagraph
+    ? "Text is edited on the canvas here."
+    : "Rich text is edited on the canvas here.";
+}
+
+/** What a paste that lost formatting says under a one-paragraph field. */
+export const ONE_PARAGRAPH_DROPPED =
+  "Text keeps words, bold, italic and links. Use Rich text for headings and lists";
 
 /**
  * A passage as one string, to tell one stored passage from another; empty
@@ -38,7 +55,72 @@ function passageKey(value: unknown): string {
   }
 }
 
-/** The Content tab's rich-text prop: its name, and the passage under it. */
+/** What the field's editor is attached with, for a one-paragraph value. */
+type ParagraphMode = Parameters<
+  Awaited<
+    ReturnType<NonNullable<ContentServices["loadRichTextEditor"]>>
+  >["attach"]
+>[2];
+
+/**
+ * A one-paragraph value's attachment: held to one paragraph by the engine's
+ * restriction, a paste that lost formatting said, and every change written as
+ * it is typed, in this attachment's one run of typing.
+ */
+function typedLive(
+  oneParagraph: boolean,
+  run: object,
+  onDropped: (dropped: boolean) => void,
+  write: (value: unknown) => unknown
+): ParagraphMode | undefined {
+  if (!oneParagraph) return undefined;
+  return {
+    paragraph: {
+      restrict: toOneParagraph,
+      onDropped: () => onDropped(true),
+      onChange: next => {
+        joinTyping(run, () => write(next));
+      },
+    },
+  };
+}
+
+/** Attach the shared editor, with the one-paragraph mode where there is one. */
+function attachField(
+  editor: Awaited<
+    ReturnType<NonNullable<ContentServices["loadRichTextEditor"]>>
+  >,
+  element: HTMLElement,
+  value: unknown,
+  mode: ParagraphMode | undefined
+) {
+  return mode === undefined
+    ? editor.attach(element, value)
+    : editor.attach(element, value, mode);
+}
+
+/**
+ * Write what the editor read when the field is left: restricted to one
+ * paragraph, and joined to the attachment's run of typing, for a value that
+ * is one; as read otherwise.
+ */
+function writeRead(
+  read: unknown,
+  oneParagraph: boolean,
+  run: object | null,
+  write: (value: unknown) => BlockDocument | null | void
+): BlockDocument | null | void {
+  if (!oneParagraph || run === null) return write(read);
+  return joinTyping(run, () => write(toOneParagraph(read).value));
+}
+
+/**
+ * The Content tab's rich-text prop: its name, and the passage under it.
+ *
+ * A whole passage (a Rich text's) also says where it is best edited, on the
+ * canvas with the format bar, and offers "Open the full editor" for longer
+ * work, where the host has an editor to open.
+ */
 export function RichTextControl({
   id,
   prop,
@@ -46,21 +128,109 @@ export function RichTextControl({
   onCommit,
   services,
 }: ContentControlProps): React.JSX.Element {
+  const oneParagraph = isOneParagraphProp(prop.schema);
+  const label = propLabel(prop.name, prop.schema);
+  const write = (value: unknown) => onCommit(prop.name, value);
   return (
-    <div className="nx-inspector__field" data-content-control="richText">
+    <div
+      className="nx-inspector__field"
+      data-content-control={prop.schema.type}
+    >
       <p className="nx-inspector__field-name" id={`${id}-label`}>
-        {propLabel(prop.name, prop.schema)}
+        {label}
       </p>
       <RichTextField
         id={id}
         labelledBy={`${id}-label`}
         value={prop.value}
         disabled={disabled}
-        onCommit={value => onCommit(prop.name, value)}
+        onCommit={write}
         services={services}
+        oneParagraph={oneParagraph}
       />
+      {oneParagraph || services?.loadRichTextEditor === undefined ? null : (
+        <FullEditorEntry
+          label={label}
+          value={prop.value}
+          disabled={disabled}
+          onCommit={write}
+          services={services}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * The panel's line on where a Rich text is edited, and the button that opens
+ * the full editor; closing it puts the focus back on the button, beside the
+ * block still selected.
+ */
+function FullEditorEntry({
+  label,
+  value,
+  disabled,
+  onCommit,
+  services,
+}: {
+  label: string;
+  value: unknown;
+  disabled: boolean;
+  onCommit: (value: unknown) => BlockDocument | null | void;
+  services: ContentServices;
+}): React.JSX.Element {
+  const [open, setOpen] = React.useState(false);
+  const button = React.useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <p className="nx-inspector__note">{FULL_EDITOR_WORDS.line}</p>
+      <Button
+        ref={button}
+        type="button"
+        size="sm"
+        variant="outline"
+        className="nx-inspector__full-editor"
+        disabled={disabled}
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+      >
+        {FULL_EDITOR_WORDS.open}
+      </Button>
+      {open ? (
+        <RichTextFullEditor
+          label={label}
+          value={value}
+          onCommit={onCommit}
+          services={services}
+          onClose={() => setOpen(false)}
+          returnFocus={() => button.current}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * A passage's words for the field while no editor is attached: one line per
+ * block, and one per item of a list, as the editor will lay them out, so the
+ * field is as tall before it is focused as after.
+ */
+export function passagePreview(passage: RichTextValue): string {
+  const lines: string[] = [];
+  for (const block of passage.root.children) {
+    const items =
+      block.type === "list" && Array.isArray(block.children)
+        ? block.children
+        : [block];
+    for (const item of items) {
+      lines.push(
+        richTextToPlainText({
+          root: { ...passage.root, children: [item] },
+        }).trim()
+      );
+    }
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -83,10 +253,18 @@ export function RichTextField({
   disabled,
   onCommit,
   services,
+  oneParagraph = false,
 }: {
   id: string;
   /** The id of the element naming the field. */
   labelledBy: string;
+  /**
+   * The value is one paragraph of words with bold, italic, links and line
+   * breaks (a Text's): edited held to that, and written as it is typed, the
+   * typing joined into one step of the history, so the canvas shows the words
+   * as they go in.
+   */
+  oneParagraph?: boolean;
   /** The passage stored, or `undefined` for none. */
   value: unknown;
   disabled: boolean;
@@ -108,6 +286,12 @@ export function RichTextField({
   >(null);
   const load = services?.loadRichTextEditor;
   const editable = !disabled && load !== undefined;
+  // A one-paragraph value is read through its restriction, so an older
+  // string opens as its words and line breaks.
+  const passage = oneParagraph ? toOneParagraph(value).value : value;
+  // The run of typing this attachment's writes join, one per attachment.
+  const typing = React.useRef<object | null>(null);
+  const [dropped, setDropped] = React.useState(false);
 
   // Loaded as soon as the field is drawn, so focusing it attaches at once
   // rather than after a fetch the author would type through.
@@ -132,7 +316,15 @@ export function RichTextField({
       setLoading(false);
     }
     if (!focused.current || session.current !== null) return;
-    const attachment = editor.attach(element, value);
+    typing.current = {};
+    const attachment = attachField(
+      editor,
+      element,
+      passage,
+      typedLive(oneParagraph, typing.current, setDropped, next =>
+        latestWrite.current(next)
+      )
+    );
     if (attachment.status === "refused") {
       setRefused(attachment.reason);
       return;
@@ -155,7 +347,13 @@ export function RichTextField({
       return null;
     }
     // Read and written BEFORE letting go: the words exist in the editor alone.
-    const written = onCommit(live.read());
+    // A one-paragraph value is written restricted, joining its typing run.
+    const written = writeRead(
+      live.read(),
+      oneParagraph,
+      typing.current,
+      onCommit
+    );
     if (written === null) {
       // Refused (a size cap, a lock that arrived): the passage stays open with
       // the author's words, held against anything else taking the editor,
@@ -173,14 +371,20 @@ export function RichTextField({
     release.current?.();
     release.current = null;
     session.current = null;
+    typing.current = null;
     live.detach();
     setRefused(null);
+    setDropped(false);
   };
+
+  // A write as the author types, through the latest render's write path.
+  const latestWrite = React.useRef(onCommit);
+  latestWrite.current = onCommit;
 
   // While no editor is attached, the field shows the passage's words, set on
   // the element rather than rendered as children: the editor takes the
   // element's contents over once attached, and React must not own them.
-  const preview = isRichTextValue(value) ? richTextToPlainText(value) : "";
+  const preview = isRichTextValue(passage) ? passagePreview(passage) : "";
   // A stored passage that changes under words the document refused (a Reset,
   // an undo) is what the page now holds: the refused draft is let go and the
   // field shows the stored one, rather than the draft and its notice sitting
@@ -262,10 +466,13 @@ export function RichTextField({
               : "This passage can't be edited here."}
         </p>
       )}
-      {load === undefined ? (
-        <p className="nx-inspector__note">
-          Rich text is edited on the canvas here.
+      {dropped ? (
+        <p className="nx-inspector__note" role="status">
+          {ONE_PARAGRAPH_DROPPED}
         </p>
+      ) : null}
+      {load === undefined ? (
+        <p className="nx-inspector__note">{canvasOnlyNote(oneParagraph)}</p>
       ) : null}
     </>
   );

@@ -21,6 +21,7 @@ import {
   lockedForRead,
   type ReadingAdapter,
 } from "../../shared/lib/read-transaction-scope";
+import { RELEASE_PUBLISHED_STATUS } from "../releases/release-scope";
 import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 import { draftsKeptByPart } from "../versions/part-drafts";
 
@@ -66,6 +67,11 @@ export interface LocalizedFieldRef {
    * `false` would read as blank), so it is non-blank when not null.
    */
   nonText?: boolean;
+  /**
+   * The field's storage is JSON (a structure, a JSON value, a list kept as one), which some
+   * databases hand back as text: only such a field's text is read back to the value it encodes.
+   */
+  json?: boolean;
 }
 
 /** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */
@@ -1240,6 +1246,12 @@ export interface TranslationStatusArgs {
    * draft-only translation as present. Undefined = report every row (admin / no per-locale status).
    */
   statusValues?: readonly string[];
+  /**
+   * The documents a due release reveals to this read (`PopulateCompanionArgs.revealed`): public
+   * in every language before the release's own rows are written, as the read already admits
+   * them, so each of their languages is reported as the release will publish it.
+   */
+  revealed?: ReadonlySet<unknown>;
 }
 
 /**
@@ -1431,6 +1443,7 @@ export async function populateTranslationStatus(
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
+    const revealed = args.revealed?.has(row[idKey]) === true;
     const meta: Record<string, LocaleTranslationMeta> = {};
     for (const code of locales) {
       meta[code] = buildLocaleMeta({
@@ -1440,6 +1453,7 @@ export async function populateTranslationStatus(
         defaultLocale,
         hasStatus,
         statusValues: args.statusValues,
+        revealed,
         isStale: (locale: string) =>
           staleKeys.has(`${String(row[idKey])}::${locale}`),
         fields: fieldProvenance?.get(
@@ -1563,6 +1577,11 @@ function buildLocaleMeta(args: {
   hasStatus: boolean;
   statusValues: readonly string[] | undefined;
   /**
+   * Whether a due release reveals the document: each language's row is then taken whatever its
+   * status, and reported in the status the release publishes it in.
+   */
+  revealed: boolean;
+  /**
    * Whether the database reported this locale as stale against the source.
    *
    * `false` covers both "the source has not moved" and "nothing is known", because the caller
@@ -1575,7 +1594,9 @@ function buildLocaleMeta(args: {
 }): LocaleTranslationMeta {
   const { code, perLocaleRows, localizedFields, defaultLocale, hasStatus } =
     args;
-  const companionRow = rowInStatusScope(perLocaleRows[code], args.statusValues);
+  const companionRow = args.revealed
+    ? perLocaleRows[code]
+    : rowInStatusScope(perLocaleRows[code], args.statusValues);
 
   const hasContent =
     !!companionRow &&
@@ -1584,7 +1605,10 @@ function buildLocaleMeta(args: {
     translated: code === defaultLocale ? true : hasContent,
   };
 
-  const status = companionRow?._status;
+  const status =
+    args.revealed && companionRow
+      ? RELEASE_PUBLISHED_STATUS
+      : companionRow?._status;
   if (hasStatus && typeof status === "string") entry.status = status;
 
   // Only ever set to `true`. Left absent when the comparison cannot answer, so a consumer reading

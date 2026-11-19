@@ -11,8 +11,7 @@
 import { sql } from "drizzle-orm";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { previewUpgrade, runUpgrade } from "../../../cli/commands/upgrade";
-import { UPGRADE_STEPS } from "../../../cli/commands/upgrade-steps";
+import { MIGRATE_DATA_STEPS } from "../../../cli/commands/upgrade-steps";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { createDynamicHandlers } from "../../../routeHandler";
 import type { TestNextly } from "../../../plugins/test-nextly";
@@ -28,7 +27,9 @@ import { _resetPerLanguageStorage } from "../per-language-storage";
 import {
   ARTICLES,
   bootSite,
+  migrateData,
   openUpgradeDatabase,
+  previewMigrateData,
   siteWithLanguages,
   storeUnderCode,
   type UpgradeDatabase,
@@ -131,16 +132,9 @@ describeEachDialect(
 
       // The conversion alone: a later step that rewrites whole-document drafts gives them new
       // keys, which would hide a key this one left under the older code.
-      await runUpgrade(
-        { confirmBackedUp: true },
-        {
-          adapter: database!.adapter as never,
-          config: UNDERSCORED,
-          steps: UPGRADE_STEPS.filter(step =>
+      await migrateData(database!.adapter as never, UNDERSCORED, MIGRATE_DATA_STEPS.filter(step =>
             step.title.startsWith("convert language codes")
-          ),
-        }
-      );
+          ));
 
       expect(await storedLanguages()).toEqual(["en", "pt-BR"]);
       const ref = {
@@ -155,10 +149,7 @@ describeEachDialect(
 
     it("serves the old code as the standard one once upgraded", async () => {
       const id = await legacyArticle();
-      await runUpgrade(
-        { confirmBackedUp: true },
-        { adapter: database!.adapter as never, config: UNDERSCORED }
-      );
+      await migrateData(database!.adapter as never, UNDERSCORED);
 
       const t = await bootSite(database!, "upgraded", UNDERSCORED);
       const read = (locale: string) =>
@@ -176,10 +167,7 @@ describeEachDialect(
     it("lists each conversion in a dry run", async () => {
       await legacyArticle();
 
-      const plan = await previewUpgrade(
-        { confirmBackedUp: true },
-        { adapter: database!.adapter as never, config: UNDERSCORED }
-      );
+      const plan = await previewMigrateData(database!.adapter as never, UNDERSCORED);
 
       expect(plan.report?.move).toContainEqual(
         expect.stringMatching(/pt_BR.*pt-BR/)
@@ -194,12 +182,12 @@ describeEachDialect(
         config: BOTH_SPELLINGS,
       };
 
-      const plan = await previewUpgrade({ confirmBackedUp: true }, deps);
+      const plan = await previewMigrateData(deps.adapter, deps.config);
       expect(plan.refusals).toEqual([
         expect.stringMatching(/pt_BR.*pt-BR|pt-BR.*pt_BR/),
       ]);
 
-      await expect(runUpgrade({ confirmBackedUp: true }, deps)).rejects.toThrow(
+      await expect(migrateData(deps.adapter, deps.config)).rejects.toThrow(
         /pt_BR.*pt-BR|pt-BR.*pt_BR/
       );
       expect(await storedLanguages()).toEqual(["en", "pt_BR"]);
@@ -207,10 +195,7 @@ describeEachDialect(
 
     it("answers a request naming the old code with a deprecation, and one naming the standard code without", async () => {
       const id = await legacyArticle();
-      await runUpgrade(
-        { confirmBackedUp: true },
-        { adapter: database!.adapter as never, config: UNDERSCORED }
-      );
+      await migrateData(database!.adapter as never, UNDERSCORED);
       await bootSite(database!, "upgraded", UNDERSCORED);
       const read = (locale: string) => {
         const url = new URL(
@@ -260,10 +245,7 @@ describeEachDialect(
 
     it("starts once upgraded, saying which code the configuration should name", async () => {
       await legacyArticle();
-      await runUpgrade(
-        { confirmBackedUp: true },
-        { adapter: database!.adapter as never, config: UNDERSCORED }
-      );
+      await migrateData(database!.adapter as never, UNDERSCORED);
       const { warnings, logger } = warningsKept();
 
       await bootSite(database!, "upgraded", UNDERSCORED, logger);

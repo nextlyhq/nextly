@@ -617,3 +617,39 @@ export {
   type SharedValue,
   type BatchStyleWrite,
 } from "./batch-style";
+
+/**
+ * Page checks: the check contract, the findings with the setting that fixes
+ * each, the groups, and the builder's own checks, run over a document.
+ *
+ * From this entry because the checks are plain functions over a document and
+ * the registry: a script, a route or an agent asking what a stored page needs
+ * gets the findings the editor lists for its draft. The list itself is
+ * behind the client banner in `./shell`.
+ *
+ * @experimental
+ */
+export {
+  pageCheckGroups,
+  runPageChecks,
+  type CheckedPage,
+  type PageCheck,
+  type PageCheckGroup,
+  type PageCheckGroupView,
+  type PageCheckNote,
+  type PageCheckReport,
+  type PageCheckResult,
+  type PageFinding,
+  type PageRegionDocument,
+  type ResolvedPage,
+} from "./page-checks/page-checks";
+export { CORE_PAGE_CHECKS } from "./page-checks/core-checks";
+// What a caller knows of the page beyond its document, for the content,
+// data and publishing checks: a script hands in the same facts the editor does.
+export type {
+  BindingToFix,
+  DoubledRegionFact,
+  PageDataFact,
+  PageFacts,
+  UnpublishedPart,
+} from "./page-checks/page-facts";

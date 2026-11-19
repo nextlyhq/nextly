@@ -30,6 +30,7 @@ import {
   getMigrationJournalFromDI,
 } from "../../../dispatcher/helpers/di";
 import { NextlyError } from "../../../errors";
+import { reservedSystemFieldNames } from "../../../lib/system-columns";
 import { getProductionNotifier } from "../../../runtime/notifications/index";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { consoleLogger } from "../../../shared/types";
@@ -359,27 +360,57 @@ export async function applyCollectionSchemaChange(
 /**
  * The fields a schema save sends, as it writes them: each relationship the editor read from an
  * earlier-shaped one written back in its stored shape (`withStoredRelationshipOptions`), matched
- * through the renames the save accepted.
+ * through the renames the save accepted; and, where asked, each stored built-in field the save
+ * left out, kept as stored (`storedBuiltInsLeftOut`).
  *
  * @param sent the field list the save sends
  * @param entity the collection's or Single's row the save is checked and written against
  * @param renames the dialog's answers to the renames its preview paired, when it has any
+ * @param options.keepBuiltIns keep each stored built-in field the save left out: a collection's,
+ *   which can hold one a demote stored. A Single never stores one (a demote moves collections
+ *   only, the admin's Singles store none, and a code-first Single is read-only here).
  */
 export function fieldsAsStored<F>(
   sent: readonly F[],
   entity: { tableName: string; fields?: readonly unknown[] | null },
-  renames: readonly BrowserRenameResolution[] = []
+  renames: readonly BrowserRenameResolution[] = [],
+  options: { keepBuiltIns?: boolean } = {}
 ): F[] {
   const stored = (entity.fields ?? []) as unknown as FieldDefinition[];
-  return withStoredRelationshipOptions(
-    sent,
-    stored,
-    acceptedFieldRenames(
-      renames,
-      entity.tableName,
+  const kept = options.keepBuiltIns ? storedBuiltInsLeftOut(stored, sent) : [];
+  return [
+    ...(kept as unknown as F[]),
+    ...withStoredRelationshipOptions(
+      sent,
       stored,
-      sent as unknown as FieldDefinition[]
-    )
+      acceptedFieldRenames(
+        renames,
+        entity.tableName,
+        stored,
+        sent as unknown as FieldDefinition[]
+      )
+    ),
+  ];
+}
+
+/**
+ * The stored top-level fields named as a built-in (`reservedSystemFieldNames("builder")`: a
+ * collection's and a Single's `title`, `slug` and the rest) that `sent` leaves out. The admin
+ * shows these as built-in rows and never sends them, so a save leaving one out has not removed
+ * it: a `title` a code-first config declared and `nextly db:sync --demote` stored, translated as a
+ * text field is on a translated collection, would otherwise read as leaving translation, offered
+ * as renamed into a field the save adds or dropped with its translations.
+ */
+function storedBuiltInsLeftOut(
+  stored: readonly FieldDefinition[],
+  sent: readonly unknown[]
+): FieldDefinition[] {
+  const builtIn = new Set(reservedSystemFieldNames("builder"));
+  const sentNames = new Set(
+    sent.map(field => (field as { name?: unknown } | null)?.name)
+  );
+  return stored.filter(
+    field => builtIn.has(field.name) && !sentNames.has(field.name)
   );
 }
 
@@ -1012,6 +1043,7 @@ async function reconcileCompanion(args: {
       kind: "collection",
       slug,
       tableName,
+      renamed: args.companionRename,
     });
   } catch (err) {
     // A refused setting and a busy-table stop are passed on as they are. Anything else: the

@@ -1,6 +1,6 @@
 /**
  * An image's source and alt text as groups: which props join, which mode the
- * stored values are in, read as the block reads them, and what each choice
+ * stored values are in, read as the block reads them, and what each change
  * writes.
  */
 import { describe, expect, it } from "vitest";
@@ -8,8 +8,9 @@ import { describe, expect, it } from "vitest";
 import {
   addressChanges,
   mediaPickChanges,
-  altModeChanges,
   altModeOf,
+  altTextChanges,
+  decorativeChanges,
   imageGroupOf,
   sourceModeOf,
   type ImageAltGroup,
@@ -130,48 +131,44 @@ describe("what a screen reader is given", () => {
     expect(altModeOf(alt, { alt: "" })).toBe("custom");
   });
 
-  it("writes From library by removing the page's alt and the mark", () => {
+  it("stores typed words as the page's own", () => {
+    expect(altTextChanges(alt, " A tabby cat ", {}, "Lib")).toStrictEqual({
+      alt: "A tabby cat",
+    });
     expect(
-      altModeChanges(alt, "library", { alt: "Words", decorative: true }, "Lib")
-    ).toStrictEqual({ alt: undefined, decorative: undefined });
-    expect(
-      altModeChanges(alt, "library", { alt: "Words" }, "Lib")
-    ).toStrictEqual({
+      altTextChanges(alt, "New words", { alt: "Old words" }, undefined)
+    ).toStrictEqual({ alt: "New words" });
+  });
+
+  it("stores nothing for the words already in use", () => {
+    // The library's words, shown as the value in use, committed unchanged:
+    // storing them would stop the image following the library's.
+    expect(altTextChanges(alt, "Lib", {}, "Lib")).toStrictEqual({});
+    expect(altTextChanges(alt, "Own", { alt: "Own" }, "Lib")).toStrictEqual({});
+  });
+
+  it("removes the page's own words for an emptied field, so the library's apply", () => {
+    expect(altTextChanges(alt, "  ", { alt: "Old" }, "Lib")).toStrictEqual({
       alt: undefined,
     });
+    // Nothing stored and nothing typed: nothing to write.
+    expect(altTextChanges(alt, "", {}, undefined)).toStrictEqual({});
+  });
+
+  it("marks the image decorative alone, keeping the alt for switching back", () => {
+    expect(decorativeChanges(alt, true, { alt: "Kept" })).toStrictEqual({
+      decorative: true,
+    });
+    expect(
+      decorativeChanges(alt, false, { alt: "Kept", decorative: true })
+    ).toStrictEqual({ decorative: undefined });
   });
 
   it("names no mark for a stored false, which the block reads as not decorative", () => {
     // Inside a content-only area the mark may not change while the alt may,
-    // so naming it would refuse a choice that changes nothing it means.
-    expect(
-      altModeChanges(alt, "library", { alt: "Words", decorative: false }, "Lib")
-    ).toStrictEqual({ alt: undefined });
-    expect(
-      altModeChanges(alt, "custom", { decorative: false }, "Lib")
-    ).toStrictEqual({ alt: "Lib" });
-  });
-
-  it("writes Custom from the library's words, so a reader hears the same", () => {
-    expect(altModeChanges(alt, "custom", {}, "A tabby cat")).toStrictEqual({
-      alt: "A tabby cat",
-    });
-    expect(altModeChanges(alt, "custom", {}, undefined)).toStrictEqual({
-      alt: "",
-    });
-  });
-
-  it("keeps the page's own alt when Custom unmarks a decorative image", () => {
-    expect(
-      altModeChanges(alt, "custom", { alt: "Kept", decorative: true }, "Lib")
-    ).toStrictEqual({ decorative: undefined });
-  });
-
-  it("writes Decorative as the mark alone, keeping the alt for switching back", () => {
-    expect(
-      altModeChanges(alt, "decorative", { alt: "Kept" }, "Lib")
-    ).toStrictEqual({
-      decorative: true,
-    });
+    // so naming it would refuse a change that means nothing.
+    expect(decorativeChanges(alt, false, { decorative: false })).toStrictEqual(
+      {}
+    );
   });
 });

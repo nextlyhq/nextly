@@ -31,6 +31,9 @@ import {
   COMPONENT_LIST_TOOLS_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
+  FONTS_PAGE_COMPONENT,
+  LAYOUT_LIST_TOOLS_COMPONENT,
+  NEW_PAGE_DIALOG_COMPONENT,
   SINGLE_SHOWN_ON_SECTION_COMPONENT,
   OVERVIEW_PAGE_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
@@ -43,6 +46,7 @@ import { TRANSFER_IMPORT_COMPONENT } from "../transfer/transfer-contract";
 import type { BindingsToFixCard as BindingsToFixCardPart } from "./bindings-report/BindingsToFixCard";
 import type { BindingsToFixPage as BindingsToFixPagePart } from "./bindings-report/BindingsToFixPage";
 import type { BlocksField as BlocksFieldPart } from "./BlocksField";
+import { startBuilderOpen } from "./builder-open-start";
 import type {
   ComponentListTools as ComponentListToolsPart,
   ComponentStoreDeleteHost as ComponentStoreDeleteHostPart,
@@ -51,7 +55,10 @@ import type {
 import type { PageBuilderView as PageBuilderViewPart } from "./editor/PageBuilderView";
 import { registerEntryDesignColumn } from "./entry-design-column";
 import type { EntryDesignSection as EntryDesignSectionPart } from "./EntryDesignSection";
-import { lazyPart, withEditorStylesheet } from "./lazy-part";
+import type { FontsPage as FontsPagePart } from "./fonts/FontsPage";
+import { lazyPart, preloadPart, withEditorStylesheet } from "./lazy-part";
+import type { LayoutListTools as LayoutListToolsPart } from "./make-default-action";
+import type { NewPageCreateDialog as NewPageCreateDialogPart } from "./new-page/new-page-dialog";
 import type { PageBuilderOverview as PageBuilderOverviewPart } from "./overview/PageBuilderOverview";
 import { PUBLISHING_ACTIONS } from "./publishing-actions";
 import type { RemoveLayoutToolbarSlot as RemoveLayoutToolbarSlotPart } from "./RemoveLayoutAction";
@@ -96,11 +103,26 @@ const DeleteComponentReplacement: typeof DeleteComponentReplacementPart =
   lazyPart(() =>
     import("./DeleteComponentAction").then(m => m.DeleteComponentReplacement)
   );
+const LayoutListTools: typeof LayoutListToolsPart = lazyPart(() =>
+  import("./make-default-action").then(m => m.LayoutListTools)
+);
 const EntryDesignSection: typeof EntryDesignSectionPart = lazyPart(() =>
   import("./EntryDesignSection").then(m => m.EntryDesignSection)
 );
 const ShownOnSection: typeof ShownOnSectionPart = lazyPart(() =>
   import("./shown-on/ShownOnSection").then(m => m.ShownOnSection)
+);
+// The Fonts page draws the builder's own Fonts screen, so it comes with the
+// editor's stylesheet.
+const FontsPage: typeof FontsPagePart = lazyPart(() =>
+  withEditorStylesheet(import("./fonts/FontsPage")).then(m => m.FontsPage)
+);
+// With the editor's stylesheet, which sizes the Header & footer menu's
+// pictures: the dialog opens over a list, where the editor's isn't loaded.
+const NewPageCreateDialog: typeof NewPageCreateDialogPart = lazyPart(() =>
+  withEditorStylesheet(import("./new-page/new-page-dialog")).then(
+    m => m.NewPageCreateDialog
+  )
 );
 const PageBuilderOverview: typeof PageBuilderOverviewPart = lazyPart(() =>
   import("./overview/PageBuilderOverview").then(m => m.PageBuilderOverview)
@@ -165,6 +187,9 @@ const COMPONENTS = {
   // The editor itself, drawn by the admin as a view of the document at the
   // address the blocks field's card links to.
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
+  // The New page dialog's body, opened from "+ New" on a list whose
+  // entries open in the builder.
+  [NEW_PAGE_DIALOG_COMPONENT]: NewPageCreateDialog,
   // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
   // The overview the rail item opens.
@@ -172,10 +197,15 @@ const COMPONENTS = {
   // The "Bindings to fix" page and its dashboard card.
   [BINDINGS_TO_FIX_PAGE_COMPONENT]: BindingsToFixPage,
   [BINDINGS_TO_FIX_CARD_COMPONENT]: BindingsToFixCard,
+  // The site's fonts, on a page of their own.
+  [FONTS_PAGE_COMPONENT]: FontsPage,
   // Above the Components list: Import from file, and the row action's
   // Delete component dialog; for a host's component store, the same tools
   // drawn through the header slot.
   [COMPONENT_LIST_TOOLS_COMPONENT]: ComponentListTools,
+  // Above the Header & footer list: Import from file, and the rows' "Make
+  // site default".
+  [LAYOUT_LIST_TOOLS_COMPONENT]: LayoutListTools,
   [COMPONENT_STORE_DELETE_HOST_COMPONENT]: ComponentStoreDeleteHost,
   // The component store's own Delete, opening Delete component instead.
   [DELETE_COMPONENT_REPLACEMENT_COMPONENT]: DeleteComponentReplacement,
@@ -203,6 +233,18 @@ registerExportActions();
 // The Design column on the lists of collections that have a template.
 registerEntryDesignColumn();
 
+// Opened straight at the builder's address: its code and its start-up read
+// are asked for now, as the admin loads, rather than once it is drawn.
+startBuilderOpen(typeof window === "undefined" ? undefined : window.location, {
+  preload: () => preloadPart(PageBuilderView),
+  startReads: async ({ locale, onCollection }) => {
+    const { startEarlyBuilderOpeningReads } = await import(
+      "./editor/builder-startup"
+    );
+    startEarlyBuilderOpeningReads(locale, onCollection);
+  },
+});
+
 export {
   BindingsToFixCard,
   BindingsToFixPage,
@@ -211,6 +253,9 @@ export {
   ComponentStoreDeleteHost,
   DeleteComponentReplacement,
   EntryDesignSection,
+  FontsPage,
+  LayoutListTools,
+  NewPageCreateDialog,
   PageBuilderOverview,
   PageBuilderView,
   RemoveLayoutToolbarSlot,

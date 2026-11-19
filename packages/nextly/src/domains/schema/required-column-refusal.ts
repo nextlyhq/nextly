@@ -28,6 +28,28 @@ export interface RequiredColumnEntity {
   slug: string;
 }
 
+/** The order entities are named in: collections, then Singles, then field groups, then tables. */
+const KIND_ORDER: Record<RequiredColumnEntityKind, number> = {
+  collection: 0,
+  single: 1,
+  fieldGroup: 2,
+  table: 3,
+};
+
+/**
+ * How a field group's users are ordered in a refusal, by every road that names them: by kind
+ * (`KIND_ORDER`), then by slug. Never the order the database returned their rows in, which MySQL
+ * does not fix, so a refusal reads the same on every dialect and every run.
+ */
+export function byNamingOrder(
+  a: RequiredColumnEntity,
+  b: RequiredColumnEntity
+): number {
+  return (
+    KIND_ORDER[a.kind] - KIND_ORDER[b.kind] || a.slug.localeCompare(b.slug)
+  );
+}
+
 /** One column a change would make NOT NULL, and the rows that would break it. */
 export interface RequiredColumnBreak {
   entity: RequiredColumnEntity;

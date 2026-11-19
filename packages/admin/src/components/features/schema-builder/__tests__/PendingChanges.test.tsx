@@ -93,6 +93,7 @@ function Harness({
     defaultValues: {},
   });
   const state = useBuilderEntityState({
+    kind: "collection",
     entity,
     builder: fieldBuilder,
     toFields: loaded => loaded.fields,
@@ -416,8 +417,12 @@ function LayoutHarness() {
     resolver: async values => ({ values, errors: {} }),
     defaultValues: {},
   });
-  saveCheck = useBuilderFieldActions(fieldBuilder).getValidatedFields;
+  saveCheck = useBuilderFieldActions(
+    fieldBuilder,
+    "collection"
+  ).getValidatedFields;
   const state = useBuilderEntityState({
+    kind: "collection",
     entity,
     builder: fieldBuilder,
     toFields: loaded => loaded.fields,
@@ -484,6 +489,68 @@ describe("pending changes in the outline", () => {
     }
     act(() => builder.handleFieldAdd("text"));
     expect(screen.getByTestId("field-row-")).toHaveTextContent("New");
+  });
+
+  // A field lacking what its type needs is an error the save refuses: counted beside the pending
+  // changes, each one reached from there as a click on its row reaches it, and Save unavailable
+  // until none stands. A field with no error leaves Save available: the Builder has no warnings.
+  it("errors counted, jumped to and blocking; warnings not", async () => {
+    const user = userEvent.setup();
+    render(<LayoutHarness />, { wrapper: Providers });
+    activeChanges.length = 0;
+    act(() =>
+      builder.setFields(prev => [
+        ...prev,
+        {
+          id: "lacks-1",
+          name: "choice",
+          label: "Choice",
+          type: "select",
+          validation: {},
+          options: [
+            { label: "A", value: "a" },
+            { label: "B", value: "a" },
+          ],
+        },
+        {
+          id: "lacks-2",
+          name: "link",
+          label: "Link",
+          type: "relationship",
+          validation: {},
+        },
+      ])
+    );
+
+    const errors = screen.getByRole("button", { name: /^2 errors/ });
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(saveCheck()).toBeNull();
+    await user.click(errors);
+    expect(activeChanges.at(-1)).toEqual({ kind: "edit", fieldId: "lacks-1" });
+    await user.click(errors);
+    expect(activeChanges.at(-1)).toEqual({ kind: "edit", fieldId: "lacks-2" });
+
+    act(() =>
+      builder.setFields(prev =>
+        prev.map(f =>
+          f.id === "lacks-1"
+            ? {
+                ...f,
+                options: [
+                  { label: "A", value: "a" },
+                  { label: "B", value: "b" },
+                ],
+              }
+            : f.id === "lacks-2"
+              ? { ...f, relationTo: "posts" }
+              : f
+        )
+      )
+    );
+
+    expect(screen.queryByRole("button", { name: /errors?\b/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(saveCheck()).not.toBeNull();
   });
 
   it("deleting a container with three fields inside", async () => {

@@ -4,8 +4,9 @@
  * An earlier release kept its migration records in `nextly_migrations`, in
  * one of two shapes: the file ledger `nextly migrate` wrote, and the shape
  * before it, which `nextly db:sync` went on creating, empty, on every SQLite
- * database it reconciled. Either way `nextly migrate` refuses the database
- * until `nextly upgrade` has moved the records into `nextly_schema_events`.
+ * database it reconciled. Either way `nextly migrate` moves the records into
+ * `nextly_schema_events` itself, once a backup is confirmed, and refuses the
+ * database, naming the flag, until one is.
  * The version columns this release added (`changed_locales`,
  * `shared_changed`) are missing too, as on any database an earlier release
  * made.
@@ -13,9 +14,9 @@
  * Each case builds that database the way a site gets one: `migrate:create`
  * and `nextly migrate` from a configuration, a start that writes a document
  * and its versions, then the ledger and the columns put back as the earlier
- * release left them. Then, as the upgrade guide says: `nextly upgrade`,
- * `nextly migrate`, and a start, which reads the document's versions and
- * writes one more. What would separate a correct move from a broken one:
+ * release left them. Then, as the upgrade guide says: `nextly migrate
+ * --backup-confirmed`, `nextly upgrade`, and a start, which reads the
+ * document's versions and writes one more. What would separate a correct move from a broken one:
  *
  * - the records lost or misread, and `nextly migrate` sees its migration
  *   file as never applied and runs it again, which fails on the tables it
@@ -58,8 +59,7 @@ import type { mergeSetupResultIntoConfig as MergeSetupResultIntoConfig } from ".
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
-import { runUpgrade, type UpgradeAdapter } from "../upgrade";
-import { schemaEventsStep } from "../upgrade-steps/schema-events";
+import { previewLegacyConsolidation } from "../legacy-bookkeeping";
 
 type LoadedConfig = Parameters<typeof MergeSetupResultIntoConfig>[0];
 type Row = Record<string, unknown>;
@@ -236,36 +236,25 @@ describe.each(getConfiguredTestDialects())(
     const sql = (statement: string) =>
       on(adapter => adapter.executeQuery<Row>(statement));
 
-    /** `nextly migrate`; throws what it refused with, and what it said. */
-    async function migrate(): Promise<string[]> {
+    /**
+     * `nextly migrate`, with nobody to ask; throws what it refused with, and
+     * what it said. `backupConfirmed` is `--backup-confirmed`.
+     */
+    async function migrate(backupConfirmed = false): Promise<string[]> {
       const { context, said } = command();
+      setNonInteractive(true);
       try {
-        await runMigrate({ cwd: state.dir, throwOnFailure: true }, context);
+        await runMigrate(
+          { cwd: state.dir, throwOnFailure: true, backupConfirmed },
+          context
+        );
       } catch (error) {
         throw new Error(
           `migrate failed: ${messageOf(error)}\n${said.join("\n")}`
         );
+      } finally {
+        setNonInteractive(false);
       }
-      return said;
-    }
-
-    /** `nextly upgrade --confirm-backed-up`; what it said. */
-    async function upgrade(at: string = url): Promise<string[]> {
-      const said: string[] = [];
-      await on(
-        adapter =>
-          runUpgrade(
-            { confirmBackedUp: true },
-            {
-              adapter: adapter as unknown as UpgradeAdapter,
-              logger: {
-                info: line => said.push(line),
-                warn: line => said.push(line),
-              },
-            }
-          ),
-        at
-      );
       return said;
     }
 
@@ -403,7 +392,7 @@ describe.each(getConfiguredTestDialects())(
       value instanceof Date ? value : new Date(Number(value));
 
     it.each<Ledger>(["earlier-empty", "earlier", "file-ledger"])(
-      "the ledger kept as %s: upgrade, then migrate, then a start that reads and writes versions",
+      "the ledger kept as %s: migrate with the backup confirmed, then upgrade, then a start that reads and writes versions",
       async ledger => {
         const post = await siteOnThisRelease();
         const files = await asTheEarlierReleaseLeftIt(ledger);
@@ -413,10 +402,15 @@ describe.each(getConfiguredTestDialects())(
         };
         expect(before.versions).toBeGreaterThanOrEqual(3);
 
-        // The premise: this release refuses the database until it is upgraded.
-        await expect(migrate()).rejects.toThrow(/nextly_migrations/);
+        // The premise: this release changes nothing until a backup is confirmed.
+        await expect(migrate()).rejects.toThrow(/--backup-confirmed/);
+        expect(
+          await on(adapter => adapter.tableExists("nextly_migrations"))
+        ).toBe(true);
 
-        const said = await upgrade();
+        // One run moves the records and carries on: no file applied again,
+        // which would fail on the tables it creates.
+        const said = await migrate(true);
         expect(said.join("\n")).toContain("Dropped nextly_migrations");
         expect(
           await on(adapter => adapter.tableExists("nextly_migrations"))
@@ -435,7 +429,7 @@ describe.each(getConfiguredTestDialects())(
           expect(said.join("\n")).toContain(NEVER_FINISHED);
         }
 
-        // `nextly migrate` now runs: no file applied again, the columns added.
+        // A second run has nothing to move or apply; the columns are added.
         await migrate();
         expect((await fileApplies()).get(files[0] ?? "")).toHaveLength(1);
         const columns = (
@@ -475,8 +469,8 @@ describe.each(getConfiguredTestDialects())(
         expect(await count(POSTS_TABLE)).toBe(before.posts);
         expect(await count("nextly_versions")).toBe(before.versions + 1);
 
-        // And a second upgrade has nothing to do.
-        expect((await upgrade()).join("\n")).toContain("Nothing to do");
+        // And another run has nothing to migrate.
+        expect((await migrate()).join("\n")).toContain("Nothing to migrate");
       },
       240_000
     );
@@ -493,7 +487,9 @@ describe.each(getConfiguredTestDialects())(
       );
       const events = await count("nextly_schema_events");
 
-      await expect(upgrade()).rejects.toThrow(/nextly_migrations.*cannot read/);
+      await expect(migrate(true)).rejects.toThrow(
+        /nextly_migrations.*cannot read/
+      );
 
       expect(await count("nextly_migrations")).toBe(1);
       expect(await count("nextly_schema_events")).toBe(events);
@@ -510,28 +506,29 @@ describe.each(getConfiguredTestDialects())(
         const pathed = new URL(url);
         pathed.searchParams.set("options", "-c search_path=uod_first,public");
 
-        // The step's own count, read-only, through that path: one record per
-        // file and the core schema's audit row. Asked of the step, not the
-        // whole command, whose schema lock is a separate question.
-        const pending = await on(
+        // The move's own plan, read-only, through that path: every record
+        // of the ledger. Asked of the plan, not the whole command, whose
+        // schema lock is a separate question.
+        const plan = await on(
           adapter =>
-            schemaEventsStep.pending({
-              adapter: adapter as unknown as UpgradeAdapter,
-              db: adapter.getDrizzle(),
+            previewLegacyConsolidation({
+              adapter,
               dialect,
-              options: {},
-              log: () => {},
-              warn: () => {},
+              backupConfirmed: true,
+              interactive: false,
             }),
           pathed.toString()
         );
 
-        expect(pending).toBe(files.length + 1);
+        expect(plan?.changes[0]).toEqual({
+          action: "move",
+          target: `${String(files.length)} ${files.length === 1 ? "record" : "records"} from nextly_migrations into nextly_schema_events`,
+        });
       },
       240_000
     );
 
-    it("finishes a stopped upgrade, writing each record once", async () => {
+    it("finishes a stopped move, writing each record once", async () => {
       await siteOnThisRelease();
       const files = await asTheEarlierReleaseLeftIt("earlier");
 
@@ -548,13 +545,13 @@ describe.each(getConfiguredTestDialects())(
           }
           return insert.call(this, values);
         });
-      await expect(upgrade()).rejects.toThrow("stopped part-way");
+      await expect(migrate(true)).rejects.toThrow("stopped part-way");
       spy.mockRestore();
       expect(
         await on(adapter => adapter.tableExists("nextly_migrations"))
       ).toBe(true);
 
-      await upgrade();
+      await migrate(true);
       expect(
         await on(adapter => adapter.tableExists("nextly_migrations"))
       ).toBe(false);

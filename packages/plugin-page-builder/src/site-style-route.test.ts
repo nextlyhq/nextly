@@ -83,6 +83,14 @@ describe("who may read the site style through the editor's route", () => {
     expect(ctx.asked).toEqual([`read-${SITE_STYLE_SLUG}`]);
   });
 
+  it("admits a caller who may change Design without holding its read", async () => {
+    // The Fonts page admits whoever may change the site's design, and reads
+    // the site's fonts through this route: everyone it admits must read here.
+    expect(
+      await mayReadSiteStyle(context([`update-${SITE_STYLE_SLUG}`]), {})
+    ).toBe(true);
+  });
+
   it("admits an author who may update pages", async () => {
     expect(await mayReadSiteStyle(context([`update-${PAGES_SLUG}`]), {})).toBe(
       true
@@ -251,9 +259,11 @@ describe("who may read the site style through the editor's route", () => {
       },
     };
     expect(await mayReadSiteStyle(filtered, {})).toBe(true);
-    // Design's read is still asked plainly: it names one document.
+    // Design's read and update are still asked plainly: they name one
+    // document.
     expect(typeLevel).toEqual([
       { action: "read", anyEntry: false },
+      { action: "update", anyEntry: false },
       { action: "update", anyEntry: true },
     ]);
   });

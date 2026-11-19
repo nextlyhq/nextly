@@ -10,10 +10,13 @@
  * ONE object for the editor's life. The renderer keeps an async block's
  * output per context, so the page drawn again for a selection does not run an
  * image or a button again and blink; a context made afresh per render would
- * be a different one each time and keep nothing. The one exception is the
- * set of lists an author chose to see empty: choosing is a deliberate act,
- * and the page is drawn again under a context naming them, while none being
- * chosen is the editor's one object again, with everything it kept.
+ * be a different one each time and keep nothing. It is made again only for a
+ * new round of picked forms (`formsRound`), when the author comes back to a
+ * page picking one, so a form changed in its own tab is drawn as it now is.
+ * The one exception is the set of lists an author chose to see empty:
+ * choosing is a deliberate act, and the page is drawn again under a context
+ * naming them, while none being chosen is the editor's one object again,
+ * with everything it kept.
  *
  * A collection list draws the entries the person editing may read, their
  * drafts included (the list entries route reads as them), in the
@@ -51,6 +54,7 @@ import { canvasListReadsIn } from "../list-entries-client";
 import { canvasNamedQueriesIn } from "../named-queries-client";
 
 import { useCanvasEntryIdentity } from "./canvas-entry";
+import { canvasForms } from "./canvas-forms";
 
 /**
  * An icon as the canvas draws it, from the set a published page draws with.
@@ -182,7 +186,12 @@ export function useCanvasPageContext(
    * The site's page data limit (`readPageDataLimit`): `Infinity` for none,
    * the default when absent. Each draw's reads are bounded by it.
    */
-  pageDataLimit?: number
+  pageDataLimit?: number,
+  /**
+   * The round the page's picked forms are drawn in (`useFormsShownAgain`),
+   * which goes up when the author comes back to a page picking a form.
+   */
+  formsRound = 0
 ): PageContext {
   const visitor = asVisitor?.visitor;
   const readMedia = useMediaResolver();
@@ -240,8 +249,12 @@ export function useCanvasPageContext(
           : { entry: { id: entryId }, entryCollection }),
         ...(namedQueries === undefined ? {} : { namedQueries }),
         ...(drawn.report === undefined ? {} : { listShown: drawn.report }),
+        // A picked form, as the person editing reads it.
+        forms: canvasForms(locale, userId),
       }),
     [
+      locale,
+      userId,
       readMedia,
       entryCollection,
       entryId,
@@ -250,6 +263,14 @@ export function useCanvasPageContext(
       namedQueries,
       drawn.report,
     ]
+  );
+  // A new round of picked forms makes a new object: the renderer keeps a
+  // Form's drawn output per context, so the Forms are drawn again from what
+  // their providers now say. Only a return to a page picking a form starts
+  // one; the other blocks are drawn again from the reads they keep.
+  const renewed = useMemo(
+    () => (formsRound === 0 ? base : { ...base }),
+    [base, formsRound]
   );
   return useMemo(() => {
     const empty =
@@ -268,10 +289,10 @@ export function useCanvasPageContext(
       pagedList === undefined &&
       visitorNotes === undefined
     ) {
-      return base;
+      return renewed;
     }
     return {
-      ...base,
+      ...renewed,
       ...(empty === undefined ? {} : { listsShowingEmpty: empty }),
       ...(still === undefined ? {} : { listsStillShowing: still }),
       ...(visitorNotes === undefined
@@ -286,7 +307,7 @@ export function useCanvasPageContext(
             listPage: { nodeId: pagedList, page: 1, href: canvasPageHref },
           }),
     };
-  }, [base, listsShowingEmpty, listsStillShowing, pagedList, visitorNotes]);
+  }, [renewed, listsShowingEmpty, listsStillShowing, pagedList, visitorNotes]);
 }
 
 /** The document a canvas reads its lists as a visitor of, and its blocks. */
@@ -407,26 +428,29 @@ function ownListReads(
 }
 
 /**
- * The start of each field's value in the first entry a collection list
- * shows, as the person editing reads it, by the field's path: the binding
- * picker's samples beside the list item's fields. Read through the list's
- * own read and the canvas's provider, whose answers are kept a while, so it
- * is the canvas's own first row and reads nothing new while that is held.
- * `undefined` for a list fed by a named query, one naming no collection, one
- * with no entry, or one whose read fails.
+ * Each field's value in one entry a collection list shows (the one the
+ * author clicked, `at`, else the first), as the person editing reads it, by
+ * the field's path: the binding picker's samples beside the list item's
+ * fields. Read through the list's own read and the canvas's provider, whose
+ * answers are kept a while, so it is the canvas's own row and reads nothing
+ * new while that is held. `undefined` for a list fed by a named query, one
+ * naming no collection, one with no entry, or one whose read fails.
  *
  * @param props - the list's stored props
  * @param locale - the language being edited
  * @param userId - the signed-in person, whose reads these are
  * @param entry - the entry the canvas draws, for a list of related entries
- * @returns the previews by path, or `undefined`
+ * @param at - the clicked row's place among those the list shows
+ * @returns the samples by path, or `undefined`
  */
 export async function canvasListSample(
   props: Readonly<Record<string, unknown>>,
   locale: string | undefined,
   userId: string | null,
-  entry: CanvasEntry
-): Promise<Readonly<Record<string, string>> | undefined> {
+  entry: CanvasEntry,
+  /** The entry's place among those the list shows; the first if absent. */
+  at?: number
+): Promise<ReturnType<typeof rowPreviews> | undefined> {
   if (props.namedQuery !== undefined && props.namedQuery !== null) {
     return undefined;
   }
@@ -437,8 +461,10 @@ export async function canvasListSample(
     find: async query => (await reads.data.find(query)).items,
     claim: () => true,
   });
-  const first = outcome.items[0];
-  return first === undefined ? undefined : rowPreviews(first);
+  // The entry the author clicked, else the first: one the list no longer
+  // shows (it changed since the click) reads the first.
+  const sampled = outcome.items[at ?? 0] ?? outcome.items[0];
+  return sampled === undefined ? undefined : rowPreviews(sampled);
 }
 
 /** No list drawn yet. */

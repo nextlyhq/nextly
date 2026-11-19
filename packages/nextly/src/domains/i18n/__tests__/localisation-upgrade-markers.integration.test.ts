@@ -11,7 +11,6 @@
 import { sql } from "drizzle-orm";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { previewUpgrade, runUpgrade } from "../../../cli/commands/upgrade";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestNextly } from "../../../plugins/test-nextly";
 import { introspectLiveColumns } from "../../schema/pipeline/diff/introspect-live";
@@ -21,7 +20,9 @@ import { _resetPerLanguageStorage } from "../per-language-storage";
 import {
   ARTICLES,
   bootSite,
+  migrateData,
   openUpgradeDatabase,
+  previewMigrateData,
   SITE,
   type UpgradeDatabase,
 } from "./helpers/localisation-upgrade-fixture";
@@ -80,12 +81,12 @@ describeEachDialect(
       await untrackedArticles();
       const deps = { adapter: database!.adapter as never, config: SITE };
 
-      const plan = await previewUpgrade({ confirmBackedUp: true }, deps);
+      const plan = await previewMigrateData(deps.adapter, deps.config);
       expect(plan.refusals).toContainEqual(
         expect.stringMatching(/articles[\s\S]*--repair-localization/)
       );
 
-      await expect(runUpgrade({ confirmBackedUp: true }, deps)).rejects.toThrow(
+      await expect(migrateData(deps.adapter, deps.config)).rejects.toThrow(
         /--repair-localization/
       );
       expect(await mainColumns()).toContain("title");

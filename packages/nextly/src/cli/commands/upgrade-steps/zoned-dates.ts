@@ -1,11 +1,11 @@
 /**
- * The `nextly upgrade` step converting each translated date column an earlier release made with a
+ * The step of `nextly i18n:convert-zoned-dates` converting each translated date column an earlier release made with a
  * time zone on PostgreSQL (`findZonedDateColumns`) to a plain `timestamp`, as the main table keeps
  * a date, each value keeping the date Nextly showed.
  *
- * A step of the upgrade rather than of `nextly migrate`, which runs before the new release serves:
+ * A command of its own rather than a step of `nextly migrate`, which runs before the new release serves:
  * an instance of an earlier release still running writes a date in a non-default language as its
- * own local time, and a converted column would keep that shifted. The upgrade runs once the release
+ * own local time, and a converted column would keep that shifted. The command is run once the release
  * serves every instance. Run again, it finds nothing to convert.
  *
  * @module cli/commands/upgrade-steps/zoned-dates

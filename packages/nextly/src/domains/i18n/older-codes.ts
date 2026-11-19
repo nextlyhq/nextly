@@ -1,7 +1,7 @@
 /**
  * Where a language code's older spelling (`pt_BR`) is still stored: the one answer to "has this
  * code's content been moved to its standard form yet", for the start that refuses to serve a site
- * whose rows are still under the older spelling, and for `nextly upgrade`, which moves them.
+ * whose rows are still under the older spelling, and for `nextly migrate`, whose data steps move them.
  *
  * @module domains/i18n/older-codes
  */

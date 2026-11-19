@@ -25,6 +25,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -147,28 +148,35 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         returnFocus: () => HTMLElement | null;
       }) => React.ReactNode;
     }): React.JSX.Element => (
-      <div>
-        {/*
-         * The top bar is rendered for the same reason the children are: the
-         * breakpoint manager lives there, and a stub that dropped the slot
-         * would leave its assertions passing on absence.
-         */}
-        {/* The real shell renders the host's Settings on every pass, open
+      // Inside a tooltip provider, as the real shell renders everything: the
+      // top bar's controls, the device buttons among them, carry tooltips.
+      <TooltipProvider>
+        <div>
+          {/*
+           * The top bar is rendered for the same reason the children are: the
+           * breakpoint manager lives there, and a stub that dropped the slot
+           * would leave its assertions passing on absence.
+           */}
+          {/* The real shell renders the host's Settings on every pass, open
             or not, which is where the breakpoint manager now lives. */}
-        {renderSettings?.({
-          open: false,
-          onOpenChange: () => {},
-          returnFocus: () => null,
-        })}
-        {topBar}
-        {topBarCenter}
-        {topBarEnd}
-        {inspector}
-        {shownPanel === null
-          ? null
-          : renderPanel?.("design", { current: shownPanel, choose: () => {} })}
-        {children}
-      </div>
+          {renderSettings?.({
+            open: false,
+            onOpenChange: () => {},
+            returnFocus: () => null,
+          })}
+          {topBar}
+          {topBarCenter}
+          {topBarEnd}
+          {inspector}
+          {shownPanel === null
+            ? null
+            : renderPanel?.("design", {
+                current: shownPanel,
+                choose: () => {},
+              })}
+          {children}
+        </div>
+      </TooltipProvider>
     ),
     BreakpointManager: nothing,
     InspectorPanel: record("inspector"),
@@ -257,6 +265,10 @@ vi.mock("./site-style-read", () => ({
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
+  // Where the page opens and the pin's id, which the top bar reads; no
+  // collection is named here, so the exit goes to the form.
+  useDocumentOpensIn: () => null,
+  PIN_TO_DASHBOARD_ACTION: "pin-to-dashboard",
   // The canvas's media read, answering nothing: these cases draw no image.
   // One function for every call, as the admin's own hook keeps it.
   useMediaResolver: (
@@ -319,6 +331,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", async () => ({
   DocumentSaveAndPublish: () => null,
   useDocumentLifeStage: () => null,
   useDocumentActions: () => null,
+  // The page menu's New page dialog, which the top bar mounts.
+  useLeaveWithoutWarning: () => () => {},
   // `null` is a real answer the pill handles — "no status has been persisted",
   // which is what a create form and a preview both look like — so this mounts
   // the top bar without putting a second subject in the assertions below.

@@ -42,6 +42,7 @@ import {
   hasContentControl,
 } from "./content-control-types";
 import type { EditorState } from "./editor-state";
+import { GALLERY_BLOCK } from "./gallery-pictures";
 import { INSPECTOR_SECTIONS } from "./inspector-sections";
 import { lockRefusalWording } from "./lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "./locking";
@@ -305,20 +306,35 @@ export type LockState = "locked" | "unlocked" | "mixed";
  * Whether a prop is offered at all.
  *
  * Left out: a prop that applies only while others are empty
- * (`onlyWithout`), once any of them is set, as a button's "Acts as" means
+ * (`onlyWithout`), once any of them is set, as a button's "Button type" means
  * nothing once the button links to a URL or an entry. Each entry names one
  * prop, or several that only together are something, as an entry link is a
- * collection and an entry. Also left out: a choice with fewer than two
- * options, which offers nothing to pick, as a column's one HTML tag, unless
- * what is stored is not that option, since the choice is then how it is put
- * back.
+ * collection and an entry. Left out too: a prop that applies only to some
+ * values of another (`onlyWhen`), while that one holds none of them, as a
+ * list's "Start at" means nothing on a bulleted list. Also left out: a choice
+ * with fewer than two options, which offers nothing to pick, as a column's one
+ * HTML tag, unless what is stored is not that option, since the choice is then
+ * how it is put back.
  */
 function offered(
   schema: PropSchema,
   value: unknown,
   values: Readonly<Record<string, unknown>>,
   declared: Readonly<Partial<Record<string, PropSchema>>>,
-  options: readonly string[]
+  options: readonly string[],
+  defaults: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  if (hiddenByOnlyWithout(schema, values, declared)) return false;
+  if (!appliesToValues(schema, values, defaults)) return false;
+  if (schema.type !== "select" || options.length >= 2) return true;
+  return propIsSet(undefined, value) && !options.includes(String(value));
+}
+
+/** Whether a prop's `onlyWithout` names a prop, or a set of them, that is set. */
+function hiddenByOnlyWithout(
+  schema: PropSchema,
+  values: Readonly<Record<string, unknown>>,
+  declared: Readonly<Partial<Record<string, PropSchema>>>
 ): boolean {
   const without = schema.onlyWithout;
   const entries: readonly unknown[] =
@@ -329,14 +345,34 @@ function offered(
         : [];
   const setHere = (name: unknown): boolean =>
     typeof name === "string" && propIsSet(declared[name], values[name]);
-  const hidden = entries.some(entry =>
+  return entries.some(entry =>
     Array.isArray(entry)
       ? entry.length > 0 && entry.every(setHere)
       : setHere(entry)
   );
-  if (hidden) return false;
-  if (schema.type !== "select" || options.length >= 2) return true;
-  return propIsSet(undefined, value) && !options.includes(String(value));
+}
+
+/**
+ * Whether a prop's `onlyWhen`, `{ kind: ["ordered"] }`, holds: each prop it
+ * names has one of the values listed, read as stored, else as the block's
+ * default, since that is the value that applies. A prop without one always
+ * applies; a malformed one, naming no list, never matches.
+ */
+function appliesToValues(
+  schema: PropSchema,
+  values: Readonly<Record<string, unknown>>,
+  defaults: Readonly<Record<string, unknown>> | undefined
+): boolean {
+  const when = schema.onlyWhen;
+  if (typeof when !== "object" || when === null || Array.isArray(when)) {
+    return true;
+  }
+  return Object.entries(when).every(([name, allowed]) => {
+    const current = propIsSet(undefined, values[name])
+      ? values[name]
+      : defaults?.[name];
+    return Array.isArray(allowed) && allowed.includes(current);
+  });
 }
 
 /**
@@ -435,7 +471,8 @@ export function inspectSelection(
             node.props[name],
             node.props,
             declared,
-            optionsOf(schema)
+            optionsOf(schema),
+            definition.defaultProps as Record<string, unknown> | undefined
           ),
           readOnly: designLock !== undefined && !content.has(name),
         },
@@ -528,7 +565,7 @@ export function advancedRowsOf(
  * the builder draws for every block (where it shows, when, its CSS id and its
  * attributes). Content is there when the block declares a setting placed in
  * it, names its own inspector to draw it, or is a core block whose Content
- * section the builder draws ({@link builderContentSectionOf}). Judged by
+ * sections the builder draws ({@link builderContentSectionsOf}). Judged by
  * what the block declares rather than by which settings show right now, so
  * a setting a condition hides does not make the tab come and go under the
  * author.
@@ -539,25 +576,30 @@ export function inspectorTabsOf(
   const holdsContent =
     inspection.inspector !== undefined ||
     contentRowsOf(inspection).length > 0 ||
-    builderContentSectionOf(inspection.blockName) !== undefined;
+    builderContentSectionsOf(inspection.blockName).length > 0;
   return INSPECTOR_TAB_ORDER.filter(tab => tab !== "content" || holdsContent);
 }
 
 /**
- * The Content sections the builder draws itself for a core block, by block:
- * Columns' layout, which writes the row's styles and adds or removes its
- * columns, so it is no prop a generated field could draw. Content, because
- * how many columns a row holds is its structure.
+ * The Content sections the builder draws itself for a core block, by block,
+ * in the order they are drawn: Columns' layout, which writes the row's
+ * styles and adds or removes its columns, so it is no prop a generated field
+ * could draw (Content, because how many columns a row holds is its
+ * structure); and a Gallery's Pictures, which adds Image children, and its
+ * Layout, whose Columns and On mobile write the gallery's styles. A section
+ * named as one the block places props in is drawn as one, the builder's
+ * controls first.
  */
-const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, string>> = {
-  [COLUMNS_ROW]: "Columns",
+const BUILDER_CONTENT_SECTIONS: Readonly<Record<string, readonly string[]>> = {
+  [COLUMNS_ROW]: ["Columns"],
+  [GALLERY_BLOCK]: ["Pictures", "Layout"],
 };
 
-/** The Content section the builder draws for a block, if it draws one. */
-export function builderContentSectionOf(blockName: string): string | undefined {
+/** The Content sections the builder draws for a block, none for most. */
+export function builderContentSectionsOf(blockName: string): readonly string[] {
   return Object.hasOwn(BUILDER_CONTENT_SECTIONS, blockName)
-    ? BUILDER_CONTENT_SECTIONS[blockName]
-    : undefined;
+    ? (BUILDER_CONTENT_SECTIONS[blockName] ?? [])
+    : [];
 }
 
 /** What a Style section is called, by its key, as the Style tab names it. */

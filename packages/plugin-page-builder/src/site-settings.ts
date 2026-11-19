@@ -86,10 +86,10 @@ import {
   type SiteSettingsRead,
   type StoredSiteStyle,
 } from "./library-contract";
-import { walkPages } from "./paged-walk";
 import {
   resolveSiteStyle,
   siteBreakpoints,
+  siteCssPrefix,
   type SiteStyleData,
 } from "./site-style";
 import {
@@ -97,7 +97,7 @@ import {
   readSiteStyleRecord,
 } from "./site-style-record";
 import {
-  loadSiteStyle,
+  readStoredSiteStyleVersioned,
   SITE_SETTINGS_WRITE_CONTEXT,
   SITE_STYLE_SLUG,
 } from "./site-style-storage";
@@ -1371,16 +1371,13 @@ const NOTHING: SiteSettingsRead = {
   layouts: [],
 };
 
-/** How many Layouts are read per page, and the most pages walked. */
-const LAYOUT_PAGE_SIZE = 100;
-const LAYOUT_PAGES_MAX = 50;
-
 /**
  * What the Site tab shows, and what this caller may change there: the site
  * permission offers the tab, and with it the rights to update and publish
- * Layouts let the default Layout be chosen, as make-default asks. Read past
- * the Layouts' own read rule, as make-default's checks are, and only for a
- * caller the site permission admits.
+ * Layouts let the default Layout be chosen from the Header & footer list, as
+ * make-default asks. The default is read past the Layouts' own read rule, as
+ * make-default's checks are, and only for a caller the site permission
+ * admits.
  */
 export async function readSiteSettings(
   ctx: SiteSettingsRouteContext,
@@ -1405,53 +1402,22 @@ export async function readSiteSettings(
     (await caller.can("update", slugs.layouts)) &&
     (await caller.can("publish", slugs.layouts));
   const { defaultLayout } = await readLayoutSettings(nextly, slugs);
-  // Every published Layout for a caller who may choose; otherwise only the
-  // default, so it can be named.
-  const only = mayChooseDefaultLayout
-    ? undefined
-    : defaultLayout === null
-      ? []
-      : [defaultLayout];
-  const layouts: SiteLayoutOption[] = [];
-  if (only === undefined || only.length > 0) {
-    // Every page of them: an option left off would be a Layout that cannot be
-    // made the default, or a default the select could not show.
-    await walkPages({
-      describe: "the published header & footer sets",
-      maxPages: LAYOUT_PAGES_MAX,
-      fetchPage: async page =>
-        await nextly.find({
-          collection: slugs.layouts,
-          ...(only === undefined ? {} : { where: { id: { in: only } } }),
-          status: "published",
-          limit: LAYOUT_PAGE_SIZE,
-          page,
-          depth: 0,
-          select: { id: true, title: true },
-          overrideAccess: true,
-        }),
-      onPage: rows => {
-        for (const row of rows) {
-          const { id, title } = row as Record<string, unknown>;
-          if (typeof id === "string" && typeof title === "string") {
-            layouts.push({ id, title });
-          }
-        }
-      },
-    });
-  }
+  const layouts = await defaultNamed(nextly, slugs.layouts, defaultLayout);
   // The breakpoints as the canvas resolves them, read past Design's read:
-  // the site permission admits their write, so it admits seeing them.
-  const { breakpoints } = await loadSiteStyle({
+  // the site permission admits their write, so it admits seeing them. The
+  // stored record is kept apart too, so the prefix can say which tier set it.
+  const { stored } = await readStoredSiteStyleVersioned({
     nextly,
     // The Single the route writes, renamed or not.
     slug: ctx.self.singles[SITE_STYLE_SLUG] ?? SITE_STYLE_SLUG,
-    ...(defaults === undefined ? {} : { defaults }),
   });
+  const record = readSiteStyleRecord(stored);
+  const { breakpoints } = resolveSiteStyle(defaults, record);
   const read = await removalStatuses(removal);
   return {
     mayManageSite: true,
     breakpoints: breakpoints ?? null,
+    prefix: siteCssPrefix(defaults, record),
     mayChooseDefaultLayout,
     defaultLayout,
     layouts,
@@ -1459,6 +1425,37 @@ export async function readSiteSettings(
       ? {}
       : { removals: read.removals, undoable: read.undoable }),
   };
+}
+
+/**
+ * The current default, when it is published, so the Site tab can name it;
+ * none otherwise. Only that one: another set is made the default from the
+ * Header & footer list, not here. Read past the sets' own read rule, as
+ * make-default's checks are.
+ */
+async function defaultNamed(
+  nextly: Pick<DefaultLayoutDirectApi, "find">,
+  layouts: string,
+  defaultLayout: string | null
+): Promise<SiteLayoutOption[]> {
+  if (defaultLayout === null) return [];
+  const found = await nextly.find({
+    collection: layouts,
+    where: { id: { in: [defaultLayout] } },
+    status: "published",
+    limit: 1,
+    depth: 0,
+    select: { id: true, title: true },
+    overrideAccess: true,
+  });
+  const named: SiteLayoutOption[] = [];
+  for (const row of found.items ?? []) {
+    const { id, title } = row;
+    if (typeof id === "string" && typeof title === "string") {
+      named.push({ id, title });
+    }
+  }
+  return named;
 }
 
 /**

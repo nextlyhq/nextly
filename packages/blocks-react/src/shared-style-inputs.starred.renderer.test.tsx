@@ -11,7 +11,7 @@
  *
  * @module shared-style-inputs.starred.renderer.test
  */
-import { renderToStaticMarkup } from "react-dom/server";
+import { prerender } from "react-dom/static";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -84,8 +84,16 @@ const saved = (stamp: string | undefined): PageStyles => ({
   ...(stamp === undefined ? {} : { sharedInputsId: stamp }),
 });
 
-function renderPublished(styles: PageStyles, starred?: string): string {
-  return renderToStaticMarkup(
+/**
+ * Rendered as a build renders it, finished: a published page draws its
+ * asynchronous blocks (a Button, which resolves its link) in place, which a
+ * synchronous renderer cannot wait for.
+ */
+async function renderPublished(
+  styles: PageStyles,
+  starred?: string
+): Promise<string> {
+  const { prelude } = await prerender(
     <PageRenderer
       document={document}
       blocks={createBlockResolver(coreBlocks)}
@@ -93,26 +101,29 @@ function renderPublished(styles: PageStyles, starred?: string): string {
       siteStyles={site(starred)}
     />
   );
+  return await new Response(prelude).text();
 }
 
 describe("a page saved before its block type's ★ moved", () => {
-  it("REUSES its saved sheet while ★ stays where it was", () => {
+  it("REUSES its saved sheet while ★ stays where it was", async () => {
     // The control: without it, the refusals below would also pass against a
     // render that recompiled every time.
-    expect(renderPublished(saved(stampFor("outline")), "outline")).toContain(
-      "rebeccapurple"
+    expect(
+      await renderPublished(saved(stampFor("outline")), "outline")
+    ).toContain("rebeccapurple");
+  });
+
+  it("is drawn with the new ★ once it moves, with no new save", async () => {
+    const html = await renderPublished(saved(stampFor("outline")), "ghost");
+    expect(html).not.toContain("rebeccapurple");
+    // Ghost's rule on the button that picked no style, by its own class.
+    expect(html).toContain(
+      `:is(.${nodeClassName("plain")}) { color: #444444 }`
     );
   });
 
-  it("is drawn with the new ★ once it moves, with no new save", () => {
-    const html = renderPublished(saved(stampFor("outline")), "ghost");
-    expect(html).not.toContain("rebeccapurple");
-    // Ghost's rule on the button that picked no style, by its own class.
-    expect(html).toContain(`:is(.${nodeClassName("plain")}) { color: #444444 }`);
-  });
-
-  it("is drawn with the new ★ when one is first chosen", () => {
-    expect(renderPublished(saved(stampFor()), "ghost")).not.toContain(
+  it("is drawn with the new ★ when one is first chosen", async () => {
+    expect(await renderPublished(saved(stampFor()), "ghost")).not.toContain(
       "rebeccapurple"
     );
   });

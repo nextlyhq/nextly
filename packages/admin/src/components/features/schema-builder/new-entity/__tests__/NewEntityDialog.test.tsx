@@ -5,7 +5,7 @@
  * checked by the server's rule as it is typed, and the further options folded
  * under one control that says which are on.
  */
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -42,6 +42,7 @@ vi.mock("@admin/services/addressCheckApi", () => ({
   },
 }));
 
+import { DESCRIPTION_MAX_LENGTH } from "../../builder-settings-modal/BasicsTab";
 import {
   addUnsavedEntity,
   removeUnsavedEntity,
@@ -74,8 +75,8 @@ function renderDialog(
   return { onCreate, user: userEvent.setup() };
 }
 
-const nameInput = () => screen.getByLabelText("Name");
-const addressInput = () => screen.getByLabelText("API address");
+const nameInput = () => screen.getByRole("textbox", { name: "Name" });
+const addressInput = () => screen.getByRole("textbox", { name: "API address" });
 const createButton = () => screen.getByRole("button", { name: "Create" });
 
 beforeEach(() => {
@@ -116,7 +117,11 @@ describe("NewEntityDialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ startingFieldType: "blocks" })
+      expect.objectContaining({ startingFieldType: "blocks" }),
+      // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
+      []
     );
   });
 
@@ -144,14 +149,16 @@ describe("NewEntityDialog", () => {
   it("derives", async () => {
     const { user } = renderDialog();
     await user.type(nameInput(), "Blog post");
-    expect(screen.getByLabelText("Plural name")).toHaveValue("Blog posts");
+    expect(screen.getByRole("textbox", { name: "Plural name" })).toHaveValue(
+      "Blog posts"
+    );
     expect(addressInput()).toHaveValue("blog_post");
   });
 
   it("edited plural and address", async () => {
     const { user } = renderDialog();
     await user.type(nameInput(), "Person");
-    const plural = screen.getByLabelText("Plural name");
+    const plural = screen.getByRole("textbox", { name: "Plural name" });
     await user.clear(plural);
     await user.type(plural, "Folks");
     await user.clear(addressInput());
@@ -172,7 +179,7 @@ describe("NewEntityDialog", () => {
   it("empty plural", async () => {
     const { user } = renderDialog();
     await user.type(nameInput(), "Post");
-    await user.clear(screen.getByLabelText("Plural name"));
+    await user.clear(screen.getByRole("textbox", { name: "Plural name" }));
     expect(createButton()).toBeDisabled();
     expect(createButton()).toHaveAccessibleDescription("Add a plural name.");
   });
@@ -241,7 +248,11 @@ describe("NewEntityDialog", () => {
         icon: "Package",
         // Drafts and publishing start on for a kind that has them.
         status: true,
-      })
+      }),
+      // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
+      []
     );
   });
 
@@ -310,7 +321,7 @@ describe("NewEntityDialog", () => {
   it("a Single", async () => {
     const { user } = renderDialog(SINGLE_BUILDER_CONFIG);
     expect(screen.getByRole("heading", { name: "New Single" })).toBeVisible();
-    expect(screen.queryByLabelText("Plural name")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Plural name" })).toBeNull();
     await user.type(nameInput(), "Home page");
     expect(addressInput()).toHaveValue("home-page");
     await waitFor(() =>
@@ -320,7 +331,7 @@ describe("NewEntityDialog", () => {
 
   it("a field group", async () => {
     const { user } = renderDialog(FIELD_GROUP_BUILDER_CONFIG);
-    expect(screen.queryByLabelText("Plural name")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Plural name" })).toBeNull();
     const options = screen.getByRole("button", { name: /More options/ });
     expect(options).toHaveAccessibleName("More options, none on");
     await user.click(options);
@@ -389,7 +400,11 @@ describe("NewEntityDialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ icon: "Camera" })
+      expect.objectContaining({ icon: "Camera" }),
+      // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
+      []
     );
   });
 
@@ -424,7 +439,11 @@ describe("NewEntityDialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ slug: "posts" })
+      expect.objectContaining({ slug: "posts" }),
+      // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
+      []
     );
   });
 
@@ -446,14 +465,63 @@ describe("NewEntityDialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await user.click(createButton());
     expect(onCreate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ description: "Shop items" })
+      expect.objectContaining({ description: "Shop items" }),
+      // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
+      []
     );
 
     await user.clear(screen.getByLabelText("Description"));
     await user.type(screen.getByLabelText("Description"), "   ");
     await user.click(createButton());
     expect(onCreate).toHaveBeenLastCalledWith(
-      expect.objectContaining({ description: "" })
+      expect.objectContaining({ description: "" }),
+      // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
+      []
+    );
+  });
+
+  // A description longer than the builder's limit is said to be over beside
+  // the field, counted beneath it, and holds Create until it is shortened —
+  // never cut on its way out.
+  it("holds Create while the description is over its limit", async () => {
+    const { onCreate, user } = renderDialog();
+    await user.type(nameInput(), "Product");
+    await user.click(screen.getByRole("button", { name: /More options/ }));
+    const description = screen.getByLabelText("Description");
+    expect(screen.getByText(`0/${DESCRIPTION_MAX_LENGTH}`)).toBeInTheDocument();
+
+    fireEvent.change(description, {
+      target: { value: "a".repeat(DESCRIPTION_MAX_LENGTH + 1) },
+    });
+    await waitFor(() =>
+      expect(createButton()).toHaveAccessibleDescription(
+        "Shorten the description."
+      )
+    );
+    expect(createButton()).toBeDisabled();
+    expect(description).toHaveAttribute("aria-invalid", "true");
+    expect(description).toHaveAccessibleDescription(
+      `Keep the description to ${DESCRIPTION_MAX_LENGTH} characters or fewer. ${DESCRIPTION_MAX_LENGTH + 1}/${DESCRIPTION_MAX_LENGTH}`
+    );
+
+    fireEvent.change(description, {
+      target: { value: "a".repeat(DESCRIPTION_MAX_LENGTH) },
+    });
+    await waitFor(() => expect(createButton()).toBeEnabled());
+    expect(description).toHaveAttribute("aria-invalid", "false");
+    await user.click(createButton());
+    expect(onCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        description: "a".repeat(DESCRIPTION_MAX_LENGTH),
+      }),
+      // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
+      []
     );
   });
 
@@ -463,7 +531,11 @@ describe("NewEntityDialog", () => {
     await waitFor(() => expect(createButton()).toBeEnabled());
     await single.user.click(createButton());
     expect(single.onCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ status: true })
+      expect.objectContaining({ status: true }),
+      // No template picked: Create hands over no template fields.
+      [],
+      // Nor anything it needs made too.
+      []
     );
   });
 
@@ -479,10 +551,38 @@ describe("NewEntityDialog", () => {
     expect(onCreate).not.toHaveBeenCalled();
   });
 
-  it("says Name and Plural name are required", () => {
+  it("says Name, Plural name and API address are required", () => {
     renderDialog();
     expect(nameInput()).toBeRequired();
-    expect(screen.getByLabelText("Plural name")).toBeRequired();
+    expect(screen.getByRole("textbox", { name: "Plural name" })).toBeRequired();
+    // Create is held while the address is blank, so it is required too.
+    expect(addressInput()).toBeRequired();
+  });
+
+  // Each field Create waits for is marked where it is seen, not only to
+  // assistive technology: the asterisk sits in its label, hidden from the
+  // accessible name the role queries above match exactly.
+  it("marks each required field with an asterisk beside its label", () => {
+    renderDialog();
+    for (const input of [
+      nameInput(),
+      screen.getByRole("textbox", { name: "Plural name" }),
+      addressInput(),
+    ]) {
+      const mark = (input as HTMLInputElement).labels?.[0]?.querySelector(
+        '[aria-hidden="true"]'
+      );
+      expect(mark).toHaveTextContent("*");
+    }
+  });
+
+  it("marks no optional field as required", async () => {
+    const { user } = renderDialog();
+    await user.click(screen.getByRole("button", { name: /More options/ }));
+    const description =
+      screen.getByLabelText<HTMLTextAreaElement>("Description");
+    expect(description).not.toBeRequired();
+    expect(description.labels?.[0]?.textContent).toBe("Description");
   });
 
   it("scrolls within the viewport when its options are open", () => {

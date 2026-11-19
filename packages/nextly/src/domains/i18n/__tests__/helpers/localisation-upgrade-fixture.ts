@@ -119,6 +119,44 @@ export function siteWithLanguages(
   return { ...SITE, localization: { locales, defaultLocale } };
 }
 
+/**
+ * Run `nextly migrate`'s data steps over `adapter` for `site`, as the command runs them once its
+ * migrations have applied, a backup confirmed: by default every step, or only `steps`.
+ */
+export async function migrateData(
+  adapter: unknown,
+  site: UpgradeSite,
+  steps: readonly UpgradeStep[] = MIGRATE_DATA_STEPS
+): Promise<void> {
+  await runDataSteps({
+    adapter: adapter as DataStepsDeps["adapter"],
+    command: "nextly migrate",
+    steps,
+    backupConfirmed: true,
+    interactive: false,
+    log: () => undefined,
+    warn: () => undefined,
+    site,
+  });
+}
+
+/** What `nextly migrate --dry-run` says of its data steps over `adapter` for `site`. */
+export function previewMigrateData(
+  adapter: unknown,
+  site: UpgradeSite
+): Promise<DryRunPlan> {
+  return previewDataSteps({
+    adapter: adapter as DataStepsDeps["adapter"],
+    command: "nextly migrate",
+    steps: MIGRATE_DATA_STEPS,
+    backupConfirmed: true,
+    interactive: false,
+    log: () => undefined,
+    warn: () => undefined,
+    site,
+  });
+}
+
 /** The database both boots of a case connect to. */
 export interface UpgradeDatabase {
   dialect: TestDialect;

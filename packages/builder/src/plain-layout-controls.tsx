@@ -12,6 +12,7 @@
  */
 import {
   BASE_BREAKPOINT,
+  breakpointContexts,
   findNode,
   type BreakpointSet,
   type NodeStyles,
@@ -22,8 +23,8 @@ import { Input, Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { offeredTiers } from "./canvas/canvas-width";
-import { chainedStyleOp, COLUMNS_ROW } from "./columns-layout";
 import { layoutWritesText } from "./code-hints";
+import { chainedStyleOp, COLUMNS_ROW } from "./columns-layout";
 import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import {
@@ -57,11 +58,11 @@ import {
   type Spread,
 } from "./plain-layout";
 import { SegmentChoices } from "./segment-choices";
-import type { SideOrientation } from "./side-orientation";
 import {
   sharedStyleChange,
   type SharedStyleChange,
 } from "./shared-style-target";
+import type { SideOrientation } from "./side-orientation";
 import {
   AppliedAtTier,
   BeneathAtTier,
@@ -69,9 +70,9 @@ import {
   type CascadeAt,
   type StyleFieldSurroundings,
 } from "./style-field-surroundings";
-import type { StyleTarget } from "./style-target";
 import type { InspectedStyleProperty } from "./style-inspector";
 import { StylePropertyFields } from "./style-property-fields";
+import type { StyleTarget } from "./style-target";
 import { readStyleValue, type StyleAddress } from "./style-values";
 
 /**
@@ -82,12 +83,23 @@ function deviceOrder(breakpoints: BreakpointSet | undefined): string[] {
   return [BASE_BREAKPOINT, ...offeredTiers(breakpoints).map(tier => tier.id)];
 }
 
+/**
+ * Every viewport tier the page's styles are written for, in their order, as
+ * the engine answers it: a target's own values are read through all of them,
+ * though the switcher offers one tier of each width.
+ */
+function compiledOrder(breakpoints: BreakpointSet | undefined): string[] {
+  return breakpointContexts(breakpoints)
+    .filter(context => context.axis === "viewport")
+    .map(context => context.id);
+}
+
 /** The edited target's styles: the block's, or the shared style's. */
 function stylesOf(
   target: StyleTarget,
   surroundings: StyleFieldSurroundings
 ): NodeStyles | undefined {
-  if (target.kind === "shared") return target.style.styles as NodeStyles;
+  if (target.kind === "shared") return target.style.styles;
   return findNode(surroundings.editor.document.nodes, surroundings.nodeId)
     ?.styles;
 }
@@ -145,15 +157,16 @@ function layoutTiers(
   const inForce =
     block && cascade.applied !== undefined
       ? appliedInForce(cascade.applied)
-      : ownCascade(order, own, normal);
+      : ownCascade(compiledOrder(surroundings.breakpoints), own, normal);
   const beneath = beneathOf({
-    order,
+    order: compiledOrder(surroundings.breakpoints),
     normal,
     atState: surroundings.state !== "base",
     cascade: block ? cascade.beneath : undefined,
   });
   return {
     order,
+    cascadeOrder: compiledOrder(surroundings.breakpoints),
     own,
     inForce,
     ...(beneath === undefined ? {} : { beneath }),
@@ -263,7 +276,7 @@ const ARRANGED_PROPERTIES: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether a block's Layout is drawn by Arrange: a container, not Columns. */
-function arrangesLayout(blockType: string | undefined): boolean {
+export function arrangesLayout(blockType: string | undefined): boolean {
   return blockType !== COLUMNS_ROW;
 }
 
@@ -271,7 +284,23 @@ function arrangesLayout(blockType: string | undefined): boolean {
  * The writes made, as one step: an op through the block's write path, or
  * one change to the shared style being edited.
  */
-function useApply(
+/** The layout properties the catalog stores as numbers: a flex share. */
+const NUMBER_PROPERTIES: ReadonlySet<string> = new Set([
+  "flexGrow",
+  "flexShrink",
+]);
+
+/** A planned value as the catalog stores it: a number where it is one. */
+function storedForm(
+  property: string,
+  value: string | null
+): string | number | null {
+  if (value === null || !NUMBER_PROPERTIES.has(property)) return value;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : value;
+}
+
+export function useApply(
   surroundings: StyleFieldSurroundings,
   target: StyleTarget
 ): (writes: readonly LayoutWrite[]) => void {
@@ -285,7 +314,7 @@ function useApply(
         property: write.property,
         path: [] as string[],
       },
-      value: write.value,
+      value: storedForm(write.property, write.value),
     }));
     if (target.kind === "shared") {
       if (target.readOnly !== undefined) return;
@@ -378,6 +407,20 @@ export interface ArrangeReading {
  * drawn: a block with no layout (its section offers no Display) and Columns,
  * whose tiles are its own.
  */
+/**
+ * What is in force and stored at each device for the edited target, read
+ * through the cascade the panel lends: Arrange's reading, and the one
+ * "Inside its parent" sizes the block by.
+ */
+export function useLayoutTiers(
+  surroundings: StyleFieldSurroundings
+): LayoutTiers {
+  const target = React.useContext(StyleTargetContext);
+  const applied = React.useContext(AppliedAtTier);
+  const beneath = React.useContext(BeneathAtTier);
+  return layoutTiers(surroundings, target, { applied, beneath });
+}
+
 export function useArrangeReading(
   surroundings: StyleFieldSurroundings,
   offersDisplay: boolean
@@ -906,7 +949,7 @@ function GridRowsCount({
 }
 
 /** A text field committed on blur and on Enter, as every field here is. */
-function DraftInput({
+export function DraftInput({
   id,
   value,
   placeholder,
@@ -1064,7 +1107,7 @@ function sharedColumnOnSpace(
   return {
     ...target,
     write: change => {
-      const write = change(target.style.styles as NodeStyles);
+      const write = change(target.style.styles);
       if (
         write.kind !== "write" ||
         !setsSpace(write.styles, state, breakpoint)

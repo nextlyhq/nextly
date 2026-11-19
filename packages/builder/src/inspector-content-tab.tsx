@@ -26,9 +26,19 @@ import {
 import type { ContentServices } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import {
+  EMBED_BLOCK_TYPE,
+  embedLinkOp,
+} from "./canvas/embed-states-model";
+import { embedSectionBodies } from "./embed-sections";
+import { FORM_BLOCK } from "./form-picked";
+import { formSectionBodies, formSourceSections } from "./form-sections";
+import { useFormSources } from "./form-source-control";
+import { galleryContentSections } from "./gallery-fields";
+import {
   blockIsReadOnly,
-  builderContentSectionOf,
+  builderContentSectionsOf,
   contentRowsOf,
+  designIsWritable,
   designReadOnlyReason,
   fieldLabel,
   lockViewOf,
@@ -46,6 +56,7 @@ import {
   rowsHoldValue,
   type PanelSection,
 } from "./panel-section";
+import { useSettingsMatch } from "./settings-filter";
 import {
   useVisitorUnreadable,
   VisitorUnreadableNote,
@@ -135,6 +146,15 @@ export function commitProp(
   if (!propIsWritable(document, id, name, lockViewOf(editor))) return null;
   const node = findNode(document.nodes, id);
   if (node === undefined) return null;
+  // An Embed's link, typed or pasted into its Link field, takes the
+  // provider's shape with it, in the same step, as a link pasted on the
+  // canvas does.
+  if (node.type === EMBED_BLOCK_TYPE && name === "src" && typeof value === "string") {
+    const linked = embedLinkOp(document, id, value, {
+      shape: designIsWritable(document, id, lockViewOf(editor)),
+    });
+    if (linked !== null) return editor.apply(linked);
+  }
   return editor.apply({
     kind: "update",
     id,
@@ -147,9 +167,34 @@ function builderSectionsOf(
   inspection: BlockInspection,
   editor: EditorState,
   around: ContentAround | undefined,
-  reasonId: string
+  reasonId: string,
+  services: ContentServices | undefined
 ): PanelSection[] {
-  const label = builderContentSectionOf(inspection.blockName);
+  const labels = builderContentSectionsOf(inspection.blockName);
+  if (labels.length === 0) return [];
+  // Layout, Stack on, Columns and On mobile write the block's design, so a
+  // design lock holds them.
+  const designHeldBy =
+    designReadOnlyReason(
+      editor.document,
+      inspection.nodeId,
+      lockViewOf(editor)
+    ) === undefined
+      ? undefined
+      : reasonId;
+  const gallery = galleryContentSections(
+    {
+      editor,
+      nodeId: inspection.nodeId,
+      breakpoints: around?.breakpoints,
+      services,
+      reasonId,
+      designHeldBy,
+    },
+    labels
+  );
+  if (gallery.length > 0) return gallery;
+  const [label] = labels;
   if (label === undefined) return [];
   const section = columnsContentSection({
     editor,
@@ -159,17 +204,38 @@ function builderSectionsOf(
     breakpoints: around?.breakpoints,
     cascade: around?.cascade,
     renderedTag: around?.renderedTag,
-    // Layout and Stack on write the row's design, so a design lock holds them.
-    heldBy:
-      designReadOnlyReason(
-        editor.document,
-        inspection.nodeId,
-        lockViewOf(editor)
-      ) === undefined
-        ? undefined
-        : reasonId,
+    heldBy: designHeldBy,
   });
   return section === undefined ? [] : [section];
+}
+
+/**
+ * The builder's sections and the block's own, as one list: a block's
+ * section named as one the builder draws is drawn inside it, after the
+ * builder's controls, so the two never share a name in one tab.
+ */
+function joinedSections(
+  builder: readonly PanelSection[],
+  own: readonly PanelSection[]
+): PanelSection[] {
+  const named = new Set(builder.map(section => section.key));
+  return [
+    ...builder.map(section => {
+      const same = own.find(each => each.key === section.key);
+      if (same === undefined) return section;
+      return {
+        ...section,
+        holdsValue: section.holdsValue || same.holdsValue,
+        body: (
+          <>
+            {section.body}
+            {same.body}
+          </>
+        ),
+      };
+    }),
+    ...own.filter(section => !named.has(section.key)),
+  ];
 }
 
 /**
@@ -203,6 +269,7 @@ function ContentSurface({
   // A block's own inspector knows nothing of bindings visitors will not see,
   // so beside one, every such binding on the block is said above it.
   const unreadable = useVisitorUnreadable(inspection.nodeId);
+  const filterOn = useSettingsMatch().active;
   const fieldsFor = (rows: readonly EditableProp[]): React.JSX.Element => (
     <ContentFields
       inspection={inspection}
@@ -229,18 +296,97 @@ function ContentSurface({
       listView={listViewOf(editor, inspection.nodeId)}
     />
   );
+  // The Form's Fields and After sending, which the builder draws in place
+  // of their generated rows.
+  const stored =
+    findNode(editor.document.nodes, inspection.nodeId)?.props ?? {};
+  const formWritable = (name: string) =>
+    propIsWritable(
+      editor.document,
+      inspection.nodeId,
+      name,
+      lockViewOf(editor)
+    );
+  // Where a Form's form comes from, read only while a Form is inspected.
+  const formSources = useFormSources(
+    inspection.blockName === FORM_BLOCK ? services?.listForms : undefined
+  );
+  const formBodies = formSectionBodies({
+    inspection,
+    stored,
+    services,
+    writable: formWritable,
+    onCommit: (name, value) => {
+      onCommit(name, value);
+    },
+    rowsOf: fieldsFor,
+    exposeOf:
+      fields === undefined
+        ? undefined
+        : prop => (
+            <PropExposeControl
+              binding={fields}
+              nodeId={inspection.nodeId}
+              prop={prop}
+            />
+          ),
+  });
+  // The Embed's section: its Link, which writes the provider's shape with
+  // the link, and the settings that apply to what the link is.
+  const embedNode = findNode(editor.document.nodes, inspection.nodeId);
+  const embedBodies = embedSectionBodies({
+    inspection,
+    stored: embedNode?.props ?? {},
+    linkBound: embedNode?.bindings?.src !== undefined,
+    services,
+    writable: name =>
+      propIsWritable(
+        editor.document,
+        inspection.nodeId,
+        name,
+        lockViewOf(editor)
+      ),
+    onCommit: (name, value) => {
+      onCommit(name, value);
+    },
+    rowsOf: fieldsFor,
+  });
   // Each section the block places in Content, folding on its own, after
-  // the one the builder draws for a core block (Columns' layout); a block
+  // the ones the builder draws for a core block (Columns' layout, a
+  // Gallery's Pictures and Layout); a block
   // with none draws the fields' own note that there is nothing to set.
-  const sections = [
-    ...builderSectionsOf(inspection, editor, around, reasonId),
-    ...inspection.sections.content.map(section => ({
-      key: section.label,
-      label: section.label,
-      holdsValue: rowsHoldValue(section.rows),
-      body: fieldsFor(section.rows),
-    })),
-  ];
+  const sections = joinedSections(
+    [
+      ...formSourceSections({
+        inspection,
+        stored,
+        sources: formSources,
+        writable: formWritable,
+        onCommit: (name, value) => {
+          onCommit(name, value);
+        },
+      }),
+      ...builderSectionsOf(inspection, editor, around, reasonId, services),
+    ],
+    // A section the builder draws as `null` is one the block has no use
+    // for as it stands: a picked form's own fields.
+    inspection.sections.content.flatMap(section => {
+      const body =
+        formBodies?.has(section.label) === true
+          ? formBodies.get(section.label)
+          : (embedBodies?.get(section.label) ?? fieldsFor(section.rows));
+      return body === null || body === undefined
+        ? []
+        : [
+            {
+              key: section.label,
+              label: section.label,
+              holdsValue: rowsHoldValue(section.rows),
+              body,
+            },
+          ];
+    })
+  );
   const generated =
     sections.length === 0 ? (
       fieldsFor(contentRowsOf(inspection))
@@ -251,7 +397,9 @@ function ContentSurface({
     inspection.inspector === undefined
       ? undefined
       : inspectors?.(inspection.inspector);
-  if (Custom === undefined) return generated;
+  // While the panel is filtered, the generated fields are drawn, which the
+  // filter can hide row by row; the block's own inspector knows nothing of it.
+  if (Custom === undefined || filterOn) return generated;
   return (
     <>
       <VisitorUnreadableNote

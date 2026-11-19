@@ -9,9 +9,23 @@
 /** The view's address segment, after the document's own address. */
 export const BUILDER_VIEW_PATH = "builder";
 
+/**
+ * The words the admin offers the view by where a document opens elsewhere: a
+ * list row's menu and the form's document bar, beside History.
+ */
+export const OPEN_IN_BUILDER = "Open in builder";
+
 /** The component the admin draws at that address. */
 export const BUILDER_VIEW_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView";
+
+/**
+ * The New page dialog's body, which the admin opens from "+ New" on a list
+ * whose entries open in the builder. Declared here, beside the view, for the
+ * reason the action below gives.
+ */
+export const NEW_PAGE_DIALOG_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#NewPageCreateDialog";
 
 /**
  * The "Remove Layout…" action drawn in a Layout's document bar, through the
@@ -29,6 +43,10 @@ export const BINDINGS_TO_FIX_PAGE_COMPONENT =
 /** The Page Builder overview, the page its rail item opens. */
 export const OVERVIEW_PAGE_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderOverview";
+
+/** The Fonts page, the admin's way into the site's fonts. */
+export const FONTS_PAGE_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#FontsPage";
 
 /** The "Bindings to fix" dashboard card. */
 export const BINDINGS_TO_FIX_CARD_COMPONENT =
@@ -71,6 +89,14 @@ export const TEMPLATE_DELETE_COMPONENT =
  */
 export const COMPONENT_LIST_TOOLS_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#ComponentListTools";
+
+/**
+ * The tools above the Header & footer list: Import from file, and the
+ * "Make site default" row actions with the question they may ask. Declared
+ * here for the same reason.
+ */
+export const LAYOUT_LIST_TOOLS_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#LayoutListTools";
 
 /**
  * The delete tools for a host's own component store, drawn through the

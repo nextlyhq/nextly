@@ -40,6 +40,18 @@ export interface BindingFieldChoice extends Omit<BindingFieldShape, "fields"> {
    */
   readonly draft?: true;
   /**
+   * A small picture of the value, for a field holding an image visitors may
+   * read: its address, as the author's read gave it. The picker draws it
+   * beside the field's name.
+   */
+  readonly thumbnail?: string;
+  /**
+   * Set on a field visitors may read that holds nothing: the picker says
+   * "(empty)" beside it, rather than leaving the author to guess why no value
+   * shows.
+   */
+  readonly empty?: true;
+  /**
    * The fields inside it: a group's own, or a relation's, one step in, as the
    * entry it names holds them.
    */
@@ -82,15 +94,26 @@ export interface BindingFieldSource {
 }
 
 /**
- * The start of each field's value in the first entry a list shows, as the
- * canvas reads it, by the field's path (`title`, `author.name`): the samples
- * the picker shows beside a list item's fields. Cut short by the same rule
- * as a {@link BindingFieldChoice}'s `preview`; a field with no such value is
+ * One field's value in a list's entry, as the picker shows it: its start as
+ * text, a picture's small thumbnail, or a field holding nothing.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export type ListSampleValue =
+  | string
+  | { readonly thumbnail: string }
+  | { readonly empty: true };
+
+/**
+ * Each field's value in one entry a list shows, as the canvas reads it, by
+ * the field's path (`title`, `author.name`): the samples the picker shows
+ * beside a list item's fields. Text is cut short by the same rule as a
+ * {@link BindingFieldChoice}'s `preview`; a field with nothing to show is
  * absent.
  *
  * @experimental Settles with the editor's binding controls.
  */
-export type ListSample = Readonly<Record<string, string>>;
+export type ListSample = Readonly<Record<string, ListSampleValue>>;
 
 /**
  * An unbind the inspector asks the host to plan, in the document it holds.
@@ -128,15 +151,18 @@ export interface BindingServices {
    */
   readonly listBindingFields?: () => Promise<readonly BindingFieldSource[]>;
   /**
-   * The start of each field's value in the first entry a list shows, read
-   * as the canvas reads that list, for the picker's samples beside a list
-   * item's fields. Takes the list's stored props. `undefined` for a list the
-   * canvas reads no entry of. Absent, the item's fields show no samples.
+   * Each field's value in one entry a list shows, read as the canvas reads
+   * that list, for the picker's samples beside a list item's fields. Takes
+   * the list's stored props and the entry's place among those it shows
+   * (the one the author clicked on the canvas), the first where none is
+   * given or the list shows fewer. `undefined` for a list the canvas reads
+   * no entry of. Absent, the item's fields show no samples.
    *
    * @experimental Settles with the editor's binding controls.
    */
   readonly readListSample?: (
-    props: Readonly<Record<string, unknown>>
+    props: Readonly<Record<string, unknown>>,
+    entry?: number
   ) => Promise<ListSample | undefined>;
   /**
    * The page's language, as the canvas's render formats bound values in it,

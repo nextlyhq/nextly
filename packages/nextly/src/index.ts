@@ -185,6 +185,12 @@ export {
 // migration writer uses.
 export { slugify } from "./hooks/prebuilt";
 
+// A slug as a collection stores it: one part, or a path where the collection
+// sets `db.slugPaths`. Core's writes store by it, so a plugin that says where
+// an entry will land before it writes says what core will store.
+// @experimental
+export { slugAsStored } from "./domains/collections/services/slug-as-stored";
+
 // Direct API types - type-safe slug resolution (for generated types integration)
 export type {
   GeneratedTypes,
@@ -350,9 +356,12 @@ export type {
   FindQueuedEmailsArgs,
   EmailLastSentArgs,
   EmailOverdueArgs,
+  FindEmailDeliveryByIDArgs,
   ActivityPage,
   DeliveryActivity,
+  DeliveryDetail,
   QueuedEmailActivity,
+  QueuedEmailDetail,
   QueuedEmailOverdue,
   TemplatesLastSent,
 } from "./direct-api/types";
@@ -635,8 +644,10 @@ export {
   type PluginFieldType,
   type PluginFieldValidateArgs,
   type PluginFieldWrite,
+  type PluginFieldWriteCaller,
   type PluginStoredValue,
   type PluginStoredValueTarget,
+  type PluginStoredValuesTarget,
   type PluginFieldInstance,
   type PluginFieldIssue,
   type PluginFieldValidationResult,

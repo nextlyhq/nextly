@@ -41,10 +41,12 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
+import { SingleRegistryService } from "../../../singles/services/single-registry-service";
 import { readTableDefinition } from "../../__tests__/helpers/table-definition";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
+import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
 // `cli/program` imports every command; the commands driven here are handed their context.
@@ -113,41 +115,51 @@ const renameResolutions = (
         ],
       };
 
+/** A Single, saved through its Schema Builder dialog. */
+const SINGLE: Kind = {
+  name: "a Single",
+  slug: "notice",
+  table: "single_notice",
+  listed: "singles",
+  create: fields =>
+    dispatchSingles(
+      "createSingle",
+      {},
+      { slug: "notice", label: "Notice", fields }
+    ),
+  change: async (t, fields, rename) =>
+    dispatchSingles(
+      "applySingleSchemaChanges",
+      { slug: "notice" },
+      {
+        fields,
+        confirmed: true,
+        // The version the Builder read, as its dialog sends it back.
+        schemaVersion: (
+          await t.getService("singleRegistryService").getSingle("notice")
+        ).schemaVersion,
+        ...renameResolutions("single_notice", rename),
+      }
+    ),
+  remove: () => dispatchSingles("deleteSingle", { slug: "notice" }, undefined),
+  row: t => t.getService("singleRegistryService").getSingleForWrite("notice"),
+  seed: async (t, value) => {
+    await t.nextly.updateSingle({
+      slug: "notice",
+      data: { heading: value, _overwrite: true },
+    } as never);
+  },
+};
+
 const KINDS: Kind[] = [
+  SINGLE,
   {
-    name: "a Single",
-    slug: "notice",
-    table: "single_notice",
-    listed: "singles",
-    create: fields =>
-      dispatchSingles(
-        "createSingle",
-        {},
-        { slug: "notice", label: "Notice", fields }
-      ),
-    change: async (t, fields, rename) =>
-      dispatchSingles(
-        "applySingleSchemaChanges",
-        { slug: "notice" },
-        {
-          fields,
-          confirmed: true,
-          // The version the Builder read, as its dialog sends it back.
-          schemaVersion: (
-            await t.getService("singleRegistryService").getSingle("notice")
-          ).schemaVersion,
-          ...renameResolutions("single_notice", rename),
-        }
-      ),
-    remove: () =>
-      dispatchSingles("deleteSingle", { slug: "notice" }, undefined),
-    row: t => t.getService("singleRegistryService").getSingleForWrite("notice"),
-    seed: async (t, value) => {
-      await t.nextly.updateSingle({
-        slug: "notice",
-        data: { heading: value, _overwrite: true },
-      } as never);
-    },
+    ...SINGLE,
+    // The same Single, its schema changed through the API's settings save, which detects a rename
+    // itself rather than being told of one.
+    name: "a Single's settings save",
+    change: (_t, fields) =>
+      dispatchSingles("updateSingleSchema", { slug: "notice" }, { fields }),
   },
   {
     name: "a field group",
@@ -447,6 +459,35 @@ describe.each(getConfiguredTestDialects())(
           .join("\n")
       ).toEqual([]);
     }
+
+    describe("a Single's settings save whose registry row fails after its file applied", () => {
+      it("throws an internal error, keeps the file recorded applied, and the same save again writes the row", async () => {
+        const t = await boot();
+        const kind = KINDS[1];
+        await kind.create([text("heading")]);
+        const appliedBefore = await appliedFiles(t);
+        // The first registry write after the file is the settings save's own row.
+        const failOnce = vi
+          .spyOn(SingleRegistryService.prototype, "updateSingle")
+          .mockRejectedValueOnce(new Error("the row write was refused"));
+
+        await expect(
+          kind.change(t, [text("heading"), text("body")])
+        ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+        failOnce.mockRestore();
+        // The file ran, and is recorded applied: the column is there, and the ledger counts it.
+        expect(await columns(t, kind.table)).toContain("body");
+        expect(await appliedFiles(t)).toHaveLength(appliedBefore.length + 1);
+
+        // The same save again: the row is written, and nothing is left for the migrate commands.
+        await kind.change(t, [text("heading"), text("body")]);
+        const fields = (await kind.row(t))?.fields as
+          | { name: string }[]
+          | undefined;
+        expect(fields?.map(field => field.name)).toEqual(["heading", "body"]);
+        await nothingLeftToDo(t);
+      }, 60_000);
+    });
 
     describe.each(KINDS)("$name", kind => {
       it("leaves nothing for migrate or migrate:check to do after its create, change and delete", async () => {
@@ -785,6 +826,86 @@ describe.each(getConfiguredTestDialects())(
             });
           },
           30_000
+        );
+
+        // A column type change keeps the push, which waits in tries of its own. Its stop says
+        // nothing ran, so the files the save wrote are withdrawn, on MySQL as anywhere else.
+        it("stops a save the push applies with nothing changed, leaving no file behind", async () => {
+          const t = await boot();
+          await kind.create([text("heading")]);
+          const before = await standing(t, kind);
+          await holdTheTable(t);
+
+          const stop = await kind
+            .change(t, [{ name: "heading", type: "number" }])
+            .then(
+              () => undefined,
+              (error: unknown) => error
+            );
+
+          free();
+          await holding.catch(() => {});
+          expect(stop).toBeInstanceOf(Error);
+          // What the stop recorded of itself, said beside a failure: a stop that changed nothing
+          // leaves nothing, and any other outcome would say why the files stayed.
+          expect(
+            await standing(t, kind),
+            JSON.stringify(
+              (stop as { code?: unknown; logContext?: { stop?: unknown } })
+                ?.logContext?.stop ?? (stop as Error | undefined)?.message
+            )
+          ).toEqual(before);
+        }, 60_000);
+
+        // MySQL commits each schema statement as it runs. A push whose second statement fails
+        // after its first committed stopped part way: its files stay, recorded applied nowhere,
+        // so the next `nextly migrate` names them. The failure comes through the test's seam on
+        // the push's statement executor, which runs the first statement and then fails. A Single's
+        // settings save runs its service's own statements, which that seam does not reach.
+        it.runIf(
+          dialect === "mysql" && kind.name !== "a Single's settings save"
+        )(
+          "keeps the files of a push whose second statement failed after its first committed",
+          async () => {
+            const t = await boot();
+            await kind.create([text("heading")]);
+            const filesBefore = migrationFiles();
+            const run = DrizzleStatementExecutor.prototype.executeStatements;
+            const sent: string[] = [];
+            // Every statement the push sends, across its calls: the first runs, which MySQL
+            // commits, and the second fails.
+            const failing = vi
+              .spyOn(DrizzleStatementExecutor.prototype, "executeStatements")
+              .mockImplementation(async function (
+                this: DrizzleStatementExecutor,
+                tx: unknown,
+                statements: string[]
+              ) {
+                for (const statement of statements) {
+                  sent.push(statement);
+                  if (sent.length > 1) {
+                    throw new Error("the second statement failed");
+                  }
+                  await run.call(this, tx, [statement]);
+                }
+              });
+
+            // A type change, which keeps the push, and a field added: two statements.
+            await expect(
+              kind.change(t, [
+                { name: "heading", type: "number" },
+                text("body"),
+              ])
+            ).rejects.toBeInstanceOf(Error);
+            failing.mockRestore();
+
+            expect(sent.length, sent.join("\n")).toBeGreaterThan(1);
+            const kept = migrationFiles().filter(f => !filesBefore.includes(f));
+            expect(kept).not.toEqual([]);
+            const applied = await appliedFiles(t);
+            for (const file of kept) expect(applied).not.toContain(file);
+          },
+          60_000
         );
       });
     });
