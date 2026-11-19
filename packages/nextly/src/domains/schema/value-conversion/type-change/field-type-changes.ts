@@ -25,6 +25,7 @@ import type { RowKey } from "../types";
 
 import {
   columnDescriptorAt,
+  type Family,
   type FieldTypeOnDialect,
   fieldTypeOnDialect,
 } from "./field-type";
@@ -127,6 +128,40 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
   table: string;
   column: string;
   result: StoredTypeChangeJudgement;
+  /**
+   * Each kept or changed value as the new type reads it, by row, where the save rewrites the
+   * values (`rewrites`): what the save's conversion writes. Absent where the database's cast is
+   * left to reach them.
+   */
+  readings?: readonly { key: RowKey; readsAs: string }[];
+}
+
+/**
+ * The families a save that rewrites the values converts between (`rewrites`): a text, an email, a
+ * choice or a number from any of those, and a list into one of them, its one item. Any other pair
+ * keeps the answer the database's cast gives, so a change this conversion does not write is judged
+ * exactly as before, never written half way.
+ */
+const REWRITTEN_FROM: ReadonlySet<Family> = new Set([
+  "text",
+  "email",
+  "choice",
+  "number",
+  "list",
+]);
+const REWRITTEN_TO: ReadonlySet<Family> = new Set([
+  "text",
+  "email",
+  "choice",
+  "number",
+]);
+
+/** Whether a save that rewrites the values writes `from`'s values as `to` reads them. */
+export function rewritesPair(
+  from: FieldTypeOnDialect,
+  to: FieldTypeOnDialect
+): boolean {
+  return REWRITTEN_FROM.has(from.family) && REWRITTEN_TO.has(to.family);
 }
 
 /**
@@ -149,6 +184,11 @@ export async function judgeFieldTypeChanges(args: {
   translationsTable?: string;
   translated?: ReadonlySet<string>;
   changes: readonly FieldTypeChange[];
+  /**
+   * The save rewrites each value of a pair it converts (`rewritesPair`) as the new type reads it,
+   * so each change of such a pair is judged that way and hands over its readings.
+   */
+  rewrites?: boolean;
 }): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
   const columnsOf = liveColumnReader(args.db, args.dialect);
@@ -166,6 +206,9 @@ export async function judgeFieldTypeChanges(args: {
       change.to.unique === true &&
       COLLATED_FAMILIES.has(change.toType.family);
     const readings: { key: RowKey; readsAs: string }[] = [];
+    const rewritten =
+      args.rewrites === true && rewritesPair(change.fromType, change.toType);
+    const written: { key: RowKey; readsAs: string }[] = [];
     const judgedHere = await judgeStoredTypeChange({
       db: args.db,
       dialect: args.dialect,
@@ -179,9 +222,15 @@ export async function judgeFieldTypeChanges(args: {
       accepts: fieldAccepts(change.toType, change.to),
       // A unique field holds each value once: two that read as one value of the new type block.
       unique: change.to.unique === true && !collated,
-      ...(collated
-        ? { onReading: (key, readsAs) => readings.push({ key, readsAs }) }
+      ...(collated || rewritten
+        ? {
+            onReading: (key, readsAs) => {
+              if (collated) readings.push({ key, readsAs });
+              if (rewritten) written.push({ key, readsAs });
+            },
+          }
         : {}),
+      ...(rewritten ? { rewrites: true } : {}),
     });
     const result =
       collated && text !== undefined
@@ -190,7 +239,13 @@ export async function judgeFieldTypeChanges(args: {
             await repeatsByCollation(args.db, readings, text)
           )
         : judgedHere;
-    judged.push({ ...change, table, column, result });
+    judged.push({
+      ...change,
+      table,
+      column,
+      result,
+      ...(rewritten ? { readings: written } : {}),
+    });
   }
   return judged;
 }
@@ -503,6 +558,8 @@ export interface EntityTypeChangeInput {
   componentRow?: boolean;
   /** The fields whose lost values the owner consented to clearing, by name. */
   acknowledged?: ReadonlySet<string>;
+  /** The save rewrites the values of each pair it converts (`judgeFieldTypeChanges`' `rewrites`). */
+  rewrites?: boolean;
 }
 
 /**
@@ -559,6 +616,7 @@ export async function judgeEntityTypeChanges(
       ? { translated: entity.translatedBefore }
       : {}),
     changes,
+    ...(entity.rewrites === true ? { rewrites: true } : {}),
   });
   return {
     refusals: typeChangeRefusals(entity.label, judged, entity.acknowledged),
