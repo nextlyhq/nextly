@@ -161,8 +161,9 @@ describeEachDialect("a Single's field type change", dialect => {
     }
   }
 
-  it("changes an empty field's column to the new type and records its file applied", async () => {
-    await fillRow(null);
+  it("changes a field's column to the new type, its value converted, and records its file applied", async () => {
+    // A value the new type takes, so the copy across the rebuild is exercised, not just the type.
+    await fillRow("12");
     const folderBefore = await migrationFiles();
 
     const { thrown, said } = await scoreToNumber();
@@ -181,7 +182,13 @@ describeEachDialect("a Single's field type change", dialect => {
       expect.objectContaining({ name: "count", type: "text" }),
       expect.objectContaining({ name: "score", type: "number" }),
     ]);
+    // The value came across and converted: a driver may hand a numeric back as a string.
+    expect(Number(await storedScore()), "the stored value").toBe(12);
     if (dialect === "sqlite") {
+      const [row] = await query<{ class: string }>(
+        `SELECT typeof(score) AS class FROM "${TABLE}"`
+      );
+      expect(["integer", "real"], "its storage class").toContain(row?.class);
       expect(await sqliteColumnType("score"), "the column's type").toBe(
         getColumnDescriptor(
           { name: "score", type: "number" },
