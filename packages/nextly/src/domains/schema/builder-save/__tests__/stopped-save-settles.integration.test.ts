@@ -70,6 +70,7 @@ import {
 } from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
+import { calculateSchemaHash } from "../../services/schema-hash";
 import { judgeStoppedSave } from "../stopped-save";
 
 // The judgement of what a stopped save applied, watched as it runs: a save that rolled back whole
@@ -596,6 +597,28 @@ describe.each(getConfiguredTestDialects())(
       return (fields ?? []).map(field => String(field.name)).sort();
     }
 
+    /** The registry row's stored fields, as saved, and its schema hash. */
+    async function storedRowOf(
+      t: TestNextly,
+      path: SavePath
+    ): Promise<{ fields: unknown; schemaHash: unknown }> {
+      clearRegistryRowCache();
+      const [row] = await t.adapter.select<{
+        fields: unknown;
+        schemaHash: unknown;
+      }>(path.registry, {
+        columns: ["fields", "schemaHash"],
+        where: { and: [{ column: "slug", op: "=", value: path.slug }] },
+      });
+      return {
+        fields:
+          typeof row?.fields === "string"
+            ? JSON.parse(row.fields)
+            : row?.fields,
+        schemaHash: row?.schemaHash,
+      };
+    }
+
     /** The registry row's migration status. */
     async function migrationStatusOf(
       t: TestNextly,
@@ -763,6 +786,15 @@ describe.each(getConfiguredTestDialects())(
             expect
               .soft(await migrationStatusOf(t, path), "the row's status")
               .toBe("applied");
+            // Its schema hash is the one of the fields it holds, not of those asked for.
+            const stored = await storedRowOf(t, path);
+            expect
+              .soft(stored.schemaHash, "the row's schema hash")
+              .toBe(
+                calculateSchemaHash(
+                  stored.fields as Parameters<typeof calculateSchemaHash>[0]
+                )
+              );
             // This process's running shape reaches what landed: a value written to `alpha`
             // through the API is read back.
             await path.store?.(t, { heading: "Second", alpha: "Landed" });
