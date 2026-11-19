@@ -389,7 +389,8 @@ async function applyBootMigrations(
     "../domains/field-groups/services/field-group-stored-tables"
   );
   const fieldGroups = await declaredFieldGroupStorage(
-    adapter,
+    // The connected adapter, which reads the registry and the catalog as the start's own reads do.
+    adapter as unknown as Parameters<typeof declaredFieldGroupStorage>[0],
     args.config.fieldGroups
   );
   const extensionSchema = await compileExtensionSchema({

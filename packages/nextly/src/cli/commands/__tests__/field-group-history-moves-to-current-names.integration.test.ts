@@ -357,7 +357,7 @@ describe.each(getConfiguredTestDialects())(
       const app = await start(dialect, url, WITH_SUBTITLE);
       const [post] = (
         await app.nextly.find({ collection: "fh_posts" as never })
-      ).docs as Array<{ card?: { heading?: string; subtitle?: unknown } }>;
+      ).items as Array<{ card?: { heading?: string; subtitle?: unknown } }>;
       expect(post.card?.heading).toBe("H");
     });
 
