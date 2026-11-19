@@ -21,14 +21,7 @@
 import { COLLECTION_LIST_TYPE, findNode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import {
-  CollectionListPicker,
-  type CollectionPickerServices,
-} from "../collection-list-picker";
-import { ColumnsLayoutPicker } from "../columns-layout-picker";
-import { isHTMLElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
-import type { FirstAdd } from "../first-add";
 import type { Rect } from "../geometry";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
@@ -37,6 +30,13 @@ import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { returnFocusToCanvas } from "./canvas-escape";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
+import {
+  CollectionListPicker,
+  type CollectionPickerServices,
+} from "./collection-list-picker";
+import { ColumnsLayoutPicker } from "./columns-layout-picker";
+import { isHTMLElement } from "./dom-kind";
+import type { FirstAdd } from "./first-add";
 import {
   layoutFragments,
   overlaySpaceOf,

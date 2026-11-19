@@ -32,12 +32,12 @@ import {
 import { CircleAlert } from "lucide-react";
 import * as React from "react";
 
+import type { EditorState } from "../editor-state";
 import {
   chooseVariantOp,
   variantChoiceOf,
   type VariantChoice,
-} from "../component-variants";
-import type { EditorState } from "../editor-state";
+} from "../panels/components/component-variants";
 
 /**
  * What the picker's control spells "no variant". Every variant's own value is

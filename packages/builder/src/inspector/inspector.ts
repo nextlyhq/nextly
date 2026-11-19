@@ -35,8 +35,8 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
+import { COLUMNS_ROW } from "../canvas/columns-layout";
 import type { RefusalWording } from "../canvas/drag-refusal";
-import { COLUMNS_ROW } from "../columns-layout";
 import type { EditorState } from "../editor-state";
 import { lockRefusalWording } from "../lock-refusal";
 import { isLocked, lockBlockingEdit, lockedAncestorOf } from "../locking";

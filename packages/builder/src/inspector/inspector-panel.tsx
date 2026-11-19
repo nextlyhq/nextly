@@ -47,17 +47,17 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
-import {
-  blockLookGroups,
-  sameLook,
-  type BlockLookRow,
-} from "../block-look-rows";
 import { CanvasPassageContext } from "../canvas/canvas-passage";
 import { useCanvasReading } from "../canvas/use-canvas-reading";
 import type { EditorState } from "../editor-state";
 import { EDITOR_WORDS } from "../editor-words";
 import { FieldsOfDocument } from "../field-edit";
 import { TypingCancel } from "../live-draft";
+import {
+  blockLookGroups,
+  sameLook,
+  type BlockLookRow,
+} from "../panels/design/block-look-rows";
 import type { PlainFlow } from "../plain-layout";
 
 import { useAskedSetting } from "./asked-setting";

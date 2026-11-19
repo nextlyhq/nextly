@@ -29,7 +29,6 @@ import { walkNodes } from "@nextlyhq/blocks-engine";
 import { Select, SelectContent, SelectTrigger } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { isHTMLElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
 import type { Rect } from "../geometry";
 import type {
@@ -49,12 +48,12 @@ import {
   useShownAgain,
 } from "../inspector/content/form-source-control";
 import { lockViewOf, propIsWritable, propPatch } from "../inspector/inspector";
-import { selectionModeFor } from "../selection";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
+import { isHTMLElement } from "./dom-kind";
 import {
   drawnForms,
   formNodeOf,
@@ -69,6 +68,7 @@ import {
   visiblePartOf,
 } from "./geometry-dom";
 import { nodeElements } from "./rendered-nodes";
+import { selectionModeFor } from "./selection";
 
 /** @experimental Settles with the form provider contract. */
 export interface FormStatesProps {

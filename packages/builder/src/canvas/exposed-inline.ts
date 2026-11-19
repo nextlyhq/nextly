@@ -35,11 +35,11 @@ import {
   type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
-import { composedHolds } from "../component-holds";
 import { setOverrideOp } from "../inspector/instance-inspector";
 import { lockBlockingEdit } from "../locking";
 import type { BuilderOp } from "../op-vocabulary";
 
+import { composedHolds } from "./component-holds";
 import { inlinePropKind } from "./inline-prop-kind";
 import { richTextChanged } from "./inline-rich-text";
 

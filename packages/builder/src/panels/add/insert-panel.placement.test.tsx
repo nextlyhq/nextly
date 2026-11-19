@@ -31,7 +31,7 @@ import {
 } from "../../canvas/insertion-preview";
 import type { EditorState } from "../../editor-state";
 import { InsertPanel } from "./insert-panel";
-import { EMPTY_SELECTION } from "../../selection";
+import { EMPTY_SELECTION } from "../../canvas/selection";
 
 beforeAll(() => {
   globalThis.ResizeObserver ??= class {

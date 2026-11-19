@@ -14,6 +14,7 @@ import {
 import * as React from "react";
 
 import type { useCanvasTokenMode } from "../../canvas/prefers-dark";
+import { variableGroupOf } from "../../panels/design/tokens-studio";
 import {
   variableLabel,
   variablesFor,
@@ -21,7 +22,6 @@ import {
 } from "../../style-colour";
 import type { StyleControl } from "../../style-controls";
 import { lengthInPx, variableValueText } from "../../style-variables";
-import { variableGroupOf } from "../../tokens-studio";
 
 import { storedText } from "./style-text-field";
 

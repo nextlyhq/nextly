@@ -46,17 +46,17 @@ import * as React from "react";
 
 import { autoscrollStep } from "../../canvas/autoscroll";
 import { DEFAULT_ACTIVATION_PX } from "../../canvas/canvas-drag";
+import { isElement } from "../../canvas/dom-kind";
 import { placementSources } from "../../canvas/drop-targets";
 import {
   canvasContentPoint,
   canvasContentRect,
   containerEdges,
 } from "../../canvas/geometry-dom";
+import { holdsBlocks } from "../../canvas/keyboard-move";
 import { RefusalNotice } from "../../canvas/refusal-notice";
-import { isElement } from "../../dom-kind";
 import type { EditorState } from "../../editor-state";
 import type { Point, Rect } from "../../geometry";
-import { holdsBlocks } from "../../keyboard-move";
 import { isLayersLockFacts } from "../../lock-refusal";
 import { refusalAnnouncement, unmovedAnnouncement } from "../../move-refusal";
 

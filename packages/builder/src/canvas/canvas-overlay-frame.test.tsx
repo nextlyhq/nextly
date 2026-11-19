@@ -43,7 +43,7 @@ import {
   hostPointInFrame,
   overlaySpaceOf,
 } from "./geometry-dom";
-import { BlockKeyboardActions } from "../keyboard-actions";
+import { BlockKeyboardActions } from "../shell/keyboard-actions";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 const PAGE_MARKER = "data-test-page";
