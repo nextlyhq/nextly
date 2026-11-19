@@ -52,6 +52,21 @@ describe("asBuilderSaveDrift", () => {
     expect(asBuilderSaveDrift(kept)).toBe(kept);
   });
 
+  // A save stopped part way whose settle failed too is told so by `withSettleFailure`, which keeps
+  // the stop's own code and context: the database holds part of the change, so it is left as is.
+  it("leaves a stopped save whose settle failed as it is", () => {
+    const original = drift();
+    const left = new NextlyError({
+      code: original.code,
+      statusCode: original.statusCode,
+      publicMessage: `${original.publicMessage} Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again.`,
+      logContext: { ...original.logContext, reason: "stopped-save-left" },
+      cause: original,
+    });
+
+    expect(asBuilderSaveDrift(left)).toBe(left);
+  });
+
   it("leaves a database never adopted, and any other error, as they are", () => {
     const unadopted = migrationDriftError({
       migration: "20261119_notes_create",

@@ -16,7 +16,8 @@ import { migrationDriftError, type DriftItem } from "../migrate/drift-error";
  * error is answered as it is: a database never adopted has its own recovery, a refusal after the
  * push (`recordWhatWasPushed`) keeps the files and names the one to record, and so does a refusal
  * that came after an earlier file of the save applied (`partlyAppliedChange` names the `keptFiles`
- * and how to record them): the database already holds part of the change.
+ * and how to record them), and a stopped save whose settle failed too (`withSettleFailure`, its
+ * `reason` "stopped-save-left"): the database already holds part of the change.
  */
 export function asBuilderSaveDrift(error: unknown): unknown {
   if (!NextlyError.is(error) || error.code !== "NEXTLY_MIGRATION_DRIFT") {
@@ -29,6 +30,7 @@ export function asBuilderSaveDrift(error: unknown): unknown {
     !driftItems.every(isDriftItem) ||
     context.unadoptedDatabase === true ||
     context.keptFiles !== undefined ||
+    context.reason === "stopped-save-left" ||
     typeof context.migration !== "string"
   ) {
     return error;
