@@ -11,12 +11,16 @@
  */
 
 import { fetcher } from "../lib/api/fetcher";
+import type { PaginatedResponse } from "../types/api";
 import type { ReleaseDocumentRef } from "../types/releases";
 import type {
   AssignmentPayload,
+  BulkMoveAnswer,
   DocumentReview,
   ReviewStateAnswer,
+  StepManyPayload,
   TakeStepPayload,
+  WaitingItem,
   WorkflowDocumentRef,
 } from "../types/workflows";
 
@@ -78,6 +82,50 @@ export const assignWorkflowParts = (
 ): Promise<WorkflowMutationResponse> =>
   fetcher<WorkflowMutationResponse>(
     "/workflows/assignments",
+    { method: "POST", body: JSON.stringify({ assignments }) },
+    true
+  );
+
+/**
+ * A page of what waits for the caller: the parts whose next step they may take and that wait for
+ * them (assigned to them or one of their roles, or to someone who can't take it, or to no one).
+ * `meta.totalCapped` says the total is a floor.
+ */
+export const fetchWaitingForMe = ({
+  page,
+  limit,
+}: {
+  page: number;
+  limit: number;
+}): Promise<PaginatedResponse<WaitingItem>> =>
+  fetcher<PaginatedResponse<WaitingItem>>(
+    `/workflows/waiting?${new URLSearchParams({
+      page: String(page),
+      limit: String(limit),
+    }).toString()}`,
+    {},
+    true
+  );
+
+/**
+ * Takes one step on several documents: each moves if it may, and each refusal comes back with its
+ * reason. The server refuses an approval here outright: each is given from that document's review.
+ */
+export const stepManyWorkflowDocuments = (
+  payload: StepManyPayload
+): Promise<BulkMoveAnswer> =>
+  fetcher<BulkMoveAnswer>(
+    "/workflows/steps/bulk",
+    { method: "POST", body: JSON.stringify(payload) },
+    true
+  );
+
+/** Assigns several documents' parts: each assigned if it may be, each refusal with its reason. */
+export const assignManyWorkflowParts = (
+  assignments: AssignmentPayload[]
+): Promise<BulkMoveAnswer> =>
+  fetcher<BulkMoveAnswer>(
+    "/workflows/assignments/bulk",
     { method: "POST", body: JSON.stringify({ assignments }) },
     true
   );

@@ -15,6 +15,8 @@ import {
   PluginMenuItems,
   usePluginMatchCounts,
 } from "@admin/components/features/dashboard/PluginMenuItems";
+import { Link } from "@admin/components/ui/link";
+import { ROUTES } from "@admin/constants/routes";
 import {
   useSidebarCollectionList,
   useSidebarSingleList,
@@ -40,6 +42,8 @@ interface ContentPanelProps {
   hasCollections: boolean;
   /** Whether the reader has Singles to list. */
   hasSingles: boolean;
+  /** Whether a workflow holds any content: the panel then leads with "Waiting for my review". */
+  hasWorkflows?: boolean;
   isActive: (href?: string, exact?: boolean) => boolean;
 }
 
@@ -48,6 +52,7 @@ export function ContentPanel({
   onSearchChange,
   hasCollections,
   hasSingles,
+  hasWorkflows = false,
   isActive,
 }: ContentPanelProps): JSX.Element {
   const collections = useSidebarCollectionList();
@@ -96,6 +101,18 @@ export function ContentPanel({
       />
 
       <nav aria-label="Content" className="space-y-4">
+        {/* What waits for the reader's review, in the lists they already use (R-11). */}
+        {hasWorkflows ? (
+          <Link
+            href={ROUTES.CONTENT_WAITING}
+            aria-current={
+              isActive(ROUTES.CONTENT_WAITING, true) ? "page" : undefined
+            }
+            className="block rounded-md px-2 py-1.5 text-sm font-medium text-foreground outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:bg-accent"
+          >
+            Waiting for my review
+          </Link>
+        ) : null}
         {shows.collections ? (
           <ContentFold
             foldKey="collections"

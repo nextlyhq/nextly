@@ -112,3 +112,46 @@ export interface AssignmentPayload {
   assignee: ReviewAssignee | null;
   dueAt?: string | null;
 }
+
+/** A part waiting for the caller, as `GET /api/workflows/waiting` names it. @experimental */
+export interface WaitingItem {
+  document: {
+    scopeKind: "collection" | "single";
+    scopeSlug: string;
+    entryId: string;
+  };
+  part: string | null;
+  stage: string;
+  stageLabel: string;
+  /** Who it is assigned to; null for unassigned work, which waits for every holder. */
+  assignee: ReviewAssignee | null;
+  enteredAt: string;
+  dueAt: string | null;
+}
+
+/** One document of `POST /api/workflows/steps/bulk`, with the parts it moves as the caller saw them. */
+export interface StepManyDocument {
+  document: WorkflowDocumentRef;
+  parts: "all" | (string | null)[];
+  seen: TakeStepPayload["seen"];
+}
+
+/** `POST /api/workflows/steps/bulk`: one step over several documents. Never an approval. */
+export interface StepManyPayload {
+  step: string;
+  comment?: string | null;
+  documents: StepManyDocument[];
+}
+
+/** One refusal of a move over several documents: the document by id, or a Single by slug. */
+export type BulkMoveRefusal = ({ id: string } | { single: string }) & {
+  code: string;
+  message: string;
+};
+
+/** A move over several documents answered: what moved, and each refusal with its reason. */
+export interface BulkMoveAnswer {
+  message?: string;
+  items: unknown[];
+  errors: BulkMoveRefusal[];
+}

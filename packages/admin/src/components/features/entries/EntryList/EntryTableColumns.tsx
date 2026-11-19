@@ -53,6 +53,11 @@ export interface CollectionForColumns {
    */
   status?: boolean;
   /**
+   * The workflow that holds the collection's publishing, where one is attached: the list offers
+   * its bulk moves (Submit for review, Assign…, Send back…) only then.
+   */
+  workflow?: { slug: string; label: string } | null;
+  /**
    * Whether the table shows each row's translation state: a collection with multilingual content
    * (i18n), listed for a user who may read every language's state. When true, the table renders
    * a per-row translation-completeness column from each row's `_translations` map, and a
