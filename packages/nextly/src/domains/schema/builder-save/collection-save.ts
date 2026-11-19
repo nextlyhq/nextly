@@ -1327,17 +1327,69 @@ function overtakenSaveError(error: unknown, left: readonly string[]): unknown {
 
 /**
  * Refuse the save's blocked and lossy field type changes, judged over the values the entity's
- * table holds (`refuseFieldTypeChanges`). A create or a delete changes no field's type. The fields
- * are the whole lists, so a field a group with no name holds is judged by its own name. Where an
- * earlier save's file for the table is not applied yet (outside development, before the deploy's
- * `nextly migrate`), the columns do not hold what the definition says, and a type change is
- * refused until it is.
+ * table holds (`judgeSaveTypeChanges`), and answer the conversion of those it writes value by value
+ * (`typeConversionOf`). A lossy change goes ahead only for a field whose clear the person
+ * confirmed, with the count of values it clears still holding (`refuseChangedClearCounts`).
  */
 async function refuseSaveTypeChanges(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string
 ): Promise<TypeConversion | undefined> {
+  const judgement = await judgeSaveTypeChanges(deps, save, table);
+  if (judgement === undefined) return undefined;
+  throwTypeChangeRefusals(judgement.label, judgement.refusals);
+  refuseChangedClearCounts(judgement.judged, save.confirmedClears);
+  return typeConversionOf({
+    dialect: deps.adapter.getCapabilities().dialect,
+    judged: judgement.judged,
+    ...judgement.at,
+  });
+}
+
+/**
+ * The values each lossy field type change of the save would clear, by field: what the review shows
+ * for the person to confirm (`confirmedClears`), judged as the save judges them.
+ */
+async function clearsOfSave(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<ConfirmedClear[]> {
+  const judgement = await judgeSaveTypeChanges(deps, save, table);
+  return (judgement?.judged ?? []).flatMap(change =>
+    change.result.judgement.class === "lossy"
+      ? [{ field: change.to.name, count: change.result.cleared.length }]
+      : []
+  );
+}
+
+/**
+ * The save's field type changes judged over the values the entity's table holds, with the refusals
+ * they give: undefined where the save changes no field's type (a create or a delete changes none).
+ * The fields are the whole lists, so a field a group with no name holds is judged by its own name.
+ * Where an earlier save's file for the table is not applied yet (outside development, before the
+ * deploy's `nextly migrate`), the columns do not hold what the definition says, and a type change
+ * is refused until it is.
+ */
+async function judgeSaveTypeChanges(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<
+  | {
+      label: string;
+      refusals: Awaited<ReturnType<typeof judgeEntityTypeChanges>>["refusals"];
+      judged: Awaited<ReturnType<typeof judgeEntityTypeChanges>>["judged"];
+      /** Where the fields' values are kept, as the conversion types their columns. */
+      at: {
+        builtBy: ColumnOrigin;
+        componentRow?: boolean;
+        translationsTable?: string;
+      };
+    }
+  | undefined
+> {
   if (save.previous === null || save.entity === null) return undefined;
   const kind = kindOf(save);
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -1371,28 +1423,28 @@ async function refuseSaveTypeChanges(
       next,
       renamed,
       ...(await migrationStatusOf(deps, save, table)),
-      // A lossy change goes ahead only for a field whose clear the person confirmed, with the
-      // count of values it clears still holding (`refuseChangedClearCounts`).
       acknowledged: clearedFieldsOf(save.confirmedClears),
       // Where the save applies its change here (development), it writes each value of a pair it
       // converts as the new type reads it, in the file or just before the push that changes the
-      // column (`typeConversionOf`). Elsewhere the change is the database's cast, judged as such.
+      // column (`typeConversionOf`). Elsewhere the change is the database's cast, judged as such:
+      // the file and `nextly migrate` carry it there.
       rewrites: deps.applies,
       builtBy: kind.builtBy,
       ...componentRow,
     }
   );
-  throwTypeChangeRefusals(label, refusals);
-  refuseChangedClearCounts(judged, save.confirmedClears);
-  return typeConversionOf({
-    dialect,
+  return {
+    label,
+    refusals,
     judged,
-    builtBy: kind.builtBy,
-    ...componentRow,
-    ...(translations.translationsTable === undefined
-      ? {}
-      : { translationsTable: translations.translationsTable }),
-  });
+    at: {
+      builtBy: kind.builtBy,
+      ...componentRow,
+      ...(translations.translationsTable === undefined
+        ? {}
+        : { translationsTable: translations.translationsTable }),
+    },
+  };
 }
 
 /**
@@ -1477,6 +1529,7 @@ export async function previewCollectionSave(
     return {
       adopts: plan.adoption !== null,
       conversions,
+      clears: await clearsOfSave(deps, save, plan.table),
       notices: [
         ...conversions.map(conversionNotice),
         ...(await settledRows(deps, save, plan.table)).map(resolutionNotice),
@@ -1518,6 +1571,11 @@ export interface CollectionSavePreview {
   adopts: boolean;
   /** Each column the save also converts, beyond the person's change. */
   conversions: ColumnConversion[];
+  /**
+   * The values each field type change that loses values would clear, by field: what the person
+   * confirms, sent back with the save as its `confirmedClears`.
+   */
+  clears: ConfirmedClear[];
   /** One line per conversion, as the review shows it. */
   notices: string[];
   /** The files the save would write, in run order. */

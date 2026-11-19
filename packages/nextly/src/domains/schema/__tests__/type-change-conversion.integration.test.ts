@@ -17,6 +17,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import {
   createTestNextly,
@@ -228,6 +229,26 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v")).toEqual({ kept: "12", lost: "abc" });
     });
 
+    // The count the person confirms is the review's, judged as the save judges it.
+    it("reviews the values a change would clear, by field, for the person to confirm", async () => {
+      const t = await boot([{ name: "v", type: "text" }]);
+      await write(t, "kept", { v: "12" });
+      await write(t, "lost", { v: "abc" });
+
+      const answer = (await dispatchCollections(
+        {} as ServiceContainer,
+        "previewSchemaChanges",
+        { collectionName: SLUG },
+        { fields: [{ name: "v", type: "number" }] }
+      )) as Response | Record<string, unknown>;
+      const json = (
+        answer instanceof Response ? await answer.json() : answer
+      ) as Record<string, unknown>;
+      const review = (json.data ?? json) as { clears?: unknown };
+
+      expect(review.clears).toEqual([{ field: "v", count: 1 }]);
+    });
+
     it("clears only the values that cannot convert when the clear is confirmed with its count, and converts the rest", async () => {
       const t = await boot([{ name: "v", type: "text" }]);
       await write(t, "kept", { v: "12" });
@@ -338,6 +359,65 @@ describe.each(getConfiguredTestDialects())(
         slug: "tcc_hero",
       } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
       expect(read?.item?.v ?? read?.v).toBe("a");
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a Builder save of a field group converts its stored values by their rule (%s)",
+  dialect => {
+    // A field group answers a pair as a collection does, its values kept on the rows the entries
+    // that embed it write.
+    it("converts a field group's list of one item into that item", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const t = await createTestNextly({ dialect });
+      instance = t;
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "tcc_box",
+          label: "Box",
+          fields: [{ name: "v", type: "chips" }],
+        }
+      );
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: SLUG,
+          label: "Post",
+          fields: [{ name: "box", type: "component", component: "tcc_box" }],
+        }
+      );
+      const created = (await t.nextly.create({
+        collection: SLUG,
+        data: { title: "a", box: { v: ["a"] } },
+      } as never)) as { item?: { id?: string }; id?: string };
+      const id = created.item?.id ?? created.id;
+
+      const stored = (await t
+        .getService("fieldGroupRegistryService")
+        .getComponent("tcc_box")) as { schemaVersion?: number };
+      await dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "tcc_box" },
+        {
+          fields: [{ name: "v", type: "text" }],
+          confirmed: true,
+          schemaVersion: stored.schemaVersion,
+        }
+      );
+
+      const read = (await t.nextly.findByID({
+        collection: SLUG,
+        id,
+      } as never)) as {
+        box?: { v?: unknown };
+        item?: { box?: { v?: unknown } };
+      };
+      expect((read.item ?? read).box?.v).toBe("a");
     });
   }
 );
