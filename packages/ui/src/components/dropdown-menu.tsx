@@ -17,7 +17,9 @@
  * **Accessibility**:
  * - Full keyboard navigation (Arrow keys, Enter, Escape, Tab)
  * - ARIA roles and attributes (menu, menuitem, menuitemcheckbox, menuitemradio)
- * - Focus management (focus trap, auto-focus first item)
+ * - Focus management (auto-focus first item, focus back to the trigger)
+ * - Not modal by default: the page around an open menu stays in reach and
+ *   in the accessibility tree; pass `modal` for a menu that must hold it
  * - Screen reader support (labels, descriptions, indicators)
  * - WCAG 2.2 Level AA compliant
  *
@@ -100,9 +102,24 @@ import * as React from "react";
 import { cn } from "../lib/utils";
 import { usePortalContainer } from "../providers/portal-provider";
 
-/** @public */
-const DropdownMenu: typeof DropdownMenuPrimitive.Root =
-  DropdownMenuPrimitive.Root;
+/**
+ * The menu's root: Radix's, not modal unless a caller asks.
+ *
+ * A menu is a list of choices, not a dialog. A modal one marks everything
+ * around it `aria-hidden` while those controls stay focusable, which hides
+ * the page from a screen reader without taking it out of reach (axe:
+ * `aria-hidden-focus`). Not modal, the menu still closes on Escape, on Tab
+ * and on a press outside, and gives focus back to its trigger; the press
+ * outside also reaches what it was on, and the page can scroll while the
+ * menu is open. A menu that must hold the page still passes `modal`.
+ *
+ * @public
+ */
+const DropdownMenu: typeof DropdownMenuPrimitive.Root = ({
+  modal = false,
+  ...props
+}) => <DropdownMenuPrimitive.Root modal={modal} {...props} />;
+DropdownMenu.displayName = "DropdownMenu";
 
 /** @public */
 const DropdownMenuTrigger: typeof DropdownMenuPrimitive.Trigger =

@@ -43,6 +43,7 @@ import {
   SITE_SETTINGS_ROUTE_PATH,
   type SiteSettingsRead,
 } from "../../library-contract";
+import { createAreaComponent } from "../layout-area-client";
 import { duplicateLayout } from "../layout-writes-client";
 import { useMakeDefaultFlow } from "../make-default-action";
 import { useAskChoicesAgain } from "../page-layout";
@@ -53,6 +54,7 @@ import { setBuilderAddress } from "./set-address";
 import { SetAreaPicker } from "./set-area-picker";
 import { useSetStanding, type SetStanding } from "./set-reads";
 import { useSetFormAreas, type SetMode } from "./set-regions";
+import { otherSetsUsing, SeparateCopy } from "./set-separate-copy";
 import { usedOnWords } from "./set-words";
 
 /** The set form's fields this edits. */
@@ -69,9 +71,12 @@ function refusalOf(error: unknown): string {
 export function SetSettingsPanel({
   set,
   control,
+  onEditArea,
 }: {
   set: SetMode;
   control: Control<FieldValues>;
+  /** Edits the set's header or footer in place; absent where one may not. */
+  onEditArea?: ((area: RegionArea) => void) | undefined;
 }): JSX.Element {
   const headingId = useId();
   const nameId = useId();
@@ -81,18 +86,32 @@ export function SetSettingsPanel({
   const title = useController({ control, name: TITLE_FIELD });
   const areas = useController({ control, name: AREAS_FIELD });
   const { onChange: setAreas } = areas.field;
+  // The areas as they stand now, read when a choice is applied rather than
+  // when it began: a header still being created must land on whatever was
+  // chosen meanwhile, and two creates in flight must each keep the other's.
+  const latestRows = useRef(form.rows);
+  latestRows.current = form.rows;
   const chooseFor = useCallback(
     (area: RegionArea) => (component: string | null) => {
-      setAreas(
+      const next =
         component === null
-          ? withoutArea(form.rows, area)
-          : withArea(form.rows, area, component)
-      );
+          ? withoutArea(latestRows.current, area)
+          : withArea(latestRows.current, area, component);
+      latestRows.current = next;
+      setAreas(next);
     },
-    [form.rows, setAreas]
+    [setAreas]
   );
   const shownTitle =
     typeof title.field.value === "string" ? title.field.value : "";
+  const sets = standing.choices?.items;
+  // The list of sets is bounded: past it, another set may still use a header.
+  const listCut = standing.choices?.meta.more === true;
+  const usedByOf = useCallback(
+    (component: string | undefined) =>
+      otherSetsUsing(sets ?? [], set.id, component),
+    [sets, set.id]
+  );
   return (
     <section
       aria-labelledby={headingId}
@@ -142,12 +161,18 @@ export function SetSettingsPanel({
         value={form.header}
         onChoose={chooseFor("header")}
         disabled={set.readOnly === true}
+        usedByOf={usedByOf}
+        listCut={listCut}
+        onEdit={onEditArea}
       />
       <AreaField
         area="footer"
         value={form.footer}
         onChoose={chooseFor("footer")}
         disabled={set.readOnly === true}
+        usedByOf={usedByOf}
+        listCut={listCut}
+        onEdit={onEditArea}
       />
       <p className="text-[color:var(--nx-builder-text-muted)] m-0 text-xs">
         {usedOnWords(standing.pages)}
@@ -163,13 +188,23 @@ function AreaField({
   value,
   onChoose,
   disabled,
+  usedByOf,
+  listCut,
+  onEdit,
 }: {
   area: RegionArea;
   value: string | undefined;
   onChoose: (component: string | null) => void;
   disabled: boolean;
+  /** The other sets a component is also used by, by title. */
+  usedByOf: (component: string | undefined) => readonly string[];
+  /** Whether the list of sets read was cut short. */
+  listCut: boolean;
+  /** Edits the area in place, once the canvas draws what was made. */
+  onEdit: ((area: RegionArea) => void) | undefined;
 }): JSX.Element {
   const id = useId();
+  const create = useCreateInPicker(area, onChoose, onEdit);
   return (
     <div className="grid gap-1.5">
       <Label htmlFor={id}>{area === "header" ? "Header" : "Footer"}</Label>
@@ -179,9 +214,64 @@ function AreaField({
         value={value}
         onChoose={onChoose}
         disabled={disabled}
+        usedByOf={usedByOf}
+        {...(disabled ? {} : { onCreate: create })}
       />
+      {value === undefined ? null : (
+        <SeparateCopy
+          area={area}
+          componentId={value}
+          usedBy={usedByOf(value)}
+          listCut={listCut}
+          disabled={disabled}
+          onCopied={copy => onChoose(copy.id)}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * "+ Create a header" (or footer): a new one made as the band's create
+ * makes one (the starter's design, published, marked for the area), then
+ * chosen in the set's form, with "Edit header" offered to edit it in place.
+ * The set changes only with its own Save and Publish.
+ */
+function useCreateInPicker(
+  area: RegionArea,
+  onChoose: (component: string | null) => void,
+  onEdit: ((area: RegionArea) => void) | undefined
+): () => void {
+  // The edit in place as it is when the toast's action is pressed: by then
+  // the canvas draws the new header, and only the latest edit opens it.
+  const latestEdit = useRef(onEdit);
+  latestEdit.current = onEdit;
+  return useCallback(() => {
+    const word = area === "header" ? "header" : "footer";
+    void createAreaComponent(area).then(
+      made => {
+        onChoose(made.id);
+        toast.success(
+          `${made.title} was created as this set's ${word}. Save or publish the set to keep it.`,
+          onEdit === undefined
+            ? {}
+            : {
+                action: {
+                  label: word === "header" ? "Edit header" : "Edit footer",
+                  onClick: () => latestEdit.current?.(area),
+                },
+              }
+        );
+      },
+      (error: unknown) => {
+        toast.error(
+          error instanceof Error && error.message !== ""
+            ? error.message
+            : `The ${word} could not be created. Try again.`
+        );
+      }
+    );
+  }, [area, onChoose, onEdit]);
 }
 
 /** Who may choose the site default, as the Header & footer list asks it. */

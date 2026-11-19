@@ -71,8 +71,11 @@ export interface QueuedEmailActivity {
   /** When it was sent, failed for good, or was cancelled. */
   settledAt: string | null;
   state: QueuedEmailState;
-  /** Attempts made so far, the one in flight included. */
-  attempts: number;
+  /**
+   * Attempts made so far, the one in flight included; null when the job that
+   * counted them has since been pruned, so the count is no longer known.
+   */
+  attempts: number | null;
   /** When the next attempt is due, while one is to follow. */
   nextAttemptAt: string | null;
   lastFailure: EmailFailure | null;
@@ -82,6 +85,63 @@ export interface QueuedEmailActivity {
   templateSlug: string | null;
   /** Who queued it: `site`, `core`, or `plugin:<name>`. */
   queuedBy: string;
+}
+
+/**
+ * Which version of its template a send used: the template's owner, whether
+ * the site had overridden it, and a digest of the version as saved (a draft
+ * test send has no saved version); `none` for a send without a template;
+ * `not-recorded` for a send from before versions were recorded.
+ */
+export type TemplateVersion =
+  | {
+      owner: string;
+      overridden: boolean;
+      digest: string | null;
+      draft?: true;
+    }
+  | "none"
+  | "not-recorded";
+
+/** How a provider answered a failure, structured: never its own text. */
+export type DeliveryFailureKind = "retryable" | "refused" | "unknown";
+
+/** One attempt on a detail sheet's timeline, oldest first. */
+export interface DeliveryAttempt {
+  id: string;
+  createdAt: string;
+  outcome: DeliveryOutcome;
+  recipientKind: RecipientKind;
+  provider: { id: string | null; type: string };
+  failureKind: DeliveryFailureKind | null;
+  failureStatus: number | null;
+  /** Core's sentence for the failure, with anything address-shaped removed. */
+  failureReason: string | null;
+  templateVersion: TemplateVersion;
+  erased: boolean;
+}
+
+/** A delivery's detail sheet. */
+export interface DeliveryDetail extends DeliveryActivity {
+  /** The queued email this was an attempt of, when it was one. */
+  queuedId: string | null;
+  templateVersion: TemplateVersion;
+  failureKind: DeliveryFailureKind | null;
+  failureStatus: number | null;
+  /** Every attempt of its queued email, or itself alone. */
+  timeline: DeliveryAttempt[];
+  /** Whether the timeline stopped at its limit, its oldest left out. */
+  timelineTruncated: boolean;
+}
+
+/** A queued email's detail sheet. */
+export interface QueuedEmailDetail extends QueuedEmailActivity {
+  /** Whether its last failure came from its template, for "Fix template". */
+  templateCaused: boolean;
+  /** The template version its latest attempt sent; null before any. */
+  templateVersion: TemplateVersion | null;
+  timeline: DeliveryAttempt[];
+  timelineTruncated: boolean;
 }
 
 /** Whether queued email is waiting on a jobs trigger that is not running. */
@@ -150,4 +210,22 @@ export function listQueuedEmailActivity(
 /** Whether queued email is overdue because the jobs trigger is not running. */
 export function getQueuedEmailOverdue(): Promise<QueuedEmailOverdue> {
   return fetcher<QueuedEmailOverdue>("/email-deliveries/overdue", {}, true);
+}
+
+/** One delivery's detail sheet: its timeline, its provider's answer and its template version. */
+export function getDeliveryDetail(id: string): Promise<DeliveryDetail> {
+  return fetcher<DeliveryDetail>(
+    `/email-deliveries/${encodeURIComponent(id)}`,
+    {},
+    true
+  );
+}
+
+/** One queued email's detail sheet. */
+export function getQueuedEmailDetail(id: string): Promise<QueuedEmailDetail> {
+  return fetcher<QueuedEmailDetail>(
+    `/email-deliveries/queued/${encodeURIComponent(id)}`,
+    {},
+    true
+  );
 }

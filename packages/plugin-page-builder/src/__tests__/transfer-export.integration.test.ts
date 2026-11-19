@@ -29,7 +29,9 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
+import { PATTERNS_SLUG } from "../collections/patterns";
 import { pageBuilder } from "../plugin";
+import { SITE_STYLE_SLUG } from "../site-style-storage";
 import type { TransferFile } from "../transfer/transfer-contract";
 
 import {
@@ -228,6 +230,98 @@ describe.each(getConfiguredTestDialects())(
 
       expect(answer.status).toBe(422);
       expect(JSON.stringify(answer.body)).toContain(missing);
+    });
+
+    it("carries the colours a shadow names through var(), from a block, a shared style and a shadow variable", async () => {
+      const t = await boot();
+      const colour = (name: string, light: string) => ({
+        name,
+        kind: "color",
+        values: { light },
+      });
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: {
+          tokens: {
+            tokens: [
+              colour("color.ink", "#111111"),
+              colour("color.edge", "#222222"),
+              colour("color.glow", "#333333"),
+              colour("color.unused", "#444444"),
+              {
+                name: "shadow.lift",
+                kind: "shadow",
+                values: { light: "0 2px 4px var(--site-color-glow)" },
+              },
+            ],
+          },
+          classes: [
+            {
+              id: "c-raised",
+              slug: "raised",
+              orderIndex: 0,
+              styles: {
+                base: {
+                  base: { boxShadow: "0 1px 2px var(--site-color-edge)" },
+                },
+              },
+            },
+          ],
+          _overwrite: true,
+        },
+      });
+      const pattern = await created(t, PATTERNS_SLUG, {
+        title: "Lifted",
+        slug: unique("lifted"),
+        granularity: "section",
+        status: "published",
+        content: {
+          formatVersion: 1,
+          kind: "pattern",
+          nodes: [
+            {
+              id: "a",
+              type: "core/box",
+              version: 1,
+              props: {},
+              classes: ["c-raised"],
+              styles: {
+                base: {
+                  base: { boxShadow: "0 1px 2px var(--site-color-ink)" },
+                },
+              },
+            },
+            {
+              id: "b",
+              type: "core/box",
+              version: 1,
+              props: {},
+              styles: {
+                base: { base: { boxShadow: "var(--site-shadow-lift)" } },
+              },
+            },
+          ],
+        },
+      });
+      const { cookie } = await holding(t, READS_EVERYTHING);
+
+      const answer = await post(cookie, [
+        "transfer",
+        "patterns",
+        pattern,
+        "export",
+      ]);
+
+      expect(answer.status).toBe(200);
+      const file = answer.body as unknown as TransferFile;
+      // The block's shadow names ink, the shared style's names edge, and the
+      // shadow variable the second block names names glow.
+      expect(file.tokens.map(token => token.name).sort()).toEqual([
+        "color.edge",
+        "color.glow",
+        "color.ink",
+        "shadow.lift",
+      ]);
     });
 
     it("answers a missing item as not found", async () => {

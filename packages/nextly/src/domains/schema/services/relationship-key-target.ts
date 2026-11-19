@@ -65,6 +65,25 @@ export function relationshipTargetSlug(
 }
 
 /**
+ * Whether two relationship definitions point at the same target under the same relation kind: the
+ * only relations a save carries across, a many-to-many's link table included. The target as reads
+ * take it (`relationTo` before `options.target`), so two relationships naming different collections
+ * only by `relationTo` are not mistaken for one; a `relationTo` list is compared whole.
+ */
+export function sameRelationTarget(
+  a: RelationshipKeyField,
+  b: RelationshipKeyField
+): boolean {
+  const listOf = (f: RelationshipKeyField) =>
+    Array.isArray(f.relationTo) ? JSON.stringify(f.relationTo) : null;
+  return (
+    relationshipTargetSlug(a) === relationshipTargetSlug(b) &&
+    listOf(a) === listOf(b) &&
+    optionsOf(a).relationType === optionsOf(b).relationType
+  );
+}
+
+/**
  * The target a relationship field's column is keyed to, or null for one that
  * carries no key.
  *

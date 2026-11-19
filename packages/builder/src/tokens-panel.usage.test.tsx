@@ -286,6 +286,34 @@ describe("how widely each row's variable is used", () => {
     ).toBeDefined();
   });
 
+  it("counts a page using a type size and its line height once, where the host counts them together", async () => {
+    const base = host({
+      reaches: () => ({
+        "font-size.body": reach(1),
+        "line-height.body": reach(2, ["c-card"]),
+      }),
+    });
+    const asked: (readonly string[])[] = [];
+    const usage: VariablesAccess = {
+      ...base,
+      usageTogether: async groups => {
+        asked.push(...groups);
+        // The one page naming the size names the line height too.
+        return groups.map(() => ({
+          documents: 2,
+          byKind: { pages: 2, components: 0, patterns: 0, layouts: 0 },
+          complete: true,
+        }));
+      },
+    };
+    render(<Hosted usage={usage} />);
+    // 2 documents between them and the shared style, not 1 + 2 + 1.
+    expect(
+      await screen.findByRole("button", { name: /^Body.*\. Used in 3 places$/ })
+    ).toBeDefined();
+    expect(asked).toContainEqual(["font-size.body", "line-height.body"]);
+  });
+
   it("says nothing for a row not read yet, and nothing without the host's reads", async () => {
     const usage = host({ reaches: () => ({ "color.brand": reach(3) }) });
     const { unmount } = render(<Hosted usage={usage} />);

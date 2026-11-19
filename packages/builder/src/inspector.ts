@@ -773,10 +773,27 @@ export function propIsWritable(
   name: string,
   view?: LockView
 ): boolean {
-  if (blockIsReadOnly(document, id)) return false;
+  return writablePropsOf(document, id, view)(name);
+}
+
+/**
+ * {@link propIsWritable} for every prop of one block, its locks read once.
+ *
+ * A panel asks it of each field it draws, on each render: asked prop by prop,
+ * each answer walked the page for the block's locks and composed the page
+ * again, once per field and per keystroke. This reads them once, and each
+ * prop's answer is then a lookup, the same answer by the same rule.
+ */
+export function writablePropsOf(
+  document: BlockDocument,
+  id: string,
+  view?: LockView
+): (name: string) => boolean {
+  if (blockIsReadOnly(document, id)) return () => false;
   const held = contentOnlyAreaOf(document, id, view);
-  if (held === undefined) return true;
-  return contentPropsOf(lockSourceOf(view).get(held.type)?.props).has(name);
+  if (held === undefined) return () => true;
+  const content = contentPropsOf(lockSourceOf(view).get(held.type)?.props);
+  return name => content.has(name);
 }
 
 /**

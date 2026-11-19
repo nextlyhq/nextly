@@ -268,6 +268,60 @@ describe("a draft in a field of the document, before the page is stored", () => 
   });
 });
 
+/**
+ * A field of the document whose commit trims what was typed, as a length's
+ * does: `2px ` is written as nothing, since `2px` is stored already.
+ */
+function TrimmingField(props: {
+  readonly onCommit: (value: string) => void;
+}): React.JSX.Element {
+  const stored = "2px";
+  const [draft, setDraft] = useStoredDraft(stored);
+  return (
+    <input
+      aria-label="Thickness"
+      value={draft}
+      onChange={event => setDraft(event.target.value)}
+      onBlur={() => {
+        const next = draft.trim();
+        if (next !== stored) props.onCommit(next);
+      }}
+    />
+  );
+}
+
+describe("a draft that settles to what is stored", () => {
+  it("is no unsaved work once a store has finished it, though nothing was written", () => {
+    const onCommit = vi.fn();
+    render(
+      <FieldsOfDocument.Provider value={true}>
+        <TrimmingField onCommit={onCommit} />
+        <Held />
+      </FieldsOfDocument.Provider>
+    );
+    typeInto(screen.getByLabelText<HTMLInputElement>("Thickness"), "2px ");
+    expect(held()).toBe("true");
+
+    act(() => finishFieldEdit());
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(held()).toBe("false");
+  });
+
+  it("is no unsaved work once the field is left, though nothing was written", () => {
+    render(
+      <FieldsOfDocument.Provider value={true}>
+        <TrimmingField onCommit={() => undefined} />
+        <Held />
+      </FieldsOfDocument.Provider>
+    );
+    const field = screen.getByLabelText<HTMLInputElement>("Thickness");
+    typeInto(field, "2px ");
+    expect(held()).toBe("true");
+    act(() => field.blur());
+    expect(held()).toBe("false");
+  });
+});
+
 /** A field of the document that writes each keystroke as it goes in. */
 function LiveField(props: {
   readonly onWrite: (value: string) => void;

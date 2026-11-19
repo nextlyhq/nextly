@@ -81,7 +81,7 @@ import {
 } from "../../schema/services/index-name";
 import {
   relationshipKeyTarget,
-  relationshipTargetSlug,
+  sameRelationTarget,
 } from "../../schema/services/relationship-key-target";
 import {
   backfillDefaultForType,
@@ -2995,16 +2995,8 @@ ${allColumnDefs.join(",\n")}
    * same relation kind — the only relations a rename preserves.
    */
   private sameRelationTarget(a: FieldDefinition, b: FieldDefinition): boolean {
-    // The target as reads take it (`relationTo` before `options.target`), so two relationships
-    // naming different collections only by `relationTo` are not mistaken for one; a `relationTo`
-    // list is compared whole.
-    const listOf = (f: FieldDefinition) =>
-      Array.isArray(f.relationTo) ? JSON.stringify(f.relationTo) : null;
-    return (
-      relationshipTargetSlug(a) === relationshipTargetSlug(b) &&
-      listOf(a) === listOf(b) &&
-      a.options?.relationType === b.options?.relationType
-    );
+    // The one rule, which the save's preview asks too (`legacy-preview/translate`).
+    return sameRelationTarget(a, b);
   }
 
   /**

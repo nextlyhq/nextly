@@ -38,6 +38,7 @@ import type {
   BuilderSaveSetup,
   CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
+import { partWayPush } from "../../schema/builder-save/landing-push";
 import { renamedFieldsOf } from "../../schema/builder-save/schema-change-save";
 import {
   entityAfterUpdate,
@@ -562,8 +563,11 @@ export class CollectionMetadataService extends BaseService {
       };
     },
     update: UpdateSettings,
-    push: (() => Promise<void>) | undefined
+    push: ((onLanded: () => void) => Promise<void>) | undefined
   ): Promise<MetadataServiceResult | undefined> {
+    // A push that fails after changing the database keeps the update's files, recorded applied
+    // nowhere, and its failure tells the admin so; one that fails before withdraws them.
+    const pushed = partWayPush(push ?? (() => Promise.resolve()));
     try {
       const definition = await loadUiSchema({
         projectRoot: deps.projectRoot,
@@ -581,7 +585,7 @@ export class CollectionMetadataService extends BaseService {
         fields
       );
       const { writeCollectionSave } = await loadCollectionSave();
-      await writeCollectionSave(
+      const written = await writeCollectionSave(
         deps,
         {
           slug,
@@ -597,8 +601,9 @@ export class CollectionMetadataService extends BaseService {
           junctions: relations.junctions,
           keys: relations.keys,
         },
-        { appliedBy: push ?? (() => Promise.resolve()) }
+        { appliedBy: pushed.appliedBy }
       );
+      pushed.throwIfFailed(written.files);
       return undefined;
     } catch (error: unknown) {
       return errorToMetadataResult(
@@ -1227,7 +1232,10 @@ export class CollectionMetadataService extends BaseService {
       // schema pipeline, with the archive it needs and what the push leaves
       // out of its diff (a renamed field group's association, the junction
       // tables), as it always has.
-      const pushUpdate = async (): Promise<void> => {
+      //
+      // `onLanded` is told once the push may have changed the database, so a failure after it,
+      // of the push or of what follows it, keeps the update's files (`partWayPush`).
+      const pushUpdate = async (onLanded?: () => void): Promise<void> => {
         // The file is what a database built from migrations replays; this database takes the
         // change through one apply of the schema pipeline, as the schema dialog's does, which
         // diffs the table as it is, so a save the database refused part-way is finished by the
@@ -1263,6 +1271,7 @@ export class CollectionMetadataService extends BaseService {
           fills: updateArtifacts.pushAnswers.fills,
           // The save detects its own renames; every other pair is a drop and an add.
           dropAndAddUnansweredRenames: true,
+          ...(onLanded === undefined ? {} : { onLanded }),
         });
         // What the push leaves out of its diff, once it has run: a renamed field group's
         // association and the junction tables, as the file carries them.
@@ -1770,7 +1779,7 @@ export class CollectionMetadataService extends BaseService {
       await this.forgetDeleted(
         slug,
         collection,
-        unregistered.get(slug) ?? { removed: 0, stored: undefined }
+        unregistered.get(slug) ?? { removed: 0, expire: undefined }
       );
     }
   }
@@ -1959,7 +1968,7 @@ export class CollectionMetadataService extends BaseService {
       await this.forgetDeleted(
         slug,
         collection,
-        unregistered.get(slug) ?? { removed: 0, stored: undefined }
+        unregistered.get(slug) ?? { removed: 0, expire: undefined }
       );
     }
   }

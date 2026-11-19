@@ -52,17 +52,22 @@ const NODES = [
   },
 ];
 
-/** A page of its own holding the Heading and the Form, with its address. */
+/**
+ * A page of its own holding the Heading and the Form, with its address and
+ * its title, which is this attempt's alone: a page an earlier attempt left
+ * behind has another.
+ */
 async function createPage(
   request: APIRequestContext,
   title: string,
   status: "draft" | "published"
-): Promise<{ id: string; slug: string }> {
+): Promise<{ id: string; slug: string; title: string }> {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const slug = `typed-kept-${stamp}`;
+  const stamped = `${title} ${stamp}`;
   const created = await request.post(ENTRIES, {
     data: {
-      title: `${title} ${stamp}`,
+      title: stamped,
       slug,
       status,
       content: { formatVersion: 1, kind: "page", nodes: NODES },
@@ -70,7 +75,7 @@ async function createPage(
   });
   expect(created.ok(), `creating a page: ${created.status()}`).toBe(true);
   const body = (await created.json()) as { item: { id: string } };
-  return { id: body.item.id, slug };
+  return { id: body.item.id, slug, title: stamped };
 }
 
 async function openBuilder(page: Page, id: string): Promise<void> {
@@ -268,8 +273,8 @@ test.describe("a value still being typed in the panel", () => {
     const pages = page.getByRole("region", { name: "Pages" }).first();
     await pages
       .getByRole("textbox", { name: "Search pages" })
-      .fill("Typed other");
-    await pages.getByRole("button", { name: /^Typed other / }).click();
+      .fill(other.title);
+    await pages.getByRole("button", { name: other.title, exact: true }).click();
 
     const question = page.getByRole("alertdialog", { name: "Unsaved Changes" });
     await expect(question).toBeVisible();
