@@ -914,13 +914,16 @@ describe.each(getConfiguredTestDialects())(
       expect(Number(left?.n)).toBe(0);
     }, 180_000);
 
-    it("stops before the registry write when the labelling fails, keeping the deleted collection registered, and the next run finishes", async () => {
+    it("stops the metadata pass before the registry write when the labelling fails, keeping the deleted collection registered, and the next run finishes", async () => {
       const { deployed, deleted, after } =
         await deleteNotesOnTheDeployedDatabase(() => {
           leftovers.labelling = true;
         });
       expect(leftovers.labelling, "the labelling was reached").toBe(false);
-      expect(deleted.code, deleted.said).not.toBeUndefined();
+      // The metadata pass stops and says so, and the run goes no further with it.
+      expect(deleted.said).toContain(
+        "Migration metadata was not recorded: the labelling failed"
+      );
       // Nothing of the registry changed: the row that names the collection is there for the next
       // run's labelling, and its rows with it.
       expect(after).toMatchObject({
