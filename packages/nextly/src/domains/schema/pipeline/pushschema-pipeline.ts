@@ -26,6 +26,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 import { sql, type SQL } from "drizzle-orm";
 
+import { isUnreachedDatabaseCode, safeCode } from "../../../database/errors";
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
 import {
@@ -314,7 +315,8 @@ export interface PipelineResult {
    * hand their statements over one at a time, read from the record of finished statements
    * (`committedOf`), pre-cleanup's each as it runs; 0 for a failure before anything ran, on every
    * dialect. Otherwise absent on PostgreSQL, whose failure rolls back whole, so a reader keeps its
-   * own rule there.
+   * own rule there; and absent where a statement failed without the database refusing it (a lost
+   * connection, a timeout), whose outcome is unknown (`refusedByDatabase`).
    */
   statementsKept?: number;
   /**
@@ -908,8 +910,11 @@ export class PushSchemaPipeline {
     let converting: ConvertingColumn[] = [];
     // How many of the statements this apply ran stay applied, for a failure to report
     // (`PipelineResult.statementsKept`): read from the record of finished statements once they run
-    // one at a time, and undefined while nothing records them.
-    let keptSoFar: () => number | undefined = () => undefined;
+    // one at a time, and undefined while nothing records them. Undefined too, outcome unknown, where
+    // the failure came while a statement ran and the database did not answer that it refused it (a
+    // lost connection, a timeout): the statement may have run, and on MySQL a schema statement
+    // committed, so a reader keeps its own rule (`refusedByDatabase`).
+    let keptSoFar: (failure: unknown) => number | undefined = () => undefined;
     try {
       // Each question Phase B asks is asked once for the whole apply: a try that re-plans after one
       // that waited out its bound reads the answers given to the first.
@@ -928,6 +933,9 @@ export class PushSchemaPipeline {
       // Whether the statement the try is about to send, or is waiting in, is a schema statement:
       // on MySQL one that waits has already committed everything before it.
       let nextIsSchema = false;
+      // Whether a statement has started and not finished: one that fails then may have run, on
+      // MySQL a schema statement committed, unless the database answered that it refused it.
+      let inFlight = false;
       let finishedEarlier = 0;
       const oneByOne = dialect !== "postgresql";
       // What runs its statements itself (pre-cleanup, a consented clearing) tells the record the
@@ -935,17 +943,22 @@ export class PushSchemaPipeline {
       const ranHere: StatementRecord = {
         starting: schema => {
           nextIsSchema = schema;
+          inFlight = true;
         },
         finished: schema => {
           finishedThisTry.push(schema);
           nextIsSchema = false;
+          inFlight = false;
         },
       };
       // On MySQL and SQLite with every statement handed over one at a time, the record says what
       // stays: the tries that ended waiting, and what this try finished that has committed.
       if (oneByOne) {
-        keptSoFar = () =>
-          finishedEarlier + committedOf(finishedThisTry, dialect, nextIsSchema);
+        keptSoFar = failure =>
+          inFlight && !refusedByDatabase(failure)
+            ? undefined
+            : finishedEarlier +
+              committedOf(finishedThisTry, dialect, nextIsSchema);
       }
       // What each MySQL or SQLite try planned, and what the tries that ended waiting planned in
       // all: a later try plans from the live database, where what an earlier one committed is no
@@ -966,7 +979,9 @@ export class PushSchemaPipeline {
           }
           for (const statement of statementsOneByOne(statements, dialect)) {
             nextIsSchema = isSchemaStatement(statement);
+            inFlight = true;
             await this.deps.executor.executeStatements(tx, [statement]);
+            inFlight = false;
             finishedThisTry.push(nextIsSchema);
             // What runs next is not known here; a wait outside these statements is judged by
             // the last schema statement that ran.
@@ -992,6 +1007,7 @@ export class PushSchemaPipeline {
       ): Promise<PlannedApply> => {
         finishedThisTry = [];
         nextIsSchema = false;
+        inFlight = false;
         // Resolved once per plan, before anything reads it. A desired schema is consumed by TWO
         // builders — the snapshot the diff compares and the Drizzle tables drizzle-kit turns into
         // DDL — and resolving inside either leaves the other on the raw fields, so a table would
@@ -1640,11 +1656,13 @@ export class PushSchemaPipeline {
               {
                 starting: statement => {
                   nextIsSchema = isSchemaStatement(statement);
+                  inFlight = true;
                 },
                 finished: statement => {
                   finishedThisTry.push(isSchemaStatement(statement));
                   told += 1;
                   nextIsSchema = false;
+                  inFlight = false;
                 },
               }
             );
@@ -2279,6 +2297,7 @@ export class PushSchemaPipeline {
                       // Counted once: a failure after this try reads only what a later one ran.
                       finishedThisTry = [];
                       nextIsSchema = false;
+                      inFlight = false;
                       plannedEarlier.push(plannedThisTry);
                       return { table: waitedTable, undone: false, committed };
                     }
@@ -2363,7 +2382,7 @@ export class PushSchemaPipeline {
           error: { code, message },
         })
       );
-      const statementsKept = keptSoFar();
+      const statementsKept = keptSoFar(caught);
       return {
         success: false,
         statementsExecuted: 0,
@@ -3063,6 +3082,34 @@ export function committedOf(
 ): number {
   if (dialect !== "mysql" || waitingIsSchema) return finished.length;
   return finished.lastIndexOf(true) + 1;
+}
+
+/**
+ * Whether a failure is the database's answer that it refused a statement: a database code on the
+ * error or one it wraps (`cause`), other than one for a database not reached or not answering in
+ * time (`isUnreachedDatabaseCode`), or a socket's own code. A refused statement did not run; one
+ * that failed any other way (a lost connection, a timeout, no code at all) may have, so its outcome
+ * is unknown. Exported for its tests.
+ */
+export function refusedByDatabase(failure: unknown): boolean {
+  let error: unknown = failure;
+  // The wrappers between the driver and the apply keep what they wrap (`cause`); a few levels
+  // reach the driver's error under any of them.
+  for (let depth = 0; depth < 5 && error instanceof Object; depth += 1) {
+    // Our own errors carry our codes, not the database's: what they wrap is read instead.
+    const code = error instanceof NextlyError ? undefined : safeCode(error);
+    if (code !== undefined) {
+      return (
+        !isUnreachedDatabaseCode(code) &&
+        // A socket's code (EPIPE, EHOSTUNREACH) or the MySQL driver's protocol codes name the
+        // connection, not an answer from the database.
+        !/^E[A-Z]+$/.test(code) &&
+        !code.toUpperCase().startsWith("PROTOCOL_")
+      );
+    }
+    error = (error as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /**
