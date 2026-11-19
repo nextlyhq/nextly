@@ -75,21 +75,22 @@ export async function refuseUnansweredDialogQuestions(args: {
   // The drops the request answers for are those of the fields the change removes, as the dialog
   // lists them for the person to confirm (`rowFieldDiff`), a field inside a group with no name
   // included, and those of the fields it keeps by name that lose their column on the row
-  // (`columnsKeptFieldsLose`).
+  // (`fieldsLosingTheirColumn`).
   const wasStored = storesPerLanguage({ localized: args.wasLocalized });
   const removedFields = rowFieldDiff(args.oldFields, args.newFields, {
     localized: wasStored,
     newLocalized: storesPerLanguage({ localized: args.isLocalized }),
   }).removed;
-  const removed = new Set([
-    ...removedFields.map(field => toSnakeCase(field.name)),
-    ...columnsKeptFieldsLose(args.oldFields, args.newFields, {
-      dialect: args.dialect,
-      builtBy: args.builtBy,
-    }),
-  ]);
-  // A removed field kept per language has its values in the translations table, which the
-  // preview does not read: its drop is confirmed by the field's name, as the dialog sends it, or
+  const losingColumn = fieldsLosingTheirColumn(args.oldFields, args.newFields, {
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+  });
+  const removed = new Set(
+    [...removedFields, ...losingColumn].map(field => toSnakeCase(field.name))
+  );
+  // A removed field kept per language, or one kept by name that loses its column, has its values
+  // in the translations table, which the preview does not read: its drop is confirmed by the
+  // field's name, as the dialog sends it, or
   // answered as the rename the dialog offered for it on the translations table
   // (`offeredCompanionRename`, the one offer the preview shows and the apply takes back), `rename`
   // keeping its values and `drop_and_add` the consent to lose them. A resolution naming any other
@@ -115,7 +116,7 @@ export async function refuseUnansweredDialogQuestions(args: {
         resolution.fromColumn === offered.candidate.fromColumn &&
         resolution.toColumn === offered.candidate.toColumn
     );
-  const unconfirmedTranslated = removedFields.filter(
+  const unconfirmedTranslated = [...removedFields, ...losingColumn].filter(
     field =>
       isFieldLocalized(field, wasStored) &&
       !answeredAsOffered(toSnakeCase(field.name)) &&
@@ -148,7 +149,7 @@ export async function refuseUnansweredDialogQuestions(args: {
 }
 
 /**
- * The columns of the row's fields that the change keeps by name but that no longer have a column
+ * The row's fields, as they were, that the change keeps by name but that no longer have a column
  * there: a field turned into a field group, whose values its group's own table would hold, drops
  * its column and what it holds, as a removed field does. Whether a field has a column is asked of
  * the row it sits on, by its builder's own rule (`columnDescriptorAt`): a field group's row keeps a
@@ -156,11 +157,11 @@ export async function refuseUnansweredDialogQuestions(args: {
  * that now keeps its links in a link table is left out: the save carries its links there rather
  * than losing them.
  */
-function columnsKeptFieldsLose(
+function fieldsLosingTheirColumn(
   oldFields: readonly FieldDefinition[],
   newFields: readonly FieldDefinition[],
   row: { dialect: SupportedDialect; builtBy: ColumnOrigin }
-): string[] {
+): FieldDefinition[] {
   const at = {
     builtBy: row.builtBy,
     ...(row.builtBy === "fieldGroup" ? { componentRow: true } : {}),
@@ -176,7 +177,7 @@ function columnsKeptFieldsLose(
       hasColumn(field) &&
       !hasColumn(kept) &&
       !usesJunctionTable(kept)
-      ? [toSnakeCase(field.name)]
+      ? [field]
       : [];
   });
 }

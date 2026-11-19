@@ -28,6 +28,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import { readTableDefinition } from "../../__tests__/helpers/table-definition";
+import { junctionTableNameFor } from "../../services/field-column-descriptor";
 
 type Field = { name: string; type: string; component?: string };
 const text = (name: string): Field => ({ name, type: "text" });
@@ -42,6 +43,8 @@ interface Answers {
     choice: "rename" | "drop_and_add";
   }[];
   eventResolutions?: { kind: "confirm_drop"; eventId: string }[];
+  /** The per-field confirmation the admin's dialog sends, by field name. */
+  resolutions?: Record<string, { action: "confirm_drop" }>;
 }
 
 /** One kind of entity the Builder saves through its schema dialog. */
@@ -312,6 +315,14 @@ for (const dialect of getConfiguredTestDialects()) {
 
         expect(await columns()).not.toContain("views");
       }, 60_000);
+
+      it("turns the field into a field group when its drop is confirmed by name, as the admin confirms a removed field", async () => {
+        await kind.save(t, await intoGroup(), {
+          resolutions: { views: { action: "confirm_drop" } },
+        });
+
+        expect(await columns()).not.toContain("views");
+      }, 60_000);
     }
   );
 }
@@ -420,6 +431,100 @@ for (const dialect of getConfiguredTestDialects()) {
       });
 
       expect(await columns()).not.toContain("related");
+    }, 60_000);
+
+    it("drops the column once its drop is confirmed by name", async () => {
+      await save({ resolutions: { related: { action: "confirm_drop" } } });
+
+      expect(await columns()).not.toContain("related");
+    }, 60_000);
+  });
+}
+
+// A collection keeps a many-to-many in a link table, which the push's questions do not cover: they
+// are asked of the entity's columns. Turned into a field group, the relationship's links are kept
+// where they are, and the save asks nothing of them.
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a collection's many-to-many turned into a field group (${dialect})`, () => {
+    let t: TestNextly;
+    let basePath: string;
+    const related = {
+      name: "related",
+      type: "relationship",
+      options: { relationType: "manyToMany", target: "tags" },
+    };
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+      });
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "tags", label: "tags", fields: [text("name")] }
+      );
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "card", label: "Card", fields: [text("line")] }
+      );
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "posts", label: "posts", fields: [text("heading"), related] }
+      );
+    });
+
+    afterEach(async () => {
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    it("keeps the links of a relationship turned into a field group", async () => {
+      const tag = await t.nextly.create({
+        collection: "tags",
+        data: { name: "first" },
+      } as never);
+      await t.nextly.create({
+        collection: "posts",
+        data: {
+          heading: "Hello",
+          related: [String((tag as { item: { id: unknown } }).item.id)],
+        },
+      } as never);
+      const link = junctionTableNameFor("dc_posts", related as never);
+      const links = async () =>
+        exec<{ n: number | string }>(
+          t,
+          `SELECT COUNT(*) AS n FROM ${link}`
+        ).then(rows => Number(rows[0]?.n ?? 0));
+      expect(await links()).toBe(1);
+
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "posts" },
+        {
+          fields: [
+            text("heading"),
+            { name: "related", type: "component", component: "card" },
+          ],
+          confirmed: true,
+          schemaVersion: await versionOf(t, "dynamic_collections", "posts"),
+        }
+      ).then(
+        () => undefined,
+        () => undefined
+      );
+
+      expect(await links()).toBe(1);
     }, 60_000);
   });
 }
@@ -606,6 +711,37 @@ for (const dialect of getConfiguredTestDialects()) {
       );
       expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
       expect(await companionColumns()).toContain("teaser");
+    }, 60_000);
+
+    // Kept by name but turned into a field group, the field has no column any more: its
+    // translations column goes with every language's value, which the main table's preview does
+    // not see, so it is confirmed by name as a removed translated field is.
+    it("refuses turning it into a field group unconfirmed, keeping every language, and drops it once confirmed by name", async () => {
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "card", label: "Card", fields: [text("line")] }
+      );
+      const intoGroup = {
+        fields: [
+          translated("heading"),
+          { name: "teaser", type: "component", component: "card" },
+        ],
+      };
+
+      const refused = await save(intoGroup).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+      expect(String(refused)).toMatch(/cancelled/);
+      expect(await companionColumns()).toContain("teaser");
+
+      await save({
+        ...intoGroup,
+        resolutions: { teaser: { action: "confirm_drop" } },
+      });
+      expect(await companionColumns()).not.toContain("teaser");
     }, 60_000);
   });
 }
