@@ -139,7 +139,16 @@ export const MIGRATE_CREATE_CODES = defineCodes({
       {
         code: "VALIDATION_ERROR",
         reason: "record-snapshot-has-changes",
-        describe: error => refusal(error, 1),
+        // The message's second sentence says nothing was written, which belongs with what
+        // happened; the why is what the snapshot would do to every later run.
+        describe: error => {
+          const { what, why: written, next } = refusal(error, 1);
+          return {
+            what: written ? `${what} ${written}` : what,
+            why: "The snapshot it writes would take in those changes with no migration making them, so each later `nextly migrate:create` would plan as if they had been made.",
+            next,
+          };
+        },
       },
     ],
   },

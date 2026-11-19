@@ -1831,8 +1831,8 @@ exports[`each code, as a command ends with it > PROMOTE_COLLECTION_NOT_FOUND 1`]
 `;
 
 exports[`each code, as a command ends with it > RECORD_SNAPSHOT_HAS_CHANGES 1`] = `
-"✗ --record-snapshot records the config as it was at the last migration, and the config has changes to "dc_posts" to migrate.
-  Why:  Nothing was written.
+"✗ --record-snapshot records the config as it was at the last migration, and the config has changes to "dc_posts" to migrate. Nothing was written.
+  Why:  The snapshot it writes would take in those changes with no migration making them, so each later \`nextly migrate:create\` would plan as if they had been made.
   Next: Put the changes aside, run \`nextly migrate:create --record-snapshot\`, then make them again and run \`nextly migrate:create --name <name>\`.
   Docs: https://nextlyhq.com/docs/cli/errors/record-snapshot-has-changes  (RECORD_SNAPSHOT_HAS_CHANGES)"
 `;
