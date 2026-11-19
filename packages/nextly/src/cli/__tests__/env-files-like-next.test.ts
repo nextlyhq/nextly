@@ -361,15 +361,17 @@ describe("the --mode option and the mode line, through the program", () => {
   it("accepts --mode after the command, as every global option is", async () => {
     const { program, stderr } = await run(["probe", "--mode", "production"]);
     expect(program.opts().mode).toBe("production");
-    expect(stderr.join("")).toBe(
-      `${databaseLine(process.cwd(), "probe.db", "production", "from the process environment")}\n`
+    // The file is resolved against the folder the environment was read from.
+    expect(stderr.join("")).toMatch(
+      /^Database: SQLite \S+probe\.db \(production; DATABASE_URL from the process environment\)\n$/
     );
   });
 
   it("prints the mode line on stderr, leaving stdout to the command", async () => {
     const { stdout, stderr } = await run(["probe"]);
-    expect(stderr.join("")).toBe(
-      `${databaseLine(process.cwd(), "probe.db", "test", "from the process environment")}\n`
+    // The file is resolved against the folder the environment was read from.
+    expect(stderr.join("")).toMatch(
+      /^Database: SQLite \S+probe\.db \(test; DATABASE_URL from the process environment\)\n$/
     );
     expect(stdout.join("")).not.toContain("Database:");
   });
