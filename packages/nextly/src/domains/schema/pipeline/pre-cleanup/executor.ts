@@ -609,3 +609,21 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
     );
   }
 }
+
+/**
+ * Whether `execute` runs any statement for `args`: a side-effect resolution's UPDATE or DELETE
+ * (after the nullable column some first add), or, outside SQLite, a consented clearing. Read from
+ * the same selections `execute` runs, so a caller recording what an apply ran (the pipeline's
+ * record of finished statements) counts pre-cleanup exactly when it changes something.
+ */
+export function preCleanupRunsStatements(args: {
+  resolutions: Resolution[];
+  events: ClassifierEvent[];
+  dialect: SupportedDialect;
+  clearing?: readonly string[];
+}): boolean {
+  return (
+    sideEffectResolutions(args).length > 0 ||
+    (args.dialect !== "sqlite" && clearedTypeChanges(args).length > 0)
+  );
+}

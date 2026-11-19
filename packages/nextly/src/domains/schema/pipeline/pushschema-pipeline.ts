@@ -163,6 +163,7 @@ import {
   assertLiveCounts,
   assertPreCleanupAccepted,
   clearConsentedValues,
+  preCleanupRunsStatements,
   withAddedColumnsLeftToTighten,
 } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
@@ -305,6 +306,13 @@ export interface PipelineResult {
   renamesApplied: number;
   error?: { code: string; message: string; details?: unknown };
   partiallyApplied?: boolean;
+  /**
+   * On a failure, how many of the statements the apply ran stay applied: on MySQL and SQLite, which
+   * hand their statements over one at a time, read from the record of finished statements
+   * (`committedOf`), pre-cleanup counted as one as it starts; 0 for a failure before anything ran.
+   * Absent on PostgreSQL, whose failure rolls back whole, so a reader keeps its own rule there.
+   */
+  statementsKept?: number;
   /**
    * The main-table columns whose values this apply moved to a companion before dropping them
    * (`planJoiningMovesForApply`), by table, column and field. Absent when nothing moved.
@@ -872,6 +880,8 @@ export class PushSchemaPipeline {
         success: false,
         statementsExecuted: 0,
         renamesApplied: 0,
+        // Refused before anything is recorded or run.
+        statementsKept: 0,
         error: { code: err.code, message: err.message },
       };
     }
@@ -892,6 +902,10 @@ export class PushSchemaPipeline {
     // cleared under consent): a statement the database refuses over a value written after they
     // were judged is reported naming them, not as its own error (`lateValueFailure`).
     let converting: ConvertingColumn[] = [];
+    // How many of the statements this apply ran stay applied, for a failure to report
+    // (`PipelineResult.statementsKept`): read from the record of finished statements once they run
+    // one at a time, and undefined while nothing records them.
+    let keptSoFar: () => number | undefined = () => undefined;
     try {
       // Each question Phase B asks is asked once for the whole apply: a try that re-plans after one
       // that waited out its bound reads the answers given to the first.
@@ -901,15 +915,23 @@ export class PushSchemaPipeline {
       // phase reports them. On SQLite each has committed as it ran; on MySQL a schema statement
       // commits what ran before it, and itself, while a row change after the last one rolls back
       // with the try's transaction (`committedOf`). MySQL's and SQLite's are handed over one at a
-      // time while the tries are on, SQLite's split as its executor splits them, since a batch that
-      // waits part-way would not say how many before it did; on PostgreSQL a batch is handed over
-      // whole, as always, its try's transaction rolling back whole.
+      // time, SQLite's split as its executor splits them, since a batch that waits or fails
+      // part-way would not say how many before it did: a busy table's stop names what stayed, and
+      // so does a failed apply (`statementsKept`). Each executor runs a batch one statement at a
+      // time anyway. On PostgreSQL a batch is handed over whole, as always, its transaction
+      // rolling back whole.
       let finishedThisTry: boolean[] = [];
       // Whether the statement the try is about to send, or is waiting in, is a schema statement:
       // on MySQL one that waits has already committed everything before it.
       let nextIsSchema = false;
       let finishedEarlier = 0;
-      const oneByOne = busyTable !== undefined && dialect !== "postgresql";
+      const oneByOne = dialect !== "postgresql";
+      // On MySQL and SQLite with every statement handed over one at a time, the record says what
+      // stays: the tries that ended waiting, and what this try finished that has committed.
+      if (oneByOne) {
+        keptSoFar = () =>
+          finishedEarlier + committedOf(finishedThisTry, dialect, nextIsSchema);
+      }
       // What each MySQL or SQLite try planned, and what the tries that ended waiting planned in
       // all: a later try plans from the live database, where what an earlier one committed is no
       // longer a change, so the apply reports that from the earlier plans (`withEarlierTries`).
@@ -1628,6 +1650,19 @@ export class PushSchemaPipeline {
           // Phase D' (F5 PR 4): pre-cleanup executor runs UPDATE/DELETE for
           // provide_default + delete_nonconforming resolutions, every one of
           // them already accepted before the first statement above.
+          // Counted as it starts, where it runs anything (`preCleanupRunsStatements`), as one
+          // statement that stays: on MySQL a column it adds commits as it runs, and on SQLite each
+          // of its statements does.
+          if (
+            preCleanupRunsStatements({
+              resolutions: dispatchResult.resolutions,
+              events: classificationResult.events,
+              dialect,
+              clearing: dispatchResult.clearing,
+            })
+          ) {
+            finishedThisTry.push(true);
+          }
           try {
             await this.deps.preCleanupExecutor.execute({
               tx,
@@ -2226,6 +2261,9 @@ export class PushSchemaPipeline {
                         (_, index) => finishedEarlier + index + 1
                       );
                       finishedEarlier += kept;
+                      // Counted once: a failure after this try reads only what a later one ran.
+                      finishedThisTry = [];
+                      nextIsSchema = false;
                       plannedEarlier.push(plannedThisTry);
                       return { table: waitedTable, undone: false, committed };
                     }
@@ -2310,10 +2348,12 @@ export class PushSchemaPipeline {
           error: { code, message },
         })
       );
+      const statementsKept = keptSoFar();
       return {
         success: false,
         statementsExecuted: 0,
         renamesApplied: 0,
+        ...(statementsKept === undefined ? {} : { statementsKept }),
         error: {
           code,
           message,
