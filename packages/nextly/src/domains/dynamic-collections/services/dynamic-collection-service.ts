@@ -1927,7 +1927,14 @@ export class DynamicCollectionService extends BaseService {
           tableName: companionOffer.candidate.tableName,
           fromColumn: companionOffer.candidate.fromColumn,
           toColumn: companionOffer.candidate.toColumn,
-          choice: "rename",
+          // As the request answered it: a pair it declined is dropped and added on the companion
+          // too, and the apply takes that as the request's choice.
+          choice: declinedRename({
+            from: { name: companionOffer.rename.from },
+            to: { name: companionOffer.rename.to },
+          })
+            ? "drop_and_add"
+            : "rename",
         });
       }
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;

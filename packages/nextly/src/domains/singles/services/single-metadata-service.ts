@@ -1413,7 +1413,15 @@ export class SingleMetadataService {
       wasStored: input.wasLocalized,
       isStored: input.isLocalized,
       statusChanges: input.wasStatus !== input.hasStatus,
-      renamed: companion?.rename,
+      // A companion rename the request declined moves no value: it is dropped and added.
+      renamed:
+        companion !== undefined &&
+        !declinedRename({
+          from: { name: companion.rename.from },
+          to: { name: companion.rename.to },
+        })
+          ? companion.rename
+          : undefined,
       liveTable: async () =>
         (
           await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
