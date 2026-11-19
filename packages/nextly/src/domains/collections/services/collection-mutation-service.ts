@@ -301,8 +301,11 @@ import {
   companionHasStatusColumn,
   companionContentStamp,
   companionWriteVia,
+  pruneOverlaysOfRemovedRows,
+  splitSharedStructureWrite,
   upsertCompanionRow,
   type CompanionSchema,
+  type SharedStructureWritten,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
@@ -3841,6 +3844,10 @@ export class CollectionMutationService extends BaseService {
     // The companion's runtime Drizzle table, for reads of the locale's own row
     // (its `_status`) through the shared typed reader.
     companionTable: unknown;
+    // The structures of the repeaters and groups keeping one structure in every
+    // language, as this write puts them on the main row: every language's
+    // overlay is pruned against them once the write lands.
+    sharedStructures: SharedStructureWritten[];
   } | null> {
     if (!this.localization) return null;
     const companion = await this.fileManager.loadCompanionSchema(
@@ -3935,6 +3942,7 @@ export class CollectionMutationService extends BaseService {
     const writeLocale = resolveRequestedLocale(this.localization, locale);
     const companionData: Record<string, unknown> = {};
     const localizedFieldValues: Record<string, unknown> = {};
+    const sharedStructures: SharedStructureWritten[] = [];
     for (const field of companion.localizedFields) {
       // createEntry passes snake_case keys (already converted); updateEntry passes camelCase
       // field names. Accept either; always store under the snake_case companion column.
@@ -3943,7 +3951,23 @@ export class CollectionMutationService extends BaseService {
         : Object.prototype.hasOwnProperty.call(entryData, field.name)
           ? field.name
           : null;
-      if (key !== null) {
+      if (key !== null && field.sharedStructure) {
+        // A repeater or group keeping one structure in every language: the
+        // structure (row ids, order, shared values) stays in `entryData` for
+        // the main row, which every language reads, and this language's
+        // translatable values inside go to its overlay, keyed by row id.
+        const written = entryData[key];
+        const split = splitSharedStructureWrite(
+          field,
+          field.sharedStructure,
+          written
+        );
+        entryData[key] = split.written.structure;
+        companionData[field.column] = split.overlay;
+        // The value as written, for the version snapshot (read shape).
+        localizedFieldValues[field.name] = written;
+        sharedStructures.push(split.written);
+      } else if (key !== null) {
         companionData[field.column] = entryData[key];
         // Keep a field-name-keyed copy for the version snapshot (read shape).
         localizedFieldValues[field.name] = entryData[key];
@@ -3989,6 +4013,7 @@ export class CollectionMutationService extends BaseService {
         .map(field => field.name),
       hasStatus: companion.hasStatus,
       companionTable: companion.table,
+      sharedStructures,
     };
   }
 
@@ -4106,12 +4131,15 @@ export class CollectionMutationService extends BaseService {
     if (this.localization && !args.tx) {
       await this.warmCompanionReadiness(args.collectionName);
     }
+    // A shared structure comes back assembled in the write language, so a
+    // row sent without an id pairs with the stored row it repeats unchanged.
     const translated = this.localization
       ? await this.readCompanionLocalizedValues(
           args.tx ?? { getDrizzle: <T = unknown>() => this.db as T },
           args.collectionName,
           args.entryId,
-          resolveRequestedLocale(this.localization, args.locale)
+          resolveRequestedLocale(this.localization, args.locale),
+          args.row
         )
       : {};
     return { ...args.row, ...translated };
@@ -6095,7 +6123,14 @@ export class CollectionMutationService extends BaseService {
     tx: { getDrizzle<T = unknown>(): T },
     collectionName: string,
     entryId: string,
-    locale: string
+    locale: string,
+    /**
+     * The entry's main row, where the caller has it: a repeater or group
+     * keeping one structure in every language is then returned assembled in
+     * `locale` from its structure there. Without it such a field is left out,
+     * and the main row's structure stands.
+     */
+    mainRow?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     // Bound to the transaction connection so the companion metadata read does not
     // re-enter the pool from inside the caller's transaction.
@@ -6108,7 +6143,8 @@ export class CollectionMutationService extends BaseService {
       tx.getDrizzle(),
       companion,
       [entryId],
-      locale
+      locale,
+      mainRow ? new Map([[entryId, mainRow]]) : undefined
     );
     return byEntry.get(entryId) ?? {};
   }
@@ -6125,13 +6161,16 @@ export class CollectionMutationService extends BaseService {
     executor: unknown,
     companion: CompanionSchema,
     entryIds: readonly string[],
-    locale: string
+    locale: string,
+    /** Main rows by entry id, whose shared structures are assembled in `locale`. */
+    mainRows?: ReadonlyMap<string, Record<string, unknown>>
   ): Promise<Map<string, Record<string, unknown>>> {
     const byLocale = await this.companionValuesByLanguageOf(
       executor,
       companion,
       entryIds,
-      [locale]
+      [locale],
+      mainRows
     );
     return byLocale.get(locale) ?? new Map();
   }
@@ -6145,11 +6184,29 @@ export class CollectionMutationService extends BaseService {
     executor: unknown,
     companion: CompanionSchema,
     entryIds: readonly string[],
-    locales: readonly string[]
+    locales: readonly string[],
+    /**
+     * Main rows by entry id: each shared structure among them is carried
+     * onto the row read, so it comes back assembled in each language.
+     */
+    mainRows?: ReadonlyMap<string, Record<string, unknown>>
   ): Promise<Map<string, Map<string, Record<string, unknown>>>> {
+    const structuresOf = (id: string): Record<string, unknown> => {
+      const main = mainRows?.get(id);
+      const carried: Record<string, unknown> = {};
+      if (!main) return carried;
+      for (const field of companion.localizedFields) {
+        if (field.sharedStructure && Object.hasOwn(main, field.name)) {
+          carried[field.name] = main[field.name];
+        }
+      }
+      return carried;
+    };
     const byLanguage = [...new Set(locales)].map(locale => ({
       locale,
-      rows: entryIds.map((id): Record<string, unknown> => ({ id })),
+      rows: entryIds.map(
+        (id): Record<string, unknown> => ({ ...structuresOf(id), id })
+      ),
     }));
     await populateCompanionFieldsByLanguage({
       db: executor as Parameters<
@@ -14718,6 +14775,19 @@ export class CollectionMutationService extends BaseService {
         companionData: Record<string, unknown>;
         /** The same values by field name, which provenance is recorded by. */
         localizedFieldValues?: Record<string, unknown>;
+        /** The shared structures written to the main row (`splitLocalizedWriteData`). */
+        sharedStructures?: readonly SharedStructureWritten[];
+        companionTable?: unknown;
+      } | null;
+      /**
+       * The split the main row's shared structures came from, where the
+       * write puts no translation (`translation` null) yet still writes them:
+       * every language's overlay is pruned against them all the same.
+       */
+      structuresFrom?: {
+        companionTableName: string;
+        companionTable: unknown;
+        sharedStructures: readonly SharedStructureWritten[];
       } | null;
       /**
        * Where the translated values came from, recorded with them
@@ -14785,9 +14855,42 @@ export class CollectionMutationService extends BaseService {
       );
       await this.recordWrittenProvenance(tx, args);
     }
+    // A repeater's rows removed from its one structure take their
+    // translations with them, in every language, on this transaction.
+    await this.pruneRemovedRowTranslations(
+      tx,
+      args.entryId,
+      args.structuresFrom ?? args.translation
+    );
     // The translation row as it was before this write, read by the claim:
     // for an overwrite, what it replaced.
     return claim?.before;
+  }
+
+  /**
+   * Prune every language's overlay against the shared structures a write
+   * put on the main row (`pruneOverlaysOfRemovedRows`). Nothing to do for a
+   * write that carried none.
+   */
+  private async pruneRemovedRowTranslations(
+    tx: TransactionContext,
+    entryId: string,
+    split:
+      | {
+          companionTableName: string;
+          companionTable?: unknown;
+          sharedStructures?: readonly SharedStructureWritten[];
+        }
+      | null
+      | undefined
+  ): Promise<void> {
+    if (!split?.sharedStructures?.length || !split.companionTable) return;
+    await pruneOverlaysOfRemovedRows(tx, this.dialect, {
+      companionTable: split.companionTable,
+      companionTableName: split.companionTableName,
+      parentId: entryId,
+      written: split.sharedStructures,
+    });
   }
 
   /**
@@ -18673,6 +18776,7 @@ export class CollectionMutationService extends BaseService {
               })
                 ? localizedUpdate
                 : null,
+            structuresFrom: localizedUpdate,
           });
         }
 
@@ -23818,6 +23922,9 @@ export class CollectionMutationService extends BaseService {
               revisionClaimed: languageJudged.claimed,
             }
           );
+          // Removed rows' translations go in every language, as the
+          // single-entry update prunes them.
+          await this.pruneRemovedRowTranslations(tx, entryId, localizedUpdate);
           // Where the values came from, beside them on this transaction.
           await this.recordWrittenProvenance(tx, {
             entryId,

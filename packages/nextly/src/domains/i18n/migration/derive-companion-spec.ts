@@ -1,8 +1,13 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
 import { isFieldLocalized } from "../classify-fields";
+import {
+  keepsTranslationsInside,
+  type StructuredField,
+} from "../shared-structure";
 
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { I18nTransitionKind } from "./transition-state";
@@ -12,6 +17,8 @@ interface FieldLike {
   name: string;
   type: string;
   localized?: boolean;
+  /** The fields inside a repeater or group, which decide whether it keeps translations inside. */
+  fields?: readonly StructuredField[];
 }
 
 interface DeriveArgs {
@@ -59,6 +66,52 @@ export function deriveCompanionSpec(
   }
   if (columns.length === 0) return null;
   return { ...companionSpecShell(args), columns };
+}
+
+/**
+ * The companion TABLE an entity's translations need: the translated fields' columns
+ * (`deriveCompanionSpec`), and beside them an overlay column for each repeater or group that keeps
+ * translations inside (`keepsTranslationsInside`), whose structure stays on the main table. `null`
+ * where the entity needs neither.
+ *
+ * Kept apart from `deriveCompanionSpec` on purpose: that spec's columns are the fields whose
+ * values live on the companion INSTEAD of the main table, which is what seeding, restoring and
+ * dropping columns copy and move. An overlay column is never one of them; its container's main
+ * column stays where it is, so the paths that build the physical or runtime table read this one,
+ * and nothing that moves values between the tables ever sees an overlay.
+ */
+export function deriveCompanionTableSpec(
+  args: DeriveArgs
+): CompanionMigrationSpec | null {
+  const spec = deriveCompanionSpec(args);
+  if (!args.collectionLocalized) return spec;
+  if (!keepsSharedStructures(args.dbName ?? spec?.mainTable ?? "")) {
+    return spec;
+  }
+  const overlays = args.fields
+    .filter(field => keepsTranslationsInside(field, true))
+    .flatMap(field => {
+      const column = fieldToLocalizedColumnSpec(
+        field,
+        args.dialect,
+        args.builtBy
+      );
+      return column ? [column] : [];
+    });
+  if (overlays.length === 0) return spec;
+  const base = spec ?? companionSpecShell(args);
+  return { ...base, columns: [...base.columns, ...overlays] };
+}
+
+/**
+ * Whether the entity whose main table is `tableName` keeps one structure across languages for its
+ * repeaters and groups, with an overlay column per container on its translation table: a
+ * collection's and a Single's do. A field group's instances keep their containers as they are; a
+ * field group's table is always its slug under the field-group prefix
+ * (`resolveComponentTableName`), which no collection's (`dc_`) or Single's (`single_`) carries.
+ */
+export function keepsSharedStructures(tableName: string): boolean {
+  return !tableName.startsWith(STORAGE_FORMAT.tablePrefix);
 }
 
 /** The table a main table's translated values are kept in. */

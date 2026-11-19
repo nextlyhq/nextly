@@ -205,6 +205,8 @@ import {
 import {
   buildCompanionSchema,
   type CompanionSchema,
+  pruneOverlaysOfRemovedRows,
+  sharedStructuresIn,
   splitLocalizedWrite,
 } from "../../i18n/runtime/companion-io";
 import {
@@ -216,6 +218,7 @@ import {
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
+import { assembleStoredValue } from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
@@ -5307,9 +5310,31 @@ export class SingleMutationService extends BaseService {
               if (
                 Object.prototype.hasOwnProperty.call(companionData, f.column)
               ) {
-                row[f.column] = companionData[f.column];
+                // A shared structure's column holds this language's overlay:
+                // the row reads its structure filled from it.
+                row[f.column] = f.sharedStructure
+                  ? assembleStoredValue(
+                      row[f.column],
+                      [companionData[f.column]],
+                      f.sharedStructure
+                    )
+                  : companionData[f.column];
               }
             }
+          }
+
+          // A repeater's rows removed from its one structure take their
+          // translations with them, in every language, on this transaction.
+          if (!holdEdit && companion && companionPhysicallyExists) {
+            await pruneOverlaysOfRemovedRows(tx, this.adapter.dialect, {
+              companionTable: companion.table,
+              companionTableName: companion.companionTableName,
+              parentId: existingDoc.id,
+              written: sharedStructuresIn(
+                mainPayload,
+                companion.localizedFields
+              ),
+            });
           }
 
           // {@link EVERY_LOCALE}: carry the lifecycle to the languages the
@@ -5817,7 +5842,15 @@ export class SingleMutationService extends BaseService {
                 if (
                   Object.prototype.hasOwnProperty.call(companionData, f.column)
                 ) {
-                  parentRow[f.name] = companionData[f.column];
+                  // A shared structure's column holds this language's
+                  // overlay: the snapshot records the structure filled from it.
+                  parentRow[f.name] = f.sharedStructure
+                    ? assembleStoredValue(
+                        parentRow[f.name],
+                        [companionData[f.column]],
+                        f.sharedStructure
+                      )
+                    : companionData[f.column];
                 } else if (
                   Object.prototype.hasOwnProperty.call(
                     previousCompanionValues,

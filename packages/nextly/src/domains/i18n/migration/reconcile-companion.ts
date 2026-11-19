@@ -15,7 +15,10 @@ import {
   uniqueTranslatedColumns,
 } from "./companion-unique-indexes";
 import { ddlType, lit, q } from "./ddl-types";
-import { deriveCompanionSpec } from "./derive-companion-spec";
+import {
+  deriveCompanionSpec,
+  deriveCompanionTableSpec,
+} from "./derive-companion-spec";
 import { storageDiffers } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
@@ -338,9 +341,10 @@ export function buildCompanionReconcileStatements(
 
   if (!args.companionExists) {
     // First translatable field on this collection (or fresh localized create): materialize
-    // the whole companion. deriveCompanionSpec returns null when there are no localized
-    // fields, in which case there is nothing to create yet.
-    const spec = deriveCompanionSpec({
+    // the whole companion, with the overlay column of each repeater or group among
+    // `newLocalized` that keeps translations inside. Null when there is nothing to hold, in
+    // which case there is nothing to create yet.
+    const spec = deriveCompanionTableSpec({
       slug,
       kind,
       dbName: tableName,

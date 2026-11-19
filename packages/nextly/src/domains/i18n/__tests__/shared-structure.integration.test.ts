@@ -15,6 +15,7 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   defineCollection,
+  defineSingle,
   group,
   number,
   repeater,
@@ -48,6 +49,18 @@ const ARTICLES = defineCollection({
   ],
 });
 
+/** A Single holding the same kind of repeater, written through the Single's own path. */
+const NOTICE = defineSingle({
+  slug: "notice",
+  fields: [
+    text({ name: "heading" }),
+    repeater({
+      name: "slides",
+      fields: [text({ name: "caption" }), number({ name: "rank" })],
+    }),
+  ],
+});
+
 interface Slide {
   id: string;
   caption?: string | null;
@@ -67,6 +80,7 @@ describeEachDialect("one structure across languages", dialect => {
     t = await createTestNextly({
       dialect,
       collections: [ARTICLES],
+      singles: [NOTICE],
       localization: LANGUAGES,
     });
     return t;
@@ -222,5 +236,78 @@ describeEachDialect("one structure across languages", dialect => {
     expect(
       (await read(nextly, id, "es")).slides.map(slide => slide.caption)
     ).toEqual(["segundo", "primero"]);
+  });
+
+  it("keeps one structure for a Single's repeater, each row keeping its own translations", async () => {
+    const { nextly } = await site();
+    const slidesOf = async (locale: string) =>
+      (
+        (await nextly.findSingle({ slug: "notice", locale })) as {
+          slides: Slide[];
+        }
+      ).slides;
+
+    await nextly.updateSingle({
+      slug: "notice",
+      locale: "en",
+      data: {
+        slides: [
+          { caption: "first", rank: 1 },
+          { caption: "second", rank: 2 },
+        ],
+        _overwrite: true,
+      },
+    });
+    const [first, second] = await slidesOf("en");
+    await nextly.updateSingle({
+      slug: "notice",
+      locale: "es",
+      data: {
+        slides: [
+          { id: first!.id, caption: "primero", rank: 1 },
+          { id: second!.id, caption: "segundo", rank: 2 },
+        ],
+        _overwrite: true,
+      },
+    });
+    expect((await slidesOf("en")).map(slide => slide.caption)).toEqual([
+      "first",
+      "second",
+    ]);
+
+    // Reordered in English with the first row removed: Spanish follows, its translation kept
+    // by row id and the removed row's gone.
+    await nextly.updateSingle({
+      slug: "notice",
+      locale: "en",
+      data: {
+        slides: [{ id: second!.id, caption: "second", rank: 20 }],
+        _overwrite: true,
+      },
+    });
+    expect(
+      (await slidesOf("es")).map(({ id: row, caption, rank }) => [
+        row,
+        caption,
+        rank,
+      ])
+    ).toEqual([[second!.id, "segundo", 20]]);
+
+    // A row given the removed row's id again reads English in Spanish, not the old translation.
+    await nextly.updateSingle({
+      slug: "notice",
+      locale: "en",
+      data: {
+        slides: [
+          { id: second!.id, caption: "second", rank: 20 },
+          { id: first!.id, caption: "back", rank: 1 },
+        ],
+        _overwrite: true,
+      },
+    });
+    expect((await slidesOf("es")).map(slide => slide.caption)).toEqual([
+      "segundo",
+      "back",
+    ]);
   });
 });

@@ -25,6 +25,7 @@ import { RELEASE_PUBLISHED_STATUS } from "../releases/release-scope";
 import { DOCUMENT_REVISION_COLUMN } from "../versions/document-revision";
 import { draftsKeptByPart } from "../versions/part-drafts";
 
+import { isBlank } from "./blank-value";
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
 import {
   documentLanguageKey,
@@ -36,6 +37,10 @@ import {
 } from "./provenance/field-status";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
 import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
+import {
+  assembleStoredValue,
+  type SharedStructureShape,
+} from "./shared-structure";
 import type { TranslationFilterState } from "./translation-filter-states";
 
 /**
@@ -72,12 +77,18 @@ export interface LocalizedFieldRef {
    * databases hand back as text: only such a field's text is read back to the value it encodes.
    */
   json?: boolean;
+  /**
+   * Set for a repeater or group that keeps one structure in every language and translations
+   * inside it: its column here holds a language's OVERLAY (its translatable values keyed by row
+   * id), and its structure stays on the main row. A read assembles the two
+   * (`assembleStoredValue`), each value inside falling back on its own; it is never a value to
+   * resolve or compare whole.
+   */
+  sharedStructure?: SharedStructureShape;
 }
 
-/** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */
-export function isBlank(value: unknown): boolean {
-  return value === null || value === undefined || value === "";
-}
+// The blank rule lives beside nothing else, so the shared-structure assembly reads the same one.
+export { isBlank };
 
 /**
  * Resolve one localized field's value from its per-locale values along a fallback `chain`
@@ -524,6 +535,25 @@ export function fillCompanionFields(args: {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
     const found: Record<string, string | null> = {};
     for (const field of args.localizedFields) {
+      if (field.sharedStructure) {
+        // The structure is on the main row; a row read without it (a read of the translated
+        // values alone) has nothing to fill and keeps no key for it.
+        if (!Object.hasOwn(row, field.name)) continue;
+        const overlays = args.localeChain.map(
+          code => perLocaleRows[code]?.[field.column]
+        );
+        row[field.name] = assembleStoredValue(
+          row[field.name],
+          overlays,
+          field.sharedStructure
+        );
+        // The first language whose overlay holds anything, as a whole field's source.
+        if (args.sources) {
+          const index = overlays.findIndex(overlay => !isBlank(overlay));
+          found[field.name] = index < 0 ? null : args.localeChain[index];
+        }
+        continue;
+      }
       const chain = field.unique === true ? ownLanguage : args.localeChain;
       const perLocaleValue: Record<string, unknown> = {};
       for (const code of chain) {
@@ -752,6 +782,21 @@ export async function populateCompanionFieldsAllLocales(
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
     for (const field of localizedFields) {
       const keyed: Record<string, unknown> = {};
+      if (field.sharedStructure) {
+        // Each language's value assembled from the one structure and that language's overlay
+        // alone, where the row holds the structure.
+        if (!Object.hasOwn(row, field.name)) continue;
+        const shape = field.sharedStructure;
+        for (const code of locales) {
+          keyed[code] = assembleStoredValue(
+            row[field.name],
+            [perLocaleRows[code]?.[field.column]],
+            shape
+          );
+        }
+        row[field.name] = keyed;
+        continue;
+      }
       for (const code of locales) {
         keyed[code] = perLocaleRows[code]?.[field.column] ?? null;
       }
