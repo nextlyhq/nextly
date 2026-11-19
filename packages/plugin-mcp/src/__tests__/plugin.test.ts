@@ -8,6 +8,7 @@ const require = createRequire(import.meta.url);
 const manifest = require("../../package.json") as {
   name: string;
   version: string;
+  description: string;
 };
 
 /**
@@ -178,4 +179,29 @@ describe("the endpoint path names one address", () => {
     // 404 and have nothing to connect it to.
     expect(() => mcpPlugin({ enabled: false, path: "/mcp/:id" })).toThrow();
   });
+});
+
+/**
+ * What the plugin tells an operator it can change, where an operator reads it: the admin's
+ * plugin list and the package's own description.
+ *
+ * Both once said the plugin was read-only. With a tool that writes, that sentence is the one an
+ * operator would rely on when deciding to turn the endpoint on, so it must name the write and
+ * what stays out of an agent's reach.
+ */
+describe("the plugin says what an agent may change", () => {
+  const descriptions = () => [
+    ["admin", mcpPlugin().admin?.description ?? ""],
+    ["package", manifest.description],
+  ];
+
+  it.each(descriptions())(
+    "the %s description names the one tool that writes, and no longer claims read-only",
+    (_where, description) => {
+      expect(description).not.toMatch(/read-only/i);
+      expect(description).toContain("submit for review");
+      expect(description).toMatch(/approves/);
+      expect(description).toMatch(/publishes/);
+    }
+  );
 });

@@ -176,6 +176,28 @@ describe("get_initial_context answers for the caller who asked", () => {
     expect(prose).toMatch(/may not have been seen|not have been seen/i);
   });
 
+  it("says which one tool writes, and what no tool does", async () => {
+    // The instructions once said this server was read-only. With `submit_for_review` that is
+    // false, and an agent told so would not know it can submit; told nothing else, it would not
+    // know a submit is all it can do. Both halves are asserted.
+    const handlers = await boot([posts]);
+    const key = await keyGranting(current!, "writes", ["posts"]);
+    const auth = { authorization: `Bearer ${key}` };
+
+    await handlers.POST(initialize(auth), params("mcp"));
+    const body = await answerOf(
+      await handlers.POST(callInitialContext(auth), params("mcp"))
+    );
+    const prose = (body.result?.content ?? []).map(c => c.text).join("\n");
+
+    expect(prose).not.toMatch(/read-only/i);
+    expect(prose).toContain("`submit_for_review`");
+    // Matched across the prose's line breaks: it is written as wrapped lines.
+    expect(prose).toMatch(
+      /No\s+tool\s+approves,\s+requests\s+changes,\s+publishes,\s+publishes\s+without\s+review,\s+assigns\s+or\s+changes\s+a\s+workflow/
+    );
+  });
+
   it("keeps a hostile entity name out of the instructions", async () => {
     // The security property. The instructions are a constant, so a slug an
     // attacker chose can only ever arrive as DATA. This is what fails the
