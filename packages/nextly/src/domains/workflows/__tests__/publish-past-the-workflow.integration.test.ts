@@ -1154,22 +1154,24 @@ describe.each(getConfiguredTestDialects())(
         await boot(dialect);
         const adapter = app().adapter;
         const ran: string[] = [];
-        let judged = 0;
-        // A gate that lets every create through, holds an effect for the commit and one for a
-        // rollback as it judges each, and fails as it settles the first.
+        const judged: string[] = [];
+        // A gate that lets every create through. Its verdict on each written entry holds an effect
+        // for the commit and one for a rollback, and the first entry's fails as it settles. The
+        // early answer a create asks before its row exists (no entry id) holds nothing.
         container.register<PublishGate>("publishGate", () => ({
           refusals: () => Promise.resolve([]),
-          judge: async () => {
-            judged += 1;
-            const item = judged;
-            await adapter.afterCommit(() => ran.push(`commit ${String(item)}`));
-            await adapter.afterRollback(() =>
-              ran.push(`rollback ${String(item)}`)
-            );
+          judge: async (_tx, question) => {
+            if (question.entryId === "") {
+              return { refusals: [], settle: () => Promise.resolve() };
+            }
+            judged.push(question.entryId);
+            const item = String(judged.length);
+            await adapter.afterCommit(() => ran.push(`commit ${item}`));
+            await adapter.afterRollback(() => ran.push(`rollback ${item}`));
             return {
               refusals: [],
               settle: () =>
-                item === 1
+                item === "1"
                   ? Promise.reject(new Error("settle failed"))
                   : Promise.resolve(),
             };
