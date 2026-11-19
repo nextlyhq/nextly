@@ -1662,6 +1662,10 @@ describe("applyDueReleases asks whether each document going live is held back", 
     // The next pass, the question answered, writes the member and settles its release.
     const retried = await applyDueReleases(d);
 
+    // Asked again about the same member, not published on the strength of nothing.
+    expect(
+      notApproved.mock.calls.map(call => call[0].map(doc => doc.entryId))
+    ).toEqual([["e1"], ["e1"]]);
     expect(publish).toHaveBeenCalledTimes(1);
     expect(retried).toMatchObject({ applied: 1, blocked: 0, published: 1 });
   });

@@ -2,10 +2,17 @@
  * Whether a component of due releases may go live: the one answer the run and a reader share.
  *
  * A component is the set of due releases that share a document (the planner's
- * `overlappingReleases`), and it is applied whole: the run writes all of it or none. So what holds
- * one document it would publish back holds every action of the component, and a read of a
- * document the component decides must project the same answer, or a reader is shown a document
- * the run never writes and sees it snap back once the release stops.
+ * `overlappingReleases`). The run asks this before its first write and writes none of the
+ * component when it is held, so what holds one document it would publish back holds every action
+ * of the component, and a read of a document the component decides must project the same answer,
+ * or a reader is shown a document the run never writes and sees it snap back once the release
+ * stops.
+ *
+ * What it guarantees is bounded by when it is asked: a hold present before the component's first
+ * write leaves none of it live. The writes themselves are one per document, each in its own
+ * transaction, so an approval withdrawn after the question and before a later document's write
+ * is caught by that write's own publish gate instead, and the documents written before it stay
+ * live. Making the question and the writes one atomic step is not attempted here.
  *
  * @module domains/releases/component-hold
  */
