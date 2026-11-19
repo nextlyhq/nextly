@@ -83,6 +83,7 @@ const inReview: PartReview = {
   steps: [],
   waitingFor: null,
   lastMove: null,
+  reviewedVersionNo: null,
 };
 
 describe("a document with no workflow attached", () => {

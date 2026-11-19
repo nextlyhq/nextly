@@ -119,6 +119,7 @@ function inReview(
     steps: [approveStep()],
     waitingFor: null,
     lastMove: null,
+    reviewedVersionNo: null,
     ...over,
   };
 }

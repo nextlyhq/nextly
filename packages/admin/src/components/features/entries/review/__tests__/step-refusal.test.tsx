@@ -72,6 +72,7 @@ const inReview: PartReview = {
   steps: [approve, sendBack],
   waitingFor: null,
   lastMove: null,
+  reviewedVersionNo: null,
 };
 
 /** A refusal as `fetcher` throws it: the parsed `{ error }` envelope. */

@@ -92,6 +92,7 @@ function inReview(part: string): PartReview {
     ],
     waitingFor: null,
     lastMove: null,
+    reviewedVersionNo: null,
   };
 }
 

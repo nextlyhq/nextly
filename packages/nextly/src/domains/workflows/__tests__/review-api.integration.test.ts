@@ -66,7 +66,9 @@ import {
   giveRole,
   person,
   role,
+  saveIn,
   seedState,
+  shownVersion,
   stateDb,
   stateOf,
   superAdminRole,
@@ -1878,6 +1880,32 @@ describe.each(getConfiguredTestDialects())(
           expect.objectContaining({ single: "banner", code: "NOT_FOUND" }),
         ]);
         expect(JSON.stringify(answer.refused)).not.toContain(String(banner.id));
+      });
+
+      it("names each part's version under review: a language's newest, and the shared part's newest in any language", async () => {
+        current = await bootSteps(dialect);
+        await person(app(), "alice", [
+          ["read", POSTS],
+          ["update", POSTS],
+        ]);
+        const id = await entry(app(), POSTS);
+        // Spanish saved after English, so the shared part's newest version is the Spanish one.
+        await saveIn(app(), POSTS, id, "es", { title: "Hola" });
+
+        const parts = partsOf(
+          await door.reviewState(ALICE, { collection: POSTS, id })
+        );
+        const reviewed = (part: string | null) =>
+          parts.find(each => each.part === part)?.reviewedVersionNo;
+
+        // The same version core reviews and approves for each part.
+        expect(reviewed("en")).toBe(await shownVersion(app(), POSTS, id, "en"));
+        expect(reviewed("es")).toBe(await shownVersion(app(), POSTS, id, "es"));
+        expect(reviewed(null)).toBe(await shownVersion(app(), POSTS, id, null));
+        expect(reviewed(null)).toBe(reviewed("es"));
+        expect(Number(reviewed("en"))).toBeLessThan(Number(reviewed("es")));
+        // A language never saved has nothing under review.
+        expect(reviewed("ar")).toBeNull();
       });
 
       it("names no last move for a part that never moved, though another part did", async () => {

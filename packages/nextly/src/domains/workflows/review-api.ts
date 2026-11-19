@@ -23,7 +23,11 @@ import { primaryStep } from "./define-workflow";
 import { roleIdsOfSlugs } from "./holders";
 import { livePartsOf, partStage, pendingPartsOn } from "./implicit-stage";
 import { lastMovesOn, type LastMove } from "./last-moves";
-import { documentTableOn, partVersionOn } from "./part-versions";
+import {
+  documentTableOn,
+  partVersionOn,
+  reviewedVersionNoOn,
+} from "./part-versions";
 import {
   partsWaitingFor,
   partWaitsDecider,
@@ -113,6 +117,12 @@ export interface PartReview {
   revision: number;
   /** The document's version as a reader of this part holds it: what a step says it saw. */
   version: string | null;
+  /**
+   * The number of the part's version under review: its newest recorded version, in its language
+   * or, for the shared part, in any. What approving the part approves, so an editor can tell
+   * whether the version it shows is that one. Null for a part never saved.
+   */
+  reviewedVersionNo: number | null;
   /** The steps that leave from its stage, each with whether the caller may take it. */
   steps: AvailableStep[];
   /**
@@ -243,6 +253,8 @@ export async function reviewStateOf(
         version:
           (await partVersionOn(tx, dialect, table, document.entryId, part)) ??
           null,
+        reviewedVersionNo:
+          (await reviewedVersionNoOn(tx, document, part)) ?? null,
         steps: stepsFrom(workflow, stage),
         lastMove: moves.get(part) ?? null,
       });

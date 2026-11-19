@@ -68,6 +68,11 @@ export interface PartReview {
   /** What a step or an assignment says it saw. */
   revision: number;
   version: string | null;
+  /**
+   * The number of the part's version under review: its newest recorded version, in its language
+   * or, for the shared part, in any. What approving the part approves.
+   */
+  reviewedVersionNo: number | null;
   steps: ReviewStep[];
   waitingFor: ReviewWaitingFor | null;
   lastMove: ReviewLastMove | null;

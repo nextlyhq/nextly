@@ -46,7 +46,7 @@ import {
   takeableOnEvery,
   waitingForWords,
 } from "./review-words";
-import { approves, hidesALanguage, SHARED_APPROVAL_HELD } from "./shared-hold";
+import { approves, useSharedApprovalHold } from "./shared-hold";
 import { STEP_NOT_OFFERED, useStepTaker } from "./useStepTaker";
 
 export interface EditorReviewInput {
@@ -106,7 +106,7 @@ export function useEditorReview({
   held,
 }: EditorReviewInput): EditorReview {
   const query = useReviewState(document);
-  const { defaultLocale, locales } = useLocalization();
+  const { defaultLocale } = useLocalization();
   const taker = useStepTaker(document);
   const queryClient = useQueryClient();
 
@@ -137,24 +137,19 @@ export function useEditorReview({
     document !== undefined && query.data?.attached === true
       ? query.data.review.parts
       : [];
-  // Where this person can't read every language, the shared fields' newest
-  // version may be one they can't see: their approval of the shared fields is
-  // held, here (the shared part on screen) and in approve-all (the shared part
-  // among those waiting for their approval).
-  const hidden = hidesALanguage(parts, locales.length);
-  const sharedApproves = (candidates: readonly PartReview[]): boolean =>
-    candidates.some(
-      candidate =>
-        candidate.part === null &&
-        candidate.steps.some(step => approves(step) && step.mayTake)
-    );
-  const sharedHold =
-    hidden && sharedApproves(onScreen) ? SHARED_APPROVAL_HELD : undefined;
-  const stepReason = stepHold(isDirty, onScreen).stepReason ?? sharedHold;
-  const hold =
-    held ??
-    stepReason ??
-    (hidden && sharedApproves(parts) ? SHARED_APPROVAL_HELD : undefined);
+  // Where the shared fields' version under review is hidden from this person,
+  // their approval of the shared fields is held: here (the shared part on
+  // screen) and in approve-all (the shared part among those waiting for it).
+  const sharedHeld = useSharedApprovalHold(document, parts);
+  const sharedOnScreen = onScreen.some(
+    candidate =>
+      candidate.part === null &&
+      candidate.steps.some(step => approves(step) && step.mayTake)
+  );
+  const stepReason =
+    stepHold(isDirty, onScreen).stepReason ??
+    (sharedOnScreen ? sharedHeld : undefined);
+  const hold = held ?? stepReason ?? sharedHeld;
 
   if (document === undefined || part === undefined) {
     return {

@@ -53,6 +53,7 @@ const notApproved: PartReview = {
   steps: [],
   waitingFor: null,
   lastMove: null,
+  reviewedVersionNo: null,
 };
 
 function answer(mayPublishWithoutReview: boolean) {

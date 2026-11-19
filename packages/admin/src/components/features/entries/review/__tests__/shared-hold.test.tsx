@@ -1,23 +1,33 @@
 /**
- * The shared fields' approval, held where the reviewer can't read every
- * language: their newest version may be one the reviewer can't see, while the
- * step would approve it. A reviewer who reads every language is not held.
+ * The shared fields' approval, held where their version under review is hidden
+ * from the reviewer: it was last saved in a language they can't read, so their
+ * history's newest version is an older one. A reviewer who can see the version
+ * under review is not held.
  */
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
+import type { VersionMeta } from "@admin/services/versionApi";
 import type { PartReview, ReviewStateAnswer } from "@admin/types/workflows";
 
 import { ReviewSection } from "../ReviewSection";
 import { SHARED_APPROVAL_HELD } from "../shared-hold";
 import { useEditorReview } from "../useEditorReview";
 
-const { fetchSpy } = vi.hoisted(() => ({ fetchSpy: vi.fn() }));
+const { fetchSpy, listSpy } = vi.hoisted(() => ({
+  fetchSpy: vi.fn(),
+  listSpy: vi.fn(),
+}));
 
 vi.mock("@admin/services/workflowApi", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/services/workflowApi")>()),
   fetchReviewState: fetchSpy,
 }));
+vi.mock("@admin/services/versionApi", async importOriginal => {
+  const original =
+    await importOriginal<typeof import("@admin/services/versionApi")>();
+  return { ...original, versionApi: { ...original.versionApi, list: listSpy } };
+});
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({
     enabled: true,
@@ -44,7 +54,7 @@ const post = {
 };
 
 /** A part in review whose approval this person may give. */
-function waiting(code: string | null): PartReview {
+function waiting(code: string | null, reviewedVersionNo: number): PartReview {
   return {
     part: code,
     stage: "inReview",
@@ -57,6 +67,7 @@ function waiting(code: string | null): PartReview {
     approval: null,
     revision: 1,
     version: `t-${code ?? "shared"}`,
+    reviewedVersionNo,
     steps: [
       {
         name: "approve",
@@ -73,16 +84,38 @@ function waiting(code: string | null): PartReview {
   };
 }
 
-function answering(...parts: PartReview[]): void {
+/** A saved version in `locale`. */
+function saved(versionNo: number, locale: string): VersionMeta {
+  return {
+    id: `v${versionNo}`,
+    versionNo,
+    status: "draft",
+    isAutosave: false,
+    label: null,
+    locale,
+    sourceVersionNo: null,
+    createdBy: null,
+    author: null,
+    createdAt: "2026-11-19T09:00:00.000Z",
+    updatedAt: "2026-11-19T09:00:00.000Z",
+  };
+}
+
+/**
+ * The review state (English and the shared fields wait; French is not this
+ * reviewer's to read) and the history they can see, newest first.
+ */
+function answering(sharedReviewed: number, visible: VersionMeta[]): void {
   const answer: ReviewStateAnswer = {
     attached: true,
     review: {
       workflow: { slug: "review", label: "Review" },
-      parts,
+      parts: [waiting("en", 8), waiting(null, sharedReviewed)],
       mayPublishWithoutReview: false,
     },
   };
   fetchSpy.mockResolvedValue(answer);
+  listSpy.mockResolvedValue({ items: visible, meta: {} });
 }
 
 /** The header's hold and approve-all's, as the editor reads them. */
@@ -105,16 +138,21 @@ function Probe() {
   );
 }
 
-describe("the shared fields' approval where a language is hidden", () => {
-  it("is held in the header, approve-all and the side panel when the reviewer can't read French", async () => {
-    answering(waiting("en"), waiting(null));
+function renderBoth() {
+  render(
+    <>
+      <Probe />
+      <ReviewSection document={post} locale="en" />
+    </>
+  );
+}
 
-    render(
-      <>
-        <Probe />
-        <ReviewSection document={post} locale="en" />
-      </>
-    );
+describe("the shared fields' approval and their version under review", () => {
+  it("is held in the header, approve-all and the side panel when French, which the reviewer can't read, was saved last", async () => {
+    // The shared fields' version under review is French v9; the reviewer sees English v8 newest.
+    answering(9, [saved(8, "en"), saved(7, "en")]);
+
+    renderBoth();
 
     await waitFor(() =>
       expect(screen.getByTestId("header")).toHaveTextContent(
@@ -134,20 +172,18 @@ describe("the shared fields' approval where a language is hidden", () => {
     ).toBeInTheDocument();
   });
 
-  it("is not held for a reviewer who reads every language, which is the control", async () => {
-    answering(waiting("en"), waiting("fr"), waiting(null));
+  it("is not held for the same reviewer when English was saved last, which is the control", async () => {
+    // The version under review is English v9, which the reviewer sees.
+    answering(9, [saved(9, "en"), saved(8, "en")]);
 
-    render(
-      <>
-        <Probe />
-        <ReviewSection document={post} locale="en" />
-      </>
-    );
+    renderBoth();
 
     await waitFor(() =>
       expect(screen.getByTestId("header")).toHaveTextContent("free")
     );
-    expect(screen.getByTestId("approve-all")).toHaveTextContent("free");
+    await waitFor(() =>
+      expect(screen.getByTestId("approve-all")).toHaveTextContent("free")
+    );
     const shared = document.querySelector('[data-review-part=""]');
     expect(
       within(shared as HTMLElement).getByRole("button", { name: "Approve" })

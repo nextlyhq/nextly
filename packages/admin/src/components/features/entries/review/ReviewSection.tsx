@@ -41,7 +41,7 @@ import { leadingReviewStep } from "../EntryForm/document-actions";
 import { PanelSection } from "../EntryForm/panels/PanelSection";
 
 import { waitingForWords } from "./review-words";
-import { approves, hidesALanguage, SHARED_APPROVAL_HELD } from "./shared-hold";
+import { approves, useSharedApprovalHold } from "./shared-hold";
 import { StepRefusalNote } from "./StepRefusalNote";
 import { useStepTaker, type StepTaker } from "./useStepTaker";
 
@@ -56,8 +56,14 @@ export function ReviewSection({
   locale,
 }: ReviewSectionProps): JSX.Element | null {
   const { data } = useReviewState(document);
-  const { defaultLocale, getLocale, locales } = useLocalization();
+  const { defaultLocale, getLocale } = useLocalization();
   const taker = useStepTaker(document);
+  // Held where the shared fields' version under review is hidden from this
+  // person: see `shared-hold`.
+  const sharedHeld = useSharedApprovalHold(
+    document,
+    data?.attached === true ? data.review.parts : []
+  );
   const language = locale ?? defaultLocale;
   if (data === undefined || !data.attached) return null;
   const own = data.review.parts.find(part => part.part === language);
@@ -70,9 +76,6 @@ export function ReviewSection({
   );
   if (parts.length === 0) return null;
   const titled = parts.length > 1;
-  // The shared fields' approval is held where this person can't read every
-  // language: see `shared-hold`.
-  const hidden = hidesALanguage(data.review.parts, locales.length);
   return (
     <PanelSection title="Review">
       <div className="space-y-4">
@@ -82,9 +85,7 @@ export function ReviewSection({
             document={document}
             part={part}
             taker={taker}
-            approvalHeld={
-              hidden && part.part === null ? SHARED_APPROVAL_HELD : undefined
-            }
+            approvalHeld={part.part === null ? sharedHeld : undefined}
             title={
               !titled
                 ? null

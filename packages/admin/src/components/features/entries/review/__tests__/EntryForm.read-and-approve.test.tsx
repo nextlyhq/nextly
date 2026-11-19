@@ -147,6 +147,7 @@ const inReview: PartReview = {
   ],
   waitingFor: { kind: "roles", roles: [{ id: "r-rev", name: "Reviewers" }] },
   lastMove: null,
+  reviewedVersionNo: null,
 };
 
 function renderAs(reader: boolean): void {

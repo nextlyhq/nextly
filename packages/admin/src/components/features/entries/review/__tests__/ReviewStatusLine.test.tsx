@@ -25,6 +25,7 @@ function part(over: Partial<PartReview> = {}): PartReview {
     steps: [],
     waitingFor: { kind: "roles", roles: [{ id: "r1", name: "Editors" }] },
     lastMove: null,
+    reviewedVersionNo: null,
     ...over,
   };
 }
