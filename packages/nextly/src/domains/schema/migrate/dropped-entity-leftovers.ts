@@ -189,15 +189,30 @@ async function goneEntities(args: {
   const gone: DroppedEntity[] = [];
   for (const [kind] of RECORDED_KINDS) {
     for (const slug of dropped[kind]) {
-      if (isReservedResourceSlug(slug)) continue;
-      if (await registryHolds(args.adapter, kind, "slug", slug)) continue;
-      const tables = recordedTablesOf(args.chain, kind, slug);
-      if (tables.length === 0) continue;
-      if (await anyTableOwned(args.adapter, tables, held)) continue;
-      gone.push({ kind, slug, tables });
+      const entity = await goneEntityOf(args, held, kind, slug);
+      if (entity !== undefined) gone.push(entity);
     }
   }
   return gone;
+}
+
+/**
+ * Dropped entity `kind` `slug`, with every table it was recorded with, where
+ * nothing can still own what it left; undefined otherwise, and for a
+ * reserved slug.
+ */
+async function goneEntityOf(
+  args: { adapter: DrizzleAdapter; chain: readonly EntitySettingsRecord[] },
+  held: ReadonlySet<string>,
+  kind: SettingsEntityKind,
+  slug: string
+): Promise<DroppedEntity | undefined> {
+  if (isReservedResourceSlug(slug)) return undefined;
+  if (await registryHolds(args.adapter, kind, "slug", slug)) return undefined;
+  const tables = recordedTablesOf(args.chain, kind, slug);
+  if (tables.length === 0) return undefined;
+  if (await anyTableOwned(args.adapter, tables, held)) return undefined;
+  return { kind, slug, tables };
 }
 
 /**
