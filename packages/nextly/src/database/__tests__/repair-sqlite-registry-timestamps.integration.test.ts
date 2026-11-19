@@ -267,20 +267,36 @@ describe("the SQLite registries' timestamps", () => {
     const startAdapter = await adapterFor();
     await createTestNextly({ adapter: startAdapter as never });
     try {
-      // The mark of an earlier start taken away: this one is the first on this release.
+      // The mark an earlier release's start left: the text repair's alone, a date.
       await startAdapter.executeQuery(
         `DELETE FROM nextly_meta WHERE key = '${TIMESTAMP_REPAIR_META_KEY}'`
+      );
+      await startAdapter.executeQuery(
+        `INSERT INTO nextly_meta (key, value, updated_at) VALUES ('${TIMESTAMP_REPAIR_META_KEY}', '"2026-01-01T00:00:00.000Z"', unixepoch())`
       );
       await startAdapter.executeQuery(
         asAnOlderFileWroteIt(
           buildCollectionMetadataUpsert(entity("rsrt_old"), "sqlite")
         )
       );
-      await runPostInitTasks();
+      const first = await recordStatements(startAdapter, "sqlite");
+      try {
+        await runPostInitTasks();
+      } finally {
+        first.uninstall();
+      }
       const [row] = await startAdapter.executeQuery<{ created_at: number }>(
         `SELECT created_at FROM dynamic_collections WHERE slug = 'rsrt_old'`
       );
       expect(isNowInSeconds(row.created_at)).toBe(true);
+      // The text repair, which that database already ran, scans no table again.
+      expect(first.statements.filter(text => text.includes("typeof("))).toEqual(
+        []
+      );
+      const [mark] = await startAdapter.executeQuery<{ value: string }>(
+        `SELECT value FROM nextly_meta WHERE key = '${TIMESTAMP_REPAIR_META_KEY}'`
+      );
+      expect(JSON.parse(mark.value)).toMatchObject({ registries: true });
 
       /** Every statement one later start's tasks send. */
       const laterStart = async (): Promise<string[]> => {

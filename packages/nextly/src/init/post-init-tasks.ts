@@ -14,6 +14,7 @@ import { repairSqliteRegistryTimestamps } from "../database/repair-sqlite-regist
 import {
   repairSqliteTimestamps,
   TIMESTAMP_REPAIR_META_KEY,
+  type TimestampRepairsDone,
 } from "../database/repair-sqlite-timestamps";
 import { getService } from "../di/service-access";
 import { warnAboutUnusableProviders } from "../domains/email/boot-check";
@@ -104,15 +105,22 @@ export async function runPostInitTasks(): Promise<void> {
     const adapter = getService("adapter");
     if (adapter.dialect === "sqlite" && !building) {
       const meta = getService("metaService");
-      const done = await meta.get<string>(TIMESTAMP_REPAIR_META_KEY);
-      if (!done) {
+      const done = await meta.get<string | TimestampRepairsDone>(
+        TIMESTAMP_REPAIR_META_KEY
+      );
+      // A date alone is the mark of the text repair, written before the registries' repair was
+      // added: that database owes only the second.
+      const registriesDone = typeof done === "object" && done?.registries;
+      if (!registriesDone) {
         const logger = getService("logger");
-        const { repaired, columns } = await repairSqliteTimestamps(adapter);
-        if (repaired > 0) {
-          logger.info(
-            `Repaired ${repaired} timestamp(s) stored as text in ${columns.length} column(s)`,
-            { columns }
-          );
+        if (!done) {
+          const { repaired, columns } = await repairSqliteTimestamps(adapter);
+          if (repaired > 0) {
+            logger.info(
+              `Repaired ${repaired} timestamp(s) stored as text in ${columns.length} column(s)`,
+              { columns }
+            );
+          }
         }
         // And the registries' timestamps an earlier release wrote in milliseconds, under the
         // same mark, so a later start reads the mark once and sends nothing for either.
@@ -122,7 +130,11 @@ export async function runPostInitTasks(): Promise<void> {
             `Repaired the timestamps of ${registries.repaired} registry row(s) stored in milliseconds`
           );
         }
-        await meta.set(TIMESTAMP_REPAIR_META_KEY, new Date().toISOString());
+        const mark: TimestampRepairsDone = {
+          at: new Date().toISOString(),
+          registries: true,
+        };
+        await meta.set(TIMESTAMP_REPAIR_META_KEY, mark);
       }
     }
   } catch {
