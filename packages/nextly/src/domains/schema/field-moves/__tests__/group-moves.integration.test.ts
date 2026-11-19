@@ -791,12 +791,25 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
-    it("moves a date written at an offset out of a group as its instant, far from 1970 either way", async () => {
+    // Far from 1970 either way, or on MySQL, whose TIMESTAMP column holds 1970 to 2038, at each end
+    // of that range, where the local time written is outside it.
+    const farDates =
+      dialect === "mysql"
+        ? {
+            early: ["1970-01-01T05:00:01+05:00", "1970-01-01T00:00:01.000Z"],
+            late: ["2038-01-19T08:14:07+05:00", "2038-01-19T03:14:07.000Z"],
+          }
+        : {
+            early: ["1960-01-01T10:00:00+05:00", "1960-01-01T05:00:00.000Z"],
+            late: ["3500-01-01T10:00:00+05:00", "3500-01-01T05:00:00.000Z"],
+          };
+
+    it("moves a date written at an offset out of a group as its instant, at the far ends its column holds", async () => {
       const t = await boot(dialect);
       await createPosts(t, SLUG, { fields: INSIDE });
       const written = {
-        early: "1960-01-01T10:00:00+05:00",
-        late: "3500-01-01T10:00:00+05:00",
+        early: farDates.early[0],
+        late: farDates.late[0],
       };
       for (const [slug, published] of Object.entries(written)) {
         await t.nextly.create({
@@ -813,10 +826,10 @@ describe.each(getConfiguredTestDialects())(
       const moved = await readAll(t);
       expect(
         new Date(moved.get("early")?.published as string).toISOString()
-      ).toBe("1960-01-01T05:00:00.000Z");
+      ).toBe(farDates.early[1]);
       expect(
         new Date(moved.get("late")?.published as string).toISOString()
-      ).toBe("3500-01-01T05:00:00.000Z");
+      ).toBe(farDates.late[1]);
     });
 
     it("clears a key the destination group kept, where the group the field leaves is not there at all", async () => {
@@ -894,6 +907,48 @@ describe.each(getConfiguredTestDialects())(
             expect(await columnsOf(second)).toEqual(columns);
           }
         );
+      }
+    );
+
+    // MySQL runs each statement as it comes: the run stops at the copy, the column it added
+    // before stays, and the group keeps every date, since the key is cleared only after.
+    it.runIf(dialect === "mysql")(
+      "stops a replayed move of a date its TIMESTAMP column does not hold before the group loses it",
+      async () => {
+        const first = await boot(dialect);
+        await createPosts(first);
+        const created = await filesWritten();
+        await seed(first);
+        await save(first, INSIDE, INTO);
+        const movedIn = await filesWritten();
+        await save(first, OUTSIDE, OUT);
+        await first.destroy();
+        instance = undefined;
+
+        const second = await boot(dialect);
+        await migrateFolder(second, created);
+        await seed(second);
+        await migrateFolder(
+          second,
+          movedIn - created,
+          resolveDataLossConsent({
+            flag: MOVED.map(name => `${TABLE}.${name}`).join(","),
+            env: {},
+          })
+        );
+        await run(
+          second,
+          `UPDATE ${q(TABLE)} SET ${q("meta")} = JSON_SET(${q("meta")}, '$.published', '1960-01-01T00:00:00.000Z') WHERE ${q("slug")} = 'one'`
+        );
+        const groups = await storedGroups(second);
+        expect(await columnsOf(second)).not.toContain("published");
+
+        await expect(migrateFolder(second)).rejects.toThrow(
+          /Incorrect datetime value/
+        );
+
+        expect(await storedGroups(second)).toEqual(groups);
+        expect(await columnsOf(second)).toContain("published");
       }
     );
 
@@ -1058,10 +1113,37 @@ describe.each(getConfiguredTestDialects())(
           t,
           OUTSIDE,
           OUT,
-          `1 entry holds a date for published in a form its own column would not read as the same date (${String((item as { id: unknown }).id)})`
+          `1 entry holds a date for published its own column would not keep as the same date (${String((item as { id: unknown }).id)})`
         );
         expect(await readAll(t)).toEqual(before);
       });
+
+      it.runIf(dialect === "mysql")(
+        "a date out of a group MySQL's TIMESTAMP column does not hold, naming the entries",
+        async () => {
+          const t = await boot(dialect);
+          await createPosts(t, SLUG, { fields: INSIDE });
+          const ids: string[] = [];
+          for (const [slug, published] of [
+            ["early", "1960-01-01T00:00:00.000Z"],
+            ["late", "2038-01-19T03:14:08.000Z"],
+          ]) {
+            const { item } = await t.nextly.create({
+              collection: SLUG,
+              data: { title: slug, slug, meta: { published } },
+            });
+            ids.push(String((item as { id: unknown }).id));
+          }
+          const before = await readAll(t);
+          await expectRefused(
+            t,
+            OUTSIDE,
+            OUT,
+            `2 entries hold a date for published its own column would not keep as the same date (${ids.sort().join(", ")}). Write each as an ISO date from 1970-01-01T00:00:01Z to 2038-01-19T03:14:07Z`
+          );
+          expect(await readAll(t)).toEqual(before);
+        }
+      );
 
       // Which save this refuses is the plan's own judgement, the same on every dialect.
       it.runIf(dialect === "sqlite")(

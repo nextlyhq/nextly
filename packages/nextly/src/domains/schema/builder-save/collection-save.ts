@@ -2105,10 +2105,21 @@ const DATE_CHECK_PAGE = 500;
 const NAMED_ENTRIES = 3;
 
 /**
- * Refuses a date moved out of a group while some entry's group holds it in a form the copy would
- * not read as the same instant (`movesAsTheSameDate`), naming the field and the entries, read
- * before anything is written. The copy would otherwise write nothing for that entry on SQLite,
- * and leave the value only in a key the saved fields no longer read.
+ * What a refused date must be, past an ISO date, for each dialect's column to keep it as the same
+ * date (`movesAsTheSameDate`): MySQL's TIMESTAMP holds only its own range, SQLite whole seconds.
+ */
+const DATES_KEPT: Record<SupportedDialect, string> = {
+  postgresql: "",
+  mysql:
+    " from 1970-01-01T00:00:01Z to 2038-01-19T03:14:07Z, the dates MySQL's column holds",
+  sqlite: " in whole seconds",
+};
+
+/**
+ * Refuses a date moved out of a group while some entry's group holds one the copy would not keep
+ * as the same instant (`movesAsTheSameDate`): a form it does not read, or an instant its column
+ * does not hold. It names the field and the entries, read before anything is written. The copy
+ * would otherwise write nothing for that entry on SQLite, and stop part-way on MySQL.
  */
 async function refuseUnreadableDates(
   deps: CollectionSaveDeps,
@@ -2124,12 +2135,13 @@ async function refuseUnreadableDates(
     const more =
       count > NAMED_ENTRIES ? ` and ${count - NAMED_ENTRIES} more` : "";
     const each = count === 1 ? "it" : "each";
+    const kept = DATES_KEPT[deps.adapter.getCapabilities().dialect];
     throw NextlyError.validation({
       errors: [
         {
           path: refill.field,
           code: "FIELD_MOVE_REFUSED",
-          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} a date for ${refill.field} in a form its own column would not read as the same date (${named}${more}). Write ${each} as an ISO date, such as 2026-07-17 or 2026-07-17T10:00:00Z, then move the field.`,
+          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} a date for ${refill.field} its own column would not keep as the same date (${named}${more}). Write ${each} as an ISO date${kept}, such as 2026-07-17 or 2026-07-17T10:00:00Z, then move the field.`,
         },
       ],
       logContext: { table, column: refill.column, unreadable: count },

@@ -178,8 +178,9 @@ const MYSQL_READS: Partial<
   json: (_, value) => value,
   boolean: text => `IF(${text} IN ('true', '1'), 1, 0)`,
   timestamp: text => {
-    // The column holds UTC: the local part is read, then its offset taken off in minutes. Not
-    // CONVERT_TZ, which leaves a value outside the range its TIMESTAMP holds as it was.
+    // The column holds UTC: the local part is read, then its offset taken off in minutes by
+    // arithmetic, which keeps no range of its own. Whether the column holds the instant is
+    // judged before the move, by `movesAsTheSameDate`.
     const offset = `REGEXP_SUBSTR(${text}, ${ISO_OFFSET})`;
     const local = `CAST(REPLACE(REGEXP_REPLACE(${text}, ${ISO_OFFSET}, ''), 'T', ' ') AS DATETIME(3))`;
     const minutes = `IF(${offset} IS NULL OR ${offset} = 'Z', 0, IF(LEFT(${offset}, 1) = '-', -1, 1) * (CAST(SUBSTRING(${offset}, 2, 2) AS SIGNED) * 60 + CAST(SUBSTRING(${offset}, 5, 2) AS SIGNED)))`;
@@ -288,12 +289,12 @@ export function heldValueAt(
 const ISO_DATE =
   /^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})(?:T(?<hour>\d{2}):(?<minute>\d{2})(?::(?<second>\d{2})(?:\.(?<fraction>\d{1,3}))?)?(?:Z|(?<sign>[+-])(?<offsetHour>\d{2}):(?<offsetMinute>\d{2})))?$/;
 
-/** The years a date column holds on each dialect: MySQL's DATETIME starts at the year 1000. */
-const FIRST_YEAR: Record<SupportedDialect, number> = {
-  postgresql: 0,
-  mysql: 1000,
-  sqlite: 0,
-};
+/**
+ * The instants MySQL's date column holds: it is a TIMESTAMP, which keeps 1970-01-01 00:00:01 to
+ * 2038-01-19 03:14:07 UTC and refuses a value outside them, part-way through the file.
+ */
+const MYSQL_FIRST_INSTANT = Date.parse("1970-01-01T00:00:01Z");
+const MYSQL_LAST_INSTANT = Date.parse("2038-01-19T03:14:07.999Z");
 
 /**
  * Whether a date a group holds is copied into a date column as the same instant the entry reads:
@@ -321,8 +322,12 @@ export function movesAsTheSameDate(
   }
   const instant = Date.parse(value);
   if (Number.isNaN(instant)) return false;
+  if (dialect === "mysql") {
+    return instant >= MYSQL_FIRST_INSTANT && instant <= MYSQL_LAST_INSTANT;
+  }
+  // PostgreSQL's and SQLite's date columns keep every year from 0 to 9999.
   const year = new Date(instant).getUTCFullYear();
-  return year >= FIRST_YEAR[dialect] && year <= 9999;
+  return year >= 0 && year <= 9999;
 }
 
 /** Whether a day is on the calendar: JavaScript would roll the 30th of February into March. */
@@ -400,7 +405,8 @@ function emptyAtDestination(
  * undone and every value where it was. The table and column are named to say why. The check the
  * save makes first (`movesAsTheSameDate`) reads the database the file is written from; this one
  * reads the database the file runs on. Other dialects need none: PostgreSQL reads every form the
- * check lets through, and MySQL stops on a value it cannot read.
+ * check lets through, and MySQL stops on a value it cannot read or its TIMESTAMP cannot hold,
+ * before the group's key is cleared.
  */
 function unkeptDatesStop(
   target: MoveColumn,
@@ -410,11 +416,13 @@ function unkeptDatesStop(
 ): string[] {
   if (target.dialect !== "sqlite" || target.kind !== "timestamp") return [];
   const q = (name: string) => quoteIdent(name, "sqlite");
-  const guard = `temp.${q(`nextly_unreadable_date_${column}`)}`;
+  // Unqualified: SQLite looks a name up in the temp schema first, and the migration's
+  // deletion check reads a table the file creates as TEMP as the file's own.
+  const guard = q(`nextly_unreadable_date_${column}`);
   const reason = q("an_entry_holds_a_date_sqlite_cannot_keep");
   const value = `json_extract(${q(from.column)}, ${dollarPath(from.keys)})`;
   return [
-    `CREATE TEMP TABLE ${q(`nextly_unreadable_date_${column}`)} (${reason} INTEGER NOT NULL);`,
+    `CREATE TEMP TABLE ${guard} (${reason} INTEGER NOT NULL);`,
     `INSERT INTO ${guard} (${reason}) SELECT CASE WHEN substr(strftime('%f', ${value}), 4) <> '000' THEN NULL ELSE CAST(strftime('%s', ${value}) AS INTEGER) END FROM ${table} WHERE ${SQLITE.holds(q(from.column), from.keys)};`,
     `DROP TABLE ${guard};`,
   ];

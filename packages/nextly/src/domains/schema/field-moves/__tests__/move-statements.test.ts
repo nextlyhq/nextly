@@ -374,8 +374,8 @@ describe("moveDataStatements on PostgreSQL and MySQL", () => {
     // none or would drop its milliseconds: the run stops there, its transaction undone.
     expect(copy.slice(0, 3)).toEqual([
       `CREATE TEMP TABLE "nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep" INTEGER NOT NULL);`,
-      `INSERT INTO temp."nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep") SELECT CASE WHEN substr(strftime('%f', json_extract("meta", '$."published"')), 4) <> '000' THEN NULL ELSE CAST(strftime('%s', json_extract("meta", '$."published"')) AS INTEGER) END FROM "dc_posts" WHERE json_type("meta", '$."published"') IS NOT NULL AND json_type("meta", '$."published"') <> 'null';`,
-      `DROP TABLE temp."nextly_unreadable_date_published";`,
+      `INSERT INTO "nextly_unreadable_date_published" ("an_entry_holds_a_date_sqlite_cannot_keep") SELECT CASE WHEN substr(strftime('%f', json_extract("meta", '$."published"')), 4) <> '000' THEN NULL ELSE CAST(strftime('%s', json_extract("meta", '$."published"')) AS INTEGER) END FROM "dc_posts" WHERE json_type("meta", '$."published"') IS NOT NULL AND json_type("meta", '$."published"') <> 'null';`,
+      `DROP TABLE "nextly_unreadable_date_published";`,
     ]);
     expect(copy[3]).toMatch(/^UPDATE "dc_posts" SET "published" = /);
   });
@@ -494,10 +494,30 @@ describe("movesAsTheSameDate", () => {
     expect(movesAsTheSameDate("0000-01-01", "sqlite")).toBe(true);
   });
 
-  it("refuses a year before 1000 on MySQL only, whose DATETIME starts there", () => {
-    expect(movesAsTheSameDate("0999-12-31", "mysql")).toBe(false);
-    expect(movesAsTheSameDate("1000-01-01", "mysql")).toBe(true);
-    expect(movesAsTheSameDate("0999-12-31", "postgresql")).toBe(true);
-    expect(movesAsTheSameDate("0999-12-31", "sqlite")).toBe(true);
+  it("refuses on MySQL only an instant outside what its TIMESTAMP column holds", () => {
+    for (const value of [
+      "1970-01-01T00:00:01Z",
+      "2038-01-19T03:14:07Z",
+      "2038-01-19T03:14:07.999Z",
+      // Local times outside the range, at instants inside it.
+      "1970-01-01T05:00:01+05:00",
+      "2038-01-19T08:14:07+05:00",
+    ]) {
+      expect(movesAsTheSameDate(value, "mysql"), value).toBe(true);
+    }
+    for (const value of [
+      "1970-01-01T00:00:00Z",
+      "1970-01-01",
+      "2038-01-19T03:14:08Z",
+      // A local time inside the range, at an instant outside it.
+      "1970-01-01T00:00:01+01:00",
+      "1960-01-01T10:00:00+05:00",
+      "3500-01-01",
+      "0999-12-31",
+    ]) {
+      expect(movesAsTheSameDate(value, "mysql"), value).toBe(false);
+      expect(movesAsTheSameDate(value, "postgresql"), value).toBe(true);
+      expect(movesAsTheSameDate(value, "sqlite"), value).toBe(true);
+    }
   });
 });
