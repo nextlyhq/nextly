@@ -64,7 +64,7 @@ export type { OpenPreferenceStore } from "./shell-state";
  * and no React.
  */
 export { lockViewOf, selectionIsInspectable } from "./inspector/inspector";
-export { pageStyleTrace } from "./style-trace";
+export { pageStyleTrace } from "./styles/style-trace";
 
 /**
  * Whether the surrounding shell is interactive.
@@ -155,7 +155,7 @@ export {
 export {
   CANVAS_ROUTE_DOCS_HREF,
   SITE_CODE_POLICY_DOCS_HREF,
-} from "./docs-links";
+} from "./shell/docs-links";
 export { CanvasMarks } from "./canvas/canvas-marks";
 /**
  * @experimental The line where the Add panel's highlighted tile would land,
@@ -214,11 +214,11 @@ export {
   type RegionEditing,
   type RegionEditingWords,
   type RegionStateArgs,
-} from "./editing-target";
+} from "./shell/editing-target";
 export {
   RegionEditingBar,
   type RegionEditingBarProps,
-} from "./region-editing-bar";
+} from "./shell/region-editing-bar";
 
 /**
  * The inserter, behind the same client banner as the shell it fills: it holds
@@ -260,8 +260,8 @@ export type { ImageBindingFallbackProps } from "./bindings/image-binding-fallbac
 // What a host tells the inspector about the component it edits, beside it.
 export type { ComponentFieldsHost } from "./panels/components/component-fields";
 // The banner over a component's own view: its name, its reach, and Back.
-export { ComponentBanner } from "./component-banner";
-export type { ComponentBannerProps } from "./component-banner";
+export { ComponentBanner } from "./shell/component-banner";
+export type { ComponentBannerProps } from "./shell/component-banner";
 // And about its variants: how many placements chose one, for the delete dialog.
 export type {
   ComponentVariantsHost,
@@ -269,8 +269,8 @@ export type {
   VariantUse,
 } from "./panels/components/component-variants";
 // The variant open in a component's view, previewed on the host's canvas.
-export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
-export type { VariantPreviewState } from "./variant-preview";
+export { useVariantPreview, VariantPreviewTag } from "./canvas/variant-preview";
+export type { VariantPreviewState } from "./canvas/variant-preview";
 // The one row of tags over the canvas: the variant previewed.
 export { CanvasPreviewTags } from "./canvas/canvas-preview-tags";
 export type { CanvasPreviewTagsProps } from "./canvas/canvas-preview-tags";
@@ -365,7 +365,7 @@ export {
   authoredBreakpoints,
   BASE_DEVICE_LABEL,
   sameBreakpoints,
-} from "./breakpoints";
+} from "./styles/breakpoints";
 export { BreakpointManager } from "./shell/breakpoint-manager";
 export type { BreakpointManagerProps } from "./shell/breakpoint-manager";
 
@@ -430,14 +430,14 @@ export {
   BlockKeyboardActions,
   useBlockActionsContext,
   useBlockKeyboardActions,
-} from "./keyboard-actions";
+} from "./shell/keyboard-actions";
 export type {
   BlockActions,
   BlockKeyboardActionsOptions,
   BlockKeyboardActionsResult,
   ComponentVerbsHost,
   SharedStyleVerbHost,
-} from "./keyboard-actions";
+} from "./shell/keyboard-actions";
 // Which way "Turn into component…" may go, as the host is told when it opens.
 export type { TurnIntoChoice } from "./canvas/toolbar-actions";
 
@@ -567,9 +567,9 @@ export type { AccordionAddQuestionProps } from "./canvas/accordion-add-question"
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
  */
-export { VisitorUnreadableBadges } from "./visitor-unreadable-badges";
-export type { VisitorUnreadableBadgesProps } from "./visitor-unreadable-badges";
-export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
+export { VisitorUnreadableBadges } from "./shell/visitor-unreadable-badges";
+export type { VisitorUnreadableBadgesProps } from "./shell/visitor-unreadable-badges";
+export { VisitorUnreadableProvider } from "./shell/visitor-unreadable-context";
 /**
  * @experimental Where the host keeps the signed-in author's Recent colours,
  * provided once around the shell so every colour picker in it, a block's and
@@ -602,12 +602,12 @@ export {
   PreviewedEntryProvider,
   usePreviewedCollection,
   usePreviewedEntry,
-} from "./previewed-entry";
+} from "./canvas/previewed-entry";
 export type {
   PreviewedBlocksField,
   PreviewedCollection,
   PreviewedEntry,
-} from "./previewed-entry";
+} from "./canvas/previewed-entry";
 /**
  * @experimental Visibility conditions applied for the entry a template is
  * previewed with: what the host hands the canvas (`conditionsApplied`) and
@@ -634,7 +634,7 @@ export {
   applyStarterPage,
   planStarterPage,
   type StarterPageSources,
-} from "./starter-page";
+} from "./shell/starter-page";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -653,7 +653,7 @@ export { MAX_HISTORY, useDocumentView, useEditorState } from "./editor-state";
 export {
   useLatestCallback,
   useLatestOptionalCallback,
-} from "./latest-callback";
+} from "./shell/latest-callback";
 export type {
   EditorDocumentView,
   EditorState,
@@ -728,8 +728,8 @@ export { useInlineEditing } from "./canvas/use-inline-editing";
  *
  * @experimental
  */
-export { createOpenPassages } from "./open-passages";
-export type { OpenPassages } from "./open-passages";
+export { createOpenPassages } from "./canvas/open-passages";
+export type { OpenPassages } from "./canvas/open-passages";
 export type { UseInlineEditingResult } from "./canvas/use-inline-editing";
 /**
  * What a host says when a double-click lands on text a component does not
@@ -906,8 +906,8 @@ export type { EditorWord } from "./editor-words";
  * document and decides when an edit is persisted; these export the surfaces,
  * not the save.
  */
-export { ClassSelector } from "./class-selector";
-export type { ClassSelectorProps } from "./class-selector";
+export { ClassSelector } from "./styles/class-selector";
+export type { ClassSelectorProps } from "./styles/class-selector";
 /*
  * Saving a block's look as a shared style: the dialog the host raises from
  * the block verb, and what the Style tab borrows from the host to edit a
@@ -919,8 +919,8 @@ export type { SharedStylesHost } from "./inspector/style-inspector/style-target"
 export type {
   SharedStyleChange,
   SharedStyleOffer,
-} from "./shared-style-target";
-export { sharedStyleNameTaken } from "./shared-style-target";
+} from "./styles/shared-style-target";
+export { sharedStyleNameTaken } from "./styles/shared-style-target";
 /*
  * The notice QUEUE is published; the region is not.
  *
@@ -944,7 +944,7 @@ export { TextStylesSection } from "./panels/design/text-styles-section";
 export type { TextStylesSectionProps } from "./panels/design/text-styles-section";
 // The whole-list class write the Styles tab's Block styles make, copy,
 // rename and hide block styles and move ★ through.
-export type { ClassListEdit, EditClasses } from "./block-style-actions";
+export type { ClassListEdit, EditClasses } from "./styles/block-style-actions";
 export type {
   ClassRenameOutcome,
   PageClassBlocks,
@@ -960,7 +960,7 @@ export type {
   SharedStylesUsage,
   SharedStyleUse,
   SharedStyleUsesPage,
-} from "./shared-style-library";
+} from "./styles/shared-style-library";
 export {
   classRows,
   filterClassRows,
@@ -972,7 +972,7 @@ export {
   usageSummary,
   withClassApplied,
   withClassRemoved,
-} from "./class-library";
+} from "./styles/class-library";
 export type {
   ApplyRefusal,
   ClassApplyOutcome,
@@ -983,7 +983,7 @@ export type {
   ClassUsageCounts,
   DeletionWarning,
   NameRefusal,
-} from "./class-library";
+} from "./styles/class-library";
 
 /**
  * The Design panel's Fonts tab, and the rules it draws from.
@@ -1028,8 +1028,8 @@ export type {
  * Which values each placement of a new component may change: the picker the
  * host's "Turn into component" form draws.
  */
-export { ExposurePicker, selectionAsComponent } from "./exposure-picker";
-export type { ExposurePickerProps } from "./exposure-picker";
+export { ExposurePicker, selectionAsComponent } from "./shell/exposure-picker";
+export type { ExposurePickerProps } from "./shell/exposure-picker";
 
 /**
  * Page checks: the count beside Publish that opens the list and walks it

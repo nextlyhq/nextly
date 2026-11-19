@@ -50,20 +50,9 @@ import {
   type NestingSource,
 } from "@nextlyhq/blocks-engine";
 
-import { compositionRefusalReason } from "../composition-refusal";
-import { blockDeletion } from "../delete-block";
 import { CONVERSION_WORDS } from "../editor-words";
-import {
-  compositionEntryContentRefusal,
-  duplicationRefusal,
-} from "../entry-content-rules";
 import type { Rect } from "../geometry";
 import { placedComponentId } from "../inspector/instance-inspector";
-import {
-  keyboardMovePosition,
-  type KeyboardMove,
-  type MoveDirection,
-} from "../keyboard-move";
 import {
   lockedBlockWording,
   lockRefusalWording,
@@ -79,24 +68,35 @@ import { refusalAnnouncement } from "../move-refusal";
 import type { BuilderOp, OpPosition } from "../op-vocabulary";
 import { pathTo } from "../panels/layers/layers";
 import {
+  saveAsSharedStyleRefusal,
+  type SharedStyleOffer,
+} from "../styles/shared-style-target";
+
+import { compositionRefusalReason } from "./composition-refusal";
+import { blockDeletion } from "./delete-block";
+import type { RefusalWording } from "./drag-refusal";
+import {
+  compositionEntryContentRefusal,
+  duplicationRefusal,
+} from "./entry-content-rules";
+import {
+  keyboardMovePosition,
+  type KeyboardMove,
+  type MoveDirection,
+} from "./keyboard-move";
+import {
   isRefusal,
   selectionDeletion,
   selectionDuplication,
   selectionMove,
-} from "../selection-ops";
+} from "./selection-ops";
 import {
   isUnwrappable,
   planUnwrap,
   planWrap,
   WRAP_WORDS,
-} from "../selection-wrap";
-import {
-  saveAsSharedStyleRefusal,
-  type SharedStyleOffer,
-} from "../shared-style-target";
-import { turnIntoOffers, type TurnIntoActionId } from "../turn-into-verb";
-
-import type { RefusalWording } from "./drag-refusal";
+} from "./selection-wrap";
+import { turnIntoOffers, type TurnIntoActionId } from "./turn-into-verb";
 
 /** The editor's own lock question, asked of the ops a verb would apply. */
 type LockQuestion = (ops: readonly BuilderOp[]) => LockRefusalFacts | undefined;

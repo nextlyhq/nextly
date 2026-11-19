@@ -27,8 +27,11 @@ import {
   type TokenRef,
 } from "@nextlyhq/blocks-engine";
 
-import { classDeclarations, usableSiteClasses } from "../../class-library";
-import { sharedStyleName } from "../../shared-style-library";
+import {
+  classDeclarations,
+  usableSiteClasses,
+} from "../../styles/class-library";
+import { sharedStyleName } from "../../styles/shared-style-library";
 
 /** One tile: a look of the block's type, or the block's own (`id: null`). */
 export interface LookTile {

@@ -31,8 +31,8 @@ import {
 import type { EditorState } from "../editor-state";
 import type { StyleStateBinding } from "./inspector-panel-types";
 import { InspectorPanel } from "./inspector-panel";
-import { siteOrientationOf } from "../side-orientation";
-import type { SharedStyleChange } from "../shared-style-target";
+import { siteOrientationOf } from "../styles/side-orientation";
+import type { SharedStyleChange } from "../styles/shared-style-target";
 import type { SharedStylesHost } from "./style-inspector/style-target";
 
 /*

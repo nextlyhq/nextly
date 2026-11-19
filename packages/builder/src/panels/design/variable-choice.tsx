@@ -58,9 +58,12 @@ import {
   variableLabel,
   variablesFor,
   type SiteVariable,
-} from "../../style-colour";
-import { measurementOfText } from "../../style-numeric";
-import { variableSample, variableValueText } from "../../style-variables";
+} from "../../styles/style-colour";
+import { measurementOfText } from "../../styles/style-numeric";
+import {
+  variableSample,
+  variableValueText,
+} from "../../styles/style-variables";
 
 import { pickedTypeSize } from "./site-text-rows";
 import {

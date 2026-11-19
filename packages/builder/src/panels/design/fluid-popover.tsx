@@ -21,7 +21,7 @@ import {
   nearestFluidSizes,
   type FluidRangeWidths,
   type FluidSizes,
-} from "../../fluid-size";
+} from "../../styles/fluid-size";
 
 /** What a size field needs to offer "Fluid…". */
 export interface FluidHook {

@@ -29,8 +29,8 @@ import {
   useOfferedVariables,
   VariableSelectItems,
 } from "../../panels/design/variable-choice";
-import type { SiteVariable } from "../../style-colour";
-import type { StyleControl } from "../../style-controls";
+import type { SiteVariable } from "../../styles/style-colour";
+import type { StyleControl } from "../../styles/style-controls";
 import {
   CSS_NUMBER,
   measurementOf,
@@ -41,7 +41,7 @@ import {
   unitChoicesFor,
   withDefaultUnit,
   withUnit,
-} from "../../style-numeric";
+} from "../../styles/style-numeric";
 import { useFieldDescription } from "../css-hint";
 
 import { InheritedValue } from "./inherited-value";

@@ -21,8 +21,8 @@
  */
 import * as React from "react";
 
-import { BACKGROUND_JOBS_DOCS_HREF } from "../../docs-links";
-import type { SharedStylesCount } from "../../shared-style-library";
+import { BACKGROUND_JOBS_DOCS_HREF } from "../../shell/docs-links";
+import type { SharedStylesCount } from "../../styles/shared-style-library";
 
 /** The most ids one usage read asks about. */
 const USAGE_READ_SIZE = 50;

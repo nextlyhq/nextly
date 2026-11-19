@@ -14,7 +14,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { DESIGN_ACTION_WORDS } from "../../editor-words";
-import { sharedStyleName } from "../../shared-style-library";
+import { sharedStyleName } from "../../styles/shared-style-library";
 
 /** One variable a file did not write as other tools read it, and why. */
 export interface ExportGap {

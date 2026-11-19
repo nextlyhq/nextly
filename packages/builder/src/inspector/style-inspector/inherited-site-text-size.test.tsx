@@ -37,7 +37,7 @@ import {
 import type { EditorState } from "../../editor-state";
 import { InheritedValue } from "./inherited-value";
 import { RenderedLengths } from "./rendered-lengths";
-import { styleControlsFor } from "../../style-controls";
+import { styleControlsFor } from "../../styles/style-controls";
 import { NumericField } from "./style-numeric-field";
 import { StyleInspectorPanel } from "./style-inspector-panel";
 

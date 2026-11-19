@@ -15,8 +15,8 @@
 import { TooltipProvider } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { isElement } from "../canvas/dom-kind";
 import { ChromeTooltip } from "../chrome-tooltip";
-import { isElement } from "../dom-kind";
 
 import { useCssNames } from "./css-names-context";
 

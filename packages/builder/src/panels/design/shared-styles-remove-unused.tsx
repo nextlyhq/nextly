@@ -24,7 +24,7 @@ import {
   SHARED_STYLES_WORD,
   type BlocksOnThisPage,
   type SharedStyleRow,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 
 import { KeepOrRemove, Refusal, useRefusableWrite } from "./panel-actions";
 import { HoldReason, removeSharedStylesThrough } from "./shared-style-details";
