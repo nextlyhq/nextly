@@ -214,27 +214,35 @@ function withKeptFiles(
 
 /**
  * What to run once the database holds part of a change `keptFiles` describe, in run order. Each
- * file's snapshot is the database as that file leaves it, so with several only the last describes
- * the finished change: the earlier ones are recorded without the comparison, and the last is
- * compared with the database. Recording them changes no registry row, and the save stopped before
- * writing its own, so `nextly migrate` follows: it brings the registry in step with the newest
- * applied snapshot on every run, with no file left to apply. Reversed, the files run again from
- * the start, by the same command.
+ * file's snapshot is the database as that file leaves it, so with several only one describes the
+ * finished change: `checked`, the last by default, or the newest with a snapshot where a
+ * translations table's file, which has none, comes after it. It is compared with the database and
+ * the others are recorded without the comparison. Recording them changes no registry row, and the
+ * save stopped before writing its own, so `nextly migrate` follows: it brings the registry in step
+ * with the newest applied snapshot on every run, with no file left to apply. Reversed, the files
+ * run again from the start, by the same command.
  */
-export function nextSteps(keptFiles: readonly string[]): string {
+export function nextSteps(
+  keptFiles: readonly string[],
+  checked: string | undefined = keptFiles[keptFiles.length - 1]
+): string {
   const last = keptFiles[keptFiles.length - 1];
-  const record =
-    keptFiles.length === 1
-      ? `Finish the change by hand, run \`nextly migrate:resolve --applied ${last}\``
-      : `Finish the change by hand, record the files in order: ${keptFiles
-          .slice(0, -1)
-          .map(
-            file => `\`nextly migrate:resolve --applied ${file} --skip-verify\``
-          )
-          .join(
-            ", "
-          )}, then \`nextly migrate:resolve --applied ${last}\`, which checks the database against the last`;
-  return `${record}; then run \`nextly migrate\`, which brings the registry in step with the recorded ${keptFiles.length === 1 ? "file" : "files"}. Or reverse what of it ran and run \`nextly migrate\`, which runs ${keptFiles.length === 1 ? "it" : "them"} from the start.`;
+  const follow = `run \`nextly migrate\`, which brings the registry in step with the recorded ${keptFiles.length === 1 ? "file" : "files"}. Or reverse what of it ran and run \`nextly migrate\`, which runs ${keptFiles.length === 1 ? "it" : "them"} from the start.`;
+  if (keptFiles.length === 1) {
+    return `Finish the change by hand, run \`nextly migrate:resolve --applied ${last}\`; then ${follow}`;
+  }
+  const commands = keptFiles.map(file =>
+    file === checked
+      ? `\`nextly migrate:resolve --applied ${file}\``
+      : `\`nextly migrate:resolve --applied ${file} --skip-verify\``
+  );
+  const record = `Finish the change by hand, record the files in order: ${commands
+    .slice(0, -1)
+    .join(", ")}, then ${commands[commands.length - 1]}`;
+  // Where the checked file is the last, the steps read as they always have.
+  return checked === last
+    ? `${record}, which checks the database against the last; then ${follow}`
+    : `${record}; the one without \`--skip-verify\` is checked against the database. Then ${follow}`;
 }
 
 /**

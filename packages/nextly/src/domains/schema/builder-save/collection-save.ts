@@ -2509,8 +2509,9 @@ async function recordWhatWasPushed(
       throw new NextlyError({
         code: "NEXTLY_MIGRATION_DRIFT",
         // The change landed, so its files are kept: the steps that finish it are a part-way
-        // push's (`nextSteps`), the registry brought in step by the `nextly migrate` after them.
-        publicMessage: `The database does not stand as ${verified.filename} says after the save's change was applied, so the save's ${ordered.length === 1 ? "file" : "files"} ${ordered.join(", ")} ${ordered.length === 1 ? "was" : "were"} kept and not recorded applied. Compare the table with ${verified.filename}. ${nextSteps(ordered)}`,
+        // push's (`nextSteps`), checking the file compared here, the registry brought in step by
+        // the `nextly migrate` after them.
+        publicMessage: `The database does not stand as ${verified.filename} says after the save's change was applied, so the save's ${ordered.length === 1 ? "file" : "files"} ${ordered.join(", ")} ${ordered.length === 1 ? "was" : "were"} kept and not recorded applied. Compare the table with ${verified.filename}. ${nextSteps(ordered, verified.filename)}`,
         logContext: {
           file: verified.filename,
           keptFiles: [...ordered],
