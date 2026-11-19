@@ -68,6 +68,8 @@ vi.mock("../../busy-table/run-unit", async original => {
 const requiredGuard = vi.hoisted(() => ({
   calls: 0,
   refuseFrom: undefined as number | undefined,
+  /** The file the check refused, by the name the run gives it. */
+  refused: undefined as string | undefined,
 }));
 vi.mock("../../migrate/required-column-guard", async original => {
   const actual =
@@ -82,6 +84,7 @@ vi.mock("../../migrate/required-column-guard", async original => {
         requiredGuard.refuseFrom !== undefined &&
         requiredGuard.calls >= requiredGuard.refuseFrom
       ) {
+        requiredGuard.refused ??= args[3];
         throw new Error("a column made Required over rows that hold none");
       }
       return actual.refuseRequiredColumnsOverNulls(...args);
@@ -113,6 +116,7 @@ for (const dialect of getConfiguredTestDialects()) {
       fileFailure.matches = undefined;
       requiredGuard.calls = 0;
       requiredGuard.refuseFrom = undefined;
+      requiredGuard.refused = undefined;
       await t?.destroy();
       vi.unstubAllEnvs();
       await rm(basePath, { recursive: true, force: true });
@@ -244,16 +248,24 @@ for (const dialect of getConfiguredTestDialects()) {
         );
         requiredGuard.refuseFrom = undefined;
 
+        // The save's files in the order they run, which their names keep.
         const written = files().filter(name => !filesBefore.includes(name));
         const recorded = (await applied()).filter(
           name => !appliedBefore.includes(name)
         );
-        expect(recorded.length).toBeGreaterThan(0);
-        const kept = written.filter(name => !recorded.includes(name));
-        expect(kept.length).toBeGreaterThan(0);
+        const at = written.indexOf(requiredGuard.refused ?? "");
+        // Refused after the first: the files before it recorded applied, it and every one after it
+        // kept, recorded nowhere, and named in the answer.
+        expect(
+          at,
+          `${String(requiredGuard.refused)} in ${written.join(", ")}`
+        ).toBeGreaterThan(0);
+        expect(recorded).toEqual(written.slice(0, at));
+        const kept = written.slice(at);
         const said = (failed as { publicMessage?: string }).publicMessage ?? "";
         expect(said).toContain("The database now holds part of this change");
         for (const name of kept) expect(said).toContain(name);
+        for (const name of recorded) expect(said).not.toContain(name);
       },
       120_000
     );
