@@ -590,19 +590,21 @@ export class EmailDeliveryActivity {
   /**
    * Run `work`'s reads, this reader's and the delivery reader's, on one
    * snapshot: a transaction that is REPEATABLE READ and read-only on
-   * PostgreSQL and MySQL, and on SQLite one that keeps every other
-   * transaction out until it ends. The two halves of the merged Activity
-   * then describe one moment, never a queued email pruned or sent between
-   * them.
+   * PostgreSQL and MySQL. The two halves of the merged Activity then
+   * describe one moment, never a queued email pruned or sent between them.
+   *
+   * Not on SQLite: its one connection is every writer's too, so a write made
+   * meanwhile outside a transaction (a delivery recorded without one) would
+   * join this one, and be lost if it rolled back. There the halves are read
+   * in turn, as they were before.
    */
   private inSnapshot<T>(work: () => Promise<T>): Promise<T> {
+    if (this.dialect === "sqlite") return work();
     return this.run(() =>
-      this.adapter.transaction(
-        tx => runReadsInTransaction(tx, work, "none"),
-        this.dialect === "sqlite"
-          ? undefined
-          : { isolationLevel: "repeatable read", readOnly: true }
-      )
+      this.adapter.transaction(tx => runReadsInTransaction(tx, work, "none"), {
+        isolationLevel: "repeatable read",
+        readOnly: true,
+      })
     );
   }
 
