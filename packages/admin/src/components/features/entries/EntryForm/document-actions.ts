@@ -188,8 +188,11 @@ export interface ReviewActionState {
   stepReason?: string;
 }
 
-/** The reason every action is unavailable while a past version is on screen. */
-const HISTORY_REASON =
+/**
+ * The reason every action is unavailable while a past version is on screen;
+ * the review's own actions outside the header say the same.
+ */
+export const HISTORY_REASON =
   "You are viewing a past version. Return to the current one to make changes.";
 
 /**
