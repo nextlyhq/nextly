@@ -243,24 +243,16 @@ export async function reviewBuilderSchemaChange(
  */
 export type BuilderSaveReview = Pick<
   CollectionSavePreview,
-  "notices" | "conversions" | "clears"
+  "notices" | "conversions"
 >;
 
 /** The review of a save with no writer: nothing beyond the change. */
 export const NOTHING_TO_REVIEW: BuilderSaveReview = {
   notices: [],
   conversions: [],
-  clears: [],
 };
 
-/**
- * The review a save's preview gives, with the values each field type change that loses values
- * would clear (`clears`), which the Builder sends back as `confirmedClears` once confirmed.
- */
+/** The review a save's preview gives. */
 export function reviewOf(preview: CollectionSavePreview): BuilderSaveReview {
-  return {
-    notices: preview.notices,
-    conversions: preview.conversions,
-    clears: preview.clears,
-  };
+  return { notices: preview.notices, conversions: preview.conversions };
 }

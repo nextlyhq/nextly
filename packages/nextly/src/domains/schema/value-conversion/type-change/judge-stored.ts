@@ -53,13 +53,6 @@ export interface CollectOptions {
   unique?: boolean;
   /** Each kept or changed value, as the new type reads it, handed over as it is judged. */
   onReading?: (key: RowKey, readsAs: string) => void;
-  /**
-   * The save writes each kept or changed value as the new type reads it, and each empty one as no
-   * value (`TypeConversion`), rather than leaving the database's cast to reach them: a value whose
-   * stored form is not its reading, or an empty list stored as `[]`, then blocks nothing. Asked
-   * only by a save that runs that conversion, for the pairs it writes (`rewritesPair`).
-   */
-  rewrites?: boolean;
 }
 
 /**
@@ -240,8 +233,6 @@ class TypeChangeTally {
     stored: string | null
   ): boolean {
     if (verdict.reason !== "empty" || stored === null) return false;
-    // A save that rewrites the values writes an empty one as no value, whatever it was stored as.
-    if (this.options.rewrites === true) return false;
     if (this.read.emptyListHeld && stored.trim() === "[]") return false;
     if (writtenAsNone(this.read, stored)) return false;
     this.note("needs-rewrite", key);
@@ -265,11 +256,7 @@ class TypeChangeTally {
       for (const row of repeated) this.note("repeated", row);
       return true;
     }
-    // A save that rewrites the values writes this one as it reads: its stored form does not matter.
-    if (
-      this.options.rewrites !== true &&
-      !this.read.value(stored, readsAs, outcome)
-    ) {
+    if (!this.read.value(stored, readsAs, outcome)) {
       this.note("needs-rewrite", key);
       return true;
     }
@@ -397,7 +384,6 @@ export function judgeStoredTypeChange(
     {
       ...(args.unique !== undefined ? { unique: args.unique } : {}),
       ...(args.onReading !== undefined ? { onReading: args.onReading } : {}),
-      ...(args.rewrites === true ? { rewrites: true } : {}),
     }
   );
 }

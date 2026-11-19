@@ -378,35 +378,6 @@ function readConfirmedDeletions(
 }
 
 /**
- * The counts of values the person confirmed clearing for fields changing type, as an apply's body
- * sends them: each field's name and a whole number of values that cannot convert. Absent where the
- * body sends none, and a change that loses values is then refused as it always has been
- * (`CollectionSave.confirmedClears`).
- */
-const ConfirmedClearsBody = z.object({
-  confirmedClears: z
-    .array(
-      z.object({
-        field: z.string().min(1),
-        count: z.number().int().min(0),
-      })
-    )
-    .max(500)
-    .optional(),
-});
-
-function readConfirmedClears(
-  body: unknown
-): z.infer<typeof ConfirmedClearsBody>["confirmedClears"] {
-  try {
-    return ConfirmedClearsBody.parse(body ?? {}).confirmedClears;
-  } catch (error) {
-    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
-    throw error;
-  }
-}
-
-/**
  * The dialog's confirmations by field name, as its questions read them
  * (`refuseUnansweredDialogQuestions`): each field's own resolution, and each removed field whose
  * count of values the person confirmed deleting (`confirmedDeletions`), a count being its drop
@@ -1100,8 +1071,6 @@ const COLLECTIONS_METHODS: Record<
       // The counts the person confirmed deleting, read with the rest of the request, before the
       // lock: a malformed one refuses the save before anything is read from the database.
       const confirmedDeletions = readConfirmedDeletions(body);
-      // The counts the person confirmed clearing for fields changing type, read the same way.
-      const confirmedClears = readConfirmedClears(body);
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
@@ -1489,7 +1458,6 @@ const COLLECTIONS_METHODS: Record<
                 ? {}
                 : { acknowledgedConversions }),
               ...confirmedDeletionsAnswer(confirmedDeletions),
-              ...(confirmedClears === undefined ? {} : { confirmedClears }),
             },
           });
           // Thrown before the registry row is written: the row keeps the fields the database

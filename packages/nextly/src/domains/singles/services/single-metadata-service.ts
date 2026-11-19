@@ -2019,9 +2019,6 @@ export class SingleMetadataService {
         : {}),
       migrationStatus: change.migrationStatus ?? null,
       builtBy: builtByFor("single", true),
-      // Judged as the save's writer judges it: where the writer applies the change here, it
-      // writes each value of a pair it converts, so a Single answers a pair as a collection does.
-      rewrites: this.saveDeps()?.applies === true,
     });
   }
 
