@@ -244,6 +244,42 @@ describe("fileTypeChangesOf", () => {
     ]);
   });
 
+  it("judges a field group's many-to-many as the column its row keeps, and a collection's not at all", () => {
+    // On a field group's row a many-to-many keeps its links as a JSON list in a column of its own;
+    // on a collection they are rows of a junction table, so turning it into text adds a column
+    // and drops the junction, which no type change judges. Read without the field group's mark,
+    // the field group's change would be taken for that drop and add, and judge nothing.
+    const LINKS = {
+      name: "heading",
+      type: "relationship",
+      options: { relationType: "manyToMany", target: "posts" },
+    };
+    const found = fileTypeChangesOf(
+      source(
+        record({
+          collections: { notes: declared({ fields: [LINKS] }) },
+          fieldGroups: { meta: declared({ fields: [LINKS] }) },
+        }),
+        record({
+          collections: { notes: declared({ fields: [TEXT] }) },
+          fieldGroups: { meta: declared({ fields: [TEXT] }) },
+        })
+      )
+    );
+
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      kind: "fieldGroup",
+      slug: "meta",
+      input: {
+        table: "comp_meta",
+        componentRow: true,
+        previous: [LINKS],
+        next: [TEXT],
+      },
+    });
+  });
+
   it("reads a field translated before the file from the entity's companion", () => {
     const [found] = fileTypeChangesOf(
       source(

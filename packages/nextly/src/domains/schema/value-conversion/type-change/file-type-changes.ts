@@ -32,10 +32,10 @@ import {
 } from "../../pipeline/ui-type-changes";
 import {
   fieldsStoredOnRow,
-  getColumnDescriptor,
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
 
+import { type ColumnAt, columnDescriptorAt } from "./field-type";
 import {
   type EntityTypeChangeInput,
   entityLabel,
@@ -262,6 +262,22 @@ export function fileTypeChangesOf(
   });
 }
 
+/**
+ * Where `kind`'s fields are kept, as their columns are made: the creator of its tables, and for a
+ * field group its own rows, where a many-to-many keeps its links as a JSON list in a column of its
+ * own rather than in a junction table. Every question this file asks of a field's column or type
+ * is asked at it, so a field group's many-to-many is judged as the column it is.
+ */
+function columnAtFor(
+  kind: SettingsEntityKind,
+  after: RecordedEntitySettings
+): ColumnAt {
+  return {
+    builtBy: builtByFor(kind, after.source === "builder"),
+    ...(kind === "fieldGroup" ? { componentRow: true } : {}),
+  };
+}
+
 /** One entity whose field types the file changes, as `fileTypeChangesOf` gives it. */
 interface FileEntityTypeChange {
   kind: SettingsEntityKind;
@@ -306,9 +322,9 @@ function entityTypeChange(args: {
   // renames it, since this is asked before its first statement.
   const readFrom = args.was.table;
   const translationsTable = `${readFrom}_locales`;
-  const builtBy = builtByFor(kind, after.source === "builder");
+  const at = columnAtFor(kind, after);
   const columnOf = (field: FieldDefinition) =>
-    getColumnDescriptor(field, dialect, builtBy)?.name.toLowerCase();
+    columnDescriptorAt(field, dialect, at)?.name.toLowerCase();
   // A column rename names the table by whichever name it has when the rename runs.
   const tables = new Set(
     [table, `${table}_locales`, readFrom, translationsTable].map(t =>
@@ -331,7 +347,7 @@ function entityTypeChange(args: {
     next,
     ...(renamed.size > 0 ? { renamed } : {}),
     dialect,
-    builtBy,
+    ...at,
   });
   const unread = unreadRenameFields({
     statements: source.statements,
@@ -340,7 +356,7 @@ function entityTypeChange(args: {
     previous,
     next,
     renamed,
-    builtBy,
+    at,
   });
   if (changes.length === 0 && unread.length === 0) return [];
   return [
@@ -359,7 +375,7 @@ function entityTypeChange(args: {
         previous,
         next,
         ...(renamed.size > 0 ? { renamed } : {}),
-        builtBy,
+        ...at,
       },
     },
   ];
@@ -420,7 +436,7 @@ function unpairedTypeChanges(args: {
       ])
     );
     if (!unreadRenameOn(source.statements, dialect, tables)) return [];
-    const builtBy = builtByFor(kind, after.source === "builder");
+    const at = columnAtFor(kind, after);
     const fields = fieldsStoredOnRow(next)
       .filter(to =>
         unpairedBefore.some(was =>
@@ -431,7 +447,7 @@ function unpairedTypeChanges(args: {
                 previous: [from],
                 next: [to],
                 dialect,
-                builtBy,
+                ...at,
               }).length > 0
           )
         )
@@ -448,7 +464,7 @@ function unpairedTypeChanges(args: {
           table,
           previous: [],
           next: [],
-          builtBy,
+          ...at,
         },
       },
     ];
@@ -469,7 +485,8 @@ function unreadRenameFields(args: {
   previous: readonly FieldDefinition[];
   next: readonly FieldDefinition[];
   renamed: ReadonlyMap<string, string>;
-  builtBy: EntityTypeChangeInput["builtBy"];
+  /** Where the fields are kept, as their columns are made (`columnAtFor`). */
+  at: ColumnAt;
 }): string[] {
   const { dialect } = args;
   if (!unreadRenameOn(args.statements, dialect, args.tables)) return [];
@@ -494,7 +511,7 @@ function unreadRenameFields(args: {
             previous: [from],
             next: [{ ...to, name: from.name }],
             dialect,
-            builtBy: args.builtBy,
+            ...args.at,
           }).length > 0
       )
     )
