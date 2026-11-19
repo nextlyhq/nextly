@@ -152,6 +152,23 @@ const migrateStep = vi.hoisted(() => ({
   runsNothing: false,
 }));
 
+/** The start's code-first reload, counted where a case watches the start. */
+const reloads = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("../../../../init/reload-config", async original => {
+  const actual =
+    await original<typeof import("../../../../init/reload-config")>();
+  return {
+    ...actual,
+    reloadNextlyConfig: (async (
+      ...args: Parameters<typeof actual.reloadNextlyConfig>
+    ) => {
+      reloads.count += 1;
+      return actual.reloadNextlyConfig(...args);
+    }) as typeof actual.reloadNextlyConfig,
+  };
+});
+
 /** Make the settle's last step, the removal of stale markers, throw, where a case asks. */
 const staleMarkers = vi.hoisted(() => ({ fail: false }));
 
@@ -275,6 +292,7 @@ afterEach(async () => {
   migrateStep.byFiles = false;
   migrateStep.runsNothing = false;
   staleMarkers.fail = false;
+  reloads.count = 0;
   kill.at = undefined;
   kill.reached = undefined;
   kill.release?.();
@@ -465,12 +483,12 @@ describe.each(getConfiguredTestDialects())(
     // A translated field added changes no main column: the save's first file records the settings
     // alone, its header naming the entity only on its settings line. Stopped as that file is put in
     // place, before the record names it, the file cannot be told as the save's: settled without it,
-    // the definition would be put back and the file left to run. The record stays.
+    // the save would be taken as undone and the file left to run. The record stays. (The definition
+    // is written after the files, so at this stop it is still as it was.)
     it("keeps a record where a file written as the save stopped cannot be told as its own", async () => {
       const t = await boot();
       await createdTranslated();
       const filesBefore = sqlFiles();
-      const definitionBefore = definitionText();
       await stopSave(
         t,
         translatedAdd,
@@ -487,9 +505,6 @@ describe.each(getConfiguredTestDialects())(
       expect(await recordRow(t), "the record stays").toBeDefined();
       expect(sqlFiles(), "the save's files stay").toEqual(
         [...filesBefore, ...written].sort()
-      );
-      expect(definitionText(), "the definition is not put back").not.toBe(
-        definitionBefore
       );
     }, 300_000);
 
@@ -552,6 +567,7 @@ describe.each(getConfiguredTestDialects())(
         migrateStep.registrations,
         "the start registered entities from the snapshots"
       ).toBe(0);
+      expect(reloads.count, "the start's code-first reload ran").toBe(0);
       expect(await recordRow(t), "the record stays").toBeDefined();
       const repo = new SchemaEventsRepository(
         t.adapter.getDrizzle(),
@@ -1030,6 +1046,113 @@ describe.each(getConfiguredTestDialects())(
       for (const file of written) {
         expect(sqlFiles(), "the save's files stay").toContain(file);
       }
+    }, 300_000);
+
+    // A later migration of another entity whose table only begins with this one's name
+    // (`single_settle_hero_archive` beside `single_settle_hero`) is not this entity's: the settle
+    // brings the registry row up all the same.
+    it("brings the registry row up over a later migration of an entity whose table only begins with this one's", async () => {
+      const t = await boot();
+      await created(t);
+      const realDelete = MetaService.prototype.delete;
+      vi.spyOn(MetaService.prototype, "delete").mockImplementation(
+        async function (this: MetaService, key: string) {
+          if (key === RECORD_KEY) await stopHere("clear");
+          return realDelete.call(this, key);
+        }
+      );
+      await stopSave(
+        t,
+        [text("heading"), text("alpha")],
+        point => point === "clear"
+      );
+      vi.mocked(MetaService.prototype.delete).mockRestore();
+      const repo = new SchemaEventsRepository(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect
+      );
+      const later = "29991231_000000_000_settle_hero_archive_update.sql";
+      writeFileSync(
+        join(HISTORY_DIR(), later),
+        [
+          "-- Migration: settle_hero_archive_update",
+          `-- Singles: ${SLUG}_archive`,
+          "-- Entity scope: touched",
+          "",
+          "-- UP",
+          `ALTER TABLE "${TABLE}_archive" ADD COLUMN "x" TEXT;`,
+          "",
+          "-- DOWN",
+          "SELECT 1;",
+          "",
+        ].join("\n")
+      );
+      await recordAlreadyApplied({ filename: later }, repo);
+      // The row as it stood before the save's own write.
+      await writeAppliedFieldsRow(t.adapter, {
+        table: "dynamic_singles",
+        slug: SLUG,
+        fields: [text("heading")] as never,
+        localized: false,
+        schemaVersion: (await versionOf(t)) + 1,
+      });
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["all"]);
+      expect(await registryFieldNames(t)).toEqual(["heading", "alpha"]);
+    }, 300_000);
+
+    // A record the settle does not judge, one that cannot be read or another host's, is answered
+    // as left all the same, so the development start holds back as for one it judged left.
+    it("answers a record it cannot read, and another host's, as left", async () => {
+      const t = await boot();
+      await created(t);
+      const meta = new MetaService(t.adapter, consoleLogger);
+      await meta.set(
+        "builder-save-in-progress:single:unreadable_one",
+        "not a save's record"
+      );
+      await meta.set(RECORD_KEY, {
+        id: "another-hosts-save",
+        kind: "single",
+        slug: SLUG,
+        startedAt: new Date().toISOString(),
+        host: "another-host",
+        database: "unknown",
+        definitionFile: "schema/builder.json",
+        definitionBefore: null,
+      });
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => [s.slug, s.outcome]).sort()).toEqual([
+        [SLUG, "left"],
+        ["unreadable_one", "left"],
+      ]);
+    }, 300_000);
+
+    it("holds back a start while another host's record stands", async () => {
+      const t = await boot();
+      await created(t);
+      await new MetaService(t.adapter, consoleLogger).set(RECORD_KEY, {
+        id: "another-hosts-save",
+        kind: "single",
+        slug: SLUG,
+        startedAt: new Date().toISOString(),
+        host: "another-host",
+        database: "unknown",
+        definitionFile: "schema/builder.json",
+        definitionBefore: null,
+      });
+      lockPassesThrough.on = true;
+      bootFolder.dir = HISTORY_DIR();
+      migrateStep.watch = true;
+
+      await runBootTimeApplyIfDev({ caller: "settle test" });
+
+      expect(migrateStep.runs, "the start's migrate step ran").toBe(0);
+      expect(reloads.count, "the start's code-first reload ran").toBe(0);
     }, 300_000);
 
     it("keeps the marker of an entity whose row cannot be read", async () => {

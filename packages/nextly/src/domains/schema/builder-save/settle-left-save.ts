@@ -54,6 +54,7 @@ import {
 } from "../migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+import { collectionOwnTables } from "../services/field-column-descriptor";
 import { uiToMinimal } from "../ui-schema/merge";
 
 import {
@@ -143,10 +144,28 @@ export async function settleLeftSaves(
   if (!(await deps.adapter.tableExists("nextly_meta"))) return settled;
   const here = hostname();
   for (const row of await readSavesInProgress(deps.adapter)) {
-    // An unreadable record names no save to judge: it refuses as it is, with its hand step.
-    if (!("record" in row)) continue;
-    // Another machine's save wrote its files there, not here: its own start settles it.
-    if (row.record.host !== here) continue;
+    // An unreadable record names no save to judge: it refuses as it is, with its hand step, and is
+    // answered as left, so a caller holds back what it holds back for a record that stays.
+    if (!("record" in row)) {
+      if (deps.only === undefined) settled.push(unreadableLeft(row.key));
+      continue;
+    }
+    // Another machine's save wrote its files there, not here: its own start settles it. It may
+    // describe a file part-applied on this database, so it too is answered as left.
+    if (row.record.host !== here) {
+      if (deps.only === undefined) {
+        settled.push({
+          id: row.record.id,
+          kind: row.record.kind,
+          slug: row.record.slug,
+          outcome: "left",
+          notes: [
+            `left by another host (${row.record.host}), which settles it`,
+          ],
+        });
+      }
+      continue;
+    }
     if (deps.only !== undefined && !deps.only.has(row.record.id)) continue;
     try {
       settled.push(await settleLeftSave(deps, row.record));
@@ -176,6 +195,18 @@ export async function settleLeftSaves(
     );
   }
   return settled;
+}
+
+/** An unreadable record, answered as left: its key names the entity where it can be read. */
+function unreadableLeft(key: string): SettledSave {
+  const [, kind, ...slug] = key.split(":");
+  return {
+    id: key,
+    kind: kind === "single" || kind === "fieldGroup" ? kind : "collection",
+    slug: slug.join(":"),
+    outcome: "left",
+    notes: ["its record cannot be read"],
+  };
 }
 
 /**
@@ -586,7 +617,7 @@ async function movedPast(
         typeof name === "string" && name > last && !files.includes(name)
     );
   const dialect = deps.adapter.getCapabilities().dialect;
-  const tables = entityTables(record);
+  const tables = relatedTables(record);
   const registry = await registryTableOf(deps.adapter, record.kind);
   for (const name of later) {
     const content = await readIfPresent(join(deps.migrationsDir, name));
@@ -757,7 +788,7 @@ function laterFileOfSave(
   const dialect = deps.adapter.getCapabilities().dialect;
   const repo = new SchemaEventsRepository(deps.adapter.getDrizzle(), dialect);
   const window = nameWindow(record);
-  const tables = entityTables(record);
+  const tables = relatedTables(record);
   return async name => {
     if (window === undefined) return "other";
     const stamp = name.slice(0, window.from.length);
@@ -782,7 +813,7 @@ function namesEntity(content: string, record: LeftSave): boolean {
   return list.includes(record.slug);
 }
 
-/** Whether a file's UP changes one of `tables`, or a table named from one of them. */
+/** Whether a file's UP changes one of `tables` (`relatedTables`), each matched by its whole name. */
 function touches(
   content: string,
   tables: readonly string[],
@@ -792,9 +823,36 @@ function touches(
   const { upSql } = parseSqlSections(content);
   return splitSqlStatements(upSql, dialect).some(statement =>
     (tablesChangedIn(statement, dialect) ?? []).some(changed =>
-      tables.some(t => changed === t || changed.startsWith(`${t}_`))
+      tables.includes(changed)
     )
   );
+}
+
+/**
+ * Every table the entity owns, from the definition before the save and after it, by whole name:
+ * its main table, its translations table and its junction tables (`collectionOwnTables`). Another
+ * entity's table that only begins with this one's name (`dc_posts_archive` beside `dc_posts`) is
+ * not among them.
+ */
+function relatedTables(record: LeftSave): string[] {
+  const { prefix } = saveKindOf(record.kind);
+  const tables = new Set<string>();
+  for (const text of [record.definitionAfter, record.definitionBefore]) {
+    const entity = rawEntity(text ?? null, record.kind, record.slug);
+    if (entity === null) continue;
+    try {
+      const minimal = uiToMinimal(entity as never, prefix);
+      for (const table of collectionOwnTables(
+        minimal.tableName,
+        minimal.fields
+      )) {
+        tables.add(table.toLowerCase());
+      }
+    } catch {
+      // An entity the merge cannot read names no table; the header test still applies.
+    }
+  }
+  return [...tables];
 }
 
 /** The entity's main table, from the definition before the save or after it. */

@@ -143,12 +143,21 @@ export async function runBootTimeApplyIfDev(opts?: {
     await loadingDefinitions(() => reloadDynamicTables(label));
 
     // Step 2: Apply code-first schema changes
-    const { reloadNextlyConfig } = await import("./reload-config");
-    // As a start's reload: it lands without comparing the schema when nothing
-    // changed since the last start. A reload that refused the configuration
-    // brought nothing in line, so this start records nothing new.
-    if ((await reloadNextlyConfig({ atStart: true })) === "refused") {
+    // Not while a save stays unsettled: the reload's statements would change the tables its
+    // record is judged against, and could change them before its remaining files run.
+    if (held) {
+      consoleLogger.warn(
+        `${label} Code-first schema changes were not applied at this start: a Builder save left part-way is not settled (named above).`
+      );
       markStartIncomplete();
+    } else {
+      const { reloadNextlyConfig } = await import("./reload-config");
+      // As a start's reload: it lands without comparing the schema when nothing
+      // changed since the last start. A reload that refused the configuration
+      // brought nothing in line, so this start records nothing new.
+      if ((await reloadNextlyConfig({ atStart: true })) === "refused") {
+        markStartIncomplete();
+      }
     }
 
     // Step 3: every relation a declared table names resolves, now that the
