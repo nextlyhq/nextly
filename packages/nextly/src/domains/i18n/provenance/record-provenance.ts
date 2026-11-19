@@ -710,9 +710,10 @@ export async function renameFieldProvenance(
 
 /**
  * The statements that move one entity's records of a renamed translated field by hand, as
- * `renameFieldProvenance` moves them: the field's own records, then each row's record under the
- * field's name and the row separator. Text for a developer finishing a rename whose move failed,
- * never run here.
+ * `renameFieldProvenance` moves them: the field's own records; then each row's record whose new
+ * path would not fit the column is deleted, as the move drops it; then each other row's record
+ * under the field's name and the row separator is moved. Text for a developer finishing a rename
+ * whose move failed, never run here.
  *
  * @experimental
  */
@@ -738,9 +739,18 @@ export function renameFieldProvenanceStatements(
   const moved = mysql
     ? `CONCAT(${newPrefix}, ${rest})`
     : `${newPrefix} || ${rest}`;
+  const underPrefix = `${scope} AND ${substring}(${path}, 1, ${String(prefix.length)}) = ${text(prefix)}`;
+  // A row's new path is its old one with the field's name changed, so it fits the column while the
+  // old one is at most this long. Characters, not bytes: MySQL's LENGTH counts bytes.
+  const longestKept =
+    TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH +
+    prefix.length -
+    `${rename.to}${ROW_PATH_SEPARATOR}`.length;
+  const length = mysql ? "CHAR_LENGTH" : "LENGTH";
   return [
     `UPDATE ${table} SET ${path} = ${text(rename.to)} WHERE ${scope} AND ${path} = ${text(rename.from)};`,
-    `UPDATE ${table} SET ${path} = ${moved} WHERE ${scope} AND ${substring}(${path}, 1, ${String(prefix.length)}) = ${text(prefix)};`,
+    `DELETE FROM ${table} WHERE ${underPrefix} AND ${length}(${path}) > ${String(longestKept)};`,
+    `UPDATE ${table} SET ${path} = ${moved} WHERE ${underPrefix};`,
   ];
 }
 

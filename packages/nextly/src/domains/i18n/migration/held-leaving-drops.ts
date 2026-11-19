@@ -132,10 +132,16 @@ function provenanceNotMoved(
   },
   statements: string[]
 ): NextlyError {
-  const kind = rename.scopeKind === "single" ? "Single" : "Collection";
+  const notMoved = `its translations step failed, so the translation records of "${rename.from}" were not moved to "${rename.to}". Until they are, no language of ${rename.to} can be found out of date.`;
+  // A Single's save records its row with the change. A Collection's stops before its row is
+  // written, so its answer is followed by the kept file's steps, which finish the rest.
+  const publicMessage =
+    rename.scopeKind === "single"
+      ? `Single "${rename.scopeSlug}" was saved: its change landed, but ${notMoved} A developer can finish it with the statements in the server log.`
+      : `Collection "${rename.scopeSlug}" was saved only in part: its change landed in the database, but ${notMoved} A developer can move them with the statements in the server log.`;
   return new NextlyError({
     code: "NEXTLY_MIGRATION_APPLY_FAILED",
-    publicMessage: `${kind} "${rename.scopeSlug}" was saved: its change landed, but its translations step failed, so the translation records of "${rename.from}" were not moved to "${rename.to}". Until they are, no language of ${rename.to} can be found out of date. A developer can finish it with the statements in the server log.`,
+    publicMessage,
     logMessage: error instanceof Error ? error.message : String(error),
     logContext: { reason: PROVENANCE_NOT_MOVED, ...rename, statements },
     ...(error instanceof Error ? { cause: error } : {}),
