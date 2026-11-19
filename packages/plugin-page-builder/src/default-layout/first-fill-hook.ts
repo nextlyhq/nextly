@@ -49,10 +49,19 @@ interface HookRegistry {
   };
 }
 
+/**
+ * The hook-context key a write carries when it makes a header or footer for
+ * a set of its own, not for the site default: the default must not take a
+ * component another set was given, so such a publish fills nothing.
+ */
+export const OWN_SET_COMPONENT_CONTEXT_KEY = "pageBuilder.ownSetComponent";
+
 /** The parts of a component write's hook context this reads. */
 interface ComponentWriteContext {
   data?: unknown;
   originalData?: unknown;
+  /** What the write itself said it is for. */
+  context?: Record<string, unknown>;
   user?: { id?: unknown } | null;
   req?: { nextly?: unknown };
   afterCommit?: (effect: () => unknown) => Promise<void>;
@@ -93,6 +102,8 @@ export function firstPublishedAs(
 ): PublishedAs | null {
   const area = publishedAreaOf(context.data);
   if (area === null) return null;
+  // Made for a set of its own: the default never takes it.
+  if (context.context?.[OWN_SET_COMPONENT_CONTEXT_KEY] === true) return null;
   if (publishedAreaOf(context.originalData) === area) return null;
   const id = (context.data as { id?: unknown }).id;
   if (typeof id !== "string" || id === "") return null;

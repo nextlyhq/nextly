@@ -52,6 +52,7 @@ import type {
   BuilderSaveSetup,
   writeCollectionSave,
 } from "../../domains/schema/builder-save/collection-save";
+import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
@@ -92,6 +93,7 @@ import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlis
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
+import { afterEnclosingCommit } from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -902,22 +904,15 @@ const COLLECTIONS_METHODS: Record<
       // show before they confirm: each conversion, fill and delete. The
       // answers are optional here, so the review can ask again once chosen.
       const answers = body as SchemaChangeAnswers;
-      // The fields the save moves are refused here as the apply refuses them, before the person
-      // confirms, where the save would not keep their values through its migration file.
-      const moves = readRequestedMoves(body);
-      const wasLocalized =
-        (collection as { localized?: boolean }).localized === true;
-      await refuseMovesOffTheFile({
-        moves,
-        writes: container.has("builderSaveSetup"),
-        pushReason: pushReasonOf({
-          adapter,
-          tableName,
-          wasLocalized,
-          isLocalized: previewLocalized ?? wasLocalized,
-          before: currentFields,
-          after: fields as FieldDefinition[],
-        }),
+      const moves = await reviewedMoves({
+        body,
+        adapter,
+        tableName,
+        wasLocalized:
+          (collection as { localized?: boolean }).localized === true,
+        requestedLocalized: previewLocalized,
+        before: currentFields,
+        after: fields as FieldDefinition[],
       });
       const review = await reviewLinesOf({
         slug: p.collectionName,
@@ -1186,8 +1181,48 @@ const COLLECTIONS_METHODS: Record<
               : undefined,
           };
           let pushedSummary: PushSummary | undefined;
-          const push = async (): Promise<void> => {
-            pushedSummary = (await applyCollectionSchemaChange(change)).summary;
+          // A push that fails after changing the database keeps its files, recorded applied
+          // nowhere, and the failure tells the admin so (`partWayPush`); one that fails before
+          // withdraws them.
+          const push = partWayPush(async onLanded => {
+            pushedSummary = (
+              await applyCollectionSchemaChange({ ...change, onLanded })
+            ).summary;
+          });
+          const newSchemaVersion = currentVersion + 1;
+          // The registry's row of the save: the fields as stored, the advanced schema version and
+          // the translation state this apply ran with, written with the stored version in one
+          // transaction so its count moves with the save it records (`writeRegistryRows`).
+          // `pending` is a file written but not run, outside development.
+          const writeRow = async (
+            storedFields: FieldDefinition[],
+            pending: boolean
+          ): Promise<void> => {
+            await writeRegistryRows(adapter, tx =>
+              tx.update(
+                "dynamic_collections",
+                {
+                  fields: JSON.stringify(storedFields),
+                  schema_version: newSchemaVersion,
+                  // Written but not run outside development: `nextly migrate`
+                  // applies it on deploy.
+                  ...(pending ? { migration_status: "pending" } : {}),
+                  // i18n: persist the state this apply actually ran with (mirrors
+                  // the singles apply). The DDL above already performed any
+                  // false→true transition, so leaving the stored flag behind would
+                  // make the settings write that follows read another false→true
+                  // transition and reconcile the companion a second time.
+                  localized: isLocalized,
+                  updated_at: new Date(),
+                },
+                { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+              )
+            );
+            // Written past the registry services, so the cached rows are cleared
+            // here: a read during the save may have cached the row from before it.
+            clearRegistryRowCache();
+            // And again once a file's transaction it joined commits (`afterEnclosingCommit`).
+            await afterEnclosingCommit(adapter);
           };
           const pushReason = pushReasonOf({
             adapter,
@@ -1205,7 +1240,10 @@ const COLLECTIONS_METHODS: Record<
             pushReason,
           });
           const written = await saveThroughWriter({
-            appliedBy: push,
+            // Where the save runs its file, the row is written in the file's own transaction, so a
+            // failed write leaves the save as it was and is answered as the failure it is.
+            registry: storedFields => writeRow(storedFields, false),
+            appliedBy: push.appliedBy,
             // Whether the push applies the change in development, the writer recording its
             // migration once the push has run (`pushReasonOf`).
             pushWhen: async () => (await pushReason()) !== null,
@@ -1223,6 +1261,9 @@ const COLLECTIONS_METHODS: Record<
                 : { acknowledgedConversions }),
             },
           });
+          // Thrown before the registry row is written: the row keeps the fields the database
+          // held before, as the kept files record the change still to finish.
+          push.throwIfFailed(written?.files ?? []);
           const storedFields =
             written === undefined
               ? (fields as unknown as FieldDefinition[])
@@ -1250,36 +1291,15 @@ const COLLECTIONS_METHODS: Record<
           // never changes and a second stale save would pass the guard. The
           // write is non-fatal (the DDL already succeeded), but track whether it
           // landed so the response never reports a version the DB did not persist.
-          const newSchemaVersion = currentVersion + 1;
           let versionPersisted = true;
           try {
-            // The row and the stored schema version in one transaction, so the
-            // version's count moves with the save it records (`writeRegistryRows`).
-            await writeRegistryRows(adapter, tx =>
-              tx.update(
-                "dynamic_collections",
-                {
-                  fields: JSON.stringify(storedFields),
-                  schema_version: newSchemaVersion,
-                  // Written but not run outside development: `nextly migrate`
-                  // applies it on deploy.
-                  ...(written !== undefined && !written.applied
-                    ? { migration_status: "pending" }
-                    : {}),
-                  // i18n: persist the state this apply actually ran with (mirrors
-                  // the singles apply). The DDL above already performed any
-                  // false→true transition, so leaving the stored flag behind would
-                  // make the settings write that follows read another false→true
-                  // transition and reconcile the companion a second time.
-                  localized: isLocalized,
-                  updated_at: new Date(),
-                },
-                { and: [{ column: "slug", op: "=", value: p.collectionName }] }
-              )
-            );
-            // Written past the registry services, so the cached rows are cleared
-            // here: a read during the save may have cached the row from before it.
-            clearRegistryRowCache();
+            // Written already, in the file's transaction, where the save ran its file.
+            if (written?.registryWritten !== true) {
+              await writeRow(
+                storedFields,
+                written !== undefined && !written.applied
+              );
+            }
           } catch (err) {
             versionPersisted = false;
             const msg = err instanceof Error ? err.message : String(err);
@@ -2108,6 +2128,36 @@ function pushReasonOf(args: {
 }
 
 /**
+ * The fields a reviewed save moves, read from its request and refused as the apply refuses them,
+ * before the person confirms, where the save would not keep their values through its migration
+ * file. The request's translation state wins where the Builder sent one, as in the apply.
+ */
+async function reviewedMoves(args: {
+  body: unknown;
+  adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>;
+  tableName: string;
+  wasLocalized: boolean;
+  requestedLocalized: boolean | undefined;
+  before: readonly FieldDefinition[];
+  after: readonly FieldDefinition[];
+}): Promise<readonly FieldMoveRequest[]> {
+  const moves = readRequestedMoves(args.body);
+  await refuseMovesOffTheFile({
+    moves,
+    writes: container.has("builderSaveSetup"),
+    pushReason: pushReasonOf({
+      adapter: args.adapter,
+      tableName: args.tableName,
+      wasLocalized: args.wasLocalized,
+      isLocalized: args.requestedLocalized ?? args.wasLocalized,
+      before: args.before,
+      after: args.after,
+    }),
+  });
+  return moves;
+}
+
+/**
  * A field change through the Builder save writer, when the app registered
  * one: written and, in development, run, or applied by `appliedBy` and then
  * recorded. Undefined without a writer, where the push pipeline applies the
@@ -2116,15 +2166,30 @@ function pushReasonOf(args: {
 async function saveThroughWriter(
   change: WriterChange & {
     /** Applies the change in development instead of the file (`writeCollectionSave`). */
-    appliedBy?: () => Promise<void>;
+    appliedBy?: () => Promise<void | "partly-applied">;
     /**
      * Whether `appliedBy` applies this change rather than the file. Asked only where the
      * answer is used, a save the writer runs in development, so a production save or one with
      * no writer reads nothing for it. Absent, `appliedBy` applies whenever it is given.
      */
     pushWhen?: () => Promise<boolean>;
+    /**
+     * The caller's registry write for the save, given the fields as stored. Where the writer runs
+     * the save's file in development, it runs inside the last file's transaction, after its ledger
+     * row, so a failed write leaves the save as it was (`inLastTransaction`); elsewhere the caller
+     * writes it once this returns.
+     */
+    registry?: (fields: FieldDefinition[]) => Promise<void>;
   }
-): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
+): Promise<
+  | {
+      fields: FieldDefinition[];
+      applied: boolean;
+      files: readonly string[];
+      registryWritten: boolean;
+    }
+  | undefined
+> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return undefined;
   const viaPush =
@@ -2136,14 +2201,23 @@ async function saveThroughWriter(
   const { writeCollectionSave } = await import(
     "../../domains/schema/builder-save/collection-save"
   );
+  const registry = change.registry;
+  const inFile = prepared.deps.applies && !viaPush && registry !== undefined;
   const result = await writeCollectionSave(
     prepared.deps,
     prepared.save,
     viaPush && change.appliedBy !== undefined
       ? { appliedBy: change.appliedBy }
-      : {}
+      : inFile
+        ? { inLastTransaction: () => registry(prepared.fields) }
+        : {}
   );
-  return { fields: prepared.fields, applied: result.applied };
+  return {
+    fields: prepared.fields,
+    applied: result.applied,
+    files: result.files,
+    registryWritten: inFile,
+  };
 }
 
 /**

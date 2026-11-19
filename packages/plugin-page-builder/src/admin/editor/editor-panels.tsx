@@ -1204,6 +1204,14 @@ export function editorPanelRenderer({
                   {...(classes.library === undefined
                     ? {}
                     : { classes: classes.library })}
+                  // An import's text styles are stored by the class writer,
+                  // matched with the site's breakpoints once they are read.
+                  importing={{
+                    onEditClasses: classes.edit,
+                    ...(siteStylePending || siteStyleError !== null
+                      ? {}
+                      : { breakpoints: canvasRender.styleContext.breakpoints }),
+                  }}
                   // A shared style using a variable opens in its own tab; a
                   // block look, which that tab does not list, in the inspector.
                   opens={{
@@ -1241,7 +1249,10 @@ export function editorPanelRenderer({
                     siteStyleError
                   )}
                   absence={siteStyleError !== null ? "failed" : "pending"}
-                  onClose={close}
+                  onClose={() => close()}
+                  // A font's "Body font" or "Headings font": back to Type,
+                  // onto that role's picker.
+                  onOpenRole={role => close(`[data-font-role="${role}"]`)}
                   // A font variable is changed in the Type tab's variables:
                   // the screen closes onto it, its group opened and in view.
                   onOpenTokens={() => {

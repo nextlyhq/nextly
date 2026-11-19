@@ -29,7 +29,11 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   usePluginRoute: vi.fn(),
   useDocumentIdentity: vi.fn(),
   useDocumentLocale: vi.fn(() => null),
+  usePluginClientConfig: () => clientConfig,
 }));
+
+/** The plugin's client config, as the site sets it. */
+let clientConfig: Record<string, unknown> | undefined;
 
 // Each picture stands for the set it draws, by its regions' components: the
 // drawing itself is the pictures module's own test.
@@ -63,6 +67,7 @@ import {
 } from "../layout-choices-contract";
 
 import {
+  NewPageLayoutPicker,
   PageLayoutPicker,
   usePageLayoutAsk,
   usePageLayoutRegions,
@@ -222,6 +227,34 @@ function rows(): { name: string; note: string | null; picture: string }[] {
         ?.getAttribute("data-regions") ?? "none",
   }));
 }
+
+describe("on a site that draws its header and footer in code", () => {
+  afterEach(() => {
+    clientConfig = undefined;
+  });
+
+  it("draws no Header & footer menu for a page, nor in the New page dialog", () => {
+    clientConfig = { siteHeaderFooter: "code" };
+    renderPicker();
+    expect(
+      screen.queryByRole("combobox", { name: "Header & footer" })
+    ).toBeNull();
+    render(
+      <Form defaults={{ layout: null, noHeaderFooter: false }}>
+        {control => <NewPageLayoutPicker control={control} />}
+      </Form>
+    );
+    expect(
+      screen.queryByRole("combobox", { name: "Header & footer" })
+    ).toBeNull();
+  });
+
+  it("keeps the page's stored choice as it is", () => {
+    clientConfig = { siteHeaderFooter: "code" };
+    renderPicker({ layout: "set-2", noHeaderFooter: false });
+    expect(values()).toMatchObject({ layout: "set-2", noHeaderFooter: false });
+  });
+});
 
 describe("the page's Layout picker", () => {
   it("is one labelled control, described by the line saying which Layout is in effect", () => {

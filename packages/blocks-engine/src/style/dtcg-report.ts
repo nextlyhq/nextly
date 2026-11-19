@@ -117,7 +117,15 @@ export function kindRefusal(
  * to be named here, so adding a field to the emitter without adding it here
  * fails.
  */
-const NEXTLY_FIELDS = new Set(["id", "css", "kind", "label", "description"]);
+const NEXTLY_FIELDS = new Set([
+  "id",
+  "css",
+  "kind",
+  "label",
+  "description",
+  "group",
+  "fluid",
+]);
 
 /**
  * The half of this system's OWN extension key that the model does not state.

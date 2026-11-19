@@ -145,8 +145,11 @@ export interface EditorState {
    * Nothing is applied: a surface shows the plan's steps and, once the
    * author confirms, applies it as one edit. No steps when there is nothing
    * to repair.
+   *
+   * Planned for `document` when given, which a surface rendering one passes
+   * so its plan is the one it shows; else for the document as it stands.
    */
-  planRepair: () => RepairPlan;
+  planRepair: (document?: BlockDocument) => RepairPlan;
   /**
    * The document as it stands with every component placement composed in,
    * through the composition the edits themselves are judged on (each document
@@ -701,11 +704,11 @@ function useLockQuestions(
   );
 
   const planRepair = useCallback(
-    (): RepairPlan =>
+    (document: BlockDocument = latestDocument.current): RepairPlan =>
       // The lock rule first and the placement rule after it, so a block a
       // lock repair moves is judged where the lock rule put it.
       planDocumentRepair(
-        latestDocument.current,
+        document,
         lockSourcesOf(hostLocksOf(definitions, nesting), baseline, limits),
         REPAIR_RULES
       ),

@@ -21,7 +21,12 @@
  * @module fonts-panel
  */
 import { cssString, tokenDisplayLabel } from "@nextlyhq/blocks-engine";
-import type { FontFaceDef, SiteTokenSet } from "@nextlyhq/blocks-engine";
+import type {
+  FontFaceDef,
+  NamedClass,
+  SiteTextMap,
+  SiteTokenSet,
+} from "@nextlyhq/blocks-engine";
 import {
   Button,
   DropdownMenu,
@@ -52,7 +57,18 @@ import {
   type SiteFamily,
 } from "./font-library";
 import { FontUploadEditor, type FontFaceUpload } from "./font-upload-editor";
+import {
+  FallbackList,
+  RoleRefusal,
+  UseForQuestion,
+  useFamiliesUses,
+  useUseFor,
+  WhereUsed,
+  type FamilyUsesHere,
+} from "./font-uses-view";
 import { KeepOrRemove, Refusal, useRefusableWrite } from "./panel-actions";
+import type { FontRole } from "./site-font-roles-model";
+import type { VariablesAccess } from "./variable-usage";
 
 export type { FontFaceUpload } from "./font-upload-editor";
 export type {
@@ -91,6 +107,49 @@ export interface FontsPanelProps {
   onRemoveFamily?: (family: SiteFamily) => Promise<string | undefined>;
   /** The Google Fonts catalogue, when the host offers one. */
   catalogue?: FontCatalogue;
+  /**
+   * How widely the site's variables are used, read for the font variables
+   * naming each font, so its details say how many places use it. Absent,
+   * no places are said.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  usage?: VariablesAccess;
+  /**
+   * Open the Body or Headings font's picker, where a font's "Body font" or
+   * "Headings font" links. Absent, those are said, not linked.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  onOpenRole?: (role: FontRole) => void;
+  /**
+   * Write the site's variables, so a font that finishes adding can be made
+   * the Body or Headings font at once. Absent, that is not asked.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  onTokensChange?: (tokens: SiteTokenSet) => void;
+  /**
+   * The Site text rows the site's code supplies, which setting or taking
+   * back a role keeps.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  suppliedText?: SiteTextMap;
+  /**
+   * The site's classes, where the text styles Site text rows follow are, so
+   * a font a row takes from one counts as the role's.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  classes?: readonly NamedClass[];
+  /**
+   * What the last save of the site's variables said, when it failed. A role
+   * chosen here is saved with them, so its failure is said here too.
+   *
+   * @experimental Settles with the Fonts screen.
+   */
+  issue?: string;
 }
 
 /** What the Fonts screen adds to the list it draws: where it opens. */
@@ -185,52 +244,141 @@ export function FontsPanel({
   acceptFiles,
   onRemoveFamily,
   catalogue,
+  usage,
+  onOpenRole,
+  onTokensChange,
+  suppliedText,
+  // The rest is what a host's studio adds: its text styles and a failed save.
+  ...studio
 }: FontsPanelProps): React.JSX.Element {
   const [view, setView] = React.useState<View>({ kind: "list" });
+  // The upload editor, open or not: held here so choosing a role for a font
+  // just uploaded closes it.
+  const [uploading, setUploading] = React.useState(false);
   const addButton = React.useRef<HTMLButtonElement>(null);
   const families = React.useMemo(
     () => (faces === undefined ? [] : siteFamilies(faces, codeFaces)),
     [faces, codeFaces]
+  );
+  const usesOf = useFamiliesUses(families, tokens, usage, studio.classes);
+  // Asked once a font finishes adding, from the catalogue or a file.
+  const useFor = useUseFor({
+    tokens,
+    faces,
+    codeFaces,
+    readOnly,
+    onTokensChange,
+    suppliedText,
+    classes: studio.classes,
+    onChosen: () => setUploading(false),
+  });
+  const question = (
+    <UseForQuestion
+      asked={useFor.asked}
+      kept={useFor.kept}
+      onAnswer={useFor.answer}
+    />
   );
 
   if (faces === undefined) return <Unread absence={absence} />;
 
   if (view.kind === "catalogue" && catalogue !== undefined) {
     return (
-      <FontCatalogueView
-        catalogue={catalogue}
-        initialQuery={view.query}
-        onSite={families}
-        onBack={() => {
-          setView({ kind: "list" });
-          // Back on the list, focus returns to where the catalogue was opened.
-          requestAnimationFrame(() => addButton.current?.focus());
-        }}
-      />
+      <>
+        {question}
+        <SaveIssue issue={studio.issue} />
+        <FontCatalogueView
+          catalogue={catalogue}
+          initialQuery={view.query}
+          onSite={families}
+          onAdded={useFor.ask}
+          onBack={() => backToList(setView, addButton)}
+        />
+      </>
     );
   }
 
   return (
     <FontsList
       families={families}
+      question={question}
+      uploading={uploading}
+      setUploading={setUploading}
       faces={faces}
       tokens={tokens}
       readOnly={readOnly}
+      issue={studio.issue}
       addButton={addButton}
       onOpenTokens={onOpenTokens}
-      onRemoveFamily={onRemoveFamily}
-      onBrowse={
-        readOnly || catalogue === undefined
-          ? undefined
-          : (query = "") => setView({ kind: "catalogue", query })
-      }
-      upload={
-        readOnly || onAddFace === undefined
-          ? undefined
-          : { onAddFace, acceptFiles }
-      }
+      onOpenRole={onOpenRole}
+      usesOf={usesOf}
+      onRemoveFamily={removalDismissing(onRemoveFamily, useFor.dismiss)}
+      onBrowse={browseOf(readOnly, catalogue, setView)}
+      upload={uploadAsking(readOnly, onAddFace, acceptFiles, useFor.ask)}
     />
   );
+}
+
+/**
+ * The host's removal, which stops asking how to use the family once it is
+ * removed: answering then would make a font with no faces the site's own.
+ */
+function removalDismissing(
+  onRemoveFamily: FontsPanelProps["onRemoveFamily"],
+  dismiss: (family: string) => void
+): FontsPanelProps["onRemoveFamily"] {
+  if (onRemoveFamily === undefined) return undefined;
+  return async family => {
+    const refusal = await onRemoveFamily(family);
+    if (refusal === undefined) dismiss(family.family);
+    return refusal;
+  };
+}
+
+/** Back from the catalogue, with focus where the catalogue was opened. */
+function backToList(
+  setView: (view: View) => void,
+  addButton: React.RefObject<HTMLButtonElement | null>
+): void {
+  setView({ kind: "list" });
+  requestAnimationFrame(() => addButton.current?.focus());
+}
+
+/** The way to the catalogue, or none for a role without the grant. */
+function browseOf(
+  readOnly: boolean,
+  catalogue: FontCatalogue | undefined,
+  setView: (view: View) => void
+): ((query?: string) => void) | undefined {
+  if (readOnly || catalogue === undefined) return undefined;
+  return (query = "") => setView({ kind: "catalogue", query });
+}
+
+/** The list's upload, which asks how to use a font once its file is stored. */
+type ListUpload = {
+  onAddFace: (request: FontFaceUpload) => Promise<string | undefined>;
+  acceptFiles: string | undefined;
+};
+
+/**
+ * The upload the list offers, or none for a role without the grant or a host
+ * without an upload: the host's own, asking how to use the font once stored.
+ */
+function uploadAsking(
+  readOnly: boolean,
+  onAddFace: FontsPanelProps["onAddFace"],
+  acceptFiles: string | undefined,
+  ask: (family: string) => void
+): ListUpload | undefined {
+  if (readOnly || onAddFace === undefined) return undefined;
+  return {
+    onAddFace: async request => {
+      const refusal = await onAddFace(request);
+      if (refusal === undefined) ask(request.family);
+      return refusal;
+    },
+    acceptFiles,
+  };
 }
 
 /** The site's fonts and font variables: the tab's list view. */
@@ -239,39 +387,48 @@ function FontsList({
   faces,
   tokens,
   readOnly,
+  issue,
   addButton,
   onOpenTokens,
+  onOpenRole,
+  usesOf,
+  question,
+  uploading,
+  setUploading,
   onRemoveFamily,
   onBrowse,
   upload,
 }: {
   families: readonly SiteFamily[];
+  /**
+   * "Use <font> for", once a font finishes adding: in the upload editor
+   * while it is open, which holds the rest of the screen inert, else at the
+   * top of the list.
+   */
+  question: React.ReactNode;
+  /** Whether the upload editor is open, held by the panel. */
+  uploading: boolean;
+  setUploading: (open: boolean) => void;
   faces: readonly FontFaceDef[];
   tokens: SiteTokenSet | undefined;
   readOnly: boolean;
+  issue: string | undefined;
   addButton: React.RefObject<HTMLButtonElement | null>;
   onOpenTokens: (() => void) | undefined;
+  onOpenRole: FontsPanelProps["onOpenRole"];
+  /** Where each family is used, by its key. */
+  usesOf: (key: string) => FamilyUsesHere;
   onRemoveFamily: FontsPanelProps["onRemoveFamily"];
   onBrowse: ((query?: string) => void) | undefined;
-  upload:
-    | {
-        onAddFace: (request: FontFaceUpload) => Promise<string | undefined>;
-        acceptFiles: string | undefined;
-      }
-    | undefined;
+  upload: ListUpload | undefined;
 }): React.JSX.Element {
   const [query, setQuery] = React.useState("");
-  const [uploading, setUploading] = React.useState(false);
   const search = React.useRef<HTMLInputElement>(null);
   const needle = query.trim().toLowerCase();
   const shownFamilies = families.filter(family =>
     family.family.toLowerCase().includes(needle)
   );
-  const rows = fontTokenRows(tokens, faces).filter(
-    row =>
-      labelOf(row).toLowerCase().includes(needle) ||
-      row.token.name.toLowerCase().includes(needle)
-  );
+  const rows = matchingRows(tokens, faces, needle);
   const { fonts } = words();
   const openUpload =
     upload === undefined ? undefined : () => setUploading(true);
@@ -293,11 +450,8 @@ function FontsList({
         />
       </div>
       <div className="nx-vars__body">
-        {readOnly ? (
-          <p className="nx-vars__note">
-            {`You can view the site’s ${fonts} but not change them.`}
-          </p>
-        ) : null}
+        {uploading ? null : question}
+        <ListNotes readOnly={readOnly} issue={issue} />
         <Popover open={uploading} onOpenChange={setUploading} modal>
           <section className="nx-vars__group" aria-labelledby="nx-fonts-site">
             <PopoverAnchor asChild>
@@ -305,15 +459,11 @@ function FontsList({
                 <h3 className="nx-vars__group-name" id="nx-fonts-site">
                   On this site
                 </h3>
-                {onBrowse === undefined && openUpload === undefined ? null : (
-                  <AddFontMenu
-                    trigger={addButton}
-                    onBrowse={
-                      onBrowse === undefined ? undefined : () => onBrowse()
-                    }
-                    onUpload={openUpload}
-                  />
-                )}
+                <AddFontMenu
+                  trigger={addButton}
+                  onBrowse={onBrowse}
+                  onUpload={openUpload}
+                />
               </div>
             </PopoverAnchor>
             <SiteFamilies
@@ -321,40 +471,97 @@ function FontsList({
               searching={needle !== ""}
               query={query.trim()}
               readOnly={readOnly}
+              usesOf={usesOf}
+              opens={{ onOpenRole, onOpenTokens }}
               onRemoveFamily={onRemoveFamily}
               onRemoved={() => search.current?.focus()}
               onBrowse={onBrowse}
               onUpload={openUpload}
             />
           </section>
-          {upload === undefined ? null : (
-            <PopoverContent
-              side="right"
-              align="start"
-              sideOffset={12}
-              className="nx-vars-editor"
-              aria-label="Upload a font file"
-            >
-              <FontUploadEditor
-                onAddFace={upload.onAddFace}
-                acceptFiles={upload.acceptFiles}
-              />
-            </PopoverContent>
-          )}
+          <UploadEditor upload={upload} question={question} />
         </Popover>
-        {needle !== "" && rows.length === 0 ? null : (
-          <FontVariables
-            rows={rows}
-            faces={faces}
-            onOpenTokens={onOpenTokens}
-          />
-        )}
+        <FontVariables
+          rows={rows}
+          faces={faces}
+          searching={needle !== ""}
+          onOpenTokens={onOpenTokens}
+        />
         <p className="nx-vars__note nx-fonts__privacy">
           Fonts are stored on your site. Visitors&rsquo; browsers never contact
           Google.
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * The upload editor beside the panel, with "Use <font> for" at its top once
+ * a file is stored; nothing for a host without an upload.
+ */
+function UploadEditor({
+  upload,
+  question,
+}: {
+  upload: ListUpload | undefined;
+  question: React.ReactNode;
+}): React.JSX.Element | null {
+  if (upload === undefined) return null;
+  return (
+    <PopoverContent
+      side="right"
+      align="start"
+      sideOffset={12}
+      className="nx-vars-editor"
+      aria-label="Upload a font file"
+    >
+      {question}
+      <FontUploadEditor
+        onAddFace={upload.onAddFace}
+        acceptFiles={upload.acceptFiles}
+      />
+    </PopoverContent>
+  );
+}
+
+/**
+ * What a role without the grant is told above the list, and a save of the
+ * site's variables that failed, as the Variables tab says it.
+ */
+function ListNotes({
+  readOnly,
+  issue,
+}: {
+  readOnly: boolean;
+  issue: string | undefined;
+}): React.JSX.Element {
+  return (
+    <>
+      {readOnly ? (
+        <p className="nx-vars__note">
+          {`You can view the site’s ${words().fonts} but not change them.`}
+        </p>
+      ) : null}
+      <SaveIssue issue={issue} />
+    </>
+  );
+}
+
+/**
+ * A save of the site's variables that failed, as the Variables tab says it:
+ * in the list and in the catalogue, wherever a role was chosen.
+ */
+function SaveIssue({
+  issue,
+}: {
+  issue: string | undefined;
+}): React.JSX.Element | null {
+  if (issue === undefined) return null;
+  return (
+    <p className="nx-vars__alert" role="alert">
+      {issue}
+    </p>
   );
 }
 
@@ -382,19 +589,24 @@ function Unread({
   );
 }
 
-/** The group's "+": a menu of the ways a font can be added. */
+/**
+ * The group's "+": a menu of the ways a font can be added, or nothing where
+ * there is none.
+ */
 function AddFontMenu({
   trigger,
   onBrowse,
   onUpload,
 }: {
   trigger: React.RefObject<HTMLButtonElement | null>;
-  onBrowse: (() => void) | undefined;
+  /** Open the catalogue, on no search. */
+  onBrowse: ((query?: string) => void) | undefined;
   onUpload: (() => void) | undefined;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   // Set while a choice opens something else, so the menu does not hand focus
   // back to its button and close what was just opened.
   const handingOff = React.useRef(false);
+  if (onBrowse === undefined && onUpload === undefined) return null;
   const choose = (action: () => void) => () => {
     handingOff.current = true;
     action();
@@ -421,7 +633,7 @@ function AddFontMenu({
         }}
       >
         {onBrowse === undefined ? null : (
-          <DropdownMenuItem onSelect={choose(onBrowse)}>
+          <DropdownMenuItem onSelect={choose(() => onBrowse())}>
             From Google Fonts
           </DropdownMenuItem>
         )}
@@ -441,6 +653,8 @@ function SiteFamilies({
   searching,
   query,
   readOnly,
+  usesOf,
+  opens,
   onRemoveFamily,
   onRemoved,
   onBrowse,
@@ -450,6 +664,8 @@ function SiteFamilies({
   searching: boolean;
   query: string;
   readOnly: boolean;
+  usesOf: (key: string) => FamilyUsesHere;
+  opens: UsesOpeners;
   onRemoveFamily: FontsPanelProps["onRemoveFamily"];
   onRemoved: () => void;
   onBrowse: ((query?: string) => void) | undefined;
@@ -502,6 +718,8 @@ function SiteFamilies({
           family={family}
           open={openKey === family.key}
           onOpenChange={open => setOpenKey(open ? family.key : null)}
+          here={usesOf(family.key)}
+          opens={opens}
           onRemove={
             readOnly || !family.removable || onRemoveFamily === undefined
               ? undefined
@@ -537,11 +755,15 @@ function FamilyRow({
   family,
   open,
   onOpenChange,
+  here,
+  opens,
   onRemove,
 }: {
   family: SiteFamily;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  here: FamilyUsesHere;
+  opens: UsesOpeners;
   onRemove: (() => Promise<string | undefined>) | undefined;
 }): React.JSX.Element {
   return (
@@ -577,7 +799,12 @@ function FamilyRow({
           className="nx-vars-editor"
           aria-label={family.family}
         >
-          <FamilyDetails family={family} onRemove={onRemove} />
+          <FamilyDetails
+            family={family}
+            here={here}
+            opens={opens}
+            onRemove={onRemove}
+          />
         </PopoverContent>
       </Popover>
     </li>
@@ -596,9 +823,13 @@ function sourceLine(family: SiteFamily): string {
 /** A family's details: its name and sample in itself, each style, its source. */
 function FamilyDetails({
   family,
+  here,
+  opens,
   onRemove,
 }: {
   family: SiteFamily;
+  here: FamilyUsesHere;
+  opens: UsesOpeners;
   onRemove: (() => Promise<string | undefined>) | undefined;
 }): React.JSX.Element {
   const first = family.faces[0];
@@ -634,10 +865,17 @@ function FamilyDetails({
         </ul>
       </div>
       <p className="nx-fonts__meta">{sourceLine(family)}</p>
+      <WhereUsed
+        here={here}
+        onOpenRole={opens.onOpenRole}
+        onOpenTokens={opens.onOpenTokens}
+      />
       {onRemove === undefined ? null : (
         <RemoveFamily
           family={family.family}
           keepsCode={family.origin === "code"}
+          here={here}
+          onOpenRole={opens.onOpenRole}
           onRemove={onRemove}
         />
       )}
@@ -645,23 +883,46 @@ function FamilyDetails({
   );
 }
 
-/** Remove, behind a confirmation naming what happens to the text and files. */
+/** Where a family's details send the author: a role's picker, the variables. */
+interface UsesOpeners {
+  readonly onOpenRole: FontsPanelProps["onOpenRole"];
+  readonly onOpenTokens: (() => void) | undefined;
+}
+
+/**
+ * Remove, behind a confirmation naming what happens to the text and files:
+ * refused for the Body or Headings font, which must be changed first, and
+ * naming each font variable that loses the font with what it falls back to.
+ */
 function RemoveFamily({
   family,
   keepsCode,
+  here,
+  onOpenRole,
   onRemove,
 }: {
   family: string;
   /** Whether the site's code supplies some of its styles, which stay. */
   keepsCode: boolean;
+  here: FamilyUsesHere;
+  onOpenRole: FontsPanelProps["onOpenRole"];
   onRemove: () => Promise<string | undefined>;
 }): React.JSX.Element {
   const [confirming, setConfirming] = React.useState(false);
   const { busy, refusal, run } = useRefusableWrite();
+  // The styles the site's code supplies stay, so the family keeps its uses.
+  const refused = !keepsCode && here.uses.roles.length > 0;
   return (
     <>
       <Refusal refusal={refusal} />
-      {confirming ? (
+      {confirming && refused ? (
+        <RoleRefusal
+          family={family}
+          roles={here.uses.roles}
+          onOpenRole={onOpenRole}
+          onBack={() => setConfirming(false)}
+        />
+      ) : confirming ? (
         <div
           className="nx-vars-editor__confirm"
           role="group"
@@ -673,6 +934,8 @@ function RemoveFamily({
               from your site&rsquo;s code stay. The files stay in your media
               library.
             </p>
+          ) : here.uses.variables.length > 0 ? (
+            <FallbackList family={family} here={here} />
           ) : (
             <p>
               Remove <strong>{family}</strong>? Text set in it falls back to the
@@ -703,22 +966,41 @@ function RemoveFamily({
   );
 }
 
+/** The font variables whose plain or code name holds the search. */
+function matchingRows(
+  tokens: SiteTokenSet | undefined,
+  faces: readonly FontFaceDef[],
+  needle: string
+): FontTokenRow[] {
+  return fontTokenRows(tokens, faces).filter(
+    row =>
+      labelOf(row).toLowerCase().includes(needle) ||
+      row.token.name.toLowerCase().includes(needle)
+  );
+}
+
 /** A font variable's plain name. */
 function labelOf(row: FontTokenRow): string {
   // The name Variables shows for it, never the code name.
   return tokenDisplayLabel(row.token);
 }
 
-/** The site's font variables, each with a note when its first font has no file. */
+/**
+ * The site's font variables, each with a note when its first font has no
+ * file; nothing while a search matches none of them.
+ */
 function FontVariables({
   rows,
   faces,
+  searching,
   onOpenTokens,
 }: {
   rows: readonly FontTokenRow[];
   faces: readonly FontFaceDef[];
+  searching: boolean;
   onOpenTokens: (() => void) | undefined;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
+  if (searching && rows.length === 0) return null;
   return (
     <section className="nx-vars__group" aria-labelledby="nx-fonts-variables">
       <div className="nx-vars__group-head">

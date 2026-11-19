@@ -94,17 +94,44 @@ export const ComponentVariantsContext: React.Context<
 
 /**
  * The variants section of a component's own view, under its exposed fields;
- * nothing where the host keeps them to that view (`editedInOwnView`).
+ * where the host keeps them to that view (`editedInOwnView`), one line saying
+ * so instead, with the way there when the host offers one.
  *
  * @experimental Settles when the component editor ships.
  */
 export function ComponentVariantsSection(props: {
   editor: EditorState;
   component: ComponentDocument;
-}): React.JSX.Element | null {
+}): React.JSX.Element {
   const host = React.useContext(ComponentVariantsContext);
-  if (host?.editedInOwnView === true) return null;
+  if (host?.editedInOwnView === true) {
+    return <VariantsInOwnView onOpen={host.onOpenOwnView} />;
+  }
   return <VariantsSection {...props} host={host} />;
+}
+
+/**
+ * Where a header or footer edited in place keeps its variants: said, so the
+ * section's absence is not read as a component without any, and opened with
+ * the same words the instance inspector uses for that view.
+ */
+function VariantsInOwnView({
+  onOpen,
+}: {
+  onOpen: (() => void) | undefined;
+}): React.JSX.Element {
+  return (
+    <div className="nx-inspector__note-row">
+      <p className="nx-inspector__note">
+        Variants are edited in the component’s own view.
+      </p>
+      {onOpen === undefined ? null : (
+        <Button type="button" size="sm" variant="ghost" onClick={onOpen}>
+          Edit component
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /** The section itself, given its host. */
