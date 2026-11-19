@@ -19,10 +19,7 @@ import {
   refuseUnlessProven,
   statementsShownBySnapshot,
 } from "./snapshot-proof";
-import type {
-  LiveSchema,
-  LiveSchemaWithColumnFacts,
-} from "./statement-judgement";
+import type { LiveSchemaWithColumnFacts } from "./statement-judgement";
 
 const posts = (
   ...columns: string[]
@@ -566,7 +563,7 @@ describe("proveStatements: rows a statement fills with its default", () => {
 
   it("passes a rebuild's copy of the table's own rows, counting the columns it leaves to their defaults", async () => {
     // At the file's end the twin is gone and the table stands in its place.
-    const live: LiveSchema = {
+    const live: LiveSchemaWithColumnFacts = {
       ...everything,
       hasTable: name => !name.startsWith("__new_"),
     };
