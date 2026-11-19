@@ -1421,6 +1421,9 @@ export class ActivityLogService extends BaseService {
       and: [
         ...starting,
         { column: "createdAt", op: ">", value: options.since },
+        // A recorded read (a search by address) is in the feed, but it
+        // changed nothing.
+        { column: "action", op: "!=", value: "read" },
       ],
     };
     // As many rows as the walk can find, so it stops at the table's end or at its own bound.

@@ -9,9 +9,9 @@
 
 import { INSTANCE_ATTRIBUTE, NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
-import { isElement } from "../dom-kind";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
+import { isElement } from "./dom-kind";
 import { nodeElements } from "./rendered-nodes";
 
 /**

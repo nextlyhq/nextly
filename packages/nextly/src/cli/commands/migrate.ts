@@ -36,6 +36,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
+import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   isLocalizationIntentRefusal,
@@ -863,6 +864,18 @@ export async function runMigrate(
         // run does not put unmigrated edits back to the snapshot. Everywhere
         // else the rows are brought to the newest applied snapshot.
         registryRows: configWatchAllowed() ? "insert-missing" : "write",
+        // A deleted entity's field-group values are read through the ORM, which this command's
+        // resolver of Nextly's own tables cannot address: every field group's table is added to
+        // it first, as `prune` adds them (`registerComponentSchemas`).
+        prepareLeftoverTables: async () => {
+          const drizzleAdapter = adapter as unknown as DrizzleAdapter;
+          await registerComponentSchemas({
+            adapter: drizzleAdapter,
+            registry: installRegistryResolver(drizzleAdapter),
+            dialect,
+            logger,
+          });
+        },
         // An app file or a plugin module waits for a busy table in tries; each try's notice goes
         // to standard error, so a run with --json keeps one document on standard output, and is
         // kept back under --quiet.
@@ -940,7 +953,8 @@ export async function runMigrate(
         ran === 0
           ? metadata.stillPending > 0 ||
             metadata.unreadable.length > 0 ||
-            metadata.rowsNotWritten.length > 0
+            metadata.rowsNotWritten.length > 0 ||
+            (metadata.leftoversLeft?.length ?? 0) > 0
             ? "No migration files to apply."
             : "Nothing to migrate. Database is up to date."
           : `${formatCount(ran, "migration")} applied.`
@@ -1286,6 +1300,12 @@ export interface MigrateCoreDeps {
    */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
   /**
+   * Makes every field group's table addressable before a deleted entity's
+   * leftovers are removed: given by the command, whose adapter resolves
+   * Nextly's own tables alone; a booted app's adapter resolves them already.
+   */
+  prepareLeftoverTables?: () => Promise<void>;
+  /**
    * Seam for tests; defaults to recording and retiring element owner rows
    * against the database.
    */
@@ -1403,6 +1423,9 @@ export interface MigrateCoreResult {
     fieldGroupsRegistered: number;
     rowsNotWritten: string[];
     rowsRemoved: string[];
+    leftoversRemoved: string[];
+    /** The dropped entities whose leftovers this run could not remove, owed to the next run. */
+    leftoversLeft?: string[];
     marked: number;
     stillPending: number;
     awaitingMigration: number;
@@ -2487,6 +2510,12 @@ function reportMetadataOutcome(
     );
   }
 
+  // What deleted entities left in the tables every entity shares, removed once
+  // their rows were gone: each entity named with what went.
+  for (const line of metadata.leftoversRemoved) {
+    logger.success(`Removed what the deleted ${line}.`);
+  }
+
   if (marked > 0) {
     logger.success(
       `${formatCount(marked, "registry row")} recorded as applied.`
@@ -2756,6 +2785,7 @@ export async function migrateCore(
     fieldGroupsRegistered: 0,
     rowsNotWritten: [] as string[],
     rowsRemoved: [] as string[],
+    leftoversRemoved: [] as string[],
     marked: 0,
     stillPending: 0,
     awaitingMigration: 0,
@@ -2789,6 +2819,9 @@ export async function migrateCore(
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
+    ...(deps.prepareLeftoverTables === undefined
+      ? {}
+      : { prepareLeftoverTables: deps.prepareLeftoverTables }),
     logger: {
       info: (m: string) => deps.logger.debug(m),
       warn: (m: string) => deps.logger.warn(m),

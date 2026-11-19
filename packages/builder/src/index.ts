@@ -103,7 +103,7 @@ export { frameInsetOf } from "./canvas/geometry-dom";
  * `instanceof HTMLElement` check fails for the frame's nodes, and the host
  * document's `activeElement` names the iframe rather than what is focused in it.
  */
-export { deepActiveElement, isHTMLElement } from "./dom-kind";
+export { deepActiveElement, isHTMLElement } from "./canvas/dom-kind";
 
 /**
  * @experimental The op store: the vocabulary every edit is expressed in, and
@@ -145,7 +145,7 @@ export type { BuilderShellProps, PanelView } from "./shell/builder-shell";
  * (`InspectorPanelProps.customCss`): its checker, given only to a person who
  * may change the site's code. A type, so it costs this entry nothing.
  */
-export type { BlockCustomCssAccess } from "./custom-css";
+export type { BlockCustomCssAccess } from "./inspector/custom-css";
 
 /**
  * @experimental The shell's own decisions: which panels the rail offers, the
@@ -303,7 +303,7 @@ export { revealNode } from "./canvas/reveal-node";
  *
  * @experimental
  */
-export { keyHint } from "./key-hint";
+export { keyHint } from "./shell/key-hint";
 
 /**
  * @experimental Whether the editor may move or delete a block the author has
@@ -324,7 +324,7 @@ export { isLocked, lockBlockingDelete, lockBlockingMove } from "./locking";
  * inspector uses. A surface that collapsed "some of these" into on or off would
  * tell an author something false about half of what they selected.
  */
-export { lockStateOf, type LockState } from "./inspector";
+export { lockStateOf, type LockState } from "./inspector/inspector";
 
 /**
  * @experimental What a selected component instance exposes for editing, and
@@ -347,7 +347,7 @@ export {
   type ExposedRow,
   type InstanceInspection,
   type OrphanedOverride,
-} from "./instance-inspector";
+} from "./inspector/instance-inspector";
 
 /**
  * @experimental Duplicating a block: the copy, and where it goes.
@@ -361,7 +361,7 @@ export {
   blockDuplication,
   COPY_SUFFIX,
   type BlockDuplication,
-} from "./duplicate-block";
+} from "./canvas/duplicate-block";
 
 /**
  * @experimental Delete, duplicate and lock across a whole selection.
@@ -383,7 +383,7 @@ export {
   type SelectionMovePlan,
   type SelectionPlan,
   type SelectionRefusal,
-} from "./selection-ops";
+} from "./canvas/selection-ops";
 
 /**
  * @experimental What "the selection" is once it can hold more than one block.
@@ -402,7 +402,7 @@ export {
   rangeBetween,
   type BlockSelection,
   type SelectionMode,
-} from "./selection";
+} from "./canvas/selection";
 
 /**
  * @experimental The palette's command list, as a plain function over state.
@@ -457,7 +457,10 @@ export {
  * phrasing of one cause is how an author is told two different things about one
  * refusal.
  */
-export { compositionRefusalReason, isPlanProblem } from "./composition-refusal";
+export {
+  compositionRefusalReason,
+  isPlanProblem,
+} from "./canvas/composition-refusal";
 
 /**
  * @experimental Who owns Escape while the editor is on screen.
@@ -601,7 +604,7 @@ export {
   type StyleInspection,
   type StyleInspectionOptions,
   type StyleSection,
-} from "./style-inspector";
+} from "./inspector/style-inspector/style-inspector";
 
 /**
  * What a SELECTION of blocks shares at one style address, and what changes it.

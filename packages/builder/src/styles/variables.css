@@ -279,7 +279,7 @@
 .nx-vars__rename-issue {
   grid-column: 2;
   font-size: var(--text-xs);
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 .nx-vars__name {

@@ -2,7 +2,8 @@
  * The Page Builder's small links read under any brand: their words reach AA's
  * 4.5:1 for small text on every surface they sit on, in light and dark, and
  * they are underlined at rest, so they read as links without relying on
- * colour.
+ * colour. The title switcher's New page item, small brand text too, is held
+ * to the same measure at the end.
  *
  * `--nx-primary` is a fill a site's brand may set to any colour. These links
  * drew their words in it, and under the e2e suite's indigo `#6366f1` that is
@@ -152,4 +153,30 @@ describe("the Page Builder's small links", () => {
       }
     });
   }
+});
+
+/**
+ * The title switcher's "+ New page…" is a menu item, not a link, so it is
+ * not underlined, but its words are small text on the menu's popover all the
+ * same. It drew them in the brand, 4.22:1 on a dark popover under indigo; it
+ * takes the text colour, and its weight sets it apart from the pages below.
+ */
+describe("the title switcher's New page item", () => {
+  it("reads under an indigo brand", () => {
+    const source = readFileSync(
+      resolve(here, "./editor/page-title-switcher.tsx"),
+      "utf8"
+    );
+    const item =
+      /<DropdownMenuItem\s(?:[^<>]|=>)*?className="([^"]*)"(?:[^<>]|=>)*?>\s*\{NEW_PAGE_ITEM\}/.exec(
+        source
+      );
+    if (item === null) throw new Error("no New page item in the switcher");
+    const classes = restingClasses(item[1] ?? "");
+    const { ratio, where } = lowestContrast(classes);
+    expect(
+      ratio,
+      `the New page item in text-${wordsToken(classes)} reads ${ratio.toFixed(2)}:1 on ${where}`
+    ).toBeGreaterThanOrEqual(SMALL_TEXT);
+  });
 });

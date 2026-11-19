@@ -675,9 +675,13 @@ describe.each(getConfiguredTestDialects())(
         "mas-posts"
       );
       expect(refused.refusal).toBeUndefined();
+      // The refusal as the start logs it: what would be deleted, and the consent a start is
+      // given, which is the variable set below.
       expect(refused.warnings.join("\n")).toMatch(
-        // The refusal's reason, which the start logs with its context.
-        /data-loss-needs-consent/
+        /Deleting data needs consent/
+      );
+      expect(refused.warnings.join("\n")).toContain(
+        "start with NEXTLY_ACCEPT_DATA_LOSS=dc_mas_added"
       );
       expect(await tableThere(viaStart)).toBe(true);
 

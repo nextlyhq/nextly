@@ -1,0 +1,24 @@
+---
+title: UPGRADE_RELEASE_UNKNOWN
+description: "`nextly upgrade` could not tell which release to move to: the one given is not published, or the installed release's channel names none, so it changed nothing."
+---
+
+## Cause
+
+`nextly upgrade` could not tell which release to move to: the one given is not published, or the installed release's channel names none, so it changed nothing.
+
+With no version given, `nextly upgrade` follows the channel of the installed `nextly` release: the npm dist-tag its prerelease identifier names (`alpha` for `0.0.2-alpha.68`), or `latest` for a release with no prerelease identifier. It moves to the release that tag names, never to another tag's release and never to an older one. It stops here in three cases: the version given is not a published release; the registry has no tag for the installed release's channel; or `nextly` is not installed in the project, so its channel cannot be read. Where it can, the message names the release a run with no version would move to; otherwise it lists every tag the registry has with its release.
+
+## Fix
+
+- Run `nextly upgrade <version>` with a release the message names.
+- Where `nextly` is not installed, install the project's packages first, or name the release.
+
+## Example
+
+```text
+✗ `0.0.2-beta.9` is not a published release of Nextly.
+  Why:  With no version given, `nextly upgrade` follows the channel of the installed release: the tag its prerelease identifier names, or `latest`. Nothing was changed.
+  Next: Run `nextly upgrade 0.0.2-alpha.79`, the release `nextly upgrade` moves to with no version given.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-release-unknown  (UPGRADE_RELEASE_UNKNOWN)
+```

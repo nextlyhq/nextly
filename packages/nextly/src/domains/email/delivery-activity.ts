@@ -52,6 +52,7 @@ import type { RequestActor } from "../../auth/request-actor";
 import { loadedDialect } from "../../database/dialect-tables";
 import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
+import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
 import {
   adapterForReads,
   runReadsInTransaction,
@@ -589,19 +590,21 @@ export class EmailDeliveryActivity {
   /**
    * Run `work`'s reads, this reader's and the delivery reader's, on one
    * snapshot: a transaction that is REPEATABLE READ and read-only on
-   * PostgreSQL and MySQL, and on SQLite one that keeps every other
-   * transaction out until it ends. The two halves of the merged Activity
-   * then describe one moment, never a queued email pruned or sent between
-   * them.
+   * PostgreSQL and MySQL. The two halves of the merged Activity then
+   * describe one moment, never a queued email pruned or sent between them.
+   *
+   * Not on SQLite: its one connection is every writer's too, so a write made
+   * meanwhile outside a transaction (a delivery recorded without one) would
+   * join this one, and be lost if it rolled back. There the halves are read
+   * in turn, as they were before.
    */
   private inSnapshot<T>(work: () => Promise<T>): Promise<T> {
+    if (this.dialect === "sqlite") return work();
     return this.run(() =>
-      this.adapter.transaction(
-        tx => runReadsInTransaction(tx, work, "none"),
-        this.dialect === "sqlite"
-          ? undefined
-          : { isolationLevel: "repeatable read", readOnly: true }
-      )
+      this.adapter.transaction(tx => runReadsInTransaction(tx, work, "none"), {
+        isolationLevel: "repeatable read",
+        readOnly: true,
+      })
     );
   }
 
@@ -912,6 +915,10 @@ export class EmailDeliveryActivity {
         ],
       });
     }
+    // And outside any transaction the caller holds: its entry is written on
+    // a transaction of its own, and on SQLite's one connection would join the
+    // caller's, to be rolled back after the search was answered.
+    assertNoOpenTransaction(this.adapter, "emailDeliveries.search");
     let page: ActivityPage<ActivityEntry>;
     try {
       page = await this.activityPage(filter, address);

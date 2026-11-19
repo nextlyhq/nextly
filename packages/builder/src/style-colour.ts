@@ -89,9 +89,12 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { toHex } from "@nextlyhq/ui/color";
 
-import { colourOrder } from "./colour-groups";
+import { colourOrder } from "./panels/design/colour-groups";
+import {
+  lengthFamilyOf,
+  type LengthFamily,
+} from "./panels/design/tokens-studio";
 import { CSS_NUMBER } from "./style-numeric";
-import { lengthFamilyOf, type LengthFamily } from "./tokens-studio";
 
 /**
  * One site variable a control may offer, in the forms it is needed in.

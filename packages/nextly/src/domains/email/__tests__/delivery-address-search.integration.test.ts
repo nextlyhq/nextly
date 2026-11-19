@@ -516,8 +516,11 @@ for (const dialect of getConfiguredTestDialects()) {
       const activity = t.getService(
         "activityLogService"
       ) as unknown as ActivityLogService;
+      // Every search the reader has made, not the feed's first page: rows
+      // written in the same second come back in no particular order.
       const feed = await activity.getRecentActivity({
         userId: readerId,
+        limit: 50,
         scope: allResources(),
         caller: { user: { id: readerId, roles: [] } },
       });
@@ -533,15 +536,26 @@ for (const dialect of getConfiguredTestDialects()) {
       const restore = captureOutput();
       logged.length = 0;
       try {
-        await search(reader, { address: ADA });
-        await search(reader, { address: ADA, before: "not-a-cursor" });
-        await search(reader, { address: ADA, status: "nonsense" });
-        await search(stranger, { address: ADA });
-        await search(
-          reader,
-          { address: ADA },
-          `email-deliveries/search?address=${encodeURIComponent(ADA)}`
+        expect((await search(reader, { address: ADA })).status).toBe(200);
+        expect(
+          (await search(reader, { address: ADA, before: "not-a-cursor" }))
+            .status
+        ).toBe(400);
+        expect(
+          (await search(reader, { address: ADA, status: "nonsense" })).status
+        ).toBe(400);
+        expect(REFUSED).toContain(
+          (await search(stranger, { address: ADA })).status
         );
+        expect(
+          (
+            await search(
+              reader,
+              { address: ADA },
+              `email-deliveries/search?address=${encodeURIComponent(ADA)}`
+            )
+          ).status
+        ).toBe(400);
         await t.nextly.emailDeliveries.search({
           address: ADA,
           user: { id: readerId },
@@ -556,6 +570,8 @@ for (const dialect of getConfiguredTestDialects()) {
       } finally {
         restore();
       }
+      // The control: the capture sees what the route logs of a refusal.
+      expect(logged.join("\n")).toContain("route-handler-error");
       expectNoAddress(logged.join("\n"), ADA);
     });
 
@@ -599,6 +615,37 @@ for (const dialect of getConfiguredTestDialects()) {
       expectNoAddress(logged.join("\n"), ADA);
     });
 
+    it("counts no search among the recent changes", async () => {
+      const activity = t.getService(
+        "activityLogService"
+      ) as unknown as ActivityLogService;
+      const count = () =>
+        activity.countRecentActivity({
+          scope: allResources(),
+          since: new Date(Date.now() - 60 * 60 * 1000),
+          caller: { user: { id: readerId, roles: [] } },
+        });
+      const before = await count();
+      const entries = (await searchEntries()).length;
+      expect((await search(reader, { address: ADA })).status).toBe(200);
+      // Recorded, and still not counted.
+      expect(await searchEntries()).toHaveLength(entries + 1);
+      expect(await count()).toEqual(before);
+    });
+
+    it("refuses a search inside a transaction the caller holds, recording none", async () => {
+      const before = (await searchEntries()).length;
+      await expect(
+        t.adapter.transaction(() =>
+          t.nextly.emailDeliveries.search({
+            address: ADA,
+            user: { id: readerId },
+          })
+        )
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+      expect(await searchEntries()).toHaveLength(before);
+    });
+
     it("answers no search it could not record", async () => {
       const activity = t.getService(
         "activityLogService"
@@ -637,9 +684,8 @@ for (const dialect of getConfiguredTestDialects()) {
     it.skipIf(dialect === "sqlite")(
       "reads both halves on one snapshot, so an email pruned between them is listed once",
       async () => {
-        // SQLite runs one transaction at a time, and the writes that settle
-        // and prune queued email are transactions: none lands between the
-        // two halves there.
+        // Not on SQLite, whose one connection a snapshot would share with
+        // every writer: there the halves are read in turn (`inSnapshot`).
         const address = "pruned@example.com";
         const queued = await t.nextly.email.queue({
           to: address,
@@ -659,13 +705,25 @@ for (const dialect of getConfiguredTestDialects()) {
             where(condition: unknown): Promise<unknown>;
           };
         };
+        // The prune is another flow, as a real one is: started here, outside
+        // the search, it resumes in its own context when the gate opens, and
+        // its delete commits on a connection of its own, outside the
+        // search's transaction.
+        let openGate!: () => void;
+        const gate = new Promise<void>(resolve => {
+          openGate = resolve;
+        });
+        const pruned = (async () => {
+          await gate;
+          await db.delete(queue).where(eq(queue.id as never, queued.id));
+        })();
         const original = deliveries.list.bind(deliveries);
         const list = vi
           .spyOn(deliveries, "list")
           .mockImplementationOnce(async options => {
-            // The queue half has been read: the prune commits now, on a
-            // connection of its own.
-            await db.delete(queue).where(eq(queue.id as never, queued.id));
+            // The queue half has been read: the prune commits now.
+            openGate();
+            await pruned;
             return original(options);
           });
         try {
@@ -677,8 +735,21 @@ for (const dialect of getConfiguredTestDialects()) {
             `queued:${queued.id}`,
           ]);
         } finally {
+          openGate();
+          await pruned;
           list.mockRestore();
         }
+        // The prune took effect: a fresh read lists the email's deliveries
+        // on their own (the send's, and the one recorded here), and no
+        // queued email.
+        const after = await t.nextly.emailDeliveries.search({
+          address,
+          user: { id: readerId },
+        });
+        expect(after.items.map(item => item.kind)).not.toContain("queued");
+        expect(after.items.map(item => item.id)).toContain(
+          await deliveryId("m-pruned")
+        );
       }
     );
 

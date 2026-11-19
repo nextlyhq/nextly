@@ -130,10 +130,10 @@ export interface VersionsDbApi {
     where: VersionsWhere
   ): Promise<unknown>;
   /**
-   * Savepoints, where the transaction has them (PostgreSQL and SQLite; MySQL's
-   * adapter offers none). Optional, so the adapter itself, which is not a
-   * transaction, still satisfies this port. Used to retry one insert without
-   * re-running the write around it.
+   * Savepoints, where the transaction has them (PostgreSQL, SQLite and
+   * MySQL; not TiDB, which may refuse them). Optional, so the adapter itself,
+   * which is not a transaction, still satisfies this port. Used to retry one
+   * insert without re-running the write around it.
    */
   savepoint?(name: string): Promise<void>;
   rollbackToSavepoint?(name: string): Promise<void>;

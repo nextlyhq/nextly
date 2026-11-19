@@ -58,7 +58,7 @@
     var(--nx-destructive) 8%,
     var(--nx-background)
   );
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
   font-size: var(--nx-builder-font-size);
   line-height: 1.45;
 }
@@ -284,7 +284,7 @@
 }
 
 .nx-list-filter__said[data-missing] {
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 /*

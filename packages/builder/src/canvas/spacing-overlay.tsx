@@ -68,7 +68,7 @@ import * as React from "react";
 import { BASE_BREAKPOINT } from "../breakpoints";
 import type { EditorState } from "../editor-state";
 import type { Scale } from "../geometry";
-import { designIsWritable, lockViewOf } from "../inspector";
+import { designIsWritable, lockViewOf } from "../inspector/inspector";
 import {
   orientationOfElement,
   type SideOrientation,
