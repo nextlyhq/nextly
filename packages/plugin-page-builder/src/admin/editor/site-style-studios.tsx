@@ -109,8 +109,15 @@ export function offerableTokens(
   // and the rest, so handing over `undefined` here would have the picker offer
   // none of them — and `undefined` already means something else to the control:
   // that the question was never asked.
-  return style?.tokens ?? { tokens: [] };
+  return style?.tokens ?? NO_SITE_TOKENS;
 }
+
+/**
+ * The set offered while the site defines no tokens of its own: one value,
+ * so the surfaces handed it see the same set on every render rather than a
+ * new empty one, and a memoised one draws nothing again.
+ */
+const NO_SITE_TOKENS: SiteTokenSet = { tokens: [] };
 
 /**
  * What the stored site style's read has DONE, in the manager's three words.
