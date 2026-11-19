@@ -205,7 +205,7 @@ describe("the More design actions menu", () => {
     // Every word the item draws, the hint's included, is in its name in
     // order, so a speech-input user saying what they see reaches it; and the
     // format is said once, not again as a description.
-    expect(labelNotInName(tokensItem, "menuitem")).toBeNull();
+    expect(labelNotInName(tokensItem)).toBeNull();
     expect(tokensItem.hasAttribute("aria-describedby")).toBe(false);
     // "DTCG" is the hint and nowhere else.
     for (const item of items) {

@@ -14,25 +14,23 @@
  *
  * @module label-in-name.fixture
  */
-import { screen } from "@testing-library/react";
 
-/** The name a screen reader hears for `element`, found through its role. */
-export function accessibleNameOf(
-  element: HTMLElement,
-  role = "button"
-): string {
-  let heard: string | undefined;
-  screen.queryAllByRole(role, {
-    hidden: true,
-    name: (name, each) => {
-      if (each === element) heard = name;
-      return false;
-    },
-  });
-  if (heard === undefined) {
-    throw new Error(`the element is not found by the role "${role}"`);
+/**
+ * The name a label gives `element`: the text of what `aria-labelledby` names,
+ * else its `aria-label`, else nothing, where it is named by its own content.
+ */
+function labelOf(element: HTMLElement): string | undefined {
+  const ids = element.getAttribute("aria-labelledby");
+  if (ids !== null) {
+    return ids
+      .split(/\s+/)
+      .map(id => {
+        const named = element.ownerDocument.getElementById(id);
+        return named?.getAttribute("aria-label") ?? named?.textContent ?? "";
+      })
+      .join(" ");
   }
-  return heard;
+  return element.getAttribute("aria-label") ?? undefined;
 }
 
 /** The text `element` draws: its text without the words only heard. */
@@ -73,16 +71,10 @@ function holdsRun(
  * Why `element`'s name does not hold the words it draws, or `null` where it
  * does. Said in full, so a failing test shows both sides.
  */
-export function labelNotInName(
-  element: HTMLElement,
-  role = "button"
-): string | null {
-  const labelled =
-    element.hasAttribute("aria-label") ||
-    element.hasAttribute("aria-labelledby");
-  if (!labelled) return null;
+export function labelNotInName(element: HTMLElement): string | null {
+  const name = labelOf(element);
+  if (name === undefined) return null;
   const drawn = drawnTextOf(element);
-  const name = accessibleNameOf(element, role);
   if (holdsRun(wordsOf(name), wordsOf(drawn))) return null;
   return `draws "${drawn}" but is named "${name}"`;
 }

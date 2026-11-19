@@ -44,12 +44,12 @@ import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
 import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
-import { PAGE_PLACEHOLDER_ATTRIBUTE } from "./page-placeholder";
 import {
   EMPTY_CONTAINER_SELECTOR,
   EMPTY_DISCLOSURE_SELECTOR,
   EMPTY_TEXT_SELECTOR,
 } from "./empty-slot";
+import { PAGE_PLACEHOLDER_ATTRIBUTE } from "./page-placeholder";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 

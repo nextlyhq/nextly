@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { blockLookGroups } from "./block-look-rows";
 import { BlockLooksGroup } from "./block-looks-group";
 import type { BlockStyleActions } from "./block-style-actions";
-import { accessibleNameOf, labelNotInName } from "./label-in-name.fixture";
+import { labelNotInName } from "./label-in-name.fixture";
 
 afterEach(cleanup);
 
@@ -99,6 +99,21 @@ function draw(
 }
 
 /** A row by the start of its name. */
+/**
+ * A row's accessible name, as a screen reader hears it: read through the role
+ * query, which computes the name the same way for every button it finds.
+ */
+function accessibleNameOf(element: HTMLElement): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
 const rowOf = (section: HTMLElement, name: string) =>
   within(section).getByRole("button", { name: new RegExp(`^${name}\\b`) });
 
