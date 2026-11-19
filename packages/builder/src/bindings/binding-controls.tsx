@@ -48,6 +48,10 @@ import {
 import { ChevronDown, Database, ExternalLink, Unlink } from "lucide-react";
 import * as React from "react";
 
+import type { UnbindAnswer } from "../composition-actions";
+import type { ContentServices } from "../content-controls";
+import { propLabel, type EditableProp } from "../inspector";
+
 import {
   boundField,
   boundNames,
@@ -69,10 +73,7 @@ import type {
   UnbindAsk,
   UnbindPlanAnswer,
 } from "./binding-services";
-import type { UnbindAnswer } from "./composition-actions";
-import type { ContentServices } from "./content-controls";
 import { ImageBindingFallback } from "./image-binding-fallback";
-import { propLabel, type EditableProp } from "./inspector";
 import type { ItemSource } from "./item-binding-source";
 
 // The picker, the names a bound prop is said by and the notes under a field

@@ -43,7 +43,7 @@ import {
   type ContentServices,
   type FoundMedia,
   type MediaPickerProps,
-} from "./content-controls";
+} from "../content-controls";
 
 /** What an image's Fallback row is given. */
 export interface ImageBindingFallbackProps {

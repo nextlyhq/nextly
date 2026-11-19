@@ -57,6 +57,26 @@ export const UPGRADE_CODES = defineCodes({
       why: "`nextly upgrade` no longer changes stored data: `nextly migrate` and `nextly i18n:convert-zoned-dates` do, and without a confirmed backup or a terminal they end as `DATA_STEPS_BACKUP_NOT_CONFIRMED`.",
     },
   },
+  UPGRADE_CANNOT_START: {
+    cause:
+      "`nextly upgrade` could not read the project it was run in, or the registry the project uses, so it changed nothing.",
+  },
+  UPGRADE_RELEASE_UNKNOWN: {
+    cause:
+      "`nextly upgrade` could not tell which release to move to: the one given is not published, or the installed release's channel names none, so it changed nothing.",
+  },
+  UPGRADE_PACKAGE_CANNOT_MOVE: {
+    cause:
+      "A Nextly package of the project cannot move to the release `nextly upgrade` was moving to, so no package was moved.",
+  },
+  UPGRADE_INSTALL_FAILED: {
+    cause:
+      "The package manager failed while `nextly upgrade` was moving the packages, and the project was put back as it was.",
+  },
+  UPGRADE_NOT_RESTORED: {
+    cause:
+      "The package manager failed while `nextly upgrade` was moving the packages, and the installed packages could not be put back.",
+  },
   UPGRADE_WORK_MOVED: {
     cause:
       "`nextly upgrade` was run for the database work it used to do, which `nextly migrate` and `nextly i18n:convert-zoned-dates` now do, so it changed nothing.",
