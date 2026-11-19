@@ -222,12 +222,13 @@ describeEachDialect("a Single's field type change", dialect => {
 
   // A value written after the save judged the values and before its table is rebuilt: the change
   // is judged again on the rebuild's own transaction, which no other write can enter on SQLite, so
-  // a value the new field cannot take refuses it there. `"2"` would be stored as the integer 2,
-  // which a checkbox, holding 0 or 1, cannot take.
+  // a value the new field cannot take refuses it there. The field is empty when the save is
+  // judged, so a change to a checkbox is allowed then; `"2"`, written after, would be stored as the
+  // integer 2, which a checkbox, holding 0 or 1, does not take.
   it.skipIf(dialect !== "sqlite")(
     "refuses a value written after the values were judged, with nothing changed",
     async () => {
-      await fillRow("1");
+      await fillRow(null);
       const before = await recorded();
       const folderBefore = await migrationFiles();
       const judged = vi.fn();
@@ -264,7 +265,9 @@ describeEachDialect("a Single's field type change", dialect => {
       // Control: the value was written after the save's own judgement passed.
       expect(judged, "the judgement before planning").toHaveBeenCalledTimes(1);
       expect(thrown, "the save answered").toBeDefined();
-      expect(JSON.stringify(thrown)).toContain("TYPE_CHANGE_LOSES_VALUES");
+      expect(JSON.stringify(thrown), "the type-change refusal").toMatch(
+        /"code":"TYPE_CHANGE_(BLOCKED|LOSES_VALUES)"/
+      );
       expect(await recorded(), "the registry row").toEqual(before);
       expect(await migrationFiles(), "the migrations folder").toEqual(
         folderBefore
