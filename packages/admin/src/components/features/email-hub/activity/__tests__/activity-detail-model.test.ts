@@ -206,6 +206,17 @@ describe("unknown outcomes", () => {
     expect(state.todo).toMatch(/open the queued email/i);
   });
 
+  it("keeps the warning when retention has removed every attempt", () => {
+    const state = detailState({
+      ...unknown,
+      attemptOnRecord: false,
+      source: "queued",
+      outcome: "retrying",
+    });
+    expect(state.title).toBe("Retrying: it may have arrived");
+    expect(state.todo).toMatch(/don’t send it by hand/i);
+  });
+
   it("asks a direct send to be checked before it is sent again", () => {
     const state = detailState({
       ...unknown,

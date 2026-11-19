@@ -188,6 +188,15 @@ export function detailState(input: {
           : "Fix the template, then send it again: sending it unchanged fails the same way.",
     };
   }
+  if (!input.attemptOnRecord && failureKind === "unknown") {
+    // Recorded as possibly taken even with no attempt left on record, so its
+    // advice still warns against sending it twice.
+    return {
+      title: `${lead === "Failed" ? "Unknown" : lead}: ${FAILURE_TITLES.unknown}`,
+      ...why,
+      todo: unknownTodo(input.source, outcome),
+    };
+  }
   if (!input.attemptOnRecord) {
     return {
       title: lead,
