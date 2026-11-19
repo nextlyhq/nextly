@@ -145,9 +145,15 @@ async function isResolvable(
 async function assertNoRowsForFrontier(
   adapter: TeardownComponentDataAdapter,
   componentTable: string,
-  parent: Frontier
+  parent: Frontier,
+  instanceTables: InstanceTables
 ): Promise<void> {
-  const count = await countRowsUnder(adapter, componentTable, parent);
+  const count = await countRowsUnder(
+    adapter,
+    componentTable,
+    parent,
+    instanceTables
+  );
   if (count === 0) return;
 
   throw NextlyError.internal({
@@ -162,16 +168,24 @@ async function assertNoRowsForFrontier(
 
 /**
  * How many rows of `componentTable` the frontier entry owns; none for a table without a
- * `_parent_table` column, which holds no component instances whatever its prefix.
+ * `_parent_table` column (not among `instanceTables`), which holds no component instances
+ * whatever its prefix.
  */
 async function countRowsUnder(
   adapter: TeardownComponentDataAdapter,
   componentTable: string,
-  parent: Frontier
+  parent: Frontier,
+  instanceTables: InstanceTables
 ): Promise<number> {
   // `ids: null` means every row under this parent table belongs to the entity; otherwise
   // only the instances deleted at the previous level own the rows below them.
   if (parent.ids !== null && parent.ids.length === 0) return 0;
+
+  // No `_parent_table` column means the table does not hold component instances at all, despite
+  // its prefix, so it cannot own rows for this entity. Asked of the catalog, through the adapter
+  // the teardown runs on, rather than by catching the count's failure: on PostgreSQL a failed
+  // statement aborts the delete's transaction, and every statement after it fails.
+  if (!(await instanceTables()).has(componentTable)) return 0;
 
   const pg = adapter.dialect === "postgresql";
   const quoted = q(componentTable, adapter.dialect);
@@ -191,21 +205,73 @@ async function countRowsUnder(
     params.push(...parent.ids);
   }
 
-  let rows: Array<Record<string, unknown>>;
-  try {
-    rows = await adapter.executeQuery<Record<string, unknown>>(
-      `SELECT COUNT(*) AS n FROM ${quoted} WHERE ${where}`,
-      params
-    );
-  } catch (error) {
-    // No `_parent_table` column means the table does not hold component instances at all,
-    // despite the `comp_` prefix, so it cannot own rows for this entity. Any other failure
-    // leaves the question unanswered and must not be read as "empty".
-    if (String(error).includes(STORAGE_FORMAT.columns.parentTable)) return 0;
-    throw error;
-  }
+  // Any failure leaves the question unanswered and must not be read as "empty".
+  const rows = await adapter.executeQuery<Record<string, unknown>>(
+    `SELECT COUNT(*) AS n FROM ${quoted} WHERE ${where}`,
+    params
+  );
 
   return Number(rows[0]?.n ?? 0);
+}
+
+/** The candidate tables, as the catalog spells them, that have a `_parent_table` column. */
+type InstanceTables = () => Promise<ReadonlySet<string>>;
+
+/**
+ * Which of `tables` have a `_parent_table` column, read from the catalog in one query through
+ * `adapter`'s own connection (the delete's transaction, where it runs in one), on the first ask
+ * and kept for the rest of the walk or count. A table the catalog does not list has none.
+ *
+ * Each table and column is compared as its server compares it (`readIdentifierCaseRules`), as the
+ * discovery of these tables compares them: a server that holds `comp_Hero` and `comp_hero` as two
+ * tables keeps them two here, and one that keeps `_PARENT_TABLE` a column of its own does not
+ * take it for the parent column, which the count names exactly.
+ */
+function instanceTablesOf(
+  adapter: TeardownComponentDataAdapter,
+  tables: readonly string[]
+): InstanceTables {
+  let read: Promise<ReadonlySet<string>> | undefined;
+  return () => {
+    read ??= (async () => {
+      // Loaded on demand: the introspection reaches the schema pipeline, which this teardown
+      // otherwise does not.
+      const { introspectLiveColumns } = await import(
+        "../../schema/pipeline/diff/introspect-live"
+      );
+      const [rules, snapshot] = await Promise.all([
+        readIdentifierCaseRules(adapter),
+        introspectLiveColumns(adapter.getDrizzle(), adapter.dialect, [
+          ...tables,
+        ]),
+      ]);
+      const listed = indexCatalog(
+        snapshot.tables.map(table => table.name),
+        rules.tables
+      );
+      const columnsOf = new Map(
+        snapshot.tables.map(table => [
+          table.name,
+          indexCatalog(
+            table.columns.map(column => column.name),
+            rules.columns
+          ),
+        ])
+      );
+      return new Set(
+        tables.filter(table => {
+          const name = resolveCatalogName(listed, table);
+          const columns = name === undefined ? undefined : columnsOf.get(name);
+          return (
+            columns !== undefined &&
+            resolveCatalogName(columns, STORAGE_FORMAT.columns.parentTable) !==
+              undefined
+          );
+        })
+      );
+    })();
+    return read;
+  };
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -334,11 +400,19 @@ export async function countEntityComponentRows(args: {
   parentTable: string;
 }): Promise<{ table: string; rows: number }[]> {
   const owned: { table: string; rows: number }[] = [];
-  for (const table of await componentTablesOf(args.adapter)) {
-    const rows = await countRowsUnder(args.adapter, table, {
-      table: args.parentTable,
-      ids: null,
-    });
+  const tables = await componentTablesOf(args.adapter);
+  // One catalog read for every table counted.
+  const instanceTables = instanceTablesOf(args.adapter, tables);
+  for (const table of tables) {
+    const rows = await countRowsUnder(
+      args.adapter,
+      table,
+      {
+        table: args.parentTable,
+        ids: null,
+      },
+      instanceTables
+    );
     if (rows > 0) owned.push({ table, rows });
   }
   return owned;
@@ -362,6 +436,9 @@ export async function teardownEntityComponentData(
   if (componentTables.length === 0) {
     return { instancesDeleted: 0, tablesTouched: [], skippedTables: [] };
   }
+  // Read from the catalog once, the first time a table the ORM cannot address is checked, for
+  // every table of the walk.
+  const instanceTables = instanceTablesOf(adapter, componentTables);
 
   const tablesTouched = new Set<string>();
   const skippedTables = new Set<string>();
@@ -397,7 +474,12 @@ export async function teardownEntityComponentData(
         // level is checked, not just the entity's own table. Any rows found fail the
         // delete, since the caller would otherwise drop the parent and strand them.
         for (const parent of frontier) {
-          await assertNoRowsForFrontier(adapter, componentTable, parent);
+          await assertNoRowsForFrontier(
+            adapter,
+            componentTable,
+            parent,
+            instanceTables
+          );
         }
         skippedTables.add(componentTable);
         continue;
