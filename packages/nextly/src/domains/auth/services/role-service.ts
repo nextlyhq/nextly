@@ -134,6 +134,19 @@ export class RoleService extends BaseService {
   }
 
   /**
+   * Find the roles carrying any of the given slugs, in one read
+   * (`RoleQueryService.findRoleIdsBySlugs`).
+   *
+   * @param slugs - The role slugs to search for
+   * @returns The id and slug of every role carrying one of them
+   */
+  findRoleIdsBySlugs(
+    slugs: readonly string[]
+  ): Promise<Array<{ id: string; slug: string }>> {
+    return this.queryService.findRoleIdsBySlugs(slugs);
+  }
+
+  /**
    * Ensure super admin role exists (idempotent).
    *
    * @returns Role ID and whether it was newly created

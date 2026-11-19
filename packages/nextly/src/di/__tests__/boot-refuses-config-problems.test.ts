@@ -1,0 +1,202 @@
+/**
+ * What a start does with a configuration whose entities have problems. An entity declared
+ * through its `define*` function is refused before anything connects, every problem named: those
+ * functions record a problem rather than throw at import, so the start is where an app passing its
+ * configuration to the runtime meets the refusal. An entity written as a plain object was never
+ * judged at the start, so a site serving one is told of each problem and starts as it did; every
+ * command refuses it.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { _resetBootMigrationsGateForTest } from "../../init/boot-migrations-gate";
+
+const created = vi.hoisted(() => ({ adapters: 0 }));
+
+vi.mock("../../database/factory", async importOriginal => {
+  const original =
+    await importOriginal<typeof import("../../database/factory")>();
+  return {
+    ...original,
+    createAdapterFromEnv: async () => {
+      created.adapters += 1;
+      return original.createAdapter({
+        type: "sqlite",
+        memory: true,
+      } as Parameters<typeof original.createAdapter>[0]);
+    },
+  };
+});
+vi.mock("../../route-handler/auth-handler", () => ({
+  setBootedConfig: () => undefined,
+}));
+
+const { clearServices, registerServices } = await import("../register");
+const { defineCollection } = await import(
+  "../../collections/config/define-collection"
+);
+const { defineSingle } = await import("../../singles/config/define-single");
+const { isServicesRegistered } = await import("../service-access");
+
+/** The refusal `registerServices` ends with, or undefined when it ends with none. */
+async function refusalOf(
+  config: Parameters<typeof registerServices>[0]
+): Promise<unknown> {
+  return registerServices(config).then(
+    () => undefined,
+    (error: unknown) => error
+  );
+}
+
+const DB = { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" };
+
+beforeEach(() => {
+  _resetBootMigrationsGateForTest();
+  created.adapters = 0;
+  vi.stubEnv("DB_DIALECT", "sqlite");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  _resetBootMigrationsGateForTest();
+  // A start that went past the check registers services; the next test starts from none.
+  clearServices();
+});
+
+describe("a start given entities declared through define* with problems", () => {
+  it("refuses with every problem before it connects anything", async () => {
+    const config = {
+      collections: [
+        defineCollection({
+          slug: "Blog Posts",
+          fields: [{ name: "title", type: "text" }],
+        }),
+      ],
+      singles: [
+        defineSingle({
+          slug: "home page",
+          fields: [{ name: "heading", type: "text" }],
+        }),
+      ],
+      db: DB,
+    } as unknown as Parameters<typeof registerServices>[0];
+
+    const refused = await refusalOf(config);
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toEqual(["collections[0].slug", "singles[0].slug"]);
+    expect(created.adapters).toBe(0);
+    expect(isServicesRegistered()).toBe(false);
+  });
+});
+
+describe("a start given an entity written as a plain object with a problem", () => {
+  it("warns of the problem, with its place, and starts as it did", async () => {
+    const warned: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...parts: unknown[]) => {
+      warned.push(parts.map(String).join(" "));
+    });
+    // A field named by an SQL keyword: the general rules judge it, and no check the start made
+    // before does, so a site declaring one starts today.
+    const config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "select", type: "text" }] },
+      ],
+      db: DB,
+    } as unknown as Parameters<typeof registerServices>[0];
+
+    const refused = await refusalOf(config);
+
+    // It starts as it did: nothing refuses it, and its services are registered.
+    expect(refused).toBeUndefined();
+    expect(
+      warned.some(line => line.includes("collections[0].fields[0].name")),
+      warned.join("\n")
+    ).toBe(true);
+    expect(created.adapters).toBe(1);
+    expect(isServicesRegistered()).toBe(true);
+  });
+});
+
+describe("a start given a define* entity whose problems include a field type nothing offers", () => {
+  /** The paths the start's refusal names, when it refuses for the configuration's problems. */
+  async function refusedPaths(
+    config: Parameters<typeof registerServices>[0]
+  ): Promise<string[]> {
+    const refused = await refusalOf(config);
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    return (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path ?? "");
+  }
+
+  it("refuses with that problem beside the others, before it connects", async () => {
+    const paths = await refusedPaths({
+      collections: [
+        defineCollection({
+          slug: "Blog Posts",
+          fields: [{ name: "score", type: "acme-rating" }],
+        } as Parameters<typeof defineCollection>[0]),
+      ],
+      db: DB,
+    } as unknown as Parameters<typeof registerServices>[0]);
+
+    expect(paths).toEqual(["collections[0].slug", "collections[0].score.type"]);
+    expect(created.adapters).toBe(0);
+  });
+
+  // `defineCollection` cannot judge a type a plugin may register later, so it finds no problem
+  // at import; the entity was still declared through it, and the start refuses it.
+  it("refuses one whose only problem is that type", async () => {
+    const paths = await refusedPaths({
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [{ name: "score", type: "acme-rating" }],
+        } as Parameters<typeof defineCollection>[0]),
+      ],
+      db: DB,
+    } as unknown as Parameters<typeof registerServices>[0]);
+
+    expect(paths).toEqual(["collections[0].score.type"]);
+    expect(created.adapters).toBe(0);
+  });
+});
+
+describe("a start given a define* entity with a public address its own rule refuses", () => {
+  it("refuses with it beside the entity's other problems, before it connects", async () => {
+    const refused = await refusalOf({
+      collections: [
+        defineCollection({
+          slug: "Blog Posts",
+          fields: [{ name: "title", type: "text" }],
+          publicAddress: "/blog",
+        } as Parameters<typeof defineCollection>[0]),
+      ],
+      db: DB,
+    } as unknown as Parameters<typeof registerServices>[0]);
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toContain("collections[0].slug");
+    expect(paths).toContain("collections[0].publicAddress");
+    expect(created.adapters).toBe(0);
+  });
+});

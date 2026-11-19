@@ -1,0 +1,219 @@
+---
+title: Starter pages
+description: Register ready-made page bodies in code that authors start a new page from, copied once and drawn in the site's own colours and fonts.
+---
+
+A **starter page** is a ready-made page body: a hero, a few sections, a call to action.
+An author picks one when making a page, in the New page dialog's **Start from**, or on an
+empty page's **or start from a page** row in the builder, and gets a finished-looking page
+in the site's own colours and fonts.
+
+A starter page is copied once. Its blocks become the page's own, each with a new id: a
+later change to the starter page never reaches a page made from it, and a change on the
+page never reaches the starter page. It fills the page body only. The header and footer are the ones the
+author chose in the dialog. In the builder, starting an empty page from one is a single
+step, and one Undo empties the page again.
+
+Starter pages are experimental: the contract may change before the page builder is stable.
+
+## Register a starter page
+
+Write one with `defineStarterPage` and pass it to `pageBuilder({ starterPages })`:
+
+```ts
+// app/starter-pages.ts
+import { defineStarterPage } from "@nextlyhq/plugin-sdk/blocks";
+
+export const welcome = defineStarterPage({
+  id: "welcome",
+  label: "Welcome",
+  description: "A heading in your brand colour, an image to add and a button.",
+  blocks: [
+    {
+      id: "hero",
+      type: "core/section",
+      version: 1,
+      props: { as: "section", contained: true },
+      slots: {
+        children: [
+          {
+            id: "hero-title",
+            type: "core/heading",
+            version: 1,
+            props: { text: "Welcome to our site", level: "h1" },
+            // A site variable, not a raw colour, so the starter wears the
+            // site's own brand colour.
+            styles: { base: { base: { color: { $token: "color.primary" } } } },
+          },
+          {
+            id: "hero-image",
+            type: "core/image",
+            version: 1,
+            props: {},
+          },
+          {
+            id: "hero-button",
+            type: "core/button",
+            version: 1,
+            props: { label: "Get in touch", href: "/contact" },
+          },
+        ],
+      },
+    },
+  ],
+});
+```
+
+```ts
+// nextly.config.ts
+import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+
+import { welcome } from "./app/starter-pages";
+
+export const builder = pageBuilder({
+  starterPages: [welcome],
+});
+```
+
+| Field         | What it is                                                              |
+| ------------- | ----------------------------------------------------------------------- |
+| `id`          | Lower case letters, digits and `-`, up to 64 characters. Unique.        |
+| `label`       | The name an author reads, up to 80 characters.                          |
+| `description` | One short sentence, up to 200 characters, read with the name.           |
+| `blocks`      | The page body's blocks, top to bottom, in the shape a page stores them. |
+
+The ids inside `blocks` are only the starter page's own: every page made from it gets new
+ones.
+
+## The page builder's own starter pages
+
+The page builder ships five starter pages, listed before any you register:
+
+- **Landing**: what the business does, three reasons to choose it, how it works in three
+  steps, a customer's words and a closing call to act.
+- **About**: why the business exists, three facts about it, a founder's words and the team,
+  with no photos needed.
+- **Contact**: email, phone and address beside a Form, then answers to the questions people
+  ask most.
+- **Pricing**: three plans side by side, the middle one marked **Most chosen**, then questions
+  about plans.
+- **Coming soon**: one message and one field for an email, for a page before launch.
+
+Each is built only from core blocks, and every colour, space and type size is one of the
+site's design variables, so a page made from one follows the site's colours, fonts and Site
+text, in light and dark. Their words describe an example business, so the preview and a
+new page look finished: replace them with your own. Their Images are empty until you
+choose a picture. A Form keeps its answers nowhere until you set its **Send to** address.
+
+## Hide the page builder's own starter pages
+
+The page builder lists its own starter pages beside yours. To list only the ones
+registered in code, turn them off:
+
+```ts
+pageBuilder({
+  starterPages: [welcome],
+  builtInStarterPages: false,
+});
+```
+
+## From a plugin
+
+A plugin declares starter pages under the page builder's key, the channel its blocks and named
+queries use:
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { defineStarterPage } from "@nextlyhq/plugin-sdk/blocks";
+
+const pricing = defineStarterPage({
+  id: "acme-pricing",
+  label: "Pricing",
+  description: "Three plans side by side.",
+  blocks: [],
+});
+
+export const acmePricingPages = definePlugin({
+  name: "acme-pricing-pages",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  contributes: {
+    declarations: {
+      "@nextlyhq/plugin-page-builder": { starterPages: [pricing] },
+    },
+  },
+});
+```
+
+A plugin's starter page may use the blocks the plugin declares, since every starter page is
+checked once all blocks are registered.
+
+## The site's own look
+
+Each starter page's preview is drawn from its own blocks with the site's style, so it shows the
+site's colours and fonts. Style a starter page's blocks with the site's variables
+(`{ $token: "color.primary" }`), text styles and block styles rather than raw colours or
+font names, and it takes each site's look.
+
+A starter page never shows a broken image or loads anything from another site: it carries no
+pictures. Leave an Image empty, and the page shows the Image's own empty state, where the
+author adds a picture from their media library.
+
+## Checked at start-up
+
+Every starter page is checked when the site starts. A starter page your site or a plugin gives
+stops the start while it is refused, so you can fix it. The page builder's own starter pages
+never stop a site from starting: whether your site can use one is asked when starter pages are
+listed (see [When a site can't use a starter page](#when-a-site-cant-use-a-starter-page)).
+
+The message names the starter page, where it came from, and why:
+
+- an id that is malformed, or that another starter page already uses;
+- no name, no description, or no blocks;
+- a block the site doesn't have;
+- a placed component, which belongs to one site's library;
+- a picture or an address to load: a media library image, an Image's or Embed's `src`, or
+  a background image in its styles;
+- blocks the page builder's validation refuses, with where.
+
+```text
+[page-builder] The starter page "welcome" from pageBuilder({ starterPages }) uses the block "acme/hero", which this site doesn't have.
+```
+
+## When a site can't use a starter page
+
+A starter page the site can't use right now is still listed, dimmed, with **Not available on
+this site** and the reason under its name. Choosing it does nothing, and a page made from it
+through the API is refused with the same words. It becomes available again as soon as the site
+can use it. A site can't use a starter page that:
+
+- uses a block, a variable or a shared style the site doesn't have, such as a colour removed in
+  Design ("Uses the Form block, which this site doesn't have.");
+- is larger than the site allows a page to be.
+
+### Page limits
+
+A page has limits, so a page that grows by accident can't slow the editor or the site down:
+
+- **Nesting:** how many levels of blocks inside blocks a page may have. A Columns block counts
+  as two (the columns, then each column), and a card inside a column is one more.
+- **Blocks:** how many blocks a page may hold.
+- **Size:** how large the page's stored content may be.
+
+The defaults are 12 levels, 5,000 blocks and 2 MB. Your site's developer can set tighter limits
+in the site config:
+
+```ts
+pageBuilder({
+  limits: { maxDepth: 6, maxNodes: 2000, maxBytes: 1024 * 1024 },
+});
+```
+
+Every one of the page builder's own starter pages fits within **6 levels, 100 blocks and
+64 KB**. A site whose limits are at least these offers all of them. Below that, the ones that
+don't fit show as unavailable ("Needs 5 levels of nesting; this site allows 4."), and the server
+log says once at start-up which ones and why:
+
+```text
+[page-builder] The starter page "Landing" isn't available on this site. Needs 5 levels of nesting; this site allows 4.
+```

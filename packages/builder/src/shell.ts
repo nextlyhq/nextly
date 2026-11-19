@@ -181,8 +181,15 @@ export { useModalKeyboardHold } from "./shell/modal-keyboard-hold";
 export type { CanvasProps } from "./canvas/canvas";
 // The regions of a page's layout around the page on the canvas, and which one
 // is selected.
-export type { CanvasRegion } from "./canvas/canvas-regions";
-export { REGION_ATTRIBUTE } from "./canvas/canvas-regions";
+export type {
+  CanvasRegion,
+  EmptyRegionAnchor,
+  EmptyRegionBandProps,
+} from "./canvas/canvas-regions";
+export {
+  EMPTY_REGION_ATTRIBUTE,
+  REGION_ATTRIBUTE,
+} from "./canvas/canvas-regions";
 export {
   useRegionSelection,
   type RegionSelection,
@@ -548,6 +555,15 @@ export { useFormsShownAgain } from "./form-source-control";
 export { FirstAddChoosers } from "./canvas/first-add-choosers";
 export type { FirstAddChoosersProps } from "./canvas/first-add-choosers";
 /**
+ * "+ Add a question" under a selected Accordion's last question, drawn over
+ * the canvas: it adds the next numbered question, opens it and types its
+ * title, through the host's way into a block's text.
+ *
+ * @experimental
+ */
+export { AccordionAddQuestion } from "./canvas/accordion-add-question";
+export type { AccordionAddQuestionProps } from "./canvas/accordion-add-question";
+/**
  * The badge on a block whose bound value a visitor will not see, drawn in the
  * canvas's overlay from the host's `visitorUnreadableBindings` answer.
  */
@@ -610,6 +626,12 @@ export {
 export { PageInserters } from "./canvas/page-inserters";
 export type { PageInsertersProps, StartOptions } from "./canvas/page-inserters";
 export type { StarterPage } from "./canvas/page-start-area";
+// Starting an empty page from a starter page's blocks, as one undo step.
+export {
+  applyStarterPage,
+  planStarterPage,
+  type StarterPageSources,
+} from "./starter-page";
 
 /**
  * The editor's document state, published beside the canvas because it is a hook
@@ -619,8 +641,21 @@ export type { StarterPage } from "./canvas/page-start-area";
  * handler and an agent all reach the same `apply`, so undo covers every one of
  * them rather than only the path that happened to implement it.
  */
-export { MAX_HISTORY, useEditorState } from "./editor-state";
-export type { EditorState, UseEditorStateArgs } from "./editor-state";
+export { MAX_HISTORY, useDocumentView, useEditorState } from "./editor-state";
+
+/**
+ * A handler that keeps its identity across renders and calls the newest one,
+ * for a surface memoised so a selection draws it nothing again.
+ */
+export {
+  useLatestCallback,
+  useLatestOptionalCallback,
+} from "./latest-callback";
+export type {
+  EditorDocumentView,
+  EditorState,
+  UseEditorStateArgs,
+} from "./editor-state";
 
 /**
  * Why `EditorState.lockRefusalFor` refuses an edit: a slot lock a block
@@ -797,6 +832,9 @@ export type {
   TokensPanelProps,
   VariablesHeader,
 } from "./tokens-panel";
+// What a host's variables write made at once answers it stored, so an import
+// can say a save the site took only in part as exactly that.
+export type { VariablesStored } from "./variables-transfer";
 // Which variable groups each Design tab lists, and the one variable search,
 // so a tab's count and the rows it lists come from the same rule.
 export {
@@ -826,6 +864,7 @@ export type { DesignTab, VariableGroup } from "./tokens-studio";
 export type {
   VariableReach,
   VariablesAccess,
+  VariablesTogether,
   VariablesUsage,
   VariableUse,
   VariableUseKind,
@@ -997,3 +1036,22 @@ export { PageChecksChip } from "./page-checks/page-checks-chip";
 export type { PageChecksChipProps } from "./page-checks/page-checks-chip";
 export { PageChecksList } from "./page-checks/page-checks-list";
 export type { PageChecksListProps } from "./page-checks/page-checks-list";
+
+/**
+ * Ending every run of typing at once, for a host's save: a field still being
+ * typed in when the page is stored keeps writing into a new step, so undo
+ * after the save takes back only what came after it. `typingEpoch` says which
+ * stretch of typing the editor is in.
+ *
+ * @experimental
+ */
+export { endTypingRuns, typingEpoch } from "./typing-run";
+
+/**
+ * A draft held in a field of the block settings panel, for a host's save:
+ * the page has unsaved work from the draft's first keystroke, and a store
+ * writes the draft first, as leaving the field would, with focus left in it.
+ *
+ * @experimental
+ */
+export { finishFieldEdit, useFieldDraftHeld } from "./field-edit";

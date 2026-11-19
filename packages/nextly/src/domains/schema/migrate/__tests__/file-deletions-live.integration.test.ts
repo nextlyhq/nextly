@@ -401,6 +401,60 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     }
   }, 120_000);
 
+  it("spares a write only to a table the run makes first and the database lacks", async () => {
+    // The database of this suite holds none of Nextly's own tables.
+    const core = "nextly_meta";
+    const view = `${P}_view`;
+    await adapter.executeQuery(
+      `CREATE VIEW ${view} AS SELECT id FROM ${keeper}`
+    );
+    const written = [
+      `INSERT INTO ${core} (id) VALUES (1)`,
+      `INSERT INTO ${missing} (id) VALUES (1)`,
+      `UPDATE ${view} SET id = 2`,
+    ];
+    const madeBeforeTheFiles = new Set([core]);
+    const facts = await readDeletionFacts(
+      adapter.getDrizzle(),
+      dialect,
+      written,
+      { madeBeforeTheFiles }
+    );
+    // The catalog was read and holds no such table.
+    expect(facts.liveTable(core)).toBe(false);
+    const unread = (table: string) => [
+      ...(dialect === "postgresql"
+        ? [
+            {
+              kind: "unnamed",
+              description: `rows written to tables that inherit from ${table} or partition it, whose triggers could not be read`,
+            },
+          ]
+        : []),
+      {
+        kind: "unnamed",
+        description: `rows written to ${table} may run code the table carries, which could not be read`,
+      },
+    ];
+    // Nothing for the table the run makes first; a table the database lacks that the run
+    // does not make, and a live view, which is no table to the catalog either, fail closed.
+    expect(fileDeletions(written, dialect, facts)).toEqual([
+      ...unread(missing),
+      ...unread(view),
+    ]);
+    // A caller that makes no table first is spared nothing.
+    const plain = await readDeletionFacts(
+      adapter.getDrizzle(),
+      dialect,
+      written
+    );
+    expect(fileDeletions(written, dialect, plain)).toEqual([
+      ...unread(core),
+      ...unread(missing),
+      ...unread(view),
+    ]);
+  }, 120_000);
+
   it("judges a file against the facts the database gives", async () => {
     const facts = await readDeletionFacts(
       adapter.getDrizzle(),
@@ -442,3 +496,52 @@ describe.each(LOCK_DIALECTS)("the deletion facts read on %s", dialect => {
     ]);
   }, 120_000);
 });
+
+describe.each(LOCK_DIALECTS)(
+  "the table a foreign key references, read on %s",
+  dialect => {
+    const P = `fkt_${randomBytes(3).toString("hex")}`;
+    let world: LockWorld;
+    let adapter: DrizzleAdapter;
+
+    beforeAll(async () => {
+      world = await lockWorld(dialect, { fresh: true });
+      adapter = await world.connect();
+    }, 120_000);
+
+    afterAll(async () => {
+      await adapter.disconnect();
+      await world.dispose();
+    }, 60_000);
+
+    it("names it as the database names it, so a table another differs from only by case is not it", async () => {
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const owner = `${P}_posts`;
+      // PostgreSQL keeps a quoted name's case: `"<p>_Posts"` is another table than `<p>_posts`.
+      const other = dialect === "postgresql" ? `${P}_Posts` : `${P}_decks`;
+      for (const statement of [
+        `CREATE TABLE ${q(owner)} (id integer PRIMARY KEY)`,
+        `CREATE TABLE ${q(other)} (id integer PRIMARY KEY)`,
+        `CREATE TABLE ${q(`${owner}_locales`)} (${q("_parent")} integer, ${q("_locale")} varchar(20), FOREIGN KEY (${q("_parent")}) REFERENCES ${q(owner)} (id))`,
+        `CREATE TABLE ${q(`${P}_cards_locales`)} (${q("_parent")} integer, ${q("_locale")} varchar(20), FOREIGN KEY (${q("_parent")}) REFERENCES ${q(other)} (id))`,
+      ]) {
+        await adapter.executeQuery(statement);
+      }
+      const { readForeignKeyTargets } = await import(
+        "../../pipeline/live-table-facts"
+      );
+      const db = adapter.getDrizzle();
+      expect(
+        (await readForeignKeyTargets(db, dialect, `${owner}_locales`)).get(
+          "_parent"
+        )
+      ).toEqual([owner]);
+      const elsewhere = (
+        await readForeignKeyTargets(db, dialect, `${P}_cards_locales`)
+      ).get("_parent");
+      expect(elsewhere).toHaveLength(1);
+      expect(elsewhere).not.toContain(owner);
+    }, 120_000);
+  }
+);

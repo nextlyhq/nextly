@@ -20,7 +20,10 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  TransactionContext,
+  TransactionOptions,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import {
   askEachLanguage,
@@ -39,6 +42,7 @@ import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { rethrowIfRuleCouldNotRun } from "../../../errors/rule-could-not-run";
 import {
+  settleWriteParts,
   type SharedPartOf,
   withWriteParts,
   writeMovesSharedPart,
@@ -72,6 +76,7 @@ import {
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
+import type { RelationshipDbExecutor } from "../../../services/collections/collection-relationship-service";
 import { expansionAccess } from "../../../services/collections/trust-bound";
 import {
   assumedBound,
@@ -298,13 +303,16 @@ import {
 import {
   assertVersionNamesEvery,
   certainlyStale,
+  type DecodedVersion,
   type DocumentRevisionState,
   givenOf,
   judgedLanguage,
   judgedLanguageStates,
   languagesJudged,
+  movedSinceJudged,
   type PartState,
   poolRevisionReader,
+  readDocumentRevision,
   refuseIfLanguageMoved,
   refuseIfMainMoved,
   releaseRunExemptFor,
@@ -312,6 +320,7 @@ import {
   staleVersionErrorFor,
   type VersionCheck,
   versionCheckFor,
+  versionOfRevision,
 } from "../../versions/stale-version";
 import {
   resolveComponentFieldMap,
@@ -334,6 +343,7 @@ import {
   recordSingleSaveActivity,
 } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
+import { componentRowPaths } from "../../webhooks/sensitive-fields";
 import type { WebhookResource } from "../../webhooks/types";
 import { workflowAttachedTo } from "../../workflows/registry";
 import { closeReviewOnDiscard } from "../../workflows/review-state-cleanup";
@@ -565,6 +575,45 @@ function fieldsWrittenIn(
     }
   }
   return written;
+}
+
+/**
+ * What a Single save is judged with: its values, the Single's fields, and who
+ * makes it. Kept as one value so the judgement before the transaction and the
+ * one under the row lock are the same call.
+ */
+/**
+ * How many times an overwrite is judged and written while its Single keeps
+ * moving between the two, before it is refused with nothing saved.
+ */
+const OVERWRITE_JUDGEMENT_ATTEMPTS = 3;
+
+/** What an overwrite refused that way is told. */
+const OVERWRITE_KEPT_CHANGING =
+  "Another save kept changing this page while yours was being checked, so nothing was saved. Try again.";
+
+interface SaveJudgement {
+  slug: string;
+  data: Record<string, unknown>;
+  fieldConfigs: DynamicSingleRecord["fields"];
+  localizedFieldNames: ReadonlySet<string>;
+  enforceLocalizedRequired: boolean;
+  /** The Single's stored document id, which a read rule is handed. */
+  entryId: string;
+  /**
+   * The language the save is in, where the Single is kept per language;
+   * validators reading what it already stores read this language's value.
+   */
+  writeLocale: string | undefined;
+  user: UpdateSingleOptions["user"];
+  /** Who the refusal is told to, with the scope a key arrived with. */
+  reader: IssueReader;
+  /**
+   * The paths that hold a value kept from the stored row because a rule
+   * denies it to this writer; the whole-number rule skips them — a legacy
+   * stored fraction under one is the row's own content, not this save's.
+   */
+  storedProvenancePaths?: ReadonlySet<string>;
 }
 
 /**
@@ -2368,30 +2417,13 @@ export class SingleMutationService extends BaseService {
    * semantics, so absent keys stay untouched and provided keys must hold. An
    * issue on a field the caller may not read is told without naming it or
    * its value.
+   *
+   * Judged on the pool, never inside the save's transaction: a field type's
+   * validator may read what another Single defines (the page builder's
+   * shared styles, say), and inside the transaction that read would wait on
+   * the pool for the connection the transaction holds.
    */
-  private async assertSaveValid(args: {
-    slug: string;
-    data: Record<string, unknown>;
-    fieldConfigs: DynamicSingleRecord["fields"];
-    localizedFieldNames: ReadonlySet<string>;
-    enforceLocalizedRequired: boolean;
-    /** The Single's stored document id, which a read rule is handed. */
-    entryId: string;
-    /**
-     * The language the save is in, where the Single is kept per language;
-     * validators reading what it already stores read this language's value.
-     */
-    writeLocale: string | undefined;
-    user: UpdateSingleOptions["user"];
-    /** Who the refusal is told to, with the scope a key arrived with. */
-    reader: IssueReader;
-    /**
-     * The paths that hold a value kept from the stored row because a rule
-     * denies it to this writer; the whole-number rule skips them — a legacy
-     * stored fraction under one is the row's own content, not this save's.
-     */
-    storedProvenancePaths?: ReadonlySet<string>;
-  }): Promise<void> {
+  private async assertSaveValid(args: SaveJudgement): Promise<void> {
     const { slug, fieldConfigs } = args;
     const validationView = relationshipValidationView(args.data, fieldConfigs);
     const judgedIssues = await validateEntryData(
@@ -2404,7 +2436,7 @@ export class SingleMutationService extends BaseService {
           ? { storedProvenancePaths: args.storedProvenancePaths }
           : {}),
         // A component inside a group or repeater is judged here, since no
-        // component write reaches it. On the pool, as this is.
+        // component write reaches it.
         componentFields: await containedComponentResolver(
           fieldConfigs,
           async componentSlug =>
@@ -2414,7 +2446,6 @@ export class SingleMutationService extends BaseService {
         ),
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
-        // Before the transaction opens, so on the pool.
         write: {
           ...storedFieldRead.entryWriteContext({
             kind: "single",
@@ -2455,6 +2486,29 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
+   * The Single's version as an overwrite is about to be judged on it, read on
+   * the pool BEFORE the judgement, so a save that lands after the read moves
+   * it: compared under the row lock with the version as committed then
+   * (`staleParts`, as a `_rev` is), a version that moved means the values
+   * were judged against a Single that has since changed. Its own row and the
+   * languages the save is judged on, as `_rev` names them; undefined where
+   * the Single has no row yet.
+   */
+  private async versionJudgedAgainst(row: {
+    readonly table: string;
+    readonly id: string;
+    readonly languages?: { table: string; locales: readonly string[] };
+  }): Promise<DecodedVersion | undefined> {
+    const state = await readDocumentRevision(poolRevisionReader(this.adapter), {
+      dialect: this.adapter.dialect,
+      table: row.table,
+      id: row.id,
+      ...(row.languages ? { languages: row.languages } : {}),
+    });
+    return state === undefined ? undefined : versionOfRevision(state);
+  }
+
+  /**
    * Updates the Single, its hooks told whether the update moves the shared
    * part (`writeMovesSharedPart`, from the Single's own fields), as they are
    * told its languages.
@@ -2470,21 +2524,37 @@ export class SingleMutationService extends BaseService {
       slug,
       this.logger
     );
-    const shared =
+    return withWriteParts(
+      { shared: this.movesSharedPart(meta, data, rawOptions.locale) },
+      () => this.updateInParts(slug, data, rawOptions)
+    );
+  }
+
+  /**
+   * Whether an update of `body` in `locale` moves the Single's shared part:
+   * asked of the body as sent before the hooks run (`update`), and of the
+   * payload as persisted once they have (`settleWriteParts`). The whole
+   * document where the Single is gone.
+   */
+  private movesSharedPart(
+    meta: DynamicSingleRecord | null | undefined,
+    body: Record<string, unknown>,
+    locale: string | undefined
+  ): boolean {
+    return (
       meta === null ||
       meta === undefined ||
       writeMovesSharedPart(
         {
+          hasLifecycle: hasLifecycle(meta),
           fields: (meta.fields ?? []) as unknown as SharedPartOf["fields"],
           localized: meta.localized === true,
           publishesPerLanguage: publishesPerLanguage(meta),
           defaultLocale: this.localization?.defaultLocale,
         },
-        data,
-        rawOptions.locale
-      );
-    return withWriteParts({ shared }, () =>
-      this.updateInParts(slug, data, rawOptions)
+        body,
+        locale
+      )
     );
   }
 
@@ -2989,6 +3059,15 @@ export class SingleMutationService extends BaseService {
       const hookOriginal = {
         ...existingDeserialized,
         ...(await this.translationIn(existingDoc.id, companion, writeLocale)),
+        // The links its many-to-many fields hold, which neither its row nor
+        // its translations have a column for (a translated one reads null
+        // there), so a hook comparing old with new sees them as stored.
+        ...(await this.queryService.readManyToManyLinks({
+          executor: this.adapter.getDrizzle<RelationshipDbExecutor>(),
+          sourceTable: singleMeta.tableName,
+          entryId: String(existingDoc.id),
+          fields: singleMeta.fields,
+        })),
       };
       const beforeCall: SingleBeforeHookCall = {
         slug,
@@ -3145,9 +3224,14 @@ export class SingleMutationService extends BaseService {
       // 6.2. Enforce the schema's declared rules on the server — the same
       // gate the collection write paths run. Singles updates are PATCH
       // semantics: absent keys stay untouched, provided keys must hold.
-      await this.assertSaveValid({
+      // Kept, so an overwrite whose Single moved before its write can be
+      // judged again (see the transaction below). The values judged are a
+      // copy: the write changes its own data in place before then (a
+      // password hashed, components extracted), and a judgement again is of
+      // the values as sent, as the first was.
+      const saveJudgement: SaveJudgement = {
         slug,
-        data: currentData,
+        data: detachData(currentData),
         fieldConfigs,
         localizedFieldNames,
         enforceLocalizedRequired,
@@ -3163,7 +3247,30 @@ export class SingleMutationService extends BaseService {
           authenticatedScope: options.authenticatedScope,
           grants: writeGrants,
         },
-      });
+      };
+      // An overwrite carries no version of its own to be refused by, so the
+      // version it is judged against is read here, before the judgement, and
+      // compared under the row lock: one that moved means another save landed
+      // after these values were judged, and they are judged again rather
+      // than written over a Single they were never judged against.
+      // Its own row, and the language it writes even where it carries no
+      // `_rev` to name one: a save of that language's translated values
+      // moves only that language's version, not the row's.
+      const overwriteLanguages =
+        judgedLanguages ??
+        (companion && companionPhysicallyExists && writeLocale !== undefined
+          ? { table: companion.companionTableName, locales: [writeLocale] }
+          : undefined);
+      const judgedRow = {
+        table: singleMeta.tableName,
+        id: String(documentId),
+        ...(overwriteLanguages ? { languages: overwriteLanguages } : {}),
+      };
+      let judgedVersion =
+        versionCheck.kind === "overwrite"
+          ? await this.versionJudgedAgainst(judgedRow)
+          : undefined;
+      await this.assertSaveValid(saveJudgement);
 
       // 6.3. A publish promotes the held pending change, and that content has
       // been judged only once, when it was SAVED. The gate that judges it
@@ -3470,6 +3577,23 @@ export class SingleMutationService extends BaseService {
       // of the related row.
       normalizeRelationshipFields(currentData, fieldConfigs);
 
+      // 6.55. A many-to-many field's links are kept in its junction table, not
+      // on the Single's row, so they are taken off the row's values here and
+      // written on the save's transaction below. Read as a collection's update
+      // reads them: a list of ids, or one id; a field the save leaves out keeps
+      // its links, and an empty list or `null` clears them.
+      const manyToManyLinks: Record<string, string[]> = {};
+      for (const field of fieldConfigs) {
+        const name = "name" in field ? field.name : undefined;
+        if (typeof name !== "string" || !usesJunctionTable(field)) continue;
+        const value = currentData[name];
+        if (value === undefined) continue;
+        delete currentData[name];
+        manyToManyLinks[name] = (
+          Array.isArray(value) ? value : value === null ? [] : [value]
+        ).map(String);
+      }
+
       // 6.6. Every repeater row gets its saved id: after the field rules and
       // the password pass have decided the value, and after references are
       // reduced to ids so an unchanged row compares equal to the stored one.
@@ -3622,6 +3746,49 @@ export class SingleMutationService extends BaseService {
         this.hookRegistry,
         hookCollection
       );
+      // Set by an attempt whose overwrite found its Single moved since the
+      // values were judged (see the check after the row lock).
+      let judgedVersionMoved = false;
+      // The save's transaction, run again for an overwrite whose Single moved
+      // after its values were judged: judged again, on the pool, against the
+      // Single as it is now, then written in a new attempt; at most
+      // OVERWRITE_JUDGEMENT_ATTEMPTS times, then refused with nothing saved.
+      // Only the judgement and the transaction run again: the hooks before
+      // them ran once and are not repeated, and nothing after the commit runs
+      // until one attempt commits.
+      const transact = async <T>(
+        work: (tx: TransactionContext) => Promise<T>,
+        retries: TransactionOptions
+      ): Promise<T> => {
+        for (let attempt = 1; ; attempt += 1) {
+          judgedVersionMoved = false;
+          try {
+            return await this.adapter.transaction(work, retries);
+          } catch (error) {
+            if (!judgedVersionMoved) throw error;
+            if (attempt >= OVERWRITE_JUDGEMENT_ATTEMPTS) {
+              throw NextlyError.conflict({
+                message: OVERWRITE_KEPT_CHANGING,
+                logContext: {
+                  slug,
+                  reason: "overwrite-kept-changing",
+                  attempt,
+                },
+              });
+            }
+          }
+          // By the Single's row as the attempt found it: a first save judged
+          // a document it had built but not yet stored, and another request's
+          // insert, which it adopted, holds the Single under that row's id.
+          const row = existingDoc?.id ?? judgedRow.id;
+          judgedVersion = await this.versionJudgedAgainst({
+            ...judgedRow,
+            id: String(row),
+          });
+          saveJudgement.entryId = String(row);
+          await this.assertSaveValid(saveJudgement);
+        }
+      };
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
@@ -3632,7 +3799,7 @@ export class SingleMutationService extends BaseService {
         // phase. Its branching is that pipeline's own; it comes down by moving
         // phases into units of their own, as `assemblesSaveDocuments` is.
         // fallow-ignore-next-line complexity
-        updatedRows = await this.adapter.transaction(async tx => {
+        updatedRows = await transact(async tx => {
           // This attempt's component values. A publish merges the held
           // draft's into them, and a retry after a lost race must start again
           // from the caller's own values: the draft may have moved on since.
@@ -3865,6 +4032,39 @@ export class SingleMutationService extends BaseService {
             },
             staleWrite
           );
+          // An overwrite's values were judged on the pool against the Single
+          // as it stood then. Another save in between (a manager's page code,
+          // say) would otherwise be replaced by values judged against what it
+          // replaced, its permission never asked. So the version they were
+          // judged against is compared with the Single as committed now, as a
+          // `_rev` is; one that moved ends this attempt, and the save is
+          // judged again on the pool (see the loop below). A row this save
+          // inserted moved for no one else.
+          if (
+            versionCheck.kind === "overwrite" &&
+            !insertedHere &&
+            movedSinceJudged(
+              judgedVersion,
+              // The same languages it was judged on: the write's own, read
+              // here where `_rev` named none for the read above.
+              overwriteLanguages === judgedLanguages
+                ? mainBefore
+                : await readDocumentRevision(tx, {
+                    dialect: this.adapter.dialect,
+                    table: singleMeta.tableName,
+                    id: existingDoc.id,
+                    ...(overwriteLanguages
+                      ? { languages: overwriteLanguages }
+                      : {}),
+                  })
+            )
+          ) {
+            judgedVersionMoved = true;
+            throw NextlyError.conflict({
+              message: OVERWRITE_KEPT_CHANGING,
+              logContext: { slug, reason: "overwrite-judged-version-moved" },
+            });
+          }
           // A conditional write is judged here, under the lock, against the
           // value as committed now (a row it inserted, as absent); a refused
           // one writes nothing. Thrown as is, and unwrapped below.
@@ -4213,6 +4413,9 @@ export class SingleMutationService extends BaseService {
             enforceLocalizedRequired,
           };
           let promotedDraft = false;
+          // The values of the pending change this publish puts live, as the
+          // change holds them; none when it promotes nothing.
+          let promotedValues: Record<string, unknown> = {};
           // Whether the request that promoted also carried content of its
           // own, which no earlier save recorded: the trail reads that
           // publish as a save too.
@@ -4415,9 +4618,24 @@ export class SingleMutationService extends BaseService {
                 delete mainPayload.status;
               }
               promotedDraft = true;
+              promotedValues = pendingDocument;
               promotionCarriesContent = callerCarriesContent;
             }
           }
+          // The payload is final once a pending change it publishes is
+          // folded in: the hooks after the write and its events are told what
+          // it moves, a field a hook added or the promoted change carries
+          // included, where the hooks before it were told what the body sent.
+          // Settled on every attempt, so a retry that promotes nothing is not
+          // told what a lost attempt promoted. The caller's component values
+          // left `currentData` for the component save, so they are put back.
+          settleWriteParts({
+            shared: this.movesSharedPart(
+              singleMeta,
+              { ...promotedValues, ...currentData, ...attemptComponentFields },
+              options.locale
+            ),
+          });
           // A publish with nothing pending puts the live row itself live: a
           // first publication, a republish after an unpublish, or a Single
           // that keeps no drafts. The validation before this transaction saw
@@ -4468,7 +4686,8 @@ export class SingleMutationService extends BaseService {
                     {
                       updatePayload: mainPayload,
                       componentFieldData: attemptComponentFields,
-                      manyToManyData: {},
+                      // Links alone are a change of the document too.
+                      manyToManyData: manyToManyLinks,
                     },
                     savedBy,
                     updateTimeOf(
@@ -4785,21 +5004,31 @@ export class SingleMutationService extends BaseService {
 
           const previousDoc =
             assembleDocuments && preRow
-              ? await buildSingleWebhookDoc(
-                  this.fieldGroupDataService,
-                  tx,
-                  existingDoc.id,
-                  singleMeta.tableName,
-                  preRow,
-                  fieldConfigs,
-                  companion,
-                  companionPhysicallyExists,
-                  eventLocale != null
-                    ? previousCompanionValues
-                    : defaultViewCompanion,
-                  payloadLocale,
-                  overlayLocaleStatus ? previousLocaleStatus : undefined
-                )
+              ? {
+                  ...(await buildSingleWebhookDoc(
+                    this.fieldGroupDataService,
+                    tx,
+                    existingDoc.id,
+                    singleMeta.tableName,
+                    preRow,
+                    fieldConfigs,
+                    companion,
+                    companionPhysicallyExists,
+                    eventLocale != null
+                      ? previousCompanionValues
+                      : defaultViewCompanion,
+                    payloadLocale,
+                    overlayLocaleStatus ? previousLocaleStatus : undefined
+                  )),
+                  // The links its many-to-many fields held, read before this
+                  // save replaces them, over the translations laid on it.
+                  ...(await this.queryService.readManyToManyLinks({
+                    executor: tx.getDrizzle<RelationshipDbExecutor>(),
+                    sourceTable: singleMeta.tableName,
+                    entryId: String(existingDoc.id),
+                    fields: fieldConfigs,
+                  })),
+                }
               : null;
 
           // On a restore, read the CURRENT component subtrees before the save
@@ -4932,6 +5161,35 @@ export class SingleMutationService extends BaseService {
               tx,
               componentWrite(attemptComponentData)
             );
+          }
+
+          // 9.55. Each many-to-many field's junction rows, replaced with the
+          // links the save sends, on this transaction, so a failure rolls the
+          // save back. Named from the Single's table, as its create made them.
+          // A held edit writes none, as it writes no component rows.
+          //
+          // The links the junctions hold once it has, `savedLinks`, are put on
+          // each document the save hands on: the written row, which its field
+          // hooks get, and its event and version, after their translations are
+          // laid over them, since a translated field has no column there either.
+          let savedLinks: Record<string, string[]> = {};
+          if (!holdEdit) {
+            await this.queryService.replaceManyToManyLinks({
+              executor: tx.getDrizzle<RelationshipDbExecutor>(),
+              sourceTable: singleMeta.tableName,
+              entryId: String(existingDoc.id),
+              fields: fieldConfigs,
+              links: manyToManyLinks,
+            });
+            savedLinks = await this.queryService.readManyToManyLinks({
+              executor: tx.getDrizzle<RelationshipDbExecutor>(),
+              sourceTable: singleMeta.tableName,
+              entryId: String(existingDoc.id),
+              fields: fieldConfigs,
+            });
+            if (Object.keys(savedLinks).length > 0) {
+              rows[0] = { ...rows[0], ...savedLinks };
+            }
           }
 
           // 9.6. i18n: upsert the companion row for the write locale in the SAME
@@ -5802,6 +6060,9 @@ export class SingleMutationService extends BaseService {
             if (singleHasStatus && isLocaleSpecificSnapshot) {
               parentRow.status = dataLocaleStatus;
             }
+            // Its many-to-many links, over the translations laid on it
+            // (`savedLinks`).
+            Object.assign(parentRow, savedLinks);
 
             const savedStatus =
               singleHasStatus && isLocaleSpecificSnapshot
@@ -5939,21 +6200,25 @@ export class SingleMutationService extends BaseService {
           // populateComponentData(strict) read the opt-out must skip. When off,
           // recordMutationEvent ignores `data`, so the raw written row stands in.
           const dataDoc = assembleDocuments
-            ? await buildSingleWebhookDoc(
-                this.fieldGroupDataService,
-                tx,
-                existingDoc.id,
-                singleMeta.tableName,
-                rows[0],
-                fieldConfigs,
-                companion,
-                companionPhysicallyExists,
-                eventLocale != null
-                  ? dataCompanionValues
-                  : defaultViewCompanion,
-                payloadLocale,
-                overlayLocaleStatus ? dataLocaleStatus : undefined
-              )
+            ? {
+                ...(await buildSingleWebhookDoc(
+                  this.fieldGroupDataService,
+                  tx,
+                  existingDoc.id,
+                  singleMeta.tableName,
+                  rows[0],
+                  fieldConfigs,
+                  companion,
+                  companionPhysicallyExists,
+                  eventLocale != null
+                    ? dataCompanionValues
+                    : defaultViewCompanion,
+                  payloadLocale,
+                  overlayLocaleStatus ? dataLocaleStatus : undefined
+                )),
+                // Over the translations laid on it (`savedLinks`).
+                ...savedLinks,
+              }
             : rows[0];
 
           // The single's field tree with component references expanded, so the
@@ -6047,7 +6312,13 @@ export class SingleMutationService extends BaseService {
             // Compared for the fields the save changed only when both were
             // assembled; the raw row stands in otherwise, and names none.
             ...(assembleDocuments
-              ? { data: dataDoc, previous: previousDoc }
+              ? {
+                  data: dataDoc,
+                  previous: previousDoc,
+                  // The component rows of the field tree the event strips by,
+                  // so the trail and the event name the same fields changed.
+                  componentRows: componentRowPaths(webhookFields),
+                }
               : {}),
             // This language's own statuses, as the transitions above read
             // them, and whether the save promoted the pending edits, which
@@ -6419,7 +6690,10 @@ export class SingleMutationService extends BaseService {
             options.overrideAccess === true && !narrows(options.trusted)
               ? "all"
               : undefined,
-        }
+        },
+        false,
+        // Its many-to-many links are in junctions named from its table.
+        singleMeta.tableName
       );
 
       // 11. Execute afterChange hooks (afterUpdate equivalent for Singles)
@@ -7311,6 +7585,18 @@ export class SingleMutationService extends BaseService {
       );
       if (own !== null) parentRow.status = own;
     }
+    // Its many-to-many fields' links, which neither the row nor its
+    // translations have a column for, as every version of the Single records
+    // them.
+    Object.assign(
+      parentRow,
+      await this.queryService.readManyToManyLinks({
+        executor: tx.getDrizzle<RelationshipDbExecutor>(),
+        sourceTable: singleMeta.tableName,
+        entryId,
+        fields,
+      })
+    );
     applyReadShape(
       parentRow,
       fields,
@@ -7435,6 +7721,8 @@ export class SingleMutationService extends BaseService {
       actor,
       data,
       previous,
+      // The Single's component rows, whose own stamps are not a change.
+      componentRows: componentRowPaths(singleMeta.fields),
       publication: {
         statusAfter: undefined,
         statusBefore: undefined,

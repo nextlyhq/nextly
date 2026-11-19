@@ -211,9 +211,18 @@
   gap: 0.5rem;
 }
 
+/*
+ * Two columns, the tiles of a row as tall as each other, so a tile with a
+ * reason under it and the one beside it line up; each row only as tall as its
+ * own tiles, so the card stays short enough to fit the canvas. Two, because
+ * the card is at most 28rem wide, and a column is as wide as a tile's 8rem
+ * picture with its padding and border; stated, since the card is as wide as
+ * its content and a grid that fits columns to its width would get one. A
+ * column narrows on a canvas too narrow for two.
+ */
 .nx-page-start__tiles {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 9.25rem));
   justify-content: center;
   gap: 0.5rem;
   margin: 0;
@@ -221,9 +230,98 @@
   list-style: none;
 }
 
+.nx-page-start__tiles > li {
+  display: flex;
+}
+
+/* A last tile alone in its row sits in the middle, as a wrapped row put it. */
+.nx-page-start__tiles > li:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+  justify-self: center;
+  width: min(9.25rem, 100%);
+}
+
 .nx-page-start__tile {
   flex-direction: column;
+  justify-content: flex-start;
+  width: 100%;
   padding: 0.5rem;
+}
+
+/*
+ * A starter page the site can't use: `aria-disabled`, not `disabled`, so it
+ * stays focusable and its reason can be read; the styling carries what
+ * `:disabled` would have. Its picture and title are dimmed, and the note and
+ * reason under them are in the muted text at full strength, so the words that
+ * say why keep their contrast in both themes.
+ */
+.nx-page-start__tile[aria-disabled="true"] {
+  border-style: dashed;
+  color: var(--nx-builder-text-muted);
+  cursor: not-allowed;
+}
+
+/*
+ * The picture's box: the dimmed picture and the panel saying why share one
+ * grid cell, so the panel lies over the picture and the box is as tall as
+ * the taller of the two; a long reason grows the box rather than being cut.
+ */
+.nx-page-start__tile-picture {
+  display: grid;
+  width: 8rem;
+}
+
+.nx-page-start__tile-picture > * {
+  grid-area: 1 / 1;
+}
+
+.nx-page-start__tile-thumb {
+  display: block;
+  opacity: 0.35;
+}
+
+/*
+ * Positioned and stacked above the picture: the picture's own opacity makes
+ * it a layer of its own, which would otherwise paint over the panel and its
+ * words. Its words are set close enough to fit a picture's height, so the
+ * tile is as tall as the others.
+ */
+.nx-page-start__tile-why {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.125rem;
+  min-width: 0;
+  padding: 0.25rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--nx-builder-panel) 85%, transparent);
+}
+
+.nx-page-start__tile-why .nx-page-start__tile-note,
+.nx-page-start__tile-why .nx-page-start__tile-reason {
+  font-size: 0.6875rem;
+  line-height: 1.15;
+}
+
+.nx-page-start__tile-note,
+.nx-page-start__tile-reason {
+  max-width: 8rem;
+  color: var(--nx-builder-text-muted);
+  font-size: 0.71875rem;
+  line-height: 1.3;
+  text-align: center;
+  text-wrap: balance;
+  white-space: normal;
+}
+
+.nx-page-start__tile-note {
+  font-weight: 600;
+}
+
+.nx-page-start__tile-reason {
+  font-weight: 400;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -403,4 +501,65 @@
   outline: 2px solid var(--nx-primary);
   outline-offset: -2px;
   color: var(--nx-foreground);
+}
+
+/*
+ * "+ Add a question", under the selected Accordion's last question
+ * (`canvas/accordion-add-question.tsx`). A full-bleed layer over the canvas
+ * root that takes no presses itself, as the appenders' does; the button opts
+ * back in. Its words are in the editor's text colour on the editor's raised
+ * surface, a pair that follows the admin's theme together, so it holds its
+ * contrast on a light or dark site in either theme. The selection colour is
+ * picked for the page's colours, not the surface's, so as the words' colour
+ * it fell to 3.6:1 in a dark admin over a light page; it stays on hover, as
+ * the border. With the ring every canvas control shows for keyboard focus.
+ */
+.nx-add-question {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.nx-add-question__button {
+  position: absolute;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  /* The room the canvas makes for it (accordion-add-question.tsx). */
+  height: 44px;
+  padding: 0 0.75rem;
+  pointer-events: auto;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface-raised);
+  color: var(--nx-builder-text);
+  font:
+    500 0.8125rem/1 var(--font-sans, system-ui),
+    sans-serif;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px var(--nx-builder-border);
+}
+
+/* Kept within the accordion's width (maxWidth, set where it is placed): the
+   "+" stays whole and the words shorten. */
+.nx-add-question__button > svg {
+  flex-shrink: 0;
+}
+
+.nx-add-question__words {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nx-add-question__button:hover {
+  border-color: var(--nx-builder-select);
+}
+
+.nx-add-question__button:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
 }

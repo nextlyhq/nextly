@@ -6,17 +6,21 @@
  *
  * @module components/features/email-hub/activity/__tests__/ActivityScreen.test
  */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { useEmailActivity } from "@admin/hooks/queries/useEmailActivity";
+import {
+  useActivityDetail,
+  useEmailActivity,
+} from "@admin/hooks/queries/useEmailActivity";
 
-import { deliveryRow } from "../activity-model";
-import { ActivityScreen, ProviderFilterNote } from "../ActivityScreen";
+import { activityRow } from "../activity-model";
+import { ActivityScreen } from "../ActivityScreen";
 
 vi.mock("@admin/hooks/queries/useEmailActivity", () => ({
   useEmailActivity: vi.fn(),
   useQueuedEmailOverdue: () => ({ data: undefined }),
+  useActivityDetail: vi.fn(() => ({ data: undefined, isLoading: false })),
 }));
 // What the template read holds in its cache: TanStack Query keeps answering
 // it after the query is disabled, as when a reader's grant ends.
@@ -27,22 +31,26 @@ vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
 vi.mock("@admin/hooks/queries/useEmailProviders", () => ({
   useEmailProviders: () => ({ data: undefined }),
 }));
+// The grants the reader holds; read-email-deliveries alone unless a case adds more.
+const held = new Set<string>(["read-email-deliveries"]);
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({
-    hasPermission: (slug: string) => slug === "read-email-deliveries",
+    hasPermission: (slug: string) => held.has(slug),
     hasAnswer: true,
   }),
 }));
 
-const ROW = deliveryRow({
+const ROW = activityRow({
+  kind: "delivery",
   id: "d1",
   createdAt: "2026-11-16T11:00:00.000Z",
-  outcome: "sent",
-  templateSlug: "password-reset",
-  provider: { id: null, type: "smtp" },
-  recipientKind: "to",
+  status: "sent",
+  template: { slug: "password-reset" },
+  provider: { id: null, type: "smtp", origin: "code" },
+  recipientKinds: ["to"],
   failureReason: null,
-  namedPerson: false,
+  attempts: null,
+  nextAttemptAt: null,
   erased: false,
 });
 
@@ -76,20 +84,6 @@ describe("the Activity screen when a read fails", () => {
   });
 });
 
-describe("the note shown while a provider is chosen", () => {
-  it("says every queued email is left out, not only those waiting for a first attempt", () => {
-    render(<ProviderFilterNote provider={{ type: "smtp" }} />);
-    const note = screen.getByText(/queued email/i);
-    expect(note.textContent).toMatch(/no queued email is listed/i);
-    expect(note.textContent).not.toMatch(/waiting for its first attempt/i);
-  });
-
-  it("is not shown while no provider is chosen", () => {
-    const { container } = render(<ProviderFilterNote provider={undefined} />);
-    expect(container.textContent).toBe("");
-  });
-});
-
 describe("names from a list the reader may no longer read", () => {
   it("never shows a cached template name once the template grant is gone", () => {
     // The reader holds only read-email-deliveries (the permissions mock), yet
@@ -101,6 +95,85 @@ describe("names from a list the reader may no longer read", () => {
     render(<ActivityScreen />);
     expect(screen.queryAllByText("Password reset")).toHaveLength(0);
     expect(screen.getAllByText("password-reset").length).toBeGreaterThan(0);
+    cachedTemplates.data = undefined;
+  });
+});
+
+describe("opening a row's detail sheet", () => {
+  it("opens the sheet for the row whose email is chosen", () => {
+    activity({ rows: [ROW] });
+    render(<ActivityScreen />);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "password-reset" })[0]
+    );
+    expect(vi.mocked(useActivityDetail)).toHaveBeenLastCalledWith({
+      source: "delivery",
+      id: "d1",
+    });
+  });
+});
+
+describe("Fix template", () => {
+  const QUEUED_FAILED = {
+    source: "queued" as const,
+    detail: {
+      id: "q1",
+      createdAt: "2026-11-16T11:00:00.000Z",
+      updatedAt: "2026-11-16T11:00:00.000Z",
+      settledAt: null,
+      state: "failed" as const,
+      attempts: 1,
+      nextAttemptAt: null,
+      lastFailure: { retryable: false, reason: "Bad Reply-To" },
+      messageHeld: true,
+      templateSlug: "password-reset",
+      queuedBy: "site",
+      templateCaused: true,
+      templateVersion: null,
+      timeline: [],
+      timelineTruncated: false,
+    },
+  };
+
+  function openFailedQueued() {
+    vi.mocked(useActivityDetail).mockReturnValue({
+      data: QUEUED_FAILED,
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as unknown as ReturnType<typeof useActivityDetail>);
+    cachedTemplates.data = [
+      {
+        id: "t-9",
+        slug: "password-reset",
+        name: "Password reset",
+        kind: "template",
+      },
+    ];
+    activity({ rows: [ROW] });
+    render(<ActivityScreen />);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Password reset" })[0]
+    );
+  }
+
+  it("opens the template's own edit page for a reader who may edit templates", () => {
+    held.add("read-email-templates");
+    held.add("update-email-templates");
+    openFailedQueued();
+    expect(
+      screen.getByRole("link", { name: "Fix template" }).getAttribute("href")
+    ).toBe("/admin/settings/email/messages/edit/t-9");
+    held.delete("read-email-templates");
+    held.delete("update-email-templates");
+    cachedTemplates.data = undefined;
+  });
+
+  it("isn't offered to a reader who may read templates but not edit them", () => {
+    held.add("read-email-templates");
+    openFailedQueued();
+    expect(screen.queryByRole("link", { name: "Fix template" })).toBeNull();
+    held.delete("read-email-templates");
     cachedTemplates.data = undefined;
   });
 });

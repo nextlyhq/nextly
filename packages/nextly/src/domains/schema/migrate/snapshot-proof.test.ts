@@ -19,7 +19,7 @@ import {
   refuseUnlessProven,
   statementsShownBySnapshot,
 } from "./snapshot-proof";
-import type { LiveSchema } from "./statement-judgement";
+import type { LiveSchemaWithColumnFacts } from "./statement-judgement";
 
 const posts = (
   ...columns: string[]
@@ -482,12 +482,20 @@ describe("statementsShownBySnapshot: what passes the first condition", () => {
 
 describe("proveStatements: rows a statement fills with its default", () => {
   /** A live schema holding every object, each usable: the statements' schema effect is there. */
-  const everything: LiveSchema = {
+  const everything: LiveSchemaWithColumnFacts = {
     hasTable: () => true,
     hasColumn: () => true,
     hasIndex: () => true,
     hasConstraint: () => true,
     usable: () => true,
+    untrackedSettings: () => [],
+    settingsReadable: () => true,
+    generatesKey: () => true,
+    identityMode: () => undefined,
+    checkEnforced: () => true,
+    keyDeferrability: () => "not",
+    indexShape: () => "plain",
+    counterCovers: () => true,
   };
 
   /** The statuses `proveStatements` gives, with `nulls` NULL rows in every column it counts. */
@@ -513,6 +521,22 @@ describe("proveStatements: rows a statement fills with its default", () => {
   }
 
   const ADD_NOTE = `ALTER TABLE "dc_posts" ADD COLUMN "note" varchar(32) DEFAULT 'n'`;
+
+  it("counts the rows under the name a later statement of the file leaves the column with", async () => {
+    const { counted } = await prove(
+      [ADD_NOTE, 'ALTER TABLE "dc_posts" RENAME COLUMN "note" TO "slug"'],
+      "postgresql",
+      0
+    );
+    expect(counted).toEqual(["dc_posts.slug"]);
+    // A column a later statement drops has no rows left to count.
+    const dropped = await prove(
+      [ADD_NOTE, 'ALTER TABLE "dc_posts" DROP COLUMN "note"'],
+      "postgresql",
+      3
+    );
+    expect(dropped.counted).toEqual([]);
+  });
 
   it("is not proven where rows it would have filled are still NULL", async () => {
     expect(await prove([ADD_NOTE], "postgresql", 2)).toEqual({
@@ -543,7 +567,7 @@ describe("proveStatements: rows a statement fills with its default", () => {
 
   it("passes a rebuild's copy of the table's own rows, counting the columns it leaves to their defaults", async () => {
     // At the file's end the twin is gone and the table stands in its place.
-    const live: LiveSchema = {
+    const live: LiveSchemaWithColumnFacts = {
       ...everything,
       hasTable: name => !name.startsWith("__new_"),
     };
@@ -653,6 +677,14 @@ describe("constraints a file adds that the database holds but does not enforce",
               usable: object =>
                 validated ||
                 !(object.kind === "constraint" && object.name === fk.name),
+              untrackedSettings: () => [],
+              settingsReadable: () => true,
+              generatesKey: () => true,
+              identityMode: () => undefined,
+              checkEnforced: () => true,
+              keyDeferrability: () => "not",
+              indexShape: () => "plain",
+              counterCovers: () => true,
             },
             nullsIn: () => Promise.resolve(0),
           },
@@ -692,5 +724,834 @@ describe("constraints a file adds that the database holds but does not enforce",
     expect((error as NextlyError).publicMessage).toContain(
       "the database holds 2 row(s) referencing rows that do not exist through a foreign key it adds (dc_posts → users)"
     );
+  });
+});
+
+/** A live schema holding every object, each usable, with the column facts a case gives. */
+const liveWith = (facts: {
+  settings?: readonly string[];
+  /** Whether the table's column settings can be read at all: not on an NDB table. */
+  readable?: boolean;
+  generatesKey?: boolean;
+  /** The mode of every identity column the database holds. */
+  identity?: "always" | "by-default";
+  /** A column the database no longer has: the earlier name of one a `CHANGE` renamed. */
+  gone?: string;
+  /** Whether every check the database holds is enforced. */
+  enforced?: boolean;
+  /** How every foreign key the database holds defers its check. */
+  deferrability?: "not" | "immediate" | "deferred";
+  /** How every index the database holds is built; `null` for one the read did not find. */
+  index?: "plain" | "other" | null;
+  /** Whether every AUTOINCREMENT counter covers its table's rows. */
+  counter?: boolean;
+  /** Whether every constraint the database holds is validated. */
+  validated?: boolean;
+}): LiveSchemaWithColumnFacts => ({
+  hasTable: () => true,
+  hasColumn: (_table, column) => column !== facts.gone,
+  hasIndex: () => true,
+  hasConstraint: () => true,
+  usable: () => facts.validated ?? true,
+  checkEnforced: () => facts.enforced ?? true,
+  keyDeferrability: () => facts.deferrability ?? "not",
+  indexShape: () =>
+    facts.index === null ? undefined : (facts.index ?? "plain"),
+  counterCovers: () => facts.counter ?? true,
+  untrackedSettings: () => facts.settings ?? [],
+  settingsReadable: () => facts.readable ?? true,
+  generatesKey: () => facts.generatesKey ?? true,
+  identityMode: () => facts.identity,
+});
+
+/** The statuses `proveStatements` gives one MySQL or PostgreSQL file against `schema`. */
+async function statusesAgainst(
+  statements: string[],
+  dialect: SupportedDialect,
+  schema: LiveSchemaWithColumnFacts,
+  between: typeof sides = sides
+): Promise<string[]> {
+  const proofs = await proveStatements({
+    statements,
+    dialect,
+    sides: between,
+    live: { schema, nullsIn: () => Promise.resolve(0) },
+  });
+  return proofs.map(proof => proof.status);
+}
+
+describe("a MySQL column restated by MODIFY or CHANGE", () => {
+  const MODIFY = "ALTER TABLE `dc_posts` MODIFY COLUMN `slug` varchar(500)";
+  const CHANGE = "ALTER TABLE `dc_posts` CHANGE COLUMN `title` `slug` text";
+
+  it("is not proven where the live column keeps a setting the statement would reset", async () => {
+    // The column already has the file's type, with a collation and a comment set by hand: a run
+    // of the file would put both back, so a record without running leaves another database.
+    const kept = liveWith({
+      settings: ["COLLATE utf8mb4_bin", "COMMENT"],
+      gone: "title",
+    });
+    expect(await statusesAgainst([MODIFY], "mysql", kept)).toEqual(["keeps"]);
+    expect(await statusesAgainst([CHANGE], "mysql", kept)).toEqual(["keeps"]);
+  });
+
+  it("asks about the column as the statement leaves it named", async () => {
+    const asked: string[] = [];
+    const schema: LiveSchemaWithColumnFacts = {
+      ...liveWith({ gone: "title" }),
+      untrackedSettings: (table, column) => {
+        asked.push(`${table}.${column}`);
+        return [];
+      },
+    };
+    await statusesAgainst([MODIFY], "mysql", schema);
+    await statusesAgainst([CHANGE], "mysql", schema);
+    expect(asked).toEqual(["dc_posts.slug", "dc_posts.slug"]);
+  });
+
+  it("reads the column past a condition written before the table or the column", async () => {
+    const asked: string[] = [];
+    const schema: LiveSchemaWithColumnFacts = {
+      ...liveWith({}),
+      untrackedSettings: (table, column) => {
+        asked.push(`${table}.${column}`);
+        return ["COMMENT"];
+      },
+    };
+    for (const statement of [
+      "ALTER TABLE IF EXISTS `dc_posts` MODIFY COLUMN `slug` varchar(500)",
+      "ALTER TABLE `dc_posts` MODIFY COLUMN IF EXISTS `slug` varchar(500)",
+    ]) {
+      const [status] = await statusesAgainst([statement], "mysql", schema);
+      // Shown or not, never recorded with the column unasked.
+      expect(status === "keeps" || status === "unshown", statement).toBe(true);
+    }
+    expect(asked.every(each => each === "dc_posts.slug")).toBe(true);
+  });
+
+  it("is not shown on a table whose column settings cannot be read", async () => {
+    // An NDB table's columns carry a format and a storage the catalog read here does not report,
+    // and a restatement resets them like any other setting.
+    expect(
+      await statusesAgainst([MODIFY], "mysql", liveWith({ readable: false }))
+    ).toEqual(["unshown"]);
+  });
+
+  it("is proven where the live column holds nothing the statement would reset", async () => {
+    expect(await statusesAgainst([MODIFY], "mysql", liveWith({}))).toEqual([
+      "shown",
+    ]);
+  });
+
+  it("is not shown where the clause states what the snapshot does not record", () => {
+    for (const tail of [
+      "varchar(500) AFTER `title`",
+      "varchar(500) FIRST",
+      "varchar(500) COLLATE utf8mb4_bin",
+      "varchar(500) CHARACTER SET latin1",
+      "varchar(500) COMMENT 'by hand'",
+      "varchar(500) INVISIBLE",
+      "timestamp ON UPDATE CURRENT_TIMESTAMP",
+      "int AUTO_INCREMENT",
+      "int GENERATED ALWAYS AS (1) STORED",
+      "point SRID 4326",
+      "int DEFAULT (1) INVISIBLE",
+      "int DEFAULT (1) FIRST",
+      "int NOT NULL DEFAULT (1) COMMENT 'by hand'",
+      "datetime(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
+      "int DEFAULT",
+      "varchar(500) NOT SECONDARY",
+      "bigint SERIAL DEFAULT VALUE",
+      "national varchar(500)",
+    ]) {
+      const statement = `ALTER TABLE \`dc_posts\` MODIFY COLUMN \`slug\` ${tail}`;
+      expect(shown(statement, "mysql"), statement).toBe(false);
+    }
+    // What the generator writes of a restated column stays shown: type, nullability, default.
+    for (const tail of [
+      "varchar(500)",
+      "varchar(500) NOT NULL DEFAULT 'first'",
+      "text NULL",
+      "bigint unsigned NOT NULL DEFAULT 0",
+      "decimal(10,2) DEFAULT -1.5",
+      "datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)",
+      "json DEFAULT (JSON_ARRAY())",
+      "binary(16) NULL DEFAULT NULL",
+      "double precision",
+      "enum('first','after') NOT NULL DEFAULT 'after'",
+    ]) {
+      const statement = `ALTER TABLE \`dc_posts\` MODIFY COLUMN \`slug\` ${tail}`;
+      expect(shown(statement, "mysql"), statement).toBe(true);
+    }
+  });
+
+  it("names such a statement and its reason in the refusal", async () => {
+    const proofs = await proveStatements({
+      statements: [MODIFY],
+      dialect: "mysql",
+      sides,
+      live: {
+        schema: liveWith({ settings: ["COMMENT"] }),
+        nullsIn: () => Promise.resolve(0),
+      },
+    });
+    let error: unknown;
+    try {
+      refuseUnlessProven({
+        file: { filename: "20261116_widen_slug.sql", sha256: CHECKSUM },
+        proof: { statements: proofs, recordedChecksum: CHECKSUM },
+        attempt: undefined,
+      });
+    } catch (thrown) {
+      error = thrown;
+    }
+    const message = (error as NextlyError).publicMessage;
+    expect(message).toContain(
+      "the database's columns keep settings 1 statement would reset"
+    );
+    expect(message).toContain(
+      "ALTER TABLE `dc_posts` MODIFY COLUMN `slug` varchar (the column keeps settings it would reset)"
+    );
+  });
+});
+
+describe("a key the database assigns, on a table the file creates", () => {
+  const counters = {
+    name: "counters",
+    columns: [
+      { name: "id", type: "int4", nullable: false, autoIncrement: true },
+      { name: "label", type: "text", nullable: true },
+    ],
+  };
+  const creating = {
+    before: { tables: [] },
+    target: { tables: [counters] },
+  };
+  const CREATES: Array<[SupportedDialect, string]> = [
+    [
+      "postgresql",
+      'CREATE TABLE "counters" ("id" serial PRIMARY KEY, "label" text)',
+    ],
+    [
+      "postgresql",
+      'CREATE TABLE "counters" ("id" integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "label" text)',
+    ],
+    [
+      "mysql",
+      "CREATE TABLE `counters` (`id` int NOT NULL AUTO_INCREMENT PRIMARY KEY, `label` text)",
+    ],
+  ];
+
+  it("is not proven where the live table's key is a plain column", async () => {
+    // The table made by hand with an ordinary integer key: every insert leaving the key out
+    // fails there, where the file's own table assigns it.
+    for (const [dialect, create] of CREATES) {
+      expect(
+        await statusesAgainst(
+          [create],
+          dialect,
+          liveWith({ generatesKey: false }),
+          creating
+        ),
+        create
+      ).toEqual(["not-done"]);
+    }
+  });
+
+  it("is proven where the database assigns the key in the way declared", async () => {
+    for (const [dialect, create] of CREATES) {
+      expect(
+        await statusesAgainst(
+          [create],
+          dialect,
+          liveWith({
+            generatesKey: true,
+            identity: create.includes("IDENTITY") ? "always" : undefined,
+          }),
+          creating
+        ),
+        create
+      ).toEqual(["shown"]);
+    }
+  });
+
+  it("does not take an identity column for the serial key a file declares", async () => {
+    // Both read as an integer the database assigns; an identity column refuses a written value
+    // a serial one takes.
+    expect(
+      await statusesAgainst(
+        [CREATES[0][1]],
+        "postgresql",
+        liveWith({ generatesKey: true, identity: "always" }),
+        creating
+      )
+    ).toEqual(["not-done"]);
+  });
+
+  it("asks the same of a key a file adds to a table it changes", async () => {
+    const ADDS: Array<[SupportedDialect, string]> = [
+      ["postgresql", 'ALTER TABLE "dc_posts" ADD COLUMN "position" serial'],
+      [
+        "mysql",
+        "ALTER TABLE `dc_posts` ADD COLUMN `position` int NOT NULL AUTO_INCREMENT UNIQUE",
+      ],
+    ];
+    for (const [dialect, add] of ADDS) {
+      expect(
+        await statusesAgainst(
+          [add],
+          dialect,
+          liveWith({ generatesKey: false })
+        ),
+        add
+      ).toEqual(["not-done"]);
+      expect(
+        await statusesAgainst([add], dialect, liveWith({ generatesKey: true })),
+        add
+      ).toEqual(["shown"]);
+    }
+  });
+
+  it("reads MySQL's SERIAL DEFAULT VALUE as a key the database assigns", async () => {
+    expect(
+      await statusesAgainst(
+        [
+          "CREATE TABLE `counters` (`id` bigint unsigned SERIAL DEFAULT VALUE, `label` text)",
+        ],
+        "mysql",
+        liveWith({ generatesKey: false }),
+        creating
+      )
+    ).toEqual(["not-done"]);
+  });
+
+  it("does not take a name or a constraint for a key the database assigns", async () => {
+    const never = liveWith({ generatesKey: false });
+    for (const [statement, between] of [
+      [
+        'CREATE TABLE "counters" ("id" integer PRIMARY KEY, "label" text REFERENCES identity (id))',
+        creating,
+      ],
+      [
+        'CREATE TABLE "counters" ("id" integer PRIMARY KEY, "label" text CHECK (identity > 0))',
+        creating,
+      ],
+      [
+        'ALTER TABLE "dc_posts" ADD CONSTRAINT serial CHECK ("title" <> \'\')',
+        sides,
+      ],
+    ] as const) {
+      expect(
+        await statusesAgainst([statement], "postgresql", never, between),
+        statement
+      ).toEqual(["shown"]);
+    }
+  });
+
+  /** A live schema whose only assigned key is `table.column`, noting each one asked about. */
+  const assignedOnly = (table: string, column: string) => {
+    const asked: string[] = [];
+    const schema: LiveSchemaWithColumnFacts = {
+      ...liveWith({}),
+      hasColumn: (_table, name) => name !== "position",
+      generatesKey: (on, name) => {
+        asked.push(`${on}.${name}`);
+        return on === table && name === column;
+      },
+    };
+    return { schema, asked };
+  };
+
+  it("asks about a key under the name later statements of the file leave it with", async () => {
+    const ADD = 'ALTER TABLE "dc_posts" ADD COLUMN "position" serial';
+    const RENAME = 'ALTER TABLE "dc_posts" RENAME COLUMN "position" TO "slug"';
+    // The column the file ends with is a plain integer: the key is not assigned there.
+    const plain = assignedOnly("dc_posts", "title");
+    expect(
+      await statusesAgainst([ADD, RENAME], "postgresql", plain.schema)
+    ).toEqual(["not-done", "shown"]);
+    expect(plain.asked).toEqual(["dc_posts.slug"]);
+    // The same file against a database that assigns it under its last name.
+    const assigned = assignedOnly("dc_posts", "slug");
+    expect(
+      await statusesAgainst([ADD, RENAME], "postgresql", assigned.schema)
+    ).toEqual(["shown", "shown"]);
+  });
+
+  it("follows a key through a renamed table, and MySQL's CHANGE", async () => {
+    const renamedTable = assignedOnly("dc_pages", "position");
+    expect(
+      await statusesAgainst(
+        [
+          'ALTER TABLE "dc_posts" ADD COLUMN "position" serial',
+          'ALTER TABLE "dc_posts" RENAME TO "dc_pages"',
+        ],
+        "postgresql",
+        {
+          ...renamedTable.schema,
+          hasColumn: () => true,
+          // The table stands under its new name alone.
+          hasTable: name => name !== "dc_posts",
+        },
+        {
+          before: sides.before,
+          target: {
+            tables: [...sides.target.tables, { ...posts(), name: "dc_pages" }],
+          },
+        }
+      )
+    ).toEqual(["shown", "shown"]);
+    expect(renamedTable.asked).toEqual(["dc_pages.position"]);
+  });
+
+  it("follows every pair of a chained table rename, in order", async () => {
+    const asked: string[] = [];
+    const schema: LiveSchemaWithColumnFacts = {
+      ...liveWith({}),
+      untrackedSettings: (table, column) => {
+        asked.push(`${table}.${column}`);
+        return ["COMMENT"];
+      },
+    };
+    // The table restated ends under the other's name: `dc_posts` to `tmp`, then `tmp` to
+    // `dc_pages`, within one statement.
+    const [status] = await statusesAgainst(
+      [
+        "ALTER TABLE `dc_posts` MODIFY COLUMN `slug` varchar(500)",
+        "RENAME TABLE `dc_posts` TO `tmp`, `dc_pages` TO `dc_posts`, `tmp` TO `dc_pages`",
+      ],
+      "mysql",
+      schema
+    );
+    expect(asked).toEqual(["dc_pages.slug"]);
+    expect(status).toBe("keeps");
+  });
+
+  it("asks about a key made on a table the file later renames into place", async () => {
+    const STAGED = [
+      'CREATE TABLE "tmp_counters" ("id" serial PRIMARY KEY, "label" text)',
+      'ALTER TABLE "tmp_counters" RENAME TO "counters"',
+    ];
+    const live = (assigned: boolean) => {
+      const { schema, asked } = assignedOnly(
+        assigned ? "counters" : "elsewhere",
+        "id"
+      );
+      return {
+        asked,
+        schema: {
+          ...schema,
+          hasColumn: () => true,
+          hasTable: (name: string) => name !== "tmp_counters",
+        },
+      };
+    };
+    const plain = live(false);
+    expect(
+      await statusesAgainst(STAGED, "postgresql", plain.schema, creating)
+    ).toEqual(["not-done", "shown"]);
+    expect(plain.asked).toEqual(["counters.id"]);
+    expect(
+      await statusesAgainst(STAGED, "postgresql", live(true).schema, creating)
+    ).toEqual(["shown", "shown"]);
+  });
+
+  it("asks nothing of a key a later statement of the file makes plain", async () => {
+    const CREATE =
+      'CREATE TABLE "counters" ("id" serial PRIMARY KEY, "label" text)';
+    for (const [dialect, statements] of [
+      [
+        "postgresql",
+        [CREATE, 'ALTER TABLE "counters" ALTER COLUMN "id" DROP DEFAULT'],
+      ],
+      [
+        "postgresql",
+        [
+          'CREATE TABLE "counters" ("id" integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "label" text)',
+          'ALTER TABLE "counters" ALTER COLUMN "id" DROP IDENTITY',
+        ],
+      ],
+      [
+        "mysql",
+        [
+          "ALTER TABLE `dc_posts` ADD COLUMN `position` int NOT NULL AUTO_INCREMENT UNIQUE",
+          "ALTER TABLE `dc_posts` CHANGE COLUMN `position` `slug` int NOT NULL",
+        ],
+      ],
+    ] as const) {
+      const plain = assignedOnly("elsewhere", "id");
+      // The statement that had the database assign the key is proven without asking: the file
+      // itself leaves the column plain. (`DROP IDENTITY` is its own statement to prove, and the
+      // snapshot records no identity to show it by.)
+      const [made] = await statusesAgainst(
+        [...statements],
+        dialect,
+        plain.schema,
+        dialect === "mysql" ? sides : creating
+      );
+      expect(made, statements[1]).toBe("shown");
+      expect(plain.asked, statements[1]).toEqual([]);
+    }
+  });
+
+  it("holds an identity column to the mode the file declares", async () => {
+    const identity = (mode: string) =>
+      `CREATE TABLE "counters" ("id" integer GENERATED ${mode} AS IDENTITY PRIMARY KEY, "label" text)`;
+    for (const [declared, live, status] of [
+      ["ALWAYS", "always", "shown"],
+      ["ALWAYS", "by-default", "not-done"],
+      ["BY DEFAULT", "by-default", "shown"],
+      ["BY DEFAULT", "always", "not-done"],
+    ] as const) {
+      expect(
+        await statusesAgainst(
+          [identity(declared)],
+          "postgresql",
+          liveWith({ identity: live }),
+          creating
+        ),
+        `${declared} against ${live}`
+      ).toEqual([status]);
+    }
+  });
+
+  it("asks nothing of a key a later statement of the file drops", async () => {
+    const dropped = assignedOnly("dc_posts", "title");
+    expect(
+      await statusesAgainst(
+        [
+          'ALTER TABLE "dc_posts" ADD COLUMN "position" serial',
+          'ALTER TABLE "dc_posts" DROP COLUMN "position"',
+        ],
+        "postgresql",
+        dropped.schema
+      )
+    ).toEqual(["shown", "shown"]);
+    expect(dropped.asked).toEqual([]);
+  });
+
+  it("asks nothing of a key the file leaves plain, or of SQLite's rowid key", async () => {
+    const never = liveWith({ generatesKey: false });
+    expect(
+      await statusesAgainst(
+        ['CREATE TABLE "counters" ("id" integer PRIMARY KEY, "label" text)'],
+        "postgresql",
+        never,
+        creating
+      )
+    ).toEqual(["shown"]);
+    expect(
+      await statusesAgainst(
+        ['CREATE TABLE "counters" ("id" integer PRIMARY KEY, "label" text)'],
+        "sqlite",
+        never,
+        creating
+      )
+    ).toEqual(["shown"]);
+  });
+});
+
+describe("rows dangling through one of two keys between the same tables", () => {
+  const key = (name: string, column: string) => ({
+    name,
+    columns: [column],
+    referencesTable: "users",
+    referencesColumns: ["id"],
+    onDelete: "no action" as const,
+    onUpdate: "no action" as const,
+  });
+  const author = key("fk_dc_posts_author", "author");
+  const editor = key("fk_dc_posts_editor", "editor");
+  const between = {
+    before: { tables: [{ ...posts("title"), foreignKeys: [author] }] },
+    target: { tables: [{ ...posts("title"), foreignKeys: [author, editor] }] },
+  };
+
+  it("does not blame the added key for rows dangling through the one the database had", () => {
+    const throughAuthor = {
+      table: "dc_posts",
+      parent: "users",
+      rows: 3,
+      columns: ["author"],
+    };
+    const throughEditor = { ...throughAuthor, rows: 1, columns: ["editor"] };
+    expect(danglingOnAddedKeys(between, [throughAuthor])).toEqual([]);
+    expect(
+      danglingOnAddedKeys(between, [throughAuthor, throughEditor])
+    ).toEqual([throughEditor]);
+  });
+
+  it("tells two keys from the same column to different columns of the parent apart", () => {
+    const toId = key("fk_dc_posts_author", "author");
+    const toEmail = {
+      ...key("fk_dc_posts_author_email", "author"),
+      referencesColumns: ["email"],
+    };
+    const twoTargets = {
+      before: { tables: [{ ...posts("title"), foreignKeys: [toId] }] },
+      target: { tables: [{ ...posts("title"), foreignKeys: [toId, toEmail] }] },
+    };
+    const through = (referencesColumns: string[]) => ({
+      table: "dc_posts",
+      parent: "users",
+      rows: 2,
+      columns: ["author"],
+      referencesColumns,
+    });
+    // Rows dangling through the key the database had are not the added key's.
+    expect(danglingOnAddedKeys(twoTargets, [through(["id"])])).toEqual([]);
+    expect(danglingOnAddedKeys(twoTargets, [through(["email"])])).toEqual([
+      through(["email"]),
+    ]);
+  });
+
+  it("still reads a count that names no key by its table pair", () => {
+    const unnamed = { table: "dc_posts", parent: "users", rows: 3 };
+    expect(danglingOnAddedKeys(between, [unnamed])).toEqual([unnamed]);
+    const unread = { ...unnamed, columns: [] };
+    expect(danglingOnAddedKeys(between, [unread])).toEqual([unread]);
+  });
+});
+
+describe("what a hand-made database can hold under the names a file writes", () => {
+  const one = async (
+    statement: string,
+    dialect: SupportedDialect,
+    facts: Parameters<typeof liveWith>[0],
+    later: string[] = []
+  ) =>
+    (await statusesAgainst([statement, ...later], dialect, liveWith(facts)))[0];
+
+  it("a constraint a file validates must be validated in the database", async () => {
+    const VALIDATE =
+      'ALTER TABLE "dc_posts" VALIDATE CONSTRAINT "dc_posts_author_fk"';
+    expect(await one(VALIDATE, "postgresql", { validated: false })).toBe(
+      "not-done"
+    );
+    expect(await one(VALIDATE, "postgresql", { validated: true })).toBe(
+      "shown"
+    );
+    // One a later statement of the file drops is not asked about.
+    expect(
+      await one(VALIDATE, "postgresql", { validated: false }, [
+        'ALTER TABLE "dc_posts" DROP CONSTRAINT "dc_posts_author_fk"',
+      ])
+    ).toBe("shown");
+  });
+
+  it("a MySQL check is held to the enforcement the file declares", async () => {
+    const ADD =
+      "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_title_ck` CHECK (`title` <> '')";
+    for (const [statement, enforced, status] of [
+      [ADD, true, "shown"],
+      // Altered by hand to NOT ENFORCED under the file's name: there, and checking nothing.
+      [ADD, false, "not-done"],
+      [`${ADD} NOT ENFORCED`, false, "shown"],
+      [`${ADD} NOT ENFORCED`, true, "not-done"],
+      [`${ADD} ENFORCED`, false, "not-done"],
+      [
+        "CREATE TABLE `dc_posts` (`id` varchar(36) PRIMARY KEY, `title` text, CONSTRAINT `dc_posts_title_ck` CHECK (`title` <> ''))",
+        false,
+        "not-done",
+      ],
+    ] as const) {
+      expect(await one(statement, "mysql", { enforced }), statement).toBe(
+        status
+      );
+    }
+    // One a later statement of the file drops is not asked about, and the table is followed.
+    expect(
+      await one(ADD, "mysql", { enforced: false }, [
+        "ALTER TABLE `dc_posts` DROP CHECK `dc_posts_title_ck`",
+      ])
+    ).toBe("shown");
+  });
+
+  it("a PostgreSQL foreign key is held to the deferrability the file declares", async () => {
+    const ADD =
+      'ALTER TABLE "dc_posts" ADD CONSTRAINT "dc_posts_author_fk" FOREIGN KEY ("title") REFERENCES "dc_posts" ("id")';
+    for (const [tail, live, status] of [
+      ["", "not", "shown"],
+      // Made by hand DEFERRABLE under the file's name.
+      ["", "immediate", "not-done"],
+      ["", "deferred", "not-done"],
+      [" NOT DEFERRABLE", "not", "shown"],
+      [" DEFERRABLE", "immediate", "shown"],
+      [" DEFERRABLE INITIALLY IMMEDIATE", "immediate", "shown"],
+      [" DEFERRABLE INITIALLY DEFERRED", "deferred", "shown"],
+      [" DEFERRABLE INITIALLY DEFERRED", "immediate", "not-done"],
+      [" DEFERRABLE", "not", "not-done"],
+      // Deferrable without the word: `INITIALLY DEFERRED` alone makes it so.
+      [" INITIALLY DEFERRED", "deferred", "shown"],
+    ] as const) {
+      expect(
+        await one(`${ADD}${tail}`, "postgresql", { deferrability: live }),
+        `${tail} against ${live}`
+      ).toBe(status);
+    }
+    // MySQL has no deferrable keys, and SQLite's are not read: neither is asked.
+    expect(
+      await one(
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_author_fk` FOREIGN KEY (`title`) REFERENCES `dc_posts` (`id`)",
+        "mysql",
+        { deferrability: "deferred" }
+      )
+    ).toBe("shown");
+  });
+
+  it("an index a file creates must be a plain one in the database", async () => {
+    const CREATE = 'CREATE INDEX "dc_posts_slug_idx" ON "dc_posts" ("slug")';
+    const ADD = "ALTER TABLE `dc_posts` ADD INDEX `dc_posts_slug_idx` (`slug`)";
+    for (const [statement, dialect] of [
+      [CREATE, "postgresql"],
+      [CREATE, "sqlite"],
+      [ADD, "mysql"],
+      [
+        "CREATE UNIQUE INDEX `dc_posts_slug_idx` ON `dc_posts` (`slug`)",
+        "mysql",
+      ],
+      [
+        "ALTER TABLE `dc_posts` ADD UNIQUE `dc_posts_slug_idx` (`slug`)",
+        "mysql",
+      ],
+      [
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_slug_idx` UNIQUE (`slug`)",
+        "mysql",
+      ],
+    ] as const) {
+      expect(await one(statement, dialect, { index: "plain" }), statement).toBe(
+        "shown"
+      );
+      // Made by hand under the file's name by another method.
+      expect(await one(statement, dialect, { index: "other" }), statement).toBe(
+        "not-done"
+      );
+      // One the read did not find is not taken for a plain one.
+      expect(await one(statement, dialect, { index: null }), statement).toBe(
+        "not-done"
+      );
+    }
+    // One a later statement of the file drops is not asked about.
+    expect(
+      await one(CREATE, "postgresql", { index: "other" }, [
+        'DROP INDEX "dc_posts_slug_idx"',
+      ])
+    ).toBe("shown");
+    // The same name dropped on another table is another index.
+    expect(
+      await one(ADD, "mysql", { index: "other" }, [
+        "ALTER TABLE `dc_pages` DROP INDEX `dc_posts_slug_idx`",
+      ])
+    ).toBe("not-done");
+    // An index a later statement renames is asked about under its last name.
+    const asked: string[] = [];
+    await statusesAgainst(
+      [
+        ADD,
+        "ALTER TABLE `dc_posts` RENAME INDEX `dc_posts_slug_idx` TO `renamed`",
+      ],
+      "mysql",
+      {
+        ...liveWith({}),
+        hasIndex: (name: string) => name !== "dc_posts_slug_idx",
+        indexShape: (table, name) => {
+          asked.push(`${table}.${name}`);
+          return "plain";
+        },
+      }
+    );
+    expect(asked).toEqual(["dc_posts.renamed"]);
+  });
+
+  it("an index statement that states a direction, a NULL order or a method is not shown", () => {
+    for (const [statement, dialect] of [
+      ['CREATE INDEX "i" ON "dc_posts" ("slug" DESC)', "postgresql"],
+      ['CREATE INDEX "i" ON "dc_posts" ("slug" NULLS FIRST)', "postgresql"],
+      ['CREATE INDEX "i" ON "dc_posts" USING hash ("slug")', "postgresql"],
+      ['CREATE INDEX "i" ON "dc_posts" ("slug" DESC)', "sqlite"],
+      ["CREATE INDEX `i` ON `dc_posts` (`slug` DESC)", "mysql"],
+      ["CREATE INDEX `i` USING HASH ON `dc_posts` (`slug`)", "mysql"],
+      ["CREATE FULLTEXT INDEX `i` ON `dc_posts` (`slug`)", "mysql"],
+      ["ALTER TABLE `dc_posts` ADD INDEX `i` (`slug` DESC)", "mysql"],
+      ["ALTER TABLE `dc_posts` ADD INDEX `i` USING HASH (`slug`)", "mysql"],
+      [
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `i` UNIQUE (`slug` DESC)",
+        "mysql",
+      ],
+    ] as const) {
+      expect(shown(statement, dialect), statement).toBe(false);
+    }
+    // The plain statements the generator writes stay shown, a key prefix and a predicate included.
+    for (const [statement, dialect] of [
+      ['CREATE INDEX IF NOT EXISTS "i" ON "dc_posts" ("slug")', "postgresql"],
+      ['CREATE INDEX "i" ON "dc_posts" USING btree ("slug")', "postgresql"],
+      [
+        'CREATE UNIQUE INDEX "i" ON "dc_posts" ("slug") WHERE "slug" IS NOT NULL',
+        "postgresql",
+      ],
+      ['CREATE INDEX "i" ON "dc_posts" ((lower("slug")))', "postgresql"],
+      ["CREATE INDEX `i` ON `dc_posts` (`slug`(191))", "mysql"],
+      ["ALTER TABLE `dc_posts` ADD UNIQUE INDEX `i` (`slug`)", "mysql"],
+    ] as const) {
+      expect(shown(statement, dialect), statement).toBe(true);
+    }
+  });
+
+  it("a SQLite rebuild's sequence carry needs a counter that covers the table's rows", async () => {
+    const REBUILD = [
+      "INSERT INTO sqlite_sequence (name, seq) SELECT '__new_dc_posts', seq FROM sqlite_sequence WHERE name = 'dc_posts'",
+      'CREATE TABLE "__new_dc_posts" ("id" text NOT NULL, "title" text, "slug" text)',
+      'INSERT INTO "__new_dc_posts" ("id", "title") SELECT "id", "title" FROM "dc_posts"',
+      'DROP TABLE "dc_posts"',
+      'ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"',
+    ];
+    const asked: string[] = [];
+    const live = (covers: boolean): LiveSchemaWithColumnFacts => ({
+      ...liveWith({}),
+      counterCovers: table => {
+        asked.push(table);
+        return covers;
+      },
+    });
+    expect((await statusesAgainst(REBUILD, "sqlite", live(false)))[0]).toBe(
+      "not-done"
+    );
+    expect((await statusesAgainst(REBUILD, "sqlite", live(true)))[0]).toBe(
+      "shown"
+    );
+    // Asked of the table the counter is carried for, under the name the file leaves it with.
+    expect(new Set(asked)).toEqual(new Set(["dc_posts"]));
+  });
+
+  it("a same-name foreign key of another shape counts as one the file adds", () => {
+    const key = (referencesTable: string) => ({
+      name: "fk_dc_posts_author",
+      columns: ["author"],
+      referencesTable,
+      referencesColumns: ["id"],
+      onDelete: "no action" as const,
+      onUpdate: "no action" as const,
+    });
+    const retargeted = {
+      before: { tables: [{ ...posts("title"), foreignKeys: [key("users")] }] },
+      target: {
+        tables: [{ ...posts("title"), foreignKeys: [key("accounts")] }],
+      },
+    };
+    const dangling = {
+      table: "dc_posts",
+      parent: "accounts",
+      rows: 2,
+      columns: ["author"],
+      referencesColumns: ["id"],
+    };
+    expect(danglingOnAddedKeys(retargeted, [dangling])).toEqual([dangling]);
+    // The same key on both sides is not the file's.
+    expect(
+      danglingOnAddedKeys(
+        { before: retargeted.target, target: retargeted.target },
+        [dangling]
+      )
+    ).toEqual([]);
   });
 });

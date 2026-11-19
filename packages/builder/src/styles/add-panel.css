@@ -31,6 +31,49 @@
   font-size: var(--nx-builder-font-size);
 }
 
+/*
+ * Nothing in the bar is squeezed but the page title: the end column's
+ * controls (search, Preview, Save, Publish, the ⋯) and the page data meter
+ * keep their whole size, so a long title beside them shortens instead.
+ */
+.nx-builder-topbar > [data-topbar="end"] > *,
+.nx-builder-topbar .nx-read-meter[data-place="bar"] {
+  flex-shrink: 0;
+}
+
+/*
+ * Once the title is at its shortest the bar is crowded (`data-crowded`, set by
+ * measuring it), and the words that give way next step aside: Preview's word
+ * and the meter's "what's this?". Hidden from sight only, so each control
+ * keeps its accessible name, and its tooltip says the rest.
+ */
+/*
+ * Where the system asks for reduced motion, nothing in the bar eases between
+ * states: a button's hover, press, and Save's and Publish's words change at
+ * once. The host's controls in the bar are included, since the author's own
+ * request covers the whole bar; doubled for weight over a control's own
+ * `transition-colors`, whichever stylesheet loads last.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .nx-builder-topbar.nx-builder-topbar *,
+  .nx-builder-topbar.nx-builder-topbar *::before,
+  .nx-builder-topbar.nx-builder-topbar *::after {
+    transition: none;
+  }
+}
+
+.nx-builder-topbar[data-crowded] [data-topbar-word] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
 /* No background: the shell's panel region is the one surface panels sit on. */
 .nx-insert-panel {
   display: flex;
@@ -186,14 +229,16 @@
 /*
  * The retry inside a notice: a link-shaped control in the sentence that
  * explains it, rather than a button beside it, because the sentence is short
- * and the action is its last clause.
+ * and the action is its last clause. In the text colour, not the accent: the
+ * accent is a fill a brand may set too light to read as small text, and the
+ * underline already says it can be pressed.
  */
 .nx-insert-panel__retry {
   padding: 0;
   border: 0;
   background: none;
   font: inherit;
-  color: var(--nx-primary);
+  color: var(--nx-builder-text);
   text-decoration: underline;
   cursor: pointer;
 }

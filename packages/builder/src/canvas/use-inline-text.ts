@@ -834,12 +834,25 @@ export function useInlineText(
      */
     const swallow = (event: Event) => event.stopPropagation();
 
+    /*
+     * A value typed inside a disclosure's `<summary>` (a Question's title):
+     * the summary opens and closes its `<details>` on a click, and on the
+     * click the browser makes for Space and Enter, whatever inside it was
+     * pressed. Refused while the title is being typed, so a space or a click
+     * placing the caret leaves the question as it is.
+     */
+    const summary = element.closest("summary");
+    const keepDisclosure = (event: Event) => event.preventDefault();
+    // In the capture phase: the element below stops a click's propagation.
+    summary?.addEventListener("click", keepDisclosure, true);
+
     element.addEventListener("keydown", onKeyDown);
     element.addEventListener("blur", tryToLeave);
     element.addEventListener("pointerdown", swallow);
     element.addEventListener("click", swallow);
     element.addEventListener("dblclick", swallow);
     return () => {
+      summary?.removeEventListener("click", keepDisclosure, true);
       stopItemKeys();
       element.removeEventListener("keydown", onKeyDown);
       element.removeEventListener("blur", tryToLeave);

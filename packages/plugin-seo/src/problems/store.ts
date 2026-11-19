@@ -28,6 +28,7 @@ import { isRecord, textOf } from "../plain-values";
 
 import type { Problem, ProblemSubject } from "./contract";
 import type { PageLinks } from "./link-graph";
+import { rowUnchanged } from "./row-change";
 
 export const PROBLEMS_SLUG = "nx_seo_problems";
 
@@ -62,7 +63,9 @@ export function problemsCollection(): CollectionConfig {
       // The pages the page's content links to, and whether it is listed and
       // its language's home, for the site's link counts and orphan pages.
       json({ name: "links", label: "Links" }),
-      // ISO text, which orders and compares alike on every dialect.
+      // On a page's row, when a check last found this page changed; on the
+      // site's row, when the site was last checked in full. ISO text, which
+      // orders and compares alike on every dialect.
       text({ name: "checkedAt", label: "Checked at" }),
       checkbox({ name: "outOfDate", label: "Out of date" }),
       // When the full check was last marked out of date, as ISO text.
@@ -116,11 +119,17 @@ export interface PageRow {
   problems: Problem[];
   /** What its links reach; none on a row kept before links were read. */
   links?: PageLinks;
+  /**
+   * When a check last found this page changed, as ISO text: a check that
+   * finds it as it was leaves the row alone. Not when it was last checked,
+   * which the site's row says for the whole site.
+   */
   checkedAt: string;
 }
 
 /** The site's own row: the last full check. */
 export interface SiteCheck {
+  /** When the site was last checked in full, as ISO text. */
   checkedAt?: string;
   pagesChecked: number;
   outOfDate: boolean;
@@ -221,15 +230,36 @@ async function rowAt(
 }
 
 /**
+ * Each page row read back as it is stored, with its id: a check finding the
+ * page as it was leaves the row alone, and one writing it again does not
+ * look it up a second time.
+ */
+const storedRows = new WeakMap<PageRow, Record<string, unknown>>();
+
+/**
  * Write `fields` to the row `key`, made where it is not there yet. A row
  * another check made a moment before is written over, rather than refused.
+ * `knownId` is the row's id where it was read already: one removed since is
+ * looked up again.
  */
 async function writeRow(
   ctx: PluginContext,
   key: string,
-  fields: Record<string, unknown>
+  fields: Record<string, unknown>,
+  knownId?: string
 ): Promise<void> {
   const slug = problemsSlug(ctx);
+  if (knownId !== undefined) {
+    try {
+      await ctx.services.collections.updateEntry(slug, knownId, {
+        ...fields,
+        _overwrite: true,
+      });
+      return;
+    } catch (error) {
+      if (!NextlyError.isCode(error, "NOT_FOUND")) throw error;
+    }
+  }
   const existing = await rowAt(ctx, key);
   if (existing === undefined) {
     try {
@@ -250,13 +280,27 @@ async function writeRow(
   });
 }
 
-/** Keep what one page's check found. */
+/**
+ * Keep what one page's check found. `previous` is the page's row in the
+ * same language as it was read before the check, where it was: the row
+ * written over. Where the check found everything but the time as `previous`
+ * holds it, the row is left as it is, so a page row's `checkedAt` says when
+ * a check last found the page changed. The site's own row records every
+ * full check.
+ */
 export async function savePage(
   ctx: PluginContext,
-  row: PageRow
+  row: PageRow,
+  previous?: PageRow
 ): Promise<void> {
   const { subject } = row;
-  await writeRow(ctx, pageKey(subject.type, subject.id, row.locale), {
+  const key = pageKey(subject.type, subject.id, row.locale);
+  const stored =
+    previous !== undefined &&
+    pageKey(previous.subject.type, previous.subject.id, previous.locale) === key
+      ? storedRows.get(previous)
+      : undefined;
+  const fields = {
     kind: "page",
     holderCollection: subject.type,
     holderId: subject.id,
@@ -268,7 +312,14 @@ export async function savePage(
     problems: row.problems,
     links: row.links ?? null,
     checkedAt: row.checkedAt,
-  });
+  };
+  if (stored !== undefined && rowUnchanged(fields, stored)) return;
+  await writeRow(
+    ctx,
+    key,
+    fields,
+    stored === undefined ? undefined : String(stored.id)
+  );
 }
 
 /** Forget a page in one language: it is gone, or no longer public there. */
@@ -290,6 +341,24 @@ export async function removePage(
     // Another check removed it first.
     if (!NextlyError.isCode(error, "NOT_FOUND")) throw error;
   }
+}
+
+/**
+ * A stored page row read back, filed under its page in `byId`, with the row
+ * as stored kept for comparing with and writing it again. Anything else is
+ * passed over.
+ */
+function fileRow(byId: Map<string, PageRow[]>, item: unknown): void {
+  if (!isRecord(item)) return;
+  const row = pageRowOf(item);
+  if (row === undefined) return;
+  const { id } = item;
+  if (typeof id === "string" || typeof id === "number") {
+    storedRows.set(row, item);
+  }
+  const rows = byId.get(row.subject.id) ?? [];
+  rows.push(row);
+  byId.set(row.subject.id, rows);
 }
 
 /**
@@ -320,13 +389,7 @@ export async function readVersionsOf(
       }
     );
     const found = data as unknown[];
-    for (const item of found) {
-      const row = isRecord(item) ? pageRowOf(item) : undefined;
-      if (row === undefined) continue;
-      const rows = byId.get(row.subject.id) ?? [];
-      rows.push(row);
-      byId.set(row.subject.id, rows);
-    }
+    for (const item of found) fileRow(byId, item);
     if (found.length < READ_PAGE) return byId;
   }
 }

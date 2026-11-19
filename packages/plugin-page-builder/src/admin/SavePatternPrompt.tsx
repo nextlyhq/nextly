@@ -24,11 +24,17 @@
  * an undo the shortcut layer still hears — and a form reading the live editor
  * would store something other than what was asked for.
  *
+ * Except once a held component setting is refused: the refusal takes its
+ * binding off the editor's document, so the snapshot binds a setting never
+ * made, and a retry stores the editor's document instead.
+ *
  * @module admin/SavePatternPrompt
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { toastMutationResult } from "@nextlyhq/plugin-sdk/admin";
 import * as React from "react";
+
+import type { CopySourceAddress } from "../library-contract";
 
 import { subjectOf } from "./library-dialog";
 import { usePatternLibrary } from "./pattern-library-client";
@@ -56,6 +62,24 @@ export interface SavePatternPromptProps {
    * the gesture, and whether it is still there is knowable only at the close.
    */
   returnFocusTo?: () => HTMLElement | null;
+  /**
+   * Run before the section is stored: the page's held component settings
+   * written, which the selection may bind and the saved section would keep
+   * binding. `false` when one was refused, and nothing is stored, so no
+   * saved section binds a setting never made.
+   */
+  beforeSave?: () => true | Promise<boolean>;
+  /**
+   * The editor's document now. A refused held setting takes its binding off
+   * the editor's document, not off the snapshot, so a retry after a refusal
+   * saves this: the snapshot would store a binding to a setting never made.
+   */
+  currentDocument?: () => BlockDocument;
+  /**
+   * The stored entry the document is, where it is one, named with the save
+   * so the custom CSS it already holds is no change to the saved section.
+   */
+  source?: CopySourceAddress;
 }
 
 /**
@@ -74,6 +98,9 @@ export function SavePatternPrompt({
   selectedIds,
   onClose,
   returnFocusTo,
+  beforeSave,
+  currentDocument,
+  source,
 }: SavePatternPromptProps): React.JSX.Element | null {
   if (document === null) return null;
   return (
@@ -82,6 +109,9 @@ export function SavePatternPrompt({
       selectedIds={selectedIds}
       onClose={onClose}
       returnFocusTo={returnFocusTo}
+      beforeSave={beforeSave}
+      currentDocument={currentDocument}
+      source={source}
     />
   );
 }
@@ -92,6 +122,9 @@ function SavePatternForm({
   selectedIds,
   onClose,
   returnFocusTo,
+  beforeSave,
+  currentDocument,
+  source,
 }: Omit<SavePatternPromptProps, "document"> & {
   document: BlockDocument;
 }): React.JSX.Element {
@@ -107,6 +140,9 @@ function SavePatternForm({
     selectedIds,
     subject: subjectOf(document, selectedIds),
   }));
+  // Whether a held setting was refused here: the snapshot then still binds
+  // what the refusal took off the editor's document.
+  const refused = React.useRef(false);
 
   /*
    * A save that COMMITTED is still a save, whatever ran after it.
@@ -126,10 +162,20 @@ function SavePatternForm({
    */
   const storing = React.useCallback(
     async (fields: Parameters<typeof writer.save>[2]) => {
+      // A refusal is said where it happened, with the binding taken off.
+      if (beforeSave !== undefined && !(await beforeSave())) {
+        refused.current = true;
+        return false;
+      }
+      const stored =
+        refused.current && currentDocument !== undefined
+          ? currentDocument()
+          : saving.document;
       const answered = await writer.save(
-        saving.document,
+        stored,
         saving.selectedIds,
-        fields
+        fields,
+        source
       );
       if (answered === undefined) return false;
       toastMutationResult("Saved to Saved sections", answered.warnings);
@@ -138,7 +184,7 @@ function SavePatternForm({
     // `saving` is in here even though it never changes: a snapshot taken once
     // at mount is stable by construction, and stating it is cheaper than a
     // suppression that would also hide the next dependency somebody forgets.
-    [writer, saving]
+    [writer, saving, beforeSave, currentDocument, source]
   );
 
   return (

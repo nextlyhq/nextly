@@ -75,6 +75,22 @@ import { BUILDER_CHROME_CLASS, CANVAS_ROOT_CLASS } from "../shell-state";
 export const EMPTY_CONTAINER_SELECTOR: string = `.${BUILDER_CHROME_CLASS} .${CANVAS_ROOT_CLASS} [${SLOTS_ATTRIBUTE}]:empty`;
 
 /**
+ * An open disclosure whose slot holds nothing: a Question emptied of its
+ * answer. Its root renders a `<summary>` beside the slot, so it is never
+ * `:empty` and {@link EMPTY_CONTAINER_SELECTOR} cannot match it; this matches
+ * it by what it holds, a summary and nothing else.
+ *
+ * Open only: a closed one shows its title alone, as on the page, and draws
+ * no start. The frame's sheet draws the empty-container box under the
+ * summary (its `::after`), and the canvas appender draws its "+" there, so
+ * the two ask the same question, as they do of an empty container. Scoped as
+ * an empty container is, to a canvas inside the builder's chrome.
+ */
+export const EMPTY_DISCLOSURE_SELECTOR: string =
+  `.${BUILDER_CHROME_CLASS} .${CANVAS_ROOT_CLASS} ` +
+  `details[${SLOTS_ATTRIBUTE}][open]:not(:has(> :not(summary)))`;
+
+/**
  * A rendered text element emptied of its words: a block's own heading or
  * paragraph, or a value a component placement exposes, cleared.
  *

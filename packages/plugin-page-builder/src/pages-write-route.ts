@@ -86,6 +86,7 @@ import {
   type RenamePageRequest,
 } from "./pages-write-contract";
 import { optionalText, parseRouteParams, parseRouteQuery } from "./route-query";
+import type { StarterPagesSource } from "./starter-pages/starter-pages-route";
 
 /** The status a new or duplicated page starts in, where the collection has the lifecycle. */
 const DRAFT = "draft";
@@ -189,13 +190,18 @@ export interface PagesWrites {
    */
   storedSlug(collection: string, slug: string): string;
   /**
-   * The document the starter page `id` gives a new page of `source`, or
+   * The document the starter page `id` gives a new page of `source`; the
+   * sentence refusing it, where the site can't hold that starter now; or
    * `undefined` where none is offered under that id.
    */
   starter(
     source: PageCollection,
     id: string
-  ): Promise<{ readonly document: unknown } | undefined>;
+  ): Promise<
+    | { readonly document: unknown }
+    | { readonly unavailable: string }
+    | undefined
+  >;
 }
 
 /**
@@ -538,13 +544,18 @@ async function startingDocument(
 ): Promise<unknown> {
   if (starter === undefined) return emptyBlockDocument(source.kinds);
   const offered = await writes.starter(source, starter);
-  if (offered === undefined) {
+  if (offered === undefined || "unavailable" in offered) {
     throw NextlyError.validation({
       errors: [
         {
           path: "starter",
           code: "INVALID",
-          message: "That starter page isn't offered here any more.",
+          // Why this site can't hold it, in the words the picker showed, or,
+          // for an id no starter has, that it isn't offered.
+          message:
+            offered === undefined
+              ? "That starter page isn't offered here any more."
+              : offered.unavailable,
         },
       ],
     });
@@ -872,7 +883,8 @@ type PagesWriteRouteContext = PageCollectionsContext &
  */
 function directPagesWrites(
   ctx: PagesWriteRouteContext,
-  store: ComponentStore
+  store: ComponentStore,
+  starters: StarterPagesSource
 ): PagesWrites {
   // Resolved per call: the caller resolves its own identity once per request.
   const asUser = () => readingAsUser(ctx);
@@ -909,8 +921,9 @@ function directPagesWrites(
       const read = slugAsStored(collection, slug);
       return "slug" in read ? read.slug : slug;
     },
-    // No starter pages are offered yet: one asked for by id is refused.
-    starter: () => Promise.resolve(undefined),
+    // A copy of a starter the site offers this page now, with new ids, or
+    // why the site can't hold it; either way the create says what it gets.
+    starter: async (source, id) => starters.copy(id, source.kinds),
   };
 }
 
@@ -918,19 +931,26 @@ function directPagesWrites(
 function directNewPageReads(
   ctx: PluginRouteContext,
   store: ComponentStore,
-  pagePath: string | undefined
+  pagePath: string | undefined,
+  starters: StarterPagesSource
 ): NewPageReads {
   const search = directPagesSearchReads(ctx, store, pagePath);
   return {
-    ...directPagesWrites(ctx, store),
+    ...directPagesWrites(ctx, store, starters),
     pageCollections: async () =>
       pageCollections(await search.collections(), search.stores()),
     pagesCollection: () => search.pagesCollection(),
     pagePath: () => pagePath,
     site: siteAddress,
-    starters: () => Promise.resolve([]),
+    starters: source => starters.list(source.kinds),
   };
 }
+
+/** No starter pages: the list is empty, and one asked for by id is refused. */
+const NO_STARTER_PAGES: StarterPagesSource = {
+  list: () => Promise.resolve([]),
+  copy: () => Promise.resolve(undefined),
+};
 
 /** One of the routes, as the plugin declares it. */
 interface PagesWriteRoute {
@@ -952,9 +972,12 @@ interface PagesWriteRoute {
 export function pagesWriteRoutes(
   store: ComponentStore = DEFAULT_COMPONENT_STORE,
   /** Where the plugin's own pages are served (`pagePreviewPath`), if stated. */
-  pagePath?: string
+  pagePath?: string,
+  /** The starter pages the site offers; none where it registers none. */
+  starters: StarterPagesSource = NO_STARTER_PAGES
 ): PagesWriteRoute[] {
-  const writesFor = (ctx: PluginRouteContext) => directPagesWrites(ctx, store);
+  const writesFor = (ctx: PluginRouteContext) =>
+    directPagesWrites(ctx, store, starters);
   return [
     {
       method: "GET",
@@ -964,7 +987,7 @@ export function pagesWriteRoutes(
         Response.json(
           await readNewPageFacts(
             parseNewPageQuery(req.url),
-            directNewPageReads(ctx, store, pagePath)
+            directNewPageReads(ctx, store, pagePath, starters)
           )
         ),
     },

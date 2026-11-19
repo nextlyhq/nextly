@@ -54,6 +54,7 @@ import {
   readHiddenCode,
   readMysqlOtherCharsets,
   readPgDescendants,
+  readForeignKeyTargets,
   readReferencingKeys,
   readUserFunctions,
   type HiddenCode,
@@ -104,8 +105,27 @@ export interface DeletionFacts {
   /**
    * Whether `table` exists before the run: a file that creates a table already there may be
    * adopted rather than run, so the table is not the run's own. Undefined when unreadable.
+   * Also asked of a table the run makes first (`madeBeforeTheFiles`) that a statement writes to.
+   * It answers for ordinary tables only: a view, or any other relation, of the name reads false.
    */
   liveTable(table: string): boolean | undefined;
+  /**
+   * The tables (lower-cased) the run itself makes, where the database lacks them, before any
+   * statement of the list runs: Nextly's own tables, which `nextly migrate` and a start's
+   * migrations create in their first phase. Such a table is a plain one when a file writes to
+   * it: the phase fails, and no file runs, where the name is taken by anything else. A
+   * statement of the list could still move the name (a rename, a table made to inherit from
+   * it), so the walk spares a write only until a statement other than a plain write names the
+   * table. Left out by a caller whose run makes nothing first, which is then spared nothing.
+   */
+  madeBeforeTheFiles?: ReadonlySet<string>;
+  /**
+   * Each column of `table` that carries a foreign key, with the tables (lower-cased) its keys
+   * reference. Undefined when unreadable; a fact source without it reads every table so.
+   */
+  keyTargets?(
+    table: string
+  ): ReadonlyMap<string, readonly string[]> | undefined;
   /**
    * The functions a SELECT may call that run code the statement does not show: lower-cased names
    * of the user-defined functions (outside the system catalogs). Undefined when unreadable, when
@@ -156,10 +176,13 @@ interface FactSource {
   hiddenCode(table: string, on: keyof HiddenCode): boolean | undefined;
   descendantsOf(table: string): readonly string[] | undefined;
   liveTable(table: string): boolean | undefined;
+  /** Whether the run makes `table` itself before the list runs (`DeletionFacts.madeBeforeTheFiles`). */
+  madeFirst(table: string): boolean;
   /** Whether a SELECT calling `name` may run code that deletes. */
   mayDeleteThrough(name: string): boolean;
   unseenRebuild: "drop" | "deferred";
   liveColumns(table: string): ReadonlySet<string> | undefined;
+  keyTargets(table: string): ReadonlyMap<string, readonly string[]> | undefined;
   liveType(table: string, column: string): string | undefined;
   /** MySQL: whether `column` has its table's default character set; undefined when unread. */
   keepsCharacterSet(table: string, column: string): boolean | undefined;
@@ -185,8 +208,11 @@ type Reach = "delete" | "truncate" | "none";
 /** What one statement does that can delete data, or change which name means which table. */
 type Step =
   | { kind: "create"; table: string; temporary?: boolean }
-  /** A table dropped; `temporary` when only a temporary table of the name can be (MySQL's DROP TEMPORARY). */
-  | { kind: "drop"; table: string; temporary?: boolean }
+  /**
+   * A table dropped; `temporary` when only a temporary table of the name can be (MySQL's DROP
+   * TEMPORARY), `ifExists` when written to do nothing where the table is not there.
+   */
+  | { kind: "drop"; table: string; temporary?: boolean; ifExists?: boolean }
   | { kind: "add-column"; table: string; column: string }
   | {
       kind: "add-key";
@@ -457,11 +483,16 @@ function readDropTables(
   tokens: readonly Token[]
 ): Step[] {
   cursor.acceptCondition();
+  const ifExists = cursor.conditional;
   const tables = cursor.names();
   if (tables === undefined) return [unread(tokens)];
   if (!cursor.accept("CASCADE")) cursor.accept("RESTRICT");
   if (!cursor.done()) return [unread(tokens)];
-  return tables.map(table => ({ kind: "drop", table }));
+  return tables.map(table => ({
+    kind: "drop",
+    table,
+    ...(ifExists ? { ifExists: true } : {}),
+  }));
 }
 
 /**
@@ -1598,6 +1629,12 @@ class FileWalk {
   private readonly shadowed = new Map<string, string | null | undefined>();
   /** Per table, the tables the list made its descendants. */
   private readonly attached = new Map<string, Set<string>>();
+  /**
+   * The tables the run makes first (`FactSource.madeFirst`) that a statement other than a
+   * plain write of rows has named: such a name may no longer reach the plain table the run
+   * made, so a write to it is spared nothing.
+   */
+  private readonly renamed = new Set<string>();
   /** The functions the list defines, by the last part of their names; `*` for one it cannot name. */
   private readonly functions = new Set<string>();
   /** The foreign keys with an ON DELETE action the list added, in order. */
@@ -1623,6 +1660,25 @@ class FileWalk {
     private readonly facts: FactSource,
     private readonly dialect: SupportedDialect
   ) {}
+
+  /**
+   * Notes each table the run makes first that `tokens`, a statement not read as a plain write
+   * of rows, names: bare, quoted, or qualified by a schema.
+   */
+  named(tokens: readonly Token[]): void {
+    for (const token of tokens) {
+      const names =
+        typeof token === "string"
+          ? token.split(".")
+          : token.kind === "name" && token.name !== undefined
+            ? [token.name]
+            : [];
+      for (const name of names) {
+        const table = name.toLowerCase();
+        if (this.facts.madeFirst(table)) this.renamed.add(table);
+      }
+    }
+  }
 
   /** The live table a name reaches here, or null for one the list made. */
   private origin(name: string): string | null {
@@ -1684,7 +1740,7 @@ class FileWalk {
         this.create(step.table, step.temporary === true);
         return true;
       case "drop":
-        this.drop(step.table, step.temporary === true);
+        this.drop(step.table, step.temporary === true, step.ifExists === true);
         return true;
       case "rows":
         this.removeRows(step);
@@ -1766,7 +1822,7 @@ class FileWalk {
     this.origins.set(table, null);
   }
 
-  private drop(name: string, temporary: boolean): void {
+  private drop(name: string, temporary: boolean, ifExists = false): void {
     if (this.shadowed.has(name)) {
       // Dropping a temporary table loses only what the run put in it, and
       // the name reaches what it reached before again.
@@ -1780,8 +1836,45 @@ class FileWalk {
     // a session's temporary table, never the live one.
     if (temporary) return;
     const table = this.origin(name);
-    if (table !== null) this.emit({ kind: "table", table });
+    if (table !== null) {
+      this.emit({
+        kind: "table",
+        table,
+        ...this.translationsTableOf(table, ifExists),
+      });
+    }
     this.origins.set(name, null);
+  }
+
+  /**
+   * `{ translates: X }` where `table` is the translations table of `X`: named
+   * `<X>_locales` and, where it stands, holding `_locale` with `_parent` a
+   * foreign key to `X`, as every translations table is made. Neither a name
+   * nor two column names prove it of a table that stands: an entity's own
+   * table, or one a plugin made, may be named and laid out so.
+   *
+   * A drop written `IF EXISTS` (`ifExists`, a delete file's) of one the facts
+   * say is not there deletes nothing, however it is named, and goes with the
+   * table it would translate. Only so written: facts read from a snapshot
+   * (`migrate:create`) never hold a translations table, and a plain drop of one
+   * there (translation turned off) is the table's own deletion.
+   */
+  private translationsTableOf(
+    table: string,
+    ifExists: boolean
+  ): { translates?: string } {
+    const suffix = "_locales";
+    if (!table.endsWith(suffix) || table.length <= suffix.length) return {};
+    const owner = table.slice(0, -suffix.length);
+    if (ifExists && this.facts.liveTable(table) === false) {
+      return { translates: owner };
+    }
+    const live = this.facts.liveColumns(table);
+    const parent = this.facts.keyTargets(table)?.get("_parent");
+    if (live?.has("_locale") !== true || parent?.includes(owner) !== true) {
+      return {};
+    }
+    return { translates: owner };
   }
 
   private changeColumn(step: Extract<Step, { kind: "column" }>): void {
@@ -2032,6 +2125,20 @@ class FileWalk {
   private write(step: Extract<Step, { kind: "writes" }>): void {
     const table = this.origin(step.table);
     if (table === null) return;
+    // A table the run makes itself before the list runs, which the database
+    // lacks now, is a plain table with no code and no descendants when the
+    // statement reaches it: nothing of it is unread, there is nothing to read.
+    // A first deploy writes a Builder collection's registry rows so. Only where
+    // the catalog says the table is not there: one that is, or may be, is
+    // judged as any live table, and so is every other table the database lacks,
+    // and this one once a statement that is not a plain write has named it.
+    if (
+      this.facts.madeFirst(table) &&
+      !this.renamed.has(table) &&
+      this.facts.liveTable(table) === false
+    ) {
+      return;
+    }
     // Without ONLY, PostgreSQL writes through a parent reach its descendants
     // (an UPDATE their rows, an INSERT into a partitioned table its
     // partitions), whose own code runs.
@@ -2344,19 +2451,28 @@ function walk(
       }
       const read = run === undefined ? statement : plainMysqlStatement(run);
       const tokens = tokensOf(read, dialect);
-      for (const step of placed(
+      const steps = placed(
         run === undefined
           ? readStatement(statement, dialect)
           : liveRunSteps(run),
         tokens,
         state
-      )) {
+      );
+      for (const step of steps) {
         file.apply(fingerprinted(step, statement));
       }
       const call = readCalls(tokens);
       if (call !== undefined) file.apply(fingerprinted(call, statement));
       advance(state, tokens);
+      // A statement read whole as a write of rows leaves every name meaning what it meant.
+      if (steps.length > 0 && steps.every(step => step.kind === "writes")) {
+        return;
+      }
     }
+    // Any other statement that names a table the run makes first may have given that name
+    // to something else (a rename the walk does not follow, a table made to inherit from
+    // it, a view): from here on a write to it is judged as a write to any table.
+    file.named(tokensOf(statement, dialect));
   });
   return file.found;
 }
@@ -2507,9 +2623,11 @@ function factSource(facts: DeletionFacts): FactSource {
     hiddenCode: (table, on) => facts.hiddenCode(table, on),
     descendantsOf: table => facts.descendantsOf(table),
     liveTable: table => facts.liveTable(table),
+    madeFirst: table => facts.madeBeforeTheFiles?.has(table) === true,
     mayDeleteThrough: name => mayDeleteThrough(name, facts.userFunctions),
     unseenRebuild: facts.unseenRebuild ?? "drop",
     liveColumns: table => facts.liveColumns.get(table),
+    keyTargets: table => facts.keyTargets?.(table),
     liveType: (table, column) => facts.liveColumnTypes?.get(table)?.get(column),
     keepsCharacterSet: (table, column) => {
       const other = facts.otherCharsets?.get(table);
@@ -2656,8 +2774,10 @@ interface Questions {
   /** Tables a row change reaches, asked what code they carry. */
   hidden: Set<string>;
   descendants: Set<string>;
-  /** Tables the list creates, asked whether they exist already. */
+  /** Tables the list creates, or writes to where the run makes them first, asked whether they exist already. */
   live: Set<string>;
+  /** Tables asked what their foreign keys reference. */
+  keys: Set<string>;
   calls: boolean;
 }
 
@@ -2672,6 +2792,7 @@ function answered(asked: Questions): boolean {
       asked.hidden,
       asked.descendants,
       asked.live,
+      asked.keys,
     ].every(set => set.size === 0)
   );
 }
@@ -2697,6 +2818,10 @@ class FactReading {
   private readonly truncates = new Map<string, readonly string[] | undefined>();
   private readonly hidden = new Map<string, HiddenCode | undefined>();
   private readonly liveTables = new Map<string, boolean | undefined>();
+  private readonly keyTargets = new Map<
+    string,
+    ReadonlyMap<string, readonly string[]> | undefined
+  >();
   /** Set once the tables could not be read: whether one exists is then unknown. */
   private spellFailed = false;
   private readonly descendants = new Map<
@@ -2723,7 +2848,9 @@ class FactReading {
 
   constructor(
     private readonly db: unknown,
-    private readonly dialect: SupportedDialect
+    private readonly dialect: SupportedDialect,
+    /** See `DeletionFacts.madeBeforeTheFiles`: handed on with the facts read. */
+    private readonly madeBeforeTheFiles: ReadonlySet<string> | undefined
   ) {}
 
   /** What a walk of `statements` asks that is not answered yet. */
@@ -2735,6 +2862,7 @@ class FactReading {
       hidden: new Set(),
       descendants: new Set(),
       live: new Set(),
+      keys: new Set(),
       calls: false,
     };
     walk(statements, this.dialect, this.answering(asked));
@@ -2770,6 +2898,7 @@ class FactReading {
         const known = lookup(this.liveTables, table, asked.live);
         return known === undefined ? false : known.value;
       },
+      madeFirst: table => this.madeBeforeTheFiles?.has(table) === true,
       mayDeleteThrough: name => {
         if (this.userFunctions !== null)
           return mayDeleteThrough(name, this.userFunctions);
@@ -2777,6 +2906,7 @@ class FactReading {
         return false;
       },
       unseenRebuild: "drop",
+      keyTargets: table => lookup(this.keyTargets, table, asked.keys)?.value,
       liveColumns: table => {
         const known = lookup(this.columnTypes, table, asked.rebuilt);
         return known?.value === undefined
@@ -2806,7 +2936,11 @@ class FactReading {
       ...asked.descendants,
       ...asked.live,
       ...asked.hidden,
+      ...asked.keys,
     ]);
+    for (const table of asked.keys) {
+      this.keyTargets.set(table, await this.readKeyTargets(table));
+    }
     for (const table of asked.live) {
       this.liveTables.set(
         table,
@@ -2870,6 +3004,16 @@ class FactReading {
     return live === undefined
       ? undefined
       : await settle(() => reachedFrom(this.db, dialect, live, false));
+  }
+
+  private async readKeyTargets(
+    table: string
+  ): Promise<ReadonlyMap<string, readonly string[]> | undefined> {
+    const live = this.live(table);
+    const dialect = this.dialect;
+    return live === undefined
+      ? undefined
+      : await settle(() => readForeignKeyTargets(this.db, dialect, live));
   }
 
   private async readTruncate(
@@ -2985,6 +3129,10 @@ class FactReading {
       hiddenCode: (table, on) => this.hidden.get(table.toLowerCase())?.[on],
       descendantsOf: table => this.descendants.get(table.toLowerCase()),
       liveTable: table => this.liveTables.get(table.toLowerCase()),
+      ...(this.madeBeforeTheFiles === undefined
+        ? {}
+        : { madeBeforeTheFiles: this.madeBeforeTheFiles }),
+      keyTargets: table => this.keyTargets.get(table.toLowerCase()),
       ...(userFunctions === undefined ? {} : { userFunctions }),
       liveColumns,
       liveColumnTypes,
@@ -3012,9 +3160,11 @@ const FACT_ROUNDS = 8;
 export async function readDeletionFacts(
   db: unknown,
   dialect: SupportedDialect,
-  statements: readonly string[]
+  statements: readonly string[],
+  /** What the caller's run does that the catalog cannot say (`DeletionFacts.madeBeforeTheFiles`). */
+  run: { madeBeforeTheFiles?: ReadonlySet<string> } = {}
 ): Promise<DeletionFacts> {
-  const reading = new FactReading(db, dialect);
+  const reading = new FactReading(db, dialect, run.madeBeforeTheFiles);
   for (let round = 0; round < FACT_ROUNDS; round += 1) {
     const asked = reading.ask(statements);
     if (answered(asked)) break;

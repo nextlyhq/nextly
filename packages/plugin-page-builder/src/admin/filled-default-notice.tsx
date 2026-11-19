@@ -94,6 +94,16 @@ async function takeFillNotices(): Promise<FillNoticesResult | undefined> {
 }
 
 /**
+ * Ask for, and say, the fills waiting for the author once, right after a
+ * component was published from a screen that is not its own: a header
+ * published while it is edited in place, from the page it sits on.
+ */
+export async function sayFillNotices(sets?: BuilderSets): Promise<void> {
+  const result = await takeFillNotices();
+  if (result !== undefined) showFillNotices(result, sets);
+}
+
+/**
  * Ask for, and say, the fills waiting for the author whenever the component
  * this screen shows is live with nothing unpublished and has just been
  * stored: on opening a live one, and right after each publish, including a

@@ -18,6 +18,7 @@ import {
   relationship,
   text,
 } from "../../../config";
+import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
 import { createDynamicHandlers } from "../../../routeHandler";
 import {
   createTestNextly,
@@ -1119,6 +1120,54 @@ describe.each(getConfiguredTestDialects())(
       expect(spanish.status, JSON.stringify(spanish.json)).toBe(200);
       expect(spanish.json.title).toBe("Entrada");
       expect(JSON.stringify(spanish.json)).not.toContain("Ann");
+    }, 90_000);
+
+    // Whether a related document is published in the read's language is
+    // judged on the translations its rows were fetched with: one statement
+    // reads the target's translations, so one state of them answers both.
+    it("judges a related document's language on the translations fetched with it", async () => {
+      const t = await boot(dialect);
+      // Published in English only.
+      const author = String(
+        (
+          await t.nextly.create({
+            collection: AUTHORS,
+            locale: "en",
+            data: { name: "Ann", status: "published" },
+          })
+        ).item.id
+      );
+      const post = String(
+        (
+          await t.nextly.create({
+            collection: POSTS,
+            locale: "en",
+            data: { title: "Post", author, status: "published" },
+          })
+        ).item.id
+      );
+      await t.nextly.update({
+        collection: POSTS,
+        id: post,
+        locale: "es",
+        data: { title: "Entrada", status: "published", _overwrite: true },
+      });
+      const read = () =>
+        restGet(["collections", POSTS, "entries", post], "?locale=es&depth=1");
+      await read();
+
+      const authorTranslations = (await statementsOf(dialect, read)).filter(
+        sql => sql.includes(`${AUTHORS}_locales`)
+      );
+      expect(authorTranslations).toHaveLength(1);
+      const spanish = await read();
+      expect(spanish.status, JSON.stringify(spanish.json)).toBe(200);
+      expect(JSON.stringify(spanish.json)).not.toContain("Ann");
+      const english = await restGet(
+        ["collections", POSTS, "entries", post],
+        "?locale=en&depth=1"
+      );
+      expect((english.json.author as Record<string, unknown>).name).toBe("Ann");
     }, 90_000);
 
     // Whole-document fallback reads the document as a request for the

@@ -26,6 +26,7 @@ import type {
 } from "@nextlyhq/blocks-engine";
 
 import { revealNode } from "../canvas/reveal-node";
+import { labelNotInName } from "../label-in-name.fixture";
 import { ShowInspectorContext } from "../shell/show-inspector";
 
 import { IMAGE_ALT_CHECK } from "./image-alt-check";
@@ -138,7 +139,7 @@ describe("pressing an item", () => {
     const { editor, canvas } = mount(page({ a: undefined, b: undefined }));
     fireEvent.click(chip());
     fireEvent.click(
-      screen.getByRole("button", { name: "Image has no alt text: Photo b" })
+      screen.getByRole("button", { name: /^Image has no alt text: Photo b\./ })
     );
     expect(editor.askSetting).toHaveBeenCalledWith("b", {
       tab: "content",
@@ -164,7 +165,7 @@ describe("pressing an item", () => {
     );
     fireEvent.click(chip());
     fireEvent.click(
-      screen.getByRole("button", { name: "Image has no alt text: Photo a" })
+      screen.getByRole("button", { name: /^Image has no alt text: Photo a\./ })
     );
     expect(show).toHaveBeenCalledTimes(1);
   });
@@ -241,10 +242,13 @@ describe("pressing an item", () => {
     editor.select.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Next check" }));
     const link = screen.getByRole("link", {
-      name: "Over the page data limit in Site header. Edit the Main header & footer, in a new tab",
+      name: "Edit header & footer: Over the page data limit in Site header (Edit the Main header & footer, in a new tab)",
     });
     expect(link.getAttribute("href")).toBe("/admin/layouts/main");
     expect(bar()?.textContent).toContain("Check 2 of 2");
+    // A speech-input user says the words the link draws (WCAG 2.5.3), and
+    // the name still says what is wrong and where the link goes.
+    expect(labelNotInName(link)).toBeNull();
     // No block of the page is left looking like the problem.
     expect(editor.select).toHaveBeenCalledWith(null);
     expect(editor.askSetting).toHaveBeenCalledTimes(1);
@@ -255,7 +259,7 @@ describe("pressing an item", () => {
     chip().focus();
     fireEvent.click(chip());
     fireEvent.click(
-      screen.getByRole("button", { name: "Image has no alt text: Photo a" })
+      screen.getByRole("button", { name: /^Image has no alt text: Photo a\./ })
     );
     await new Promise(resolve => setTimeout(resolve, 20));
     fireEvent.click(screen.getByRole("button", { name: "Next check" }));
@@ -271,7 +275,7 @@ describe("pressing an item", () => {
     chip().focus();
     fireEvent.click(chip());
     fireEvent.click(
-      screen.getByRole("button", { name: "Image has no alt text: Photo a" })
+      screen.getByRole("button", { name: /^Image has no alt text: Photo a\./ })
     );
     // What the list closing would have done by now, had it been let.
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -282,7 +286,7 @@ describe("pressing an item", () => {
     const { redraw } = mount(page({ a: undefined, b: undefined }));
     fireEvent.click(chip());
     fireEvent.click(
-      screen.getByRole("button", { name: "Image has no alt text: Photo a" })
+      screen.getByRole("button", { name: /^Image has no alt text: Photo a\./ })
     );
     redraw(page({ a: "The team", b: undefined }));
     expect(bar()?.textContent).toContain("Fixed · 1 to go");
@@ -295,7 +299,7 @@ describe("pressing an item", () => {
     );
     fireEvent.click(chip());
     fireEvent.click(
-      screen.getByRole("button", { name: "Image has no alt text: Photo a" })
+      screen.getByRole("button", { name: /^Image has no alt text: Photo a\./ })
     );
     const previous = screen.getByRole("button", { name: "Previous check" });
     expect((previous as HTMLButtonElement).disabled).toBe(true);
@@ -321,7 +325,7 @@ describe("pressing an item", () => {
     );
     fireEvent.click(chip());
     fireEvent.click(
-      screen.getByRole("button", { name: "Image has no alt text: Photo c" })
+      screen.getByRole("button", { name: /^Image has no alt text: Photo c\./ })
     );
     redraw(page({ a: "One", b: undefined, c: undefined, d: undefined }));
     expect(bar()?.textContent).toContain("Check 2 of 3");
@@ -337,7 +341,7 @@ describe("pressing an item", () => {
     mount(page({ a: undefined }));
     fireEvent.click(chip());
     fireEvent.click(
-      screen.getByRole("button", { name: "Image has no alt text: Photo a" })
+      screen.getByRole("button", { name: /^Image has no alt text: Photo a\./ })
     );
     fireEvent.click(screen.getByRole("button", { name: "All checks" }));
     expect(screen.getByRole("heading", { name: "Page checks" })).toBeDefined();
@@ -349,7 +353,7 @@ describe("pressing an item", () => {
     const { redraw } = mount(page({ a: undefined }));
     fireEvent.click(chip());
     fireEvent.click(
-      screen.getByRole("button", { name: "Image has no alt text: Photo a" })
+      screen.getByRole("button", { name: /^Image has no alt text: Photo a\./ })
     );
     redraw(page({ a: "The team" }));
     expect(bar()?.textContent).toContain("All clear");
@@ -364,7 +368,7 @@ describe("pressing an item", () => {
     mount(page({ a: undefined }));
     fireEvent.click(chip());
     fireEvent.click(
-      screen.getByRole("button", { name: "Image has no alt text: Photo a" })
+      screen.getByRole("button", { name: /^Image has no alt text: Photo a\./ })
     );
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(bar()).toBeNull();

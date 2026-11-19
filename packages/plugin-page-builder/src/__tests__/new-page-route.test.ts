@@ -530,6 +530,75 @@ describe("creating from the New page dialog", () => {
     expect(offered.create).not.toHaveBeenCalled();
   });
 
+  it("refuses a starter the site can't hold in the words the picker shows, and makes nothing", async () => {
+    const sentence =
+      'The starter page "Landing" isn\'t available on this site. Needs 5 levels of nesting; this site allows 4.';
+    const starter = vi.fn(async () => ({ unavailable: sentence }));
+    const reads = readsOver({ starter });
+    const error = await refused(() =>
+      createPage({ collection: "pages", title: "A", starter: "landing" }, reads)
+    );
+    expect(issuesOf(error)).toEqual([
+      expect.objectContaining({ path: "starter", message: sentence }),
+    ]);
+    expect(reads.create).not.toHaveBeenCalled();
+  });
+
+  it("fills the page body only from a starter, the header and footer following the dialog's choice", async () => {
+    // The starter's blocks, as the source copies them for a new page.
+    const body = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "copied", type: "core/heading", version: 1, props: {} }],
+    };
+    const starter = vi.fn(async () => ({ document: body }));
+
+    const chosen = readsOver({ starter });
+    await createPage(
+      {
+        collection: "pages",
+        title: "A",
+        starter: "landing",
+        layout: "set-2",
+        noHeaderFooter: false,
+      },
+      chosen
+    );
+    const written = chosen.create.mock.calls[0]?.[1] as Record<string, unknown>;
+    // The body is the starter's, and nothing else of the page is.
+    expect(written.content).toBe(body);
+    expect(written).toMatchObject({ layout: "set-2", noHeaderFooter: false });
+
+    // None, as the dialog chose: the starter brings no header or footer.
+    const none = readsOver({ starter });
+    await createPage(
+      {
+        collection: "pages",
+        title: "A",
+        starter: "landing",
+        layout: null,
+        noHeaderFooter: true,
+      },
+      none
+    );
+    expect(none.create.mock.calls[0]?.[1]).toMatchObject({
+      content: body,
+      layout: null,
+      noHeaderFooter: true,
+    });
+
+    // The site default where the dialog sent no choice: nothing written.
+    const unset = readsOver({ starter });
+    await createPage(
+      { collection: "pages", title: "A", starter: "landing" },
+      unset
+    );
+    const plain = unset.create.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(plain.content).toBe(body);
+    expect(plain).not.toHaveProperty("layout");
+    expect(plain).not.toHaveProperty("noHeaderFooter");
+  });
+
   it("answers whether the author may change the page they made", async () => {
     const may = vi.fn(async (action: string) => action !== "update");
     const item = await createPage(

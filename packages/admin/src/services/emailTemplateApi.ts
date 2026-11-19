@@ -88,11 +88,30 @@ export type EmailTemplateOwner =
   | { kind: "plugin"; name: string; installed: boolean }
   | { kind: "site" };
 
+/**
+ * A written template's blocks, as the server stores and checks them: derived
+ * from the draft preview's contract, which carries them, so the admin never
+ * restates the shape the server validates.
+ */
+export type WrittenDocument = NonNullable<
+  DraftPreviewRequest["template"]["blocks"]
+>;
+
+/** One block of a written template. */
+export type WrittenBlock = WrittenDocument["blocks"][number];
+
+/** Whether a template is written in blocks or coded in HTML. */
+export type TemplateFormat = "code" | "written";
+
 export interface EmailTemplateRecord {
   id: string;
   name: string;
   slug: string;
   kind: EmailTemplateKind;
+  /** Written in blocks, or coded; absent or null on a template stored before blocks were, which is coded. */
+  format?: TemplateFormat | null;
+  /** A written template's blocks; null for a coded one. Its HTML is written from them. */
+  blocks?: WrittenDocument | null;
   subject: string;
   htmlContent: string;
   plainTextContent: string | null;
@@ -170,13 +189,21 @@ export interface EmailTemplateVersion {
 export interface OwnerChange {
   /** Stable within one review. */
   id: string;
-  /** The field, or "template" for an update offered as a whole. */
+  /**
+   * The field; "blocks" for a change to a written template's blocks; or
+   * "template" for an update offered as a whole.
+   */
   field:
     | "subject"
     | "preheader"
     | "htmlContent"
     | "plainTextContent"
+    | "blocks"
     | "template";
+  /** For a change to blocks: what the owner did to them. */
+  kind?: "insert" | "delete" | "change" | "move";
+  /** For a change to blocks: the blocks themselves. */
+  blocks?: { base: unknown[]; theirs: unknown[]; mine: unknown[] };
   /** The site edited the same lines. */
   conflict: boolean;
   /** The lines the change replaced in the version the copy started from. */
@@ -199,6 +226,12 @@ export interface EmailTemplateComparison {
   theirs: EmailTemplateVersion;
   mine: EmailTemplateVersion;
   changes: OwnerChange[];
+  /** For a template written in blocks: each side's blocks in plain words, or null where coded. */
+  inWords?: {
+    base: string[] | null;
+    theirs: string[] | null;
+    mine: string[] | null;
+  };
   /** Names the three versions; applying is refused once any of them moved. */
   review: string;
 }
@@ -210,6 +243,8 @@ export interface OwnerUpdateUndo {
   blocks?: unknown;
   /** The digest the override was based on before the review. */
   baseDigest?: string | null;
+  /** The base copy's blocks before the review; passed back as given. */
+  baseBlocks?: unknown;
   base: EmailTemplateVersion;
   applied: string;
   appliedBase: string;
@@ -246,6 +281,9 @@ export interface CreateEmailTemplatePayload {
   description?: string | null;
   cc?: string[] | null;
   bcc?: string[] | null;
+  /** "written" with its blocks for a template written in blocks; left out for a coded one. */
+  format?: TemplateFormat;
+  blocks?: WrittenDocument | null;
 }
 
 export interface UpdateEmailTemplatePayload {
@@ -265,6 +303,9 @@ export interface UpdateEmailTemplatePayload {
   description?: string | null;
   cc?: string[] | null;
   bcc?: string[] | null;
+  /** A written template's blocks; "code" converts it to code, one way. */
+  format?: TemplateFormat;
+  blocks?: WrittenDocument | null;
 }
 
 export interface EmailTemplatePreviewResult {
@@ -470,6 +511,9 @@ export interface SendTestTarget {
  * absent field is the stored one.
  */
 export interface TemplateTestDraft {
+  /** A written email's format and blocks, so a test sends the blocks on screen. */
+  format?: TemplateFormat;
+  blocks?: WrittenDocument | null;
   subject?: string;
   preheader?: string | null;
   htmlContent?: string;

@@ -26,6 +26,7 @@ import * as React from "react";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { isElement, isInput } from "./dom-kind";
 import { SegmentChoices } from "./segment-choices";
+import { CompactSides } from "./spacing-box";
 import {
   identityOfKey,
   NONE,
@@ -34,7 +35,6 @@ import {
   presetLabels,
   spacingPresets,
 } from "./spacing-presets";
-import { CompactSides } from "./spacing-box";
 import type { ApplyTo } from "./spacing-side";
 import type { StyleControl } from "./style-controls";
 import type { CommitOutcome } from "./style-field-surroundings";

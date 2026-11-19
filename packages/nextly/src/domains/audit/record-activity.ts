@@ -89,6 +89,11 @@ export interface RecordMutationActivityInput {
   data: Record<string, unknown>;
   /** Prior state for an update; null on create and delete. */
   previous?: Record<string, unknown> | null;
+  /**
+   * The schema's component row paths (`componentRowPaths`), whose own system
+   * stamps are not a change. Absent, every key counts.
+   */
+  componentRows?: readonly string[];
   actor?: RequestActor | null;
   /** What the write did to whether the entry is live, from a path that can publish. */
   publication?: PublicationFacts;
@@ -219,12 +224,13 @@ function updateMetadata(input: {
   /** Absent when the write could not assemble its documents: no fields are named. */
   data?: Record<string, unknown>;
   previous?: Record<string, unknown> | null;
+  componentRows?: readonly string[];
   publication?: PublicationFacts;
 }): Record<string, unknown> | undefined {
   if (input.action !== "update") return undefined;
   const changed =
     input.previous && input.data
-      ? computeChangedFields(input.previous, input.data)
+      ? computeChangedFields(input.previous, input.data, input.componentRows)
       : [];
   const marks = publicationMarks(input.publication);
   if (changed.length === 0 && marks === undefined) return undefined;
@@ -360,6 +366,8 @@ export interface RecordSingleActivityInput {
    */
   data?: Record<string, unknown>;
   previous?: Record<string, unknown> | null;
+  /** As an entry's: the component row paths whose own stamps are not a change. */
+  componentRows?: readonly string[];
   /** What the save did to whether the Single is live. */
   publication?: PublicationFacts;
 }
@@ -408,6 +416,7 @@ export async function recordSingleActivity(
     action: "update",
     data: input.data,
     previous: input.previous,
+    componentRows: input.componentRows,
     publication: input.publication,
   });
   await service.logActivityInTx(db(), {

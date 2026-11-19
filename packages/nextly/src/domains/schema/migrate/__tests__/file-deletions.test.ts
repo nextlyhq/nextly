@@ -48,6 +48,8 @@ interface Facts {
   rewrite?: Record<string, boolean | undefined>;
   /** The tables the database has before the run, beyond those `columns` names; "unreadable" for none known. */
   live?: readonly string[] | "unreadable";
+  /** The tables the run itself makes before any statement of the list runs, where the database lacks them. */
+  madeFirst?: readonly string[];
   /**
    * MySQL: per table in `columns`, the columns whose character set is not the table's default;
    * none when left out. "unreadable": not read for any table.
@@ -58,6 +60,8 @@ interface Facts {
    * "unreadable": not read for any table.
    */
   notNull?: Record<string, readonly string[]> | "unreadable";
+  /** Per table, each column with a foreign key and the tables it references; none when left out. */
+  keys?: Record<string, Record<string, readonly string[]>>;
 }
 
 /** Live facts answering exactly from `facts`, with no case folding. */
@@ -87,6 +91,7 @@ function fake(facts: Facts = {}): DeletionFacts {
         : false;
     },
     descendantsOf: answer(facts.descendants),
+    keyTargets: table => new Map(Object.entries(facts.keys?.[table] ?? {})),
     liveTable: table =>
       facts.live === "unreadable"
         ? undefined
@@ -94,6 +99,9 @@ function fake(facts: Facts = {}): DeletionFacts {
     ...(facts.functions === "unreadable"
       ? {}
       : { userFunctions: new Set(facts.functions ?? []) }),
+    ...(facts.madeFirst === undefined
+      ? {}
+      : { madeBeforeTheFiles: new Set(facts.madeFirst) }),
     ...(facts.deferred === true ? { unseenRebuild: "deferred" as const } : {}),
     liveColumns: new Map(
       tables.map(([table, columns]) => [table, new Set(Object.keys(columns))])
@@ -168,6 +176,67 @@ describe("tables dropped", () => {
       ).toEqual([table("posts"), table("pages")]);
     }
   );
+
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "names a dropped translations table the table it translates on %s, by its key to it and not its name",
+    dialect => {
+      const statements = [
+        "DROP TABLE IF EXISTS posts_locales",
+        "DROP TABLE IF EXISTS pages_locales",
+        "DROP TABLE IF EXISTS notes_locales",
+        "DROP TABLE IF EXISTS cards_locales",
+        "DROP TABLE posts",
+      ];
+      const translations = { _parent: "text", _locale: "text", title: "text" };
+      const deletions = read(dialect, statements, {
+        columns: {
+          // `_locale`, and `_parent` a key to `posts`: `posts`' translations table.
+          posts_locales: translations,
+          // Named so, but an entity's own table.
+          pages_locales: { id: "text", title: "text" },
+          // Laid out as one, but `_parent` keys nothing.
+          notes_locales: translations,
+          // Laid out as one, but `_parent` keys another table.
+          cards_locales: translations,
+          posts: { id: "text" },
+        },
+        keys: {
+          posts_locales: { _parent: ["posts"] },
+          cards_locales: { _parent: ["decks"] },
+        },
+      });
+      expect(deletions).toEqual([
+        { kind: "table", table: "posts_locales", translates: "posts" },
+        table("pages_locales"),
+        table("notes_locales"),
+        table("cards_locales"),
+        table("posts"),
+      ]);
+    }
+  );
+
+  it("names a dropped translations table the database does not have the table it would translate, by its name", () => {
+    // Absent, it holds nothing: the drop of a delete file's `IF EXISTS` loses nothing, however named.
+    expect(
+      read(
+        "postgresql",
+        ["DROP TABLE IF EXISTS posts_locales", "DROP TABLE posts"],
+        {
+          columns: { posts: { id: "text" } },
+        }
+      )
+    ).toEqual([
+      { kind: "table", table: "posts_locales", translates: "posts" },
+      table("posts"),
+    ]);
+    // A plain drop is not written to do nothing where the table is missing: facts read from a
+    // snapshot never hold a translations table, and turning translation off drops it so.
+    expect(
+      read("postgresql", ["DROP TABLE posts_locales"], {
+        columns: { posts: { id: "text" } },
+      })
+    ).toEqual([table("posts_locales")]);
+  });
 
   it("counts a table created IF NOT EXISTS as live: it may have been there", () => {
     expect(
@@ -649,6 +718,192 @@ describe("code a table carries, when a row change reaches it", () => {
         triggers: { audit: undefined },
       })
     ).toEqual([mayCarry("rows written to", "audit")]);
+  });
+
+  describe("rows written to a table the run makes itself before the list runs", () => {
+    // Nextly's own registry tables on a database that holds nothing: the run's first phase
+    // makes them, as plain tables with no code, before any statement of a file runs.
+    const first = ["nextly_meta", "dynamic_collections"];
+    const unread = {
+      triggers: { nextly_meta: undefined, dynamic_collections: undefined },
+      descendants: { nextly_meta: undefined, dynamic_collections: undefined },
+    };
+    const writes = [
+      "INSERT INTO dynamic_collections (slug) VALUES ('posts')",
+      "UPDATE nextly_meta SET value = '2' WHERE key = 'v'",
+    ];
+    const refused = (table: string): Deletion[] => [
+      unnamed(
+        `rows written to tables that inherit from ${table} or partition it, whose triggers could not be read`
+      ),
+      mayCarry("rows written to", table),
+    ];
+
+    it("reports nothing where the database lacks the table", () => {
+      for (const dialect of ["sqlite", "mysql", "postgresql"] as const) {
+        expect(
+          read(dialect, writes, { ...unread, madeFirst: first }),
+          dialect
+        ).toEqual([]);
+      }
+    });
+
+    it("still fails closed where the table is there, or may be", () => {
+      expect(
+        read("postgresql", writes, {
+          ...unread,
+          madeFirst: first,
+          live: first,
+        })
+      ).toEqual([...refused("dynamic_collections"), ...refused("nextly_meta")]);
+      expect(
+        read("postgresql", writes, {
+          ...unread,
+          madeFirst: first,
+          live: "unreadable",
+        })
+      ).toEqual([...refused("dynamic_collections"), ...refused("nextly_meta")]);
+    });
+
+    it("still fails closed where the run makes no table first: a caller that does not say so", () => {
+      // An install of a plugin's modules, or a rollback, runs no first phase.
+      expect(read("postgresql", writes, unread)).toEqual([
+        ...refused("dynamic_collections"),
+        ...refused("nextly_meta"),
+      ]);
+    });
+
+    it("still fails closed for any other table the database lacks", () => {
+      // Only the tables the run makes first are known to be plain when a file writes to them.
+      // A name the database lacks may be a view, or be given to a live table by a statement
+      // the list does not follow.
+      expect(
+        read("postgresql", ["INSERT INTO audit_old (id) VALUES (1)"], {
+          triggers: { audit_old: undefined },
+          descendants: { audit_old: undefined },
+          madeFirst: first,
+        })
+      ).toEqual(refused("audit_old"));
+      // A schema-qualified rename is not followed: the write after it is judged by the name
+      // it is written under, which the database lacks.
+      expect(
+        read(
+          "postgresql",
+          [
+            "ALTER TABLE public.audit RENAME TO audit_old",
+            "INSERT INTO audit_old (id) VALUES (1)",
+          ],
+          {
+            triggers: { audit_old: undefined },
+            descendants: { audit_old: undefined },
+            madeFirst: first,
+          }
+        )
+      ).toEqual(refused("audit_old"));
+    });
+
+    it("still fails closed for rows removed from such a table", () => {
+      expect(
+        read("mysql", ["DELETE FROM nextly_meta"], {
+          triggers: { nextly_meta: undefined },
+          madeFirst: first,
+        })
+      ).toEqual([
+        rows("nextly_meta"),
+        mayCarry("rows removed from", "nextly_meta"),
+      ]);
+    });
+
+    it("judges a live table renamed onto such a name as the live table it is", () => {
+      expect(
+        read(
+          "postgresql",
+          [
+            "ALTER TABLE posts RENAME TO nextly_meta",
+            "INSERT INTO nextly_meta (key) VALUES ('v')",
+          ],
+          {
+            triggers: { posts: ["insert"] },
+            live: ["posts"],
+            madeFirst: first,
+          }
+        )
+      ).toEqual([carries("rows written to", "posts")]);
+    });
+
+    it("spares nothing once a statement that is not a plain write names the table", () => {
+      const insert = "INSERT INTO nextly_meta (key) VALUES ('v')";
+      const facts = { ...unread, madeFirst: first };
+      // Renames the walk does not follow can take the table the run made away, and put a
+      // live one under its name.
+      expect(
+        read(
+          "postgresql",
+          [
+            "ALTER TABLE public.nextly_meta RENAME TO meta_old",
+            "ALTER TABLE public.audit RENAME TO nextly_meta",
+            insert,
+          ],
+          facts
+        )
+      ).toEqual(refused("nextly_meta"));
+      // However the name is written.
+      expect(
+        read(
+          "postgresql",
+          ['ALTER TABLE "public"."nextly_meta" RENAME TO "meta_old"', insert],
+          facts
+        )
+      ).toEqual(refused("nextly_meta"));
+      // A live table made to inherit from it is reached by a write through it, with the
+      // code that table carries.
+      expect(
+        read(
+          "postgresql",
+          [
+            "ALTER TABLE legacy_rows INHERIT dynamic_collections",
+            "UPDATE dynamic_collections SET slug = 'x'",
+          ],
+          {
+            triggers: {
+              dynamic_collections: undefined,
+              legacy_rows: ["update"],
+            },
+            madeFirst: first,
+          }
+        )
+      ).toEqual([
+        mayCarry("rows written to", "dynamic_collections"),
+        carries("rows written to", "legacy_rows"),
+      ]);
+      // Writes before such a statement, and to the other table, are still spared.
+      expect(
+        read(
+          "postgresql",
+          [
+            insert,
+            "INSERT INTO dynamic_collections (slug) VALUES ('posts')",
+            "ALTER TABLE public.nextly_meta RENAME TO meta_old",
+            "INSERT INTO dynamic_collections (slug) VALUES ('notes')",
+          ],
+          facts
+        )
+      ).toEqual([]);
+    });
+
+    it("does not read a write after the list defined code, whatever the table", () => {
+      const insert = "INSERT INTO nextly_meta (key) VALUES ('v')";
+      expect(
+        read(
+          "sqlite",
+          [
+            "CREATE TRIGGER meta_wipe AFTER INSERT ON nextly_meta BEGIN DELETE FROM posts; END",
+            insert,
+          ],
+          { ...unread, madeFirst: first }
+        )
+      ).toEqual([afterCode("INSERT INTO NEXTLY_META", insert)]);
+    });
   });
 
   it("asks blanket consent for a PostgreSQL column conversion on a table whose CHECK calls a function, and names its DROP COLUMN", () => {

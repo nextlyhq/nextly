@@ -497,7 +497,9 @@ function DialogBody({ state }: { state: DialogState }): JSX.Element | null {
           {pages.map(page => (
             <li key={page.id}>
               <a
-                className="font-medium text-primary underline-offset-4 hover:underline"
+                // In the text colour, underlined: a brand's primary is a fill and
+                // can fall under AA as small text.
+                className="font-medium text-foreground underline underline-offset-2"
                 href={`/admin/collections/${encodeURIComponent(pagesCollection)}/${encodeURIComponent(page.id)}`}
                 target="_blank"
                 rel="noopener noreferrer"

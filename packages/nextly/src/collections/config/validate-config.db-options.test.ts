@@ -13,6 +13,13 @@ import { text } from "../fields/helpers";
 
 import { defineCollection, type CollectionConfig } from "./define-collection";
 import { validateCollectionConfig } from "./validate-config";
+import { configurationProblems } from "../../shared/lib/config-problems";
+
+/** Every problem the configuration's load reports for these entities, as one text. */
+const problemText = (entities: Parameters<typeof configurationProblems>[0]) =>
+  configurationProblems(entities)
+    .map(problem => `[${problem.code}] ${problem.path}: ${problem.message}`)
+    .join("\n");
 
 function errorsFor(db: unknown) {
   return validateCollectionConfig({
@@ -87,13 +94,17 @@ describe("validateCollectionConfig: db options", () => {
     ]);
   });
 
-  it("stops defineCollection, the entry every code-first collection goes through", () => {
-    expect(() =>
-      defineCollection({
-        slug: "orders",
-        fields: [text({ name: "reference" })],
-        db: { idType: "serial" } as unknown as CollectionConfig["db"],
+  it("is reported for a collection declared through defineCollection, the entry every code-first collection goes through", () => {
+    expect(
+      problemText({
+        collections: [
+          defineCollection({
+            slug: "orders",
+            fields: [text({ name: "reference" })],
+            db: { idType: "serial" } as unknown as CollectionConfig["db"],
+          }),
+        ],
       })
-    ).toThrow(/DB_ID_TYPE_INVALID/);
+    ).toMatch(/DB_ID_TYPE_INVALID/);
   });
 });

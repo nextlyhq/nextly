@@ -28,8 +28,12 @@ interface WrittenFields {
   plainTextContent: string;
 }
 
-/** A save's blocks, checked; a refusal names each field that failed. */
-function parseWrittenDocument(blocks: unknown): WrittenDocument {
+/**
+ * A save's blocks, checked; a refusal names each field that failed. Also
+ * checks the blocks an owner review merges, which both sides adding to can
+ * take past a limit.
+ */
+export function parseWrittenDocument(blocks: unknown): WrittenDocument {
   const parsed = writtenDocumentSchema.safeParse(blocks);
   if (!parsed.success) {
     // The validation envelope every route uses, with each path under

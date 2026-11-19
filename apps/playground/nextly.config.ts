@@ -45,7 +45,9 @@ import { BuilderFirstPages } from "./src/collections/builder-first-pages";
 import { EntryArticles } from "./src/collections/entry-articles";
 import { ContributionStories } from "./src/collections/contribution-stories";
 import { ListStories } from "./src/collections/list-stories";
+import { e2eRateLimit } from "./src/e2e-rate-limit";
 import { E2E_NAMED_QUERIES } from "./src/named-queries";
+import { E2E_STARTER_PAGES } from "./src/starter-pages";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
@@ -131,6 +133,24 @@ const SeoPages = defineCollection({
   ],
   publicAddress: "/seo/{slug}",
 });
+/**
+ * A collection a workflow holds: the preset `review` workflow (Drafting, In review, Approved),
+ * so the editor's next step, the review panel and the publish gate can be shown and tested.
+ * Its own collection rather than one another spec publishes, which the workflow would hold.
+ * Registered for the e2e run and the visual check only, by the fixture switch.
+ */
+const ReviewedNotes = defineCollection({
+  slug: "reviewed-notes",
+  labels: { singular: "Reviewed note", plural: "Reviewed notes" },
+  status: true,
+  versions: { drafts: true },
+  fields: [
+    text({ name: "title", label: "Title", required: true }),
+    textarea({ name: "summary", label: "Summary" }),
+  ],
+  workflow: reviewWorkflow(),
+});
+
 /** A kind of listing page hidden from search as a whole, as tag pages often are. */
 const SeoTags = defineCollection({
   slug: "seo-tags",
@@ -149,23 +169,6 @@ const SeoHome = defineSingle({
     text({ name: "title", label: "Title" }),
     textarea({ name: "summary", label: "Summary" }),
   ],
-});
-
-/**
- * A collection with the review workflow attached, for the browser test of
- * Settings › Workflows (`e2e/tests/settings-workflows.spec.ts`): the preset,
- * so the screen shows a workflow with a step of its own to grant, a review
- * stage, labels and emails. Registered for the e2e run only, by the switch
- * the other fixtures use, so a contributor's site gains no workflow.
- */
-const ReviewedNotes = defineCollection({
-  slug: "reviewed-notes",
-  labels: { singular: "Reviewed note", plural: "Reviewed notes" },
-  // A workflow runs on drafts.
-  status: true,
-  versions: { drafts: true },
-  workflow: reviewWorkflow(),
-  fields: [text({ name: "title", label: "Title", required: true })],
 });
 
 /**
@@ -200,10 +203,21 @@ const speedExtraCollections = Array.from(
  */
 export const pageBuilderPlugin = pageBuilder({
   siteStyle: SITE_STYLE_DEFAULTS,
+  // A site that draws its header and footer in code, for the browser tests
+  // of that mode alone (`NEXTLY_E2E_SITE_HEADER_FOOTER=code`); the Page
+  // Builder's own sets otherwise, as a default install has.
+  ...(process.env.NEXTLY_E2E_SITE_HEADER_FOOTER === "code"
+    ? { siteHeaderFooter: "code" as const }
+    : {}),
   // The browser tests' custom sources, registered by the same switch as
   // the collections and the Single they read.
   ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
     ? { namedQueries: [...E2E_NAMED_QUERIES] }
+    : {}),
+  // The browser tests' starter page, by the same switch: a new page made
+  // from it in the New page dialog, and an empty page started from it.
+  ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+    ? { starterPages: [...E2E_STARTER_PAGES] }
     : {}),
   pagePreviewPath: "/{slug}",
   // Each post is served at `/blog/<its slug>` by the same route as the pages,
@@ -314,8 +328,8 @@ export default defineConfig({
     // field group, so a past version can be read in that layout; registered
     // for the e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [HistoryNotes] : []),
-    // The browser test of Settings › Workflows needs a workflow attached;
-    // registered for the e2e run only, by the same switch.
+    // A collection the `review` workflow holds, for the browser tests and the
+    // visual check of the editor under a workflow; by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ReviewedNotes] : []),
     // The browser test of a document editable in one language and read-only
     // in another needs a rule that answers by language; registered for the
@@ -491,6 +505,9 @@ export default defineConfig({
   typescript: {
     outputFile: "./src/types/nextly-types.ts",
   },
+  // The product's REST limits, unless the browser suite's server asks for
+  // its higher ones (`NEXTLY_E2E_RATE_LIMIT=1`; see `src/e2e-rate-limit.ts`).
+  ...e2eRateLimit(process.env.NEXTLY_E2E_RATE_LIMIT),
   db: {
     schemasDir: "./src/db/schemas/collections",
     migrationsDir: "./src/db/migrations",

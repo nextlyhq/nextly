@@ -132,7 +132,12 @@ export function AccountPage({ searchParams }: AccountPageProps): JSX.Element {
 
   return (
     <Stack gap={6} className="p-6">
-      <a href={adminPageHref("list")} className="text-sm text-primary">
+      <a
+        href={adminPageHref("list")}
+        // In the text colour, underlined: a brand's primary is a fill and
+        // can fall under AA as small text.
+        className="text-sm text-foreground underline underline-offset-2"
+      >
         All accounts
       </a>
       {notice === null ? null : (

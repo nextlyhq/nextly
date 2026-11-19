@@ -797,6 +797,9 @@ await nextly.verifyEmail({ token: "verification-token" });
 `nextly.workflows` reads and moves review state through the same code as the REST routes, so both answer one caller alike. Calls are trusted unless you pass `overrideAccess: false` with a `user`. A trusted call is never refused for access, and takes a step as the system, which may not approve or request changes. It is still refused for a document that does not exist (`NOT_FOUND`) or a part the document cannot have (`WORKFLOW_UNKNOWN_PART`).
 
 ```ts
+declare const id: string;
+declare const user: import("nextly").UserContext;
+
 const state = await nextly.workflows.reviewState({
   document: { collection: "posts", id },
 });

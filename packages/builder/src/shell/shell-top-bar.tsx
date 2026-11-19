@@ -19,9 +19,14 @@ import * as React from "react";
 import type { CanvasZoom } from "../canvas/canvas-zoom";
 import { CanvasZoomControl } from "../canvas/canvas-zoom-control";
 import { ChromeTooltip } from "../chrome-tooltip";
+import {
+  useLatestCallback,
+  useLatestOptionalCallback,
+} from "../latest-callback";
 
 import type { BuilderShellProps } from "./shell-props";
 import { PANEL_DIVIDER_CLASS } from "./shell-stylesheet";
+import { useTopBarRoom } from "./top-bar-room";
 
 /**
  * The exit's words where the host names no other: it returns to the document
@@ -30,12 +35,58 @@ import { PANEL_DIVIDER_CLASS } from "./shell-stylesheet";
 export const DEFAULT_EXIT_LABEL = "Exit editor";
 
 /**
- * The editor's top bar: three columns, the outer two equal, so the centre one
- * (the devices and the zoom) stays in the middle of the editor whatever the
- * sides hold. The shell draws its own controls here (exit, the zoom, the side
+ * The editor's top bar: three columns, the outer two equal while there is
+ * room, so the centre one (the devices and the zoom) stays in the middle of
+ * the editor. The shell draws its own controls here (exit, the zoom, the side
  * toggles) around what the host puts in each column.
+ *
+ * As room runs out the bar gives way in one order: the title shortens first,
+ * and once it is at its shortest the bar is crowded (`data-crowded`), and the
+ * words marked `data-topbar-word` step aside, keeping their icons and names
+ * (`top-bar-room`). Nothing else shortens.
+ *
+ * Drawn again only when something it shows changes. The shell renders again
+ * for every change of what it holds, a selection among them, and hands the
+ * bar a new header ref and new handlers each time; those are read when
+ * called, so the memoised bar is handed the same functions, and a host whose
+ * columns keep their identity has its whole bar left alone. Whether a handler
+ * is there at all is kept as given, since the bar draws the exit and the
+ * left panel's toggle only for a handler there is.
  */
-export function ShellTopBar({
+export function ShellTopBar(props: TopBarProps): React.JSX.Element {
+  const headerRef = useLatestCallback(props.headerRef);
+  const onExit = useLatestOptionalCallback(props.onExit);
+  const onLeft = useLatestOptionalCallback(props.onLeft);
+  const onInspector = useLatestCallback(props.onInspector);
+  return (
+    <KeptTopBar
+      {...props}
+      headerRef={headerRef}
+      onExit={onExit}
+      onLeft={onLeft}
+      onInspector={onInspector}
+    />
+  );
+}
+
+/** The top bar's props, from the shell's own and the host's. */
+type TopBarProps = Pick<
+  BuilderShellProps,
+  "onExit" | "exitLabel" | "title" | "topBar" | "topBarCenter" | "topBarEnd"
+> & {
+  headerRef: (element: HTMLElement | null) => void;
+  zoom: CanvasZoom;
+  appliedScale: number;
+  onZoomPick: ((next: CanvasZoom) => void) | undefined;
+  leftShown: boolean;
+  inspectorShown: boolean;
+  /** Absent when the host offers no left panel, so there is nothing to show. */
+  onLeft: (() => void) | undefined;
+  onInspector: () => void;
+};
+
+/** The bar itself, memoised, so it draws again only for a prop that changed. */
+const KeptTopBar = React.memo(function TopBar({
   headerRef,
   onExit,
   exitLabel = DEFAULT_EXIT_LABEL,
@@ -50,31 +101,28 @@ export function ShellTopBar({
   inspectorShown,
   onLeft,
   onInspector,
-}: Pick<
-  BuilderShellProps,
-  "onExit" | "exitLabel" | "title" | "topBar" | "topBarCenter" | "topBarEnd"
-> & {
-  headerRef: (element: HTMLElement | null) => void;
-  zoom: CanvasZoom;
-  appliedScale: number;
-  onZoomPick: ((next: CanvasZoom) => void) | undefined;
-  leftShown: boolean;
-  inspectorShown: boolean;
-  /** Absent when the host offers no left panel, so there is nothing to show. */
-  onLeft: (() => void) | undefined;
-  onInspector: () => void;
-}): React.JSX.Element {
+}: TopBarProps): React.JSX.Element {
+  // The bar itself, kept here as well as handed to the shell, so it can be
+  // measured for room.
+  const { ref, crowded } = useTopBarRoom(headerRef);
   return (
     <header
-      ref={headerRef}
+      ref={ref}
       // Focusable by F6, not by Tab: Tab reaches the controls inside it.
       tabIndex={-1}
-      // Three columns, the outer two equal, so the centre column (the
-      // devices and the zoom) sits in the middle of the editor whatever the
-      // sides hold. A container, so controls inside can give way by width.
+      // Three columns, the outer two equal while there is room, so the
+      // centre column (the devices and the zoom) sits in the middle of the
+      // editor. The end column never takes less than its controls need, so
+      // Save, Publish and the buttons beside them are always whole and never
+      // drawn over the centre; when the sides cannot both have half, the
+      // start column, whose title shortens, is the one that gives way. A
+      // container, so controls inside can give way by width.
       // `nx-builder-topbar` sets every control inside at the editor's density.
-      className="nx-builder-topbar border-[color:var(--nx-builder-divider)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-b px-2"
+      className="nx-builder-topbar border-[color:var(--nx-builder-divider)] @container/topbar grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-2 border-b px-2"
       aria-label="Editor actions"
+      // Crowded once the title is at its shortest: the words that step
+      // aside next do so (`nx-builder-topbar` in the stylesheet).
+      data-crowded={crowded ? "" : undefined}
     >
       <div data-topbar="start" className="flex min-w-0 items-center gap-2">
         {/*
@@ -105,7 +153,8 @@ export function ShellTopBar({
             aria-label={exitLabel}
             title={exitLabel}
             // A square at the editor's control height, as the bar's others are.
-            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height)] items-center justify-center rounded-md border focus-visible:ring-2 focus-visible:outline-none"
+            // Never squeezed by a long title beside it: the title shortens.
+            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring inline-flex size-[var(--nx-builder-control-height)] shrink-0 items-center justify-center rounded-md border focus-visible:ring-2 focus-visible:outline-none"
           >
             <ArrowLeft className="size-4" aria-hidden="true" />
           </button>
@@ -113,6 +162,8 @@ export function ShellTopBar({
         {title !== undefined && title !== "" ? (
           <span
             title={title}
+            // The control that shortens first, as far as nothing.
+            data-topbar-shortens=""
             className="min-w-0 shrink truncate text-sm font-medium"
           >
             {title}
@@ -154,21 +205,32 @@ export function ShellTopBar({
           onLeft={onLeft}
           onInspector={onInspector}
         />
-        {/* `null` and `false` are what a conditional slot gives when it is
-          empty, so they draw no rule either. */}
-        {topBarEnd === undefined ||
-        topBarEnd === null ||
-        topBarEnd === false ? null : (
-          <>
-            <span
-              aria-hidden="true"
-              className={cn("h-5 w-px shrink-0", PANEL_DIVIDER_CLASS)}
-            />
-            {topBarEnd}
-          </>
-        )}
+        <EndControls topBarEnd={topBarEnd} />
       </div>
     </header>
+  );
+});
+
+/**
+ * The host's controls at the bar's end, after a thin rule. `null` and
+ * `false` are what a conditional slot gives when it is empty, so they draw
+ * no rule either. Its own component, so the bar's layout reads apart from
+ * which of its slots are filled.
+ */
+function EndControls({
+  topBarEnd,
+}: Pick<BuilderShellProps, "topBarEnd">): React.JSX.Element | null {
+  if (topBarEnd === undefined || topBarEnd === null || topBarEnd === false) {
+    return null;
+  }
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className={cn("h-5 w-px shrink-0", PANEL_DIVIDER_CLASS)}
+      />
+      {topBarEnd}
+    </>
   );
 }
 

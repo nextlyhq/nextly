@@ -1,0 +1,22 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`a configuration that does not parse > names the file, line and column once, with the offending line 1`] = `
+"✗ \`nextly.config.ts\` has a syntax error, so it could not be read.
+  Why:  nextly.config.ts:4:12: Expected "}" but found "]"
+          /* éé */ ],
+  Next: Fix the code shown above, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-syntax-error  (CONFIG_SYNTAX_ERROR)"
+`;
+
+exports[`a configuration with several problems > reports every problem with its path, the problem and the fix, then a count 1`] = `
+"✗ \`nextly.config.ts\` has 3 problems, so it cannot be used.
+  Why:  collections[0].slug: Collection address 'Blog Posts' must start with a lowercase letter and contain only lowercase letters, numbers, hyphens and underscores
+          Fix: use a lowercase address, such as 'blog-posts'.
+        collections[1].fields: Collection 'notes': fields 'body' and 'body' at the top level have the same name. Rename one of them.
+        collections[1].score.type: Invalid field type 'acme-rating'. No built-in type, and no installed plugin offers it on this surface.
+          Fix: use a built-in field type, or install the plugin that offers this one.
+        3 problems.
+  Next: Fix each problem listed, then run the command again.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-invalid  (CONFIG_INVALID)
+"
+`;

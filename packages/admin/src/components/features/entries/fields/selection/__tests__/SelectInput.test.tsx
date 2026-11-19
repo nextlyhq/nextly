@@ -111,6 +111,20 @@ describe("SelectInput — isClearable knob", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("names its clear button after the field, so two selects can be told apart", () => {
+    render(
+      <Harness
+        field={{ ...baseField, label: "Colour" } as SelectFieldConfig}
+        defaultValue="red"
+      />
+    );
+    // A screen reader says which field is cleared, and a page with several
+    // clearable selects has one distinct button for each.
+    expect(
+      screen.getByRole("button", { name: "Clear Colour" })
+    ).toBeInTheDocument();
+  });
+
   it("renders the clear button when isClearable is true AND value is set", () => {
     render(
       <Harness

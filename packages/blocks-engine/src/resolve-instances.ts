@@ -64,6 +64,7 @@ import {
   surveyHost,
 } from "./resolve-instances-run";
 import { inlineForest } from "./resolve-instances-walk";
+import { withSettingDefaults } from "./setting-defaults";
 
 export { COMPONENT_UNRESOLVED_REASONS } from "./resolve-instances-contract";
 export type {
@@ -117,12 +118,16 @@ export {
   hostIdsIn,
 } from "./resolve-instances-clone";
 
+/** The component documents already filled with their settings' defaults. */
+const DEFAULTED = new WeakSet<BlockDocument>();
+
 /**
  * Inline every component instance the document holds.
  *
  * @param document the host document, as stored
  * @param definitions the definitions to inline, at the posture the caller chose
  */
+
 export function resolveComponentInstances(
   document: BlockDocument,
   definitions: ComponentLookup,
@@ -186,6 +191,20 @@ export function resolveComponentInstances(
   // document past `maxNodes` is therefore composed not at all rather than up
   // to the cap: proceeding on a partial answer is worse than not composing.
   if (survey.truncated) return unchanged;
+  // A component composed on its own, as its editor and preview draw it,
+  // shows each setting's default where a block follows one, and so where a
+  // placement inside it feeds a setting from one: filled before its own
+  // placements are expanded, which would otherwise take that binding
+  // unfilled, and after the survey, so only a forest under the cap is
+  // copied. Composed once more as filled, and only once: a fill is never
+  // filled again. A page's placements are filled as each is composed.
+  if (document.kind === "component" && !DEFAULTED.has(document)) {
+    const shown = withSettingDefaults(document, undefined, limits);
+    if (shown !== document) {
+      DEFAULTED.add(shown);
+      return resolveComponentInstances(shown, definitions, options);
+    }
+  }
   // An optimisation, and stated as one because no test can hold it: identity
   // is already guaranteed by `inlineForest`, which returns its input array
   // when nothing changed, so removing this line changes no output. What it

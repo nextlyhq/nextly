@@ -18,11 +18,13 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
   getColumnDescriptor,
+  getComponentRowColumnDescriptor,
   numberFieldStoresFractions,
   relationStorageShape,
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
 import { parseColumnType } from "../column-type";
+import { integerBits, MYSQL_TEXT_BYTES } from "../value-readings";
 
 /** The families the rules are stated for. */
 export type Family =
@@ -65,7 +67,8 @@ export interface DateColumn {
 /** What a text column holds: a number of characters, or of bytes; absent where it is unbounded. */
 export type TextBound =
   | { unit: "characters"; most: number }
-  | { unit: "bytes"; most: number };
+  /** Bytes in the column's character set (`charset`, MySQL's name for it); UTF-8 where absent. */
+  | { unit: "bytes"; most: number; charset?: string };
 
 /** A relationship's targets and where its links are kept. */
 export interface RelationTarget {
@@ -102,27 +105,57 @@ export interface FieldTypeOnDialect {
 }
 
 /**
+ * Where a field's values are kept, as its column is made: the creator of its table, whose rules
+ * size the column, and whether the row is a field group's, where a many-to-many keeps its links as
+ * a JSON list in a column of its own rather than in a junction table.
+ */
+export interface ColumnAt {
+  builtBy: ColumnOrigin;
+  componentRow?: boolean;
+}
+
+/**
+ * The column a field's values are kept in, as its creator makes it: on a field group's row the
+ * component question (`getComponentRowColumnDescriptor`), elsewhere the entity's
+ * (`getColumnDescriptor`). Null for a field with no column of its own there.
+ */
+export function columnDescriptorAt(
+  field: FieldDefinition,
+  dialect: SupportedDialect,
+  at: ColumnAt
+): ReturnType<typeof getColumnDescriptor> {
+  return at.componentRow === true
+    ? getComponentRowColumnDescriptor(field, dialect, at.builtBy)
+    : getColumnDescriptor(field, dialect, at.builtBy);
+}
+
+/**
  * The type `field` has on `dialect`: its family, and what its column holds there.
  *
  * @param builtBy the creator of the field's table, whose rules size its columns
+ * @param options `componentRow` where the field is kept on a field group's row
  */
 export function fieldTypeOnDialect(
   field: FieldDefinition,
   dialect: SupportedDialect,
-  builtBy: ColumnOrigin
+  builtBy: ColumnOrigin,
+  options: { componentRow?: boolean } = {}
 ): FieldTypeOnDialect {
   // A built-in type is read by its own entry; any other is a plugin's.
   const read = Object.hasOwn(BY_TYPE, field.type)
     ? BY_TYPE[field.type]
     : pluginType;
-  return read(field, dialect, builtBy);
+  return read(field, dialect, {
+    builtBy,
+    ...(options.componentRow === true ? { componentRow: true } : {}),
+  });
 }
 
 /** How one field type reads on a database. */
 type TypeReader = (
   field: FieldDefinition,
   dialect: SupportedDialect,
-  builtBy: ColumnOrigin
+  at: ColumnAt
 ) => FieldTypeOnDialect;
 
 /** The base every reading starts from: the database, and the field's type name. */
@@ -134,10 +167,10 @@ const baseOf = (field: FieldDefinition, dialect: SupportedDialect) => ({
 /** A family whose column bounds its text: Text, Email, Rich text. */
 const bounded =
   (family: "text" | "email" | "richText"): TypeReader =>
-  (field, dialect, builtBy) => ({
+  (field, dialect, at) => ({
     ...baseOf(field, dialect),
     family,
-    ...textColumn(field, dialect, builtBy),
+    ...textColumn(field, dialect, at),
   });
 
 /** A family the rules read with nothing more than the family. */
@@ -146,49 +179,58 @@ const plain =
   (field, dialect) => ({ ...baseOf(field, dialect), family });
 
 /**
+ * A field holding several values (a Text or a Select with `hasMany`) as a JSON list of `item`s,
+ * written to the field's own text column, which bounds its writing.
+ */
+function listInTextColumn(
+  field: FieldDefinition,
+  dialect: SupportedDialect,
+  at: ColumnAt,
+  item: FieldTypeOnDialect
+): FieldTypeOnDialect {
+  return {
+    ...baseOf(field, dialect),
+    family: "list",
+    ...textColumn(field, dialect, at),
+    item,
+  };
+}
+
+/**
  * The built-in field types, each read as its family and what its column holds. Every built-in type
  * has an entry, so a type added to the union is read deliberately, never as a plugin's.
  */
 const BY_TYPE: Record<DynamicFieldType, TypeReader> = {
   // A text field holding several values keeps them as a JSON list of texts.
-  text: (field, dialect, builtBy) =>
+  text: (field, dialect, at) =>
     field.hasMany === true
-      ? {
+      ? listInTextColumn(field, dialect, at, {
           ...baseOf(field, dialect),
-          family: "list",
-          // The list is written to the field's own text column, which bounds its writing.
-          ...textColumn(field, dialect, builtBy),
-          item: { ...baseOf(field, dialect), family: "text" },
-        }
-      : bounded("text")(field, dialect, builtBy),
+          family: "text",
+        })
+      : bounded("text")(field, dialect, at),
   textarea: bounded("text"),
   code: bounded("text"),
   email: bounded("email"),
   richText: bounded("richText"),
-  radio: (field, dialect, builtBy) => ({
+  radio: (field, dialect, at) => ({
     ...baseOf(field, dialect),
     family: "choice",
-    ...choiceColumn(field, dialect, builtBy),
+    ...choiceColumn(field, dialect, at),
   }),
-  select: (field, dialect, builtBy) =>
+  select: (field, dialect, at) =>
     field.hasMany === true
-      ? {
+      ? listInTextColumn(field, dialect, at, {
           ...baseOf(field, dialect),
-          family: "list",
-          // A select holding several values writes the list to its text column, which bounds it.
-          ...textColumn(field, dialect, builtBy),
-          item: {
-            ...baseOf(field, dialect),
-            family: "choice",
-            options: selectOptionValues(field),
-          },
-        }
+          family: "choice",
+          options: selectOptionValues(field),
+        })
       : {
           ...baseOf(field, dialect),
           family: "choice",
-          ...choiceColumn(field, dialect, builtBy),
+          ...choiceColumn(field, dialect, at),
         },
-  number: (field, dialect, builtBy) =>
+  number: (field, dialect, at) =>
     field.hasMany === true
       ? {
           ...baseOf(field, dialect),
@@ -207,7 +249,7 @@ const BY_TYPE: Record<DynamicFieldType, TypeReader> = {
       : {
           ...baseOf(field, dialect),
           family: "number",
-          number: numberFormat(field, dialect, builtBy),
+          number: numberFormat(field, dialect, at),
         },
   checkbox: plain("checkbox"),
   date: (field, dialect) => ({
@@ -222,15 +264,15 @@ const BY_TYPE: Record<DynamicFieldType, TypeReader> = {
     family: "list",
     item: { ...baseOf(field, dialect), family: "text" },
   }),
-  relationship: (field, dialect) => ({
+  relationship: (field, dialect, at) => ({
     ...baseOf(field, dialect),
     family: "relationship",
-    relation: relationOf(field),
+    relation: relationOf(field, at),
   }),
-  upload: (field, dialect) => ({
+  upload: (field, dialect, at) => ({
     ...baseOf(field, dialect),
     family: "relationship",
-    relation: relationOf(field),
+    relation: relationOf(field, at),
   }),
   password: plain("password"),
   group: plain("container"),
@@ -261,16 +303,16 @@ const DATE_COLUMNS: Record<SupportedDialect, DateColumn> = {
 function textColumn(
   field: FieldDefinition,
   dialect: SupportedDialect,
-  builtBy: ColumnOrigin
+  at: ColumnAt
 ): { textBound?: TextBound } {
-  const type = getColumnDescriptor(field, dialect, builtBy)?.dialectType;
+  const type = columnDescriptorAt(field, dialect, at)?.dialectType;
   if (type === undefined) return {};
   const parsed = parseColumnType({ type, nullable: true });
   if (parsed.family === "varchar" && parsed.length !== undefined) {
     return { textBound: { unit: "characters", most: parsed.length } };
   }
   if (parsed.family === "text" && dialect === "mysql") {
-    return { textBound: { unit: "bytes", most: 65_535 } };
+    return { textBound: { unit: "bytes", most: MYSQL_TEXT_BYTES } };
   }
   return {};
 }
@@ -278,10 +320,10 @@ function textColumn(
 function choiceColumn(
   field: FieldDefinition,
   dialect: SupportedDialect,
-  builtBy: ColumnOrigin
+  at: ColumnAt
 ): { textBound?: TextBound; options: string[] } {
   return {
-    ...textColumn(field, dialect, builtBy),
+    ...textColumn(field, dialect, at),
     options: selectOptionValues(field),
   };
 }
@@ -290,9 +332,9 @@ function choiceColumn(
 function numberFormat(
   field: FieldDefinition,
   dialect: SupportedDialect,
-  builtBy: ColumnOrigin
+  at: ColumnAt
 ): NumberFormat {
-  const column = getColumnDescriptor(field, dialect, builtBy);
+  const column = columnDescriptorAt(field, dialect, at);
   if (column?.kind === "decimal") {
     return {
       kind: "decimal",
@@ -302,11 +344,14 @@ function numberFormat(
   }
   if (column?.kind === "double") return { kind: "double" };
   // PostgreSQL's and MySQL's integer is 32 bits; SQLite's is 64.
-  return { kind: "integer", bits: dialect === "sqlite" ? 64 : 32 };
+  return { kind: "integer", bits: integerBits(dialect) };
 }
 
-/** A relationship's targets and where its links are kept, as its definition says. */
-function relationOf(field: FieldDefinition): RelationTarget {
+/**
+ * A relationship's targets and where its links are kept, as its definition says: a many-to-many in
+ * a junction table, except on a field group's row, which keeps its links as a list in its column.
+ */
+function relationOf(field: FieldDefinition, at: ColumnAt): RelationTarget {
   const options = (field.options ?? {}) as {
     target?: unknown;
     relationType?: unknown;
@@ -316,9 +361,11 @@ function relationOf(field: FieldDefinition): RelationTarget {
     .filter((target): target is string => typeof target === "string")
     .sort();
   const kept =
-    options.relationType === "manyToMany" && field.type === "relationship"
+    options.relationType === "manyToMany" &&
+    field.type === "relationship" &&
+    at.componentRow !== true
       ? "join"
-      : (relationStorageShape(field) ?? "one");
+      : (relationStorageShape(field, at.componentRow === true) ?? "one");
   return { targets, upload: field.type === "upload", kept };
 }
 
@@ -330,7 +377,7 @@ function relationOf(field: FieldDefinition): RelationTarget {
 function pluginType(
   field: FieldDefinition,
   dialect: SupportedDialect,
-  builtBy: ColumnOrigin
+  at: ColumnAt
 ): FieldTypeOnDialect {
   const base = { dialect, type: field.type };
   const declared = getFieldType(field.type);
@@ -341,13 +388,13 @@ function pluginType(
       return {
         ...base,
         family: "text",
-        ...textColumn(field, dialect, builtBy),
+        ...textColumn(field, dialect, at),
       };
     case "number":
       return {
         ...base,
         family: "number",
-        number: { kind: "integer", bits: dialect === "sqlite" ? 64 : 32 },
+        number: { kind: "integer", bits: integerBits(dialect) },
       };
     case "boolean":
       return { ...base, family: "checkbox" };

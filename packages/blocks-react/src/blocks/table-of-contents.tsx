@@ -91,6 +91,12 @@ const MARKER_ATTRIBUTE = "data-nx-toc";
 const HIGHLIGHT_ATTRIBUTE = "data-nx-toc-highlight";
 
 /**
+ * The mark on the folding title's `<summary>`: the one thing a visitor taps
+ * to fold the contents, so a target at least 44px tall, as each link is.
+ */
+const TOGGLE_ATTRIBUTE = "data-nx-toc-toggle";
+
+/**
  * The markers and the highlight, which no stored style can say: a counter
  * per list, joined down the nesting (`2.1`), or a bullet, each drawn before
  * the entry's link with an empty alternative text (the second `content`;
@@ -110,6 +116,11 @@ const TABLE_OF_CONTENTS_CSS = [
   `[${MARKER_ATTRIBUTE}="bullets"] li li::before{content:"\\25E6";content:"\\25E6"/""}`,
   `[${HIGHLIGHT_ATTRIBUTE}]{scroll-target-group:auto}`,
   `[${HIGHLIGHT_ATTRIBUTE}] a:target-current{font-weight:600}`,
+  // A floor, under `:where`, so an author's own minimum height on the title
+  // replaces it; a smaller `height` cannot take the target below 44px. Only
+  // the folding title takes it: a title that cannot fold is a label, not a
+  // target.
+  `:where([${TOGGLE_ATTRIBUTE}]){min-height:44px}`,
 ].join("");
 
 /** The key the contents' rules are hoisted under. */
@@ -254,7 +265,7 @@ function renderTableOfContents({
            * which Style › Icon paints and places; with no icon chosen it is
            * nothing, and the browser's marker shows.
            */}
-          <summary className={titleClass}>
+          <summary className={titleClass} {...{ [TOGGLE_ATTRIBUTE]: "" }}>
             <span className={DISCLOSURE_ICON_CLASS} aria-hidden="true" />
             <span className={DISCLOSURE_TITLE_CLASS} {...markProp?.("title")}>
               {title}
@@ -367,14 +378,18 @@ const TABLE_OF_CONTENTS_PARTS = {
 } as const;
 
 /**
- * Version 1 to 2: the list is built from the page's headings, so the bound
- * passage it read (`content`) goes, with no fallback to it. `marker` stays
- * unset, which reads as bullets: version 1 drew no numbers.
+ * Version 1 to 2: the list is built from the page's headings, so the passage
+ * it read (`content`) goes, with any binding on it and any component setting
+ * exposing it (`VERSION_1_DROPS`), and no fallback to it. Nothing else
+ * changes: `marker` stays unset, which reads as bullets, as version 1 drew
+ * no numbers.
  */
 function fromVersion1(props: Record<string, unknown>): Record<string, unknown> {
-  const { content: _content, ...rest } = props;
-  return rest;
+  return props;
 }
+
+/** The props version 1 to 2 drops: the bound passage. */
+const VERSION_1_DROPS = { 1: ["content"] } as const;
 
 /** What a new block stores: the defaults the settings show. */
 const NEW_BLOCK_PROPS = {
@@ -396,6 +411,7 @@ export const tableOfContents: BlockDefinition<
   name: TABLE_OF_CONTENTS_BLOCK,
   version: 2,
   migrate: { 1: fromVersion1 },
+  drops: VERSION_1_DROPS,
   // What an author reads, in the Add panel and the block card: one plain line.
   description: "Links to the headings on the page.",
   editor: {

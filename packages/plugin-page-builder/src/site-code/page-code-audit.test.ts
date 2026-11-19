@@ -4,9 +4,11 @@
  * row, named by its path, with hashes, sizes and counts and never the code;
  * and none for a write that leaves the code as it was.
  */
+import { DEFAULT_LIMITS, type DocumentLimits } from "@nextlyhq/blocks-engine";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DOCUMENT_CSS_SAVED_AUDIT,
   PAGE_CODE_SAVED_AUDIT,
   registerPageCodeAudit,
 } from "./page-code-audit";
@@ -23,8 +25,11 @@ function doc(head?: string): Record<string, unknown> {
   };
 }
 
-/** The hook, registered as the plugin registers it, and what it writes. */
-function hooked() {
+/**
+ * The hook, registered as the plugin registers it on a site with these
+ * limits where given, and what it writes.
+ */
+function hooked(limits?: DocumentLimits) {
   const handlers: ((context: unknown) => unknown)[] = [];
   const write = vi.fn(
     async (_event: { metadata?: Record<string, unknown> }) => {}
@@ -39,6 +44,7 @@ function hooked() {
     mayHoldBlocks: () => true,
     options: undefined,
     siteOrigin: () => "https://site.test",
+    ...(limits === undefined ? {} : { limits }),
   });
   const commit = async (
     data: Record<string, unknown>,
@@ -107,5 +113,98 @@ describe("the page code audit", () => {
     await commit({ hero: { body: doc(CODE) } }, { hero: { body: doc(CODE) } });
     await commit({ title: "Renamed" }, { content: doc(CODE) });
     expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe("the custom CSS audit", () => {
+  const PAGE_CSS = "h1 { color: rebeccapurple; }";
+  const BLOCK_CSS = "selector { border: 4px solid blue; }";
+  /** A page with its own CSS and blocks holding these CSS texts. */
+  const styled = (own: string | undefined, ...blocks: string[]) => ({
+    ...doc(),
+    ...(own === undefined ? {} : { settings: { customCss: own } }),
+    nodes: blocks.map((css, index) => ({
+      id: `b${index}`,
+      type: "core/text",
+      version: 1,
+      props: {},
+      customCss: css,
+    })),
+  });
+
+  it("records a change to a page's or a block's CSS with hashes and sizes, never the CSS", async () => {
+    const { commit, write } = hooked();
+    await commit(
+      { content: styled(PAGE_CSS, BLOCK_CSS) },
+      { content: styled(undefined) }
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+    const event = write.mock.calls[0]?.[0] as {
+      kind: string;
+      actorUserId: string;
+      metadata: Record<string, unknown>;
+    };
+    expect(event.kind).toBe(DOCUMENT_CSS_SAVED_AUDIT);
+    expect(event.actorUserId).toBe("u1");
+    expect(event.metadata).toMatchObject({
+      collection: "pages",
+      entryId: "p1",
+      field: "content",
+      cssChars: PAGE_CSS.length,
+      cssCharsBefore: 0,
+      blockCssChars: BLOCK_CSS.length,
+      blocksWithCss: 1,
+      blocksWithCssBefore: 0,
+    });
+    expect(event.metadata.cssSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(event.metadata.cssSha256).not.toBe(event.metadata.cssSha256Before);
+    expect(JSON.stringify(event)).not.toContain("rebeccapurple");
+    expect(JSON.stringify(event)).not.toContain("solid blue");
+  });
+
+  it("records a duplicated block's CSS, and nothing for blocks moved with theirs", async () => {
+    const { commit, write } = hooked();
+    const before = styled(PAGE_CSS, BLOCK_CSS, "selector { color: red; }");
+    // Reordered: the same CSS, in another order.
+    await commit(
+      { content: styled(PAGE_CSS, "selector { color: red; }", BLOCK_CSS) },
+      { content: before }
+    );
+    expect(write).not.toHaveBeenCalled();
+    await commit(
+      { content: styled(PAGE_CSS, BLOCK_CSS, BLOCK_CSS) },
+      { content: styled(PAGE_CSS, BLOCK_CSS) }
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(
+      (write.mock.calls[0]?.[0] as { metadata: Record<string, unknown> })
+        .metadata
+    ).toMatchObject({ blocksWithCss: 2, blocksWithCssBefore: 1 });
+  });
+
+  it("records CSS on a block past the default count that the site's own count draws", async () => {
+    const count = DEFAULT_LIMITS.maxNodes + 1;
+    const { commit, write } = hooked({ ...DEFAULT_LIMITS, maxNodes: count });
+    // Only the last block holds CSS, so a read that stops at the engine's
+    // default count sees no change at all.
+    const page = (css: string | undefined) => ({
+      ...doc(),
+      nodes: Array.from({ length: count }, (_, index) => ({
+        id: `b${index}`,
+        type: "core/text",
+        version: 1,
+        props: {},
+        ...(index === count - 1 && css !== undefined ? { customCss: css } : {}),
+      })),
+    });
+    await commit({ content: page(BLOCK_CSS) }, { content: page(undefined) });
+    expect(write).toHaveBeenCalledTimes(1);
+    const event = write.mock.calls[0]?.[0] as
+      | { metadata?: Record<string, unknown> }
+      | undefined;
+    expect(event?.metadata).toMatchObject({
+      blocksWithCss: 1,
+      blocksWithCssBefore: 0,
+    });
   });
 });

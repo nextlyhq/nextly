@@ -83,11 +83,13 @@ import {
 } from "../../plugins/schema/validate-relations";
 import { assertSettingsPermissionsOwned } from "../../plugins/settings-permission";
 import { assertFieldTypeSettings } from "../../plugins/validate-field-type-settings";
+import { withEditorPlaces } from "../../shared/lib/build-messages";
 import {
   CONFIG_FILE_NAMES,
   CONFIG_SEARCH_DIRS,
   findConfigFile,
 } from "../../shared/lib/config-file";
+import { configurationProblems } from "../../shared/lib/config-problems";
 import { consoleLogger } from "../../shared/types";
 
 import { bundleAndRequire } from "./config-bundler";
@@ -844,6 +846,20 @@ async function loadConfigInternal(
       warn: message => consoleLogger.warn(message),
     });
 
+    // Every problem in the configuration's entities, found by the rules that judge each one, so
+    // a command refuses an invalid configuration before it does anything else, and names every
+    // problem rather than the first. Run once the plugins' field types are registered, since a
+    // field's type is judged against them.
+    // The app's own entities, in the form the plugins' setups left them, placed where the app
+    // declared them; a plugin's contributions keep the checks of their own type.
+    const problems = configurationProblems(appConfig, config);
+    if (problems.length > 0) {
+      throw NextlyError.validation({
+        errors: problems,
+        logContext: { configPath, reason: "config-invalid" },
+      });
+    }
+
     debugLog(options, "Config loaded successfully");
     debugLog(options, "Dependencies:", dependencies);
 
@@ -870,6 +886,10 @@ async function loadConfigInternal(
       throw error;
     }
 
+    // A build failure carried as esbuild reports it would name its place a
+    // second way under `--verbose` (bytes from 0) below the editor's place
+    // the error shows, so it is carried with the editor's places instead.
+    const failure = withEditorPlaces(error) ?? error;
     throw new NextlyError({
       code: "INVALID_INPUT",
       publicMessage: "Failed to load Nextly configuration.",
@@ -878,9 +898,9 @@ async function loadConfigInternal(
       logContext: {
         configPath,
         reason: "load-error",
-        cause: describeError(error),
+        cause: describeError(failure),
       },
-      cause: asCause(error),
+      cause: asCause(failure),
     });
   }
 }
