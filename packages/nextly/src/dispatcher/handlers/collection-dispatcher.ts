@@ -2094,6 +2094,8 @@ async function saveThroughWriter(
       fields: FieldDefinition[];
       applied: boolean;
       files: readonly string[];
+      /** Of kept files, the one a resolve checks against the database (the writer's). */
+      checked?: string | null;
       registryWritten: boolean;
     }
   | undefined
@@ -2124,6 +2126,7 @@ async function saveThroughWriter(
     fields: prepared.fields,
     applied: result.applied,
     files: result.files,
+    ...(result.checked === undefined ? {} : { checked: result.checked }),
     registryWritten: inFile,
   };
 }

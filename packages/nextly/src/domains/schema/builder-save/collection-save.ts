@@ -394,11 +394,7 @@ export async function writeCollectionSave(
         if (applied === "partly-applied") {
           // Kept recorded applied nowhere: nothing says what committed, so the record stays.
           written.started.left();
-          return {
-            files: [...written.names],
-            applied: false,
-            checked: await checkedFileOf(deps, written.files.change),
-          };
+          return keptResult(deps, written);
         }
         await recordWhatWasPushed(deps, written.files, written.table);
       } else if (deps.applies) {
@@ -423,14 +419,7 @@ export async function writeCollectionSave(
         pushed = true;
         if (applied === "partly-applied") written.started.left();
       }
-      return {
-        files: [...written.names],
-        applied: deps.applies,
-        // Kept outside development, recorded nowhere: named, as a part-way failure names them.
-        ...(deps.applies
-          ? {}
-          : { checked: await checkedFileOf(deps, written.files.change) }),
-      };
+      return finishedResult(deps, written);
     } catch (error) {
       if (!pushed) {
         await undoThenThrow(error, [
@@ -2539,6 +2528,33 @@ async function recordWhatWasPushed(
   for (const { filename, file } of units) {
     await recordAlreadyApplied({ filename, sha256: file.sha256 }, repo);
   }
+}
+
+/**
+ * A save's result where its files were kept, recorded applied nowhere: the files, and the one a
+ * `migrate:resolve` checks against the database (`checkedFileOf`).
+ */
+async function keptResult(
+  deps: CollectionSaveDeps,
+  written: { names: readonly string[]; files: SaveFiles }
+): Promise<CollectionSaveResult> {
+  return {
+    files: [...written.names],
+    applied: false,
+    checked: await checkedFileOf(deps, written.files.change),
+  };
+}
+
+/**
+ * A save's result once its change was made: its files recorded applied in development, and
+ * elsewhere kept, recorded nowhere, and named as a part-way failure names them (`keptResult`).
+ */
+async function finishedResult(
+  deps: CollectionSaveDeps,
+  written: { names: readonly string[]; files: SaveFiles }
+): Promise<CollectionSaveResult> {
+  if (!deps.applies) return keptResult(deps, written);
+  return { files: [...written.names], applied: true };
 }
 
 /**
