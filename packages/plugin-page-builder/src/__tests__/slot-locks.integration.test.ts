@@ -265,6 +265,27 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    it("names the lock first, then CSS the server can't store, in one refusal", async () => {
+      const t = await boot();
+      // CONTROL: outside the lock, the CSS alone is refused.
+      const loose = placed("acme/headline");
+      loose.customCss = "color: red;";
+      expect(
+        issuesOf(await refusalOf(savePage(t, [loose]))).map(i => i.code)
+      ).toEqual(["CUSTOM_CSS_REFUSED"]);
+
+      const card = placed("acme/sealed-card");
+      card.slots!.body![0]!.customCss = "color: red;";
+      const issues = issuesOf(await refusalOf(savePage(t, [card])));
+
+      // One round names every reason, the lock first, so a person fixes both
+      // before saving again.
+      expect(issues.map(issue => issue.code)).toEqual([
+        "locked-slot-content-only",
+        "CUSTOM_CSS_REFUSED",
+      ]);
+    });
+
     it("keeps what a block's changed defaults left behind, accepts the repair, and refuses a third value", async () => {
       const t = await boot();
       const card = placed("acme/drifting-card");
