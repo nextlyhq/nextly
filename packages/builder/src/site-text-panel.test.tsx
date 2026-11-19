@@ -21,6 +21,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { CssNamesContext } from "./css-names-context";
+import { labelNotInName } from "./label-in-name.fixture";
 import { TokensPanel, type TokensPanelProps } from "./tokens-panel";
 
 type HostedProps = Omit<TokensPanelProps, "currentTokens" | "onChange"> &
@@ -106,6 +107,23 @@ function enter(field: HTMLElement, value: string): void {
 }
 
 describe("the Site text rows", () => {
+  it("names each row by its own text, with no label laid over the sample it draws", () => {
+    render(<Hosted tokens={SITE} groups={["type", "fonts"]} />);
+    const rows = within(section()).getAllByRole("button", {
+      name: /^Site text: /,
+    });
+    expect(rows).toHaveLength(10);
+    for (const row of rows) {
+      // A label over the row would have to hold its drawn sample sentence
+      // too, so the row is named by text inside it, heard as it was before.
+      expect(row.getAttribute("aria-label")).toBeNull();
+      expect(labelNotInName(row)).toBeNull();
+    }
+    expect(
+      siteRow(/^Heading 1, \d+ \/ [\d.]+$/).getAttribute("data-site-text")
+    ).toBe("h1");
+  });
+
   it("has one row each for Body, the six headings, Links, Buttons and Captions, each with its pair", () => {
     render(<Hosted tokens={SITE} groups={["type", "fonts"]} />);
     const rows = within(section()).getAllByRole("button", {
@@ -394,9 +412,11 @@ describe("a row following a text style", () => {
       key: "Escape",
     });
     await waitFor(() =>
-      expect(siteRow(/^Heading 1/).getAttribute("aria-label")).toBe(
-        "Site text: Heading 1 uses Display"
-      )
+      expect(
+        within(section()).getByRole("button", {
+          name: "Site text: Heading 1 uses Display",
+        })
+      ).toBe(siteRow(/^Heading 1/))
     );
   });
 

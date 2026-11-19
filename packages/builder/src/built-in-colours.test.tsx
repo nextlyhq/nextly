@@ -33,6 +33,22 @@ import { StyleInspectorPanel } from "./style-inspector-panel";
 import { TokensPanel } from "./tokens-panel";
 import type { VariableReach, VariablesAccess } from "./variable-usage";
 
+/**
+ * An element's accessible name, as a screen reader hears it: from its content
+ * where it has no label of its own. Read through the role query, which
+ * computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
 afterEach(() => {
   cleanup();
   clearBlocks();
@@ -233,7 +249,7 @@ describe("while the built-in colours are hidden", () => {
     await waitFor(() => expect(listed()).toEqual(["Primary", "Own"]));
     const primary = screen.getByRole("button", { name: /^Primary/ });
     expect(within(primary).getByText("Built-in")).toBeDefined();
-    expect(primary.getAttribute("aria-label")).toMatch(/^Primary, built-in/);
+    expect(nameOf(primary)).toMatch(/^Primary, built-in/);
     const own = screen.getByRole("button", { name: /^Own/ });
     expect(within(own).queryByText("Built-in")).toBeNull();
     // A group left with none of its colours listed is not drawn: Text and

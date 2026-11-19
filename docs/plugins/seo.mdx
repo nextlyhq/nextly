@@ -1865,6 +1865,10 @@ problems once you save.
 - **The whole site is checked when the list opens** and its last full check is over 24 hours old,
   and whenever someone chooses **Check again**. The list says when it was last checked. No scheduler
   is needed, so this works the same on a self-hosted server.
+- **A check writes only what changed.** Where a check finds a page as it was, the page's kept result
+  is left alone, so a full check of a site that hasn't changed writes nothing for its pages. A
+  page's own `checkedAt` in the plugin's list of checks says when a check last found that page
+  changed; when the whole site was last checked is kept on the site's own row.
 - **Serving a page runs no check.** What each check found is kept, and the list reads it.
 - **A full check waits for the plugin's record of addresses** to be brought up to date after a
   start; until then the list asks to check again in a minute, as the sitemap asks crawlers.
