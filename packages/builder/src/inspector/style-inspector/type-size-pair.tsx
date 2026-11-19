@@ -25,10 +25,10 @@ import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { useCanvasTokenMode } from "../../canvas/prefers-dark";
-import { pickedTypeSize } from "../../site-text-rows";
-import { variableFor } from "../../style-colour";
-import { readStyleValue, type StyleAddress } from "../../style-values";
-import { unlinkedValue } from "../../variable-choice";
+import { pickedTypeSize } from "../../panels/design/site-text-rows";
+import { unlinkedValue } from "../../panels/design/variable-choice";
+import { variableFor } from "../../styles/style-colour";
+import { readStyleValue, type StyleAddress } from "../../styles/style-values";
 
 /** The line height's address beside a font size's. */
 function lineHeightAt(address: StyleAddress): StyleAddress {

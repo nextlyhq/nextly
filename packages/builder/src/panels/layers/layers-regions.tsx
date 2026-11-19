@@ -11,7 +11,7 @@ import type { RegionArea } from "@nextlyhq/blocks-engine";
 import { Lock } from "lucide-react";
 import * as React from "react";
 
-import { isHTMLElement } from "../../dom-kind";
+import { isHTMLElement } from "../../canvas/dom-kind";
 import { EDITOR_WORDS } from "../../editor-words";
 
 /** The region Layers shows the blocks of while it is edited in place. */

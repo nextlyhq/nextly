@@ -23,9 +23,9 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import { chainedStyleOp } from "../../columns-layout";
+import { chainedStyleOp } from "../../canvas/columns-layout";
 import type { BuilderOp } from "../../op-vocabulary";
-import { readStyleValue, type StyleAddress } from "../../style-values";
+import { readStyleValue, type StyleAddress } from "../../styles/style-values";
 
 /** The Accordion's registered name. */
 export const ACCORDION_BLOCK = "core/accordion";

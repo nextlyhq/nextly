@@ -12,7 +12,7 @@ import {
   type StyleLeaf,
 } from "@nextlyhq/blocks-engine";
 
-import { LAYOUT_CSS_NAMES, type LayoutWrite } from "../plain-layout";
+import { LAYOUT_CSS_NAMES, type LayoutWrite } from "../styles/plain-layout";
 
 /** One declaration: its property, and its value where one is known. */
 export interface WrittenDeclaration {

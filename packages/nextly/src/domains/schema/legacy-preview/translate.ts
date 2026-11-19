@@ -19,26 +19,22 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { isVirtualField } from "../../../collections/fields/virtual";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import { isFieldLocalized } from "../../i18n/classify-fields";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
-import { usesJunctionTable } from "../field-rules";
 import {
-  countNulls as countNullsHelper,
-  countRows as countRowsHelper,
-  countRowsBreakingNotNull,
-} from "../pipeline/classifier/count-helpers";
+  computeNonNullCounts,
+  countJunctionLinks,
+  type RemovedCount,
+  UNCOUNTED,
+} from "../builder-save/deletion-counts";
+import { usesJunctionTable } from "../field-rules";
 import type { PipelinePreviewResult } from "../pipeline/preview";
 import {
-  fieldProducesColumn,
   fieldsStoredOnRow,
-  junctionTableNameFor,
   toSnakeCase,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
-import { rowFieldDiff } from "../services/field-diff";
+import { computeFieldDiff } from "../services/field-diff";
 import {
   relationshipTargetSlug,
   sameRelationTarget,
@@ -79,7 +75,7 @@ export interface TranslateContext {
  * Translate pipeline preview output to legacy `SchemaPreviewResult`.
  *
  * What this does:
- *   1. Run `rowFieldDiff` on user-provided fields to produce the
+ *   1. Run `computeFieldDiff` on user-provided fields to produce the
  *      legacy `changes.{added,removed,changed,unchanged}` shape.
  *   2. Count the non-null values each removed field holds, where they are
  *      stored (`countRows - countNulls`, the pipeline's helpers). A count
@@ -99,14 +95,22 @@ export async function translatePipelinePreviewToLegacy(
   preview: PipelinePreviewResult,
   context: TranslateContext
 ): Promise<SchemaPreviewResult> {
-  const { tableName, currentFields, newFields, db, dialect } = context;
+  const { tableName, db, dialect } = context;
   const localized = context.localized === true;
+  // The fields stored on the row (`fieldsStoredOnRow`), before and after: a field inside a group
+  // with no name is the row's own field, compared, counted and judged as one beside it is, by the
+  // diff below and by every check of a changed field after it.
+  const currentFields = fieldsStoredOnRow(context.currentFields);
+  const newFields = fieldsStoredOnRow(context.newFields);
 
   // Step 1: legacy field-level diff (pure function).
   // Where the fields' values are stored, before and after, by the shared rule: an entity keeps its
   // translatable values in the companion when translated, and every entity does under per-language
   // storage, where turning the entity's translation on or off moves none of them.
-  const diff = rowFieldDiff(currentFields, newFields, {
+  // Compared by the row's fields, so a field removed from a group with no name is listed, and
+  // counted, as its column goes; a save that compares the confirmed counts compares it the same way
+  // (`deletionHoldOf`).
+  const diff = computeFieldDiff(currentFields, newFields, {
     localized: storesPerLanguage({ localized }),
     newLocalized: storesPerLanguage({
       localized: context.requestedLocalized ?? localized,
@@ -328,15 +332,6 @@ export async function translatePipelinePreviewToLegacy(
   };
 }
 
-/** A removed field's values, as far as the preview could count them. */
-interface RemovedCount {
-  rowCount: number;
-  /** True when the count could not be read: never taken for an empty column. */
-  unknown: boolean;
-}
-
-const UNCOUNTED: RemovedCount = { rowCount: 0, unknown: true };
-
 /**
  * Whether a changed field switches between one related entry and many, which
  * stores its values differently. Read from the fields themselves rather than
@@ -348,9 +343,8 @@ function togglesHasMany(
   currentFields: FieldDefinition[],
   newFields: FieldDefinition[]
 ): boolean {
-  // The row's fields, a field inside a group with no name among them, as the diff reads them.
-  const before = fieldsStoredOnRow(currentFields).find(f => f.name === name);
-  const after = fieldsStoredOnRow(newFields).find(f => f.name === name);
+  const before = currentFields.find(f => f.name === name);
+  const after = newFields.find(f => f.name === name);
   if (!before || !after) return false;
   return (before.hasMany === true) !== (after.hasMany === true);
 }
@@ -387,12 +381,9 @@ async function countLinksDropped(
   currentFields: FieldDefinition[],
   newFields: FieldDefinition[]
 ): Promise<Map<string, LinksDropped>> {
-  // The row's fields, a field inside a group with no name among them, as the diff reads them.
-  const afterByName = new Map(
-    fieldsStoredOnRow(newFields).map(field => [field.name, field])
-  );
+  const afterByName = new Map(newFields.map(field => [field.name, field]));
   const dropped = new Map<string, LinksDropped>();
-  for (const before of fieldsStoredOnRow(currentFields)) {
+  for (const before of currentFields) {
     const after = afterByName.get(before.name);
     const direction = after && linkMoveOf(before, after);
     if (!after || !direction) continue;
@@ -416,8 +407,8 @@ async function countLinksDropped(
 /**
  * Which way a kept relationship's links move, if they do: into a link table, out of one, or to a
  * new one for another target. Kept a many-to-many and pointed the same way, its link table is
- * carried (`sameRelationTarget`, the save's own pairing), so no link moves. The dialog's file road
- * asks the same of a save before it runs (`refuseUnansweredDialogQuestions`).
+ * carried (`sameRelationTarget`, the save's own pairing), so no link moves.
+ * The dialog's file road asks the same of a save before it runs (`refuseUnansweredDialogQuestions`).
  */
 export function linkMoveOf(
   before: FieldDefinition,
@@ -428,24 +419,6 @@ export function linkMoveOf(
   if (!hadTable) return hasTable ? "joining" : null;
   if (!hasTable) return "leaving";
   return sameRelationTarget(before, after) ? null : "retargeted";
-}
-
-/** The links a many-to-many's link table holds, or unknown where they cannot be counted. */
-async function countJunctionLinks(
-  db: unknown,
-  dialect: SupportedDialect,
-  tableName: string,
-  field: FieldDefinition
-): Promise<RemovedCount> {
-  try {
-    const { total } = await countRowsBreakingNotNull(db, dialect, {
-      table: junctionTableNameFor(tableName, field),
-      column: null,
-    });
-    return { rowCount: total, unknown: false };
-  } catch {
-    return UNCOUNTED;
-  }
 }
 
 /** What a relationship is called on the side of the move that keeps no link table. */
@@ -491,65 +464,6 @@ function linkTableWarnings(
       ? `Changing '${name}' from many-to-many to ${becomes} drops its link table and every link it holds: could not count them.`
       : `Changing '${name}' from many-to-many to ${becomes} drops its link table and the ${links.count.rowCount.toLocaleString()} links it holds.`,
   ];
-}
-
-/**
- * Count each removed field's non-null values where they are stored:
- * - a field with no storage (a virtual field) holds nothing;
- * - a field whose values live in a table of their own (a field group, a
- *   many-to-many relationship) is not counted here, so its count is unknown;
- * - a translated field of a translated entity is counted in the companion
- *   table, across its languages; every other field on the main table;
- * - the column is the field's stored column name, not its name as written.
- * Any count that fails is unknown, never 0.
- */
-async function computeNonNullCounts(
-  db: unknown,
-  dialect: SupportedDialect,
-  tableName: string,
-  localized: boolean,
-  removed: FieldDefinition[]
-): Promise<Record<string, RemovedCount>> {
-  const counts: Record<string, RemovedCount> = {};
-  // One row count per table, shared by the fields stored in it.
-  const totals = new Map<string, Promise<number>>();
-  const totalOf = (table: string): Promise<number> => {
-    const known = totals.get(table);
-    if (known) return known;
-    const pending = countRowsHelper(db, dialect, table);
-    totals.set(table, pending);
-    return pending;
-  };
-
-  for (const field of removed) {
-    if (isVirtualField(field)) {
-      counts[field.name] = { rowCount: 0, unknown: false };
-      continue;
-    }
-    if (!fieldProducesColumn(field)) {
-      counts[field.name] = UNCOUNTED;
-      continue;
-    }
-    const table = isFieldLocalized(field, localized)
-      ? `${tableName}${STORAGE_FORMAT.companionSuffix}`
-      : tableName;
-    try {
-      const total = await totalOf(table);
-      const nulls = await countNullsHelper(
-        db,
-        dialect,
-        table,
-        toSnakeCase(field.name)
-      );
-      counts[field.name] = {
-        rowCount: Math.max(0, total - nulls),
-        unknown: false,
-      };
-    } catch {
-      counts[field.name] = UNCOUNTED;
-    }
-  }
-  return counts;
 }
 
 /**

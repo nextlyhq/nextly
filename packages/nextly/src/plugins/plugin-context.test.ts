@@ -397,6 +397,7 @@ describe("createPluginContext (P1 reshape)", () => {
       "singles",
       "users",
       "versions",
+      "workflows",
     ]);
   });
 });

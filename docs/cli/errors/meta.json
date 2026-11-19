@@ -84,6 +84,7 @@
     "migrate-ledger-unreadable",
     "migration-sql-uncheckable",
     "migration-tampered",
+    "migration-history-forked",
     "migrations-writer-busy",
     "migrations-writer-overtaken",
     "missing-migration",

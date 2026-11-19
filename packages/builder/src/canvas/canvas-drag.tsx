@@ -51,12 +51,12 @@
 import { findNode } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { numberedForPlace } from "../accordion-questions";
 import { layersLockFacts } from "../lock-refusal";
 import { lockBlockingMove } from "../locking";
 import type { OpPosition } from "../op-vocabulary";
 import { placementTypesOf } from "../panels/add/inserter";
 
+import { numberedForPlace } from "./accordion-questions";
 import {
   AUTOSCROLL_MAX_STEP_PX,
   AUTOSCROLL_ZONE_PX,

@@ -21,7 +21,7 @@ import type { EditorState } from "../editor-state";
 import {
   useVisitorUnreadable,
   VisitorUnreadableNote,
-} from "../visitor-unreadable-context";
+} from "../shell/visitor-unreadable-context";
 
 import {
   PropExposeControl,

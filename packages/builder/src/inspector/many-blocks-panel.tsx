@@ -9,8 +9,8 @@
 
 import * as React from "react";
 
+import { selectionLock } from "../canvas/selection-ops";
 import type { EditorState } from "../editor-state";
-import { selectionLock } from "../selection-ops";
 
 import { SelectionCard } from "./block-card";
 import {

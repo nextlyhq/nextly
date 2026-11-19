@@ -11,14 +11,14 @@
 import { isTokenRef } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import type { StyleControl } from "../../style-controls";
+import type { StyleControl } from "../../styles/style-controls";
 import {
   physicalSideName,
   sideBoxFor,
   sideOf,
   type SideBox,
-} from "../../style-sides";
-import { readStyleValue } from "../../style-values";
+} from "../../styles/style-sides";
+import { readStyleValue } from "../../styles/style-values";
 import { fieldLabel } from "../inspector";
 
 import { siteDefaultSource } from "./site-default-source";

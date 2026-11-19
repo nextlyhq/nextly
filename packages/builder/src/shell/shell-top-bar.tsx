@@ -19,11 +19,11 @@ import * as React from "react";
 import type { CanvasZoom } from "../canvas/canvas-zoom";
 import { CanvasZoomControl } from "../canvas/canvas-zoom-control";
 import { ChromeTooltip } from "../chrome-tooltip";
+
 import {
   useLatestCallback,
   useLatestOptionalCallback,
-} from "../latest-callback";
-
+} from "./latest-callback";
 import type { BuilderShellProps } from "./shell-props";
 import { PANEL_DIVIDER_CLASS } from "./shell-stylesheet";
 import { useTopBarRoom } from "./top-bar-room";

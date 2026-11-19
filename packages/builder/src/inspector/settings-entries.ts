@@ -14,18 +14,19 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import {
+  COLUMNS_LAYOUTS,
+  COLUMNS_ROW,
+  stackOf,
+  stackTiers,
+} from "../canvas/columns-layout";
+import { propLabel } from "../prop-label";
+import {
   BUTTON_BLOCK,
   ICON_BLOCK,
   SECTION_BLOCK,
   sizesOffered,
   type ShortcutAt,
-} from "../block-shortcuts";
-import {
-  COLUMNS_LAYOUTS,
-  COLUMNS_ROW,
-  stackOf,
-  stackTiers,
-} from "../columns-layout";
+} from "../styles/block-shortcuts";
 import {
   childAxisRows,
   LAYOUT_CSS_NAMES,
@@ -33,9 +34,8 @@ import {
   type ChildAxis,
   type ParentArrangement,
   type PlainFlow,
-} from "../plain-layout";
-import { propLabel } from "../prop-label";
-import { readStyleValue } from "../style-values";
+} from "../styles/plain-layout";
+import { readStyleValue } from "../styles/style-values";
 
 import { BUILT_IN_WRITES } from "./code-hints";
 import {

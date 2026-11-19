@@ -59,16 +59,16 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { liveBreakpointsFor } from "../../breakpoints";
-import type { ParentArrangement } from "../../plain-layout";
+import { liveBreakpointsFor } from "../../styles/breakpoints";
+import type { ParentArrangement } from "../../styles/plain-layout";
 import {
   styleControlsFor,
   type StyleControl,
   type StyleControlOptions,
   type StyleControlVariants,
-} from "../../style-controls";
-import { styleProvenance } from "../../style-provenance";
-import { readStyleValue } from "../../style-values";
+} from "../../styles/style-controls";
+import { styleProvenance } from "../../styles/style-provenance";
+import { readStyleValue } from "../../styles/style-values";
 import { fieldLabel, selectedNode } from "../inspector";
 import {
   INSPECTOR_SECTIONS,

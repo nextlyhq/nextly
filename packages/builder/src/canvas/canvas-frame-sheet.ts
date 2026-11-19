@@ -35,13 +35,13 @@ import {
   ENTRY_CONTENT_NOTE_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
 
-import {
-  QUESTION_ROOM_ATTRIBUTE,
-  QUESTION_ROOM_PROPERTY,
-} from "../accordion-questions";
 import { GALLERY_BLOCK } from "../inspector/content/gallery-pictures";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
+import {
+  QUESTION_ROOM_ATTRIBUTE,
+  QUESTION_ROOM_PROPERTY,
+} from "./accordion-questions";
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
 import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
 import {

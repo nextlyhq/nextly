@@ -32,7 +32,7 @@ import {
   textStyleOptions,
   wornTextStyle,
   type TextStyleOption,
-} from "../../text-style-choice";
+} from "../../panels/design/text-style-choice";
 import { lockViewOf } from "../inspector";
 
 import { SectionHeld } from "./section-held";

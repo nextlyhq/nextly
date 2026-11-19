@@ -38,7 +38,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import type { EditorState } from "../../editor-state";
-import { EMPTY_SELECTION } from "../../selection";
+import { EMPTY_SELECTION } from "../../canvas/selection";
 import type { PreferenceStore } from "../../shell-state";
 
 import { InsertPanel } from "./insert-panel";

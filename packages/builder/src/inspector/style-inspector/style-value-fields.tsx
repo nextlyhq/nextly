@@ -32,8 +32,15 @@ import * as React from "react";
 import { useCanvasTokenMode } from "../../canvas/prefers-dark";
 import { typedStyleText } from "../../live-draft";
 import { useLiveGesture } from "../../live-gesture";
-import { foldedLeaf, type SiteVariable } from "../../style-colour";
-import type { StyleControl } from "../../style-controls";
+import {
+  focusVariableAfterPick,
+  pickedVariable,
+  useOfferedVariables,
+  VariableChoice,
+  VariableSelectItems,
+} from "../../panels/design/variable-choice";
+import { foldedLeaf, type SiteVariable } from "../../styles/style-colour";
+import type { StyleControl } from "../../styles/style-controls";
 import {
   fontWeightOptions,
   lineHeightFromText,
@@ -42,21 +49,14 @@ import {
   storedKey,
   type FoldedControl,
   type FoldedOption,
-} from "../../style-folded";
+} from "../../styles/style-folded";
 import {
   scrubbedValue,
   steppedValue,
   toggleOptionsFor,
   toggleShows,
-} from "../../style-numeric";
-import { tokenForTypedName } from "../../style-variables";
-import {
-  focusVariableAfterPick,
-  pickedVariable,
-  useOfferedVariables,
-  VariableChoice,
-  VariableSelectItems,
-} from "../../variable-choice";
+} from "../../styles/style-numeric";
+import { tokenForTypedName } from "../../styles/style-variables";
 import { commitOnEnter } from "../commit-on-enter";
 import { CssHint, OptionWrites, useFieldDescription } from "../css-hint";
 

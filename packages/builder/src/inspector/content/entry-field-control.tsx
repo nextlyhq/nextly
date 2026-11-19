@@ -42,7 +42,7 @@ import {
   usePreviewedEntry,
   type PreviewedBlocksField,
   type PreviewedCollection,
-} from "../../previewed-entry";
+} from "../../canvas/previewed-entry";
 import { propLabel } from "../inspector";
 
 import type { ContentControlProps } from "./content-controls";

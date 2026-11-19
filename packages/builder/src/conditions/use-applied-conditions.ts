@@ -16,10 +16,10 @@ import {
 } from "@nextlyhq/blocks-react";
 import { useMemo } from "react";
 
+import type { PreviewedEntry } from "../canvas/previewed-entry";
 import { useLoopCollections } from "../inspector/content/collection-loop-controls";
 import type { ContentServices } from "../inspector/content/content-controls";
 import { layerLabel, type ComponentTitleOf } from "../panels/layers/layers";
-import type { PreviewedEntry } from "../previewed-entry";
 
 import {
   appliedConditionsOf,

@@ -19,7 +19,7 @@ import {
   type NamedClass,
 } from "@nextlyhq/blocks-engine";
 
-import type { BlockLookRow } from "../../block-look-rows";
+import type { BlockLookRow } from "../../panels/design/block-look-rows";
 
 import { looksOfType, wornLook } from "./look-tiles";
 

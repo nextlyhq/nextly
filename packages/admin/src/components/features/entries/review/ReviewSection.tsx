@@ -20,6 +20,7 @@
 import { Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
+import { StagePill } from "@admin/components/features/settings/workflows/StagePill";
 import { toast } from "@admin/components/ui";
 import {
   useAssignPart,
@@ -41,6 +42,8 @@ import { leadingReviewStep } from "../EntryForm/document-actions";
 import { PanelSection } from "../EntryForm/panels/PanelSection";
 
 import { waitingForWords } from "./review-words";
+import { approves, hidesALanguage, SHARED_APPROVAL_HELD } from "./shared-hold";
+import { StepRefusalNote } from "./StepRefusalNote";
 import { useStepTaker, type StepTaker } from "./useStepTaker";
 
 export interface ReviewSectionProps {
@@ -54,7 +57,7 @@ export function ReviewSection({
   locale,
 }: ReviewSectionProps): JSX.Element | null {
   const { data } = useReviewState(document);
-  const { defaultLocale, getLocale } = useLocalization();
+  const { defaultLocale, getLocale, locales } = useLocalization();
   const taker = useStepTaker(document);
   const language = locale ?? defaultLocale;
   if (data === undefined || !data.attached) return null;
@@ -68,6 +71,9 @@ export function ReviewSection({
   );
   if (parts.length === 0) return null;
   const titled = parts.length > 1;
+  // The shared fields' approval is held where this person can't read every
+  // language: see `shared-hold`.
+  const hidden = hidesALanguage(data.review.parts, locales.length);
   return (
     <PanelSection title="Review">
       <div className="space-y-4">
@@ -77,6 +83,9 @@ export function ReviewSection({
             document={document}
             part={part}
             taker={taker}
+            approvalHeld={
+              hidden && part.part === null ? SHARED_APPROVAL_HELD : undefined
+            }
             title={
               !titled
                 ? null
@@ -87,6 +96,7 @@ export function ReviewSection({
           />
         ))}
       </div>
+      <StepRefusalNote refusal={taker.refusal} onDismiss={taker.clearRefusal} />
       {taker.dialog}
     </PanelSection>
   );
@@ -96,11 +106,14 @@ function PartBlock({
   document,
   part,
   taker,
+  approvalHeld,
   title,
 }: {
   document: ReleaseDocumentRef;
   part: PartReview;
   taker: StepTaker;
+  /** Why this part's approve steps are held, where they are. */
+  approvalHeld: string | undefined;
   title: string | null;
 }): JSX.Element {
   const { formatDate } = useAdminDateFormatter();
@@ -109,11 +122,19 @@ function PartBlock({
       {title === null ? null : (
         <p className="text-xs font-medium text-muted-foreground">{title}</p>
       )}
-      <p className="font-medium text-foreground">
-        {part.stage === null
-          ? "Live, nothing waiting for review"
-          : (part.stageLabel ?? part.stage)}
-      </p>
+      {part.stage === null ? (
+        <p className="font-medium text-foreground">
+          Live, nothing waiting for review
+        </p>
+      ) : (
+        <p>
+          {/* The stage as Settings shows it: its saved label on its colour. */}
+          <StagePill
+            label={part.stageLabel ?? part.stage}
+            colour={part.stageColour}
+          />
+        </p>
+      )}
       {part.stage === null ? null : (
         <>
           <p className="text-xs text-muted-foreground">
@@ -124,7 +145,7 @@ function PartBlock({
               Due {formatDate(part.dueAt, { dateStyle: "medium" }, part.dueAt)}
             </p>
           )}
-          <PartSteps part={part} taker={taker} />
+          <PartSteps part={part} taker={taker} approvalHeld={approvalHeld} />
           <AssignControls document={document} part={part} />
         </>
       )}
@@ -137,9 +158,11 @@ function PartBlock({
 function PartSteps({
   part,
   taker,
+  approvalHeld,
 }: {
   part: PartReview;
   taker: StepTaker;
+  approvalHeld: string | undefined;
 }): JSX.Element | null {
   const steps = part.steps
     .filter(step => step.mayTake)
@@ -157,12 +180,20 @@ function PartSteps({
           size="sm"
           variant={step.primary ? "default" : "outline"}
           className="h-7 px-2 text-xs"
-          disabled={taker.pending || part.version === null}
+          disabled={
+            taker.pending ||
+            part.version === null ||
+            (approvalHeld !== undefined && approves(step))
+          }
           onClick={() => take(step)}
         >
           {step.label}
         </Button>
       ))}
+      {approvalHeld === undefined ||
+      !steps.some(step => approves(step)) ? null : (
+        <p className="w-full text-xs text-muted-foreground">{approvalHeld}</p>
+      )}
     </div>
   );
 }
