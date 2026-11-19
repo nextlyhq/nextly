@@ -52,9 +52,14 @@ interface RepairDb {
   run(query: SQL): unknown;
 }
 
-/** Whether a registry's column holds milliseconds in a row. */
+/**
+ * Whether a registry's column holds milliseconds in a row: an integer above the line. The type is
+ * asked first because SQLite orders any text above any number: a timestamp an older writer
+ * stored as text (`repair-sqlite-timestamps`) would read as above the line too, and dividing it
+ * would leave the number its first digits spell, which that repair could no longer read.
+ */
 const inMilliseconds = (column: string): SQL =>
-  sql`${sql.identifier(column)} > ${sql.raw(String(MILLISECONDS_ABOVE))}`;
+  sql`(typeof(${sql.identifier(column)}) = 'integer' AND ${sql.identifier(column)} > ${sql.raw(String(MILLISECONDS_ABOVE))})`;
 
 /** The registries this database has, by the names it holds them under. */
 async function registryTables(adapter: DrizzleAdapter): Promise<string[]> {

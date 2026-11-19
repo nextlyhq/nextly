@@ -60,6 +60,54 @@ export async function provisionUserFieldsAtStart(): Promise<void> {
 }
 
 /**
+ * SQLite's timestamp repairs, each once, under one mark.
+ *
+ * The first rewrites timestamps an older SQLite writer stored as text. It scans every table, and
+ * leaving both encodings in one column is worse than either alone: SQLite orders integers before
+ * text whatever the values say, so a half-repaired database sorts wrongly while looking fine.
+ * The second rewrites the registries' timestamps an earlier release wrote in milliseconds.
+ *
+ * One mark records both, so a later start reads it once and sends nothing for either. A date
+ * alone is the mark of the first, written before the second was added: that database owes only
+ * the second. A failed repair never stops the app starting; the mark stays as it was, so the next
+ * start tries again. Nothing during a build, or on another dialect.
+ */
+async function repairSqliteTimestampsOnce(building: boolean): Promise<void> {
+  try {
+    const adapter = getService("adapter");
+    if (adapter.dialect !== "sqlite" || building) return;
+    const meta = getService("metaService");
+    const done = await meta.get<string | TimestampRepairsDone>(
+      TIMESTAMP_REPAIR_META_KEY
+    );
+    if (typeof done === "object" && done?.registries) return;
+    const logger = getService("logger");
+    if (!done) {
+      const { repaired, columns } = await repairSqliteTimestamps(adapter);
+      if (repaired > 0) {
+        logger.info(
+          `Repaired ${repaired} timestamp(s) stored as text in ${columns.length} column(s)`,
+          { columns }
+        );
+      }
+    }
+    const registries = await repairSqliteRegistryTimestamps(adapter);
+    if (registries.repaired > 0) {
+      logger.info(
+        `Repaired the timestamps of ${registries.repaired} registry row(s) stored in milliseconds`
+      );
+    }
+    const mark: TimestampRepairsDone = {
+      at: new Date().toISOString(),
+      registries: true,
+    };
+    await meta.set(TIMESTAMP_REPAIR_META_KEY, mark);
+  } catch {
+    // Meta or the adapter may not be registered, or the tables may not exist yet.
+  }
+}
+
+/**
  * Run idempotent post-initialization tasks after services are registered.
  *
  * - Seeds built-in email templates (welcome, password-reset, email-verification, layout)
@@ -96,52 +144,8 @@ export async function runPostInitTasks(): Promise<void> {
     // or the email_templates table may not exist yet (migrations not run)
   }
 
-  // Rewrite timestamps an older SQLite writer stored as text. Runs once and
-  // records that it has; the guard matters because it scans every table, and
-  // leaving both encodings in one column is worse than either alone — SQLite
-  // orders integers before text whatever the values say, so a half-repaired
-  // database sorts wrongly while looking fine.
-  try {
-    const adapter = getService("adapter");
-    if (adapter.dialect === "sqlite" && !building) {
-      const meta = getService("metaService");
-      const done = await meta.get<string | TimestampRepairsDone>(
-        TIMESTAMP_REPAIR_META_KEY
-      );
-      // A date alone is the mark of the text repair, written before the registries' repair was
-      // added: that database owes only the second.
-      const registriesDone = typeof done === "object" && done?.registries;
-      if (!registriesDone) {
-        const logger = getService("logger");
-        if (!done) {
-          const { repaired, columns } = await repairSqliteTimestamps(adapter);
-          if (repaired > 0) {
-            logger.info(
-              `Repaired ${repaired} timestamp(s) stored as text in ${columns.length} column(s)`,
-              { columns }
-            );
-          }
-        }
-        // And the registries' timestamps an earlier release wrote in milliseconds, under the
-        // same mark, so a later start reads the mark once and sends nothing for either.
-        const registries = await repairSqliteRegistryTimestamps(adapter);
-        if (registries.repaired > 0) {
-          logger.info(
-            `Repaired the timestamps of ${registries.repaired} registry row(s) stored in milliseconds`
-          );
-        }
-        const mark: TimestampRepairsDone = {
-          at: new Date().toISOString(),
-          registries: true,
-        };
-        await meta.set(TIMESTAMP_REPAIR_META_KEY, mark);
-      }
-    }
-  } catch {
-    // Silently skip — meta or the adapter may not be registered, or the tables
-    // may not exist yet. A failed repair must never stop the app booting; the
-    // marker stays unset, so the next boot tries again.
-  }
+  // SQLite's timestamp repairs, once: see `repairSqliteTimestampsOnce`.
+  await repairSqliteTimestampsOnce(building);
 
   // Name each configured translated unique field whose per-language index is not there yet. The
   // boot never creates it, so until a migration or `db:sync` does, the rule is not enforced.

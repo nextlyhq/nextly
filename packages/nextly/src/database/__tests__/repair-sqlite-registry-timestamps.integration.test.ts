@@ -207,6 +207,25 @@ describe("the SQLite registries' timestamps", () => {
     expect(isNowInSeconds(row.created_at)).toBe(true);
   });
 
+  it("leaves a timestamp an older writer stored as text for the repair that reads text", async () => {
+    // SQLite orders any text above any number, so a text value is "above" the line too; divided,
+    // it would become the number its first digits spell, which no later repair could read.
+    await adapter.executeQuery(
+      inSeconds(buildCollectionMetadataUpsert(entity("rsrt_text"), "sqlite"))
+    );
+    const ISO = "2026-01-01T09:30:00.000Z";
+    await adapter.executeQuery(
+      `UPDATE dynamic_collections SET created_at = '${ISO}', updated_at = '${ISO}' WHERE slug = 'rsrt_text'`
+    );
+
+    const result = await repairSqliteRegistryTimestamps(adapter);
+    expect(result).toEqual({ repaired: 0, createdCorrected: [] });
+    expect(await stored("dynamic_collections", "rsrt_text")).toEqual({
+      created_at: ISO,
+      updated_at: ISO,
+    });
+  });
+
   it("gives the corrected address's unresolved archive rows back to the labelling, and no other's", async () => {
     await seedOlderRows();
     const archive = (collection: string, kind: string) =>
@@ -290,9 +309,9 @@ describe("the SQLite registries' timestamps", () => {
       );
       expect(isNowInSeconds(row.created_at)).toBe(true);
       // The text repair, which that database already ran, scans no table again.
-      expect(first.statements.filter(text => text.includes("typeof("))).toEqual(
-        []
-      );
+      expect(
+        first.statements.filter(text => text.includes("PRAGMA table_info"))
+      ).toEqual([]);
       const [mark] = await startAdapter.executeQuery<{ value: string }>(
         `SELECT value FROM nextly_meta WHERE key = '${TIMESTAMP_REPAIR_META_KEY}'`
       );
