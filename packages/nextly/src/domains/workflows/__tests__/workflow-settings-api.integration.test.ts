@@ -29,6 +29,8 @@
  * - The settings list, for each review stage, the roles holding its primary step on every
  *   attachment, whom its default reviewer is chosen from: those granted it, those inheriting it,
  *   and the super-admin role, never one holding it on some attachments only.
+ * - The Public role, which stands for visitors, is never a default reviewer: not offered, and
+ *   refused, even where it holds the step.
  *
  * The plausible broken surfaces: an eligibility check on the first attached collection only, a
  * write that stores a definition key or ignores it, a write that skips the revision, grants set on
@@ -52,6 +54,8 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { consoleLogger } from "../../../shared/types";
+import { RoleMutationService } from "../../auth/services/role/role-mutation-service";
 import { RolePermissionService } from "../../auth/services/role-permission-service";
 import { workflowDefinitionHash } from "../hash";
 import { holderAnswer } from "../holders";
@@ -693,6 +697,55 @@ describe.each(getConfiguredTestDialects())(
         expect(
           (await door.read(SAM, "editorial")).defaultReviewerHolds
         ).toEqual({ legal: "holds" });
+      });
+
+      it("never offers or accepts the Public role as a default reviewer, even holding the step everywhere", async () => {
+        current = await bootSteps(dialect);
+        await admin();
+        // The role every visitor is judged by, as boot makes it.
+        const { id: visitors } = await new RoleMutationService(
+          app().adapter,
+          consoleLogger
+        ).ensurePublicRole();
+        await door.update(SAM, "editorial", {
+          revision: 0,
+          grants: { clear: [visitors], bounce: [visitors] },
+        });
+        // The control: Public does hold the legal check's primary step everywhere.
+        expect(await roleHoldsOn(visitors, "sign-off")).toEqual(
+          holdingEverywhere
+        );
+
+        const { reviewerRoles } = (await door.read(SAM, "editorial")) as {
+          reviewerRoles: Record<string, string[]>;
+        };
+        expect(reviewerRoles.legal).not.toContain(visitors);
+
+        // Refused alone, and with the grants that would let it hold the step written beside it.
+        for (const write of [
+          { defaultReviewers: { legal: { kind: "role", id: visitors } } },
+          {
+            grants: { clear: [visitors], bounce: [visitors] },
+            defaultReviewers: { legal: { kind: "role", id: visitors } },
+          },
+        ]) {
+          const refusal = await refusalOf(() =>
+            door.update(SAM, "editorial", { revision: 1, ...write })
+          );
+          expect(refusal).toMatchObject({
+            status: 400,
+            code: "VALIDATION_ERROR",
+          });
+          expect(refusal.problems).toEqual([
+            expect.objectContaining({
+              path: "defaultReviewers.legal",
+              code: "WORKFLOW_INELIGIBLE_REVIEWER",
+            }),
+          ]);
+        }
+        expect((await door.read(SAM, "editorial")).defaultReviewers).toEqual(
+          {}
+        );
       });
 
       it("refuses a default reviewer who cannot take the stage's primary step on every attached collection and Single", async () => {

@@ -32,6 +32,7 @@ import { consoleLogger } from "../../shared/types";
 import { recordSettingsActivity } from "../audit/record-settings-activity";
 import { entityPermissionSpelling } from "../auth/services/entity-permission-spelling";
 import { PermissionService } from "../auth/services/permission-service";
+import { isAssignableRole } from "../auth/services/public-role";
 import {
   afterGrantsChanged,
   afterRoleGrantsChanged,
@@ -207,7 +208,8 @@ export interface WorkflowSettingsView {
    * The roles holding each review stage's primary step on every collection and Single the
    * workflow is attached to, by stage name, each sorted: those granted it, those inheriting it and
    * the super-admin role. Whom the stage's default reviewer may be chosen from, a person through any
-   * of them; a role holding it on some attachments only is not listed.
+   * of them; a role holding it on some attachments only, or one that cannot be given to anyone (the
+   * Public role), is not listed.
    */
   reviewerRoles: Record<string, string[]>;
 }
@@ -522,11 +524,47 @@ async function reviewerStanding(
 ): Promise<{ answer: HolderAnswer; slug: string | null }> {
   const action = primaryAction(registered.workflow, stage);
   if (action === null) return { answer: "lacks", slug: null };
+  // A role that cannot be given to anyone (the Public role) is nobody to review, whatever it holds.
+  if (await isUnassignableRole(adapter, reviewer)) {
+    return { answer: "lacks", slug: null };
+  }
   for (const slug of attachedTo(registered)) {
     const answer = await holderAnswer(adapter, reviewer, action, slug);
     if (answer !== "holds") return { answer, slug };
   }
   return { answer: "holds", slug: null };
+}
+
+/**
+ * The roles among `ids` that cannot be given to anyone (`isAssignableRole`): the Public role, which
+ * stands for visitors. Work assigned to it would wait in no one's list, so it is never a default
+ * reviewer.
+ */
+async function unassignableRoles(
+  adapter: DrizzleAdapter,
+  ids: readonly string[]
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const rows = await adapter.select<{ id: unknown; slug: unknown }>("roles", {
+    columns: ["id", "slug"],
+    where: { and: [{ column: "id", op: "IN", value: [...ids] }] },
+  });
+  return new Set(
+    rows
+      .filter(row => !isAssignableRole({ slug: String(row.slug) }))
+      .map(row => String(row.id))
+  );
+}
+
+/** Whether `reviewer` is a role that cannot be given to anyone. */
+async function isUnassignableRole(
+  adapter: DrizzleAdapter,
+  reviewer: ReviewAssignee
+): Promise<boolean> {
+  return (
+    reviewer.kind === "role" &&
+    (await unassignableRoles(adapter, [reviewer.id])).has(reviewer.id)
+  );
 }
 
 /**
@@ -579,9 +617,12 @@ async function reviewerRolesOf(
       continue;
     }
     if (!byAction.has(action)) {
+      const holding = await rolesHoldingEverywhere(adapter, action, slugs);
+      // Only roles that can be given to someone may be chosen.
+      const unassignable = await unassignableRoles(adapter, holding);
       byAction.set(
         action,
-        await rolesHoldingEverywhere(adapter, action, slugs)
+        holding.filter(id => !unassignable.has(id))
       );
     }
     reviewerRoles[stage.name] = [...(byAction.get(action) ?? [])];
@@ -713,6 +754,10 @@ async function reviewerProblems(
     let lacking: string | null = null;
     if (action === null) {
       lacking = "it has no step out of it";
+    } else if (await isUnassignableRole(adapter, reviewer)) {
+      // Asked before the grants: a role standing for visitors is refused whatever it holds.
+      lacking =
+        "it is a role that cannot be given to anyone, such as the Public role, which stands for visitors";
     } else if (granting.has(action)) {
       const answer = await holderAnswerOnceGranted(adapter, reviewer, [
         ...(granting.get(action) ?? []),
