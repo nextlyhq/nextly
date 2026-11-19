@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { getColumnDescriptor } from "../../schema/services/field-column-descriptor";
+import { indexNameForColumn } from "../../schema/services/index-name";
 import type { SqliteTypeChange } from "../../schema/services/sqlite-nullability-rebuild";
 import {
   DynamicCollectionSchemaService,
@@ -22,7 +23,9 @@ const field = (overrides: Record<string, unknown>): FieldDefinition =>
 function told(
   dialect: SupportedDialect,
   before: FieldDefinition,
-  after: FieldDefinition
+  after: FieldDefinition,
+  /** The index names the live table holds, as the caller reads them. */
+  indexNames?: ReadonlySet<string>
 ): { types: [string, SqliteTypeChange][]; sql: string } {
   const types: [string, SqliteTypeChange][] = [];
   const sql = new DynamicCollectionSchemaService(
@@ -32,6 +35,7 @@ function told(
     isSingle: true,
     tableHasRows: true,
     onSqliteTypeChange: (column, change) => types.push([column, change]),
+    ...(indexNames === undefined ? {} : { indexNames }),
   });
   return { types, sql };
 }
@@ -49,7 +53,7 @@ describe("a column's type change, told to the caller on SQLite", () => {
         {
           type: getColumnDescriptor(SCORE_NUMBER, "sqlite", "collection")
             ?.dialectType,
-          fromRelationship: false,
+          formerUnique: false,
           unique: false,
         },
       ],
@@ -57,9 +61,9 @@ describe("a column's type change, told to the caller on SQLite", () => {
     expect(sql).not.toMatch(/score/i);
   });
 
-  // The rebuild drops only the key Nextly made for a relationship's column, and an older one's
+  // The rebuild drops only the key Nextly made for a relationship's column, and an older one-to-one's
   // inline UNIQUE only where the field after is not unique: told both, with the type.
-  it("tells whether the field before was a relationship, and whether the one after is unique", () => {
+  it("tells whether the field before was unique, and whether the one after is", () => {
     const { types } = told(
       "sqlite",
       SCORE_TEXT,
@@ -67,10 +71,7 @@ describe("a column's type change, told to the caller on SQLite", () => {
     );
 
     expect(types).toEqual([
-      [
-        "score",
-        expect.objectContaining({ fromRelationship: false, unique: true }),
-      ],
+      ["score", expect.objectContaining({ formerUnique: false, unique: true })],
     ]);
   });
 
@@ -91,6 +92,43 @@ describe("a column's type change, told to the caller on SQLite", () => {
 
       expect(types).toEqual([]);
       expect(sql).toMatch(/score/i);
+    }
+  );
+});
+
+// A relationship's column is indexed whatever its `.index` says; a plain field's only on request.
+// A type change across that line adds or drops the index as the rules before and after differ, on
+// every dialect, or the table keeps an index its file does not declare.
+describe("a type change across a relationship, and its column's index", () => {
+  const AUTHOR = field({
+    name: "author",
+    type: "relationship",
+    relationTo: "posts",
+  });
+  const AUTHOR_NUMBER = field({ name: "author", type: "number" });
+
+  it.each(["sqlite", "postgresql", "mysql"] as const)(
+    "drops the relationship's index when it becomes a plain field (%s)",
+    dialect => {
+      // The live table holds the relationship's index, as the caller reads it (MySQL drops only an
+      // index it is told is there).
+      const { sql } = told(
+        dialect,
+        AUTHOR,
+        AUTHOR_NUMBER,
+        new Set([indexNameForColumn("single_hero", "author")])
+      );
+
+      expect(sql).toMatch(/DROP INDEX[^;]*author/i);
+    }
+  );
+
+  it.each(["sqlite", "postgresql", "mysql"] as const)(
+    "adds the index a field becoming a relationship takes (%s)",
+    dialect => {
+      const { sql } = told(dialect, AUTHOR_NUMBER, AUTHOR);
+
+      expect(sql).toMatch(/CREATE INDEX[^;]*author/i);
     }
   );
 });

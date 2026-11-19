@@ -28,12 +28,27 @@ beforeEach(async () => {
 });
 
 /** The table rebuilt with `score` of `type`, as a Single's save rebuilds it. */
+/** The key Nextly makes for a relationship on `score` to `posts`. */
+const POSTS_KEY = {
+  columns: ["score"],
+  referencesTable: "posts",
+  referencesColumns: ["id"],
+  onDelete: "set null",
+  onUpdate: "no action",
+} as const;
+
 /** What the field before and after were, for a change of `score`'s type. */
 interface Fields {
-  /** The field before was a relationship, its column carrying the key Nextly made for it. */
-  fromRelationship?: boolean;
-  /** The table that relationship's key referenced. */
-  referencedTable?: string;
+  /** The key Nextly made for the field before, a relationship's, where it had one. */
+  formerKey?: {
+    columns: string[];
+    referencesTable: string;
+    referencesColumns: string[];
+    onDelete: "set null" | "cascade" | "no action" | "restrict" | "set default";
+    onUpdate: "set null" | "cascade" | "no action" | "restrict" | "set default";
+  };
+  /** The field before was unique (a one-to-one, or marked unique). */
+  formerUnique?: boolean;
   /** The field after is unique. */
   unique?: boolean;
 }
@@ -61,10 +76,10 @@ const changeScoreTo = (
           "score",
           {
             type,
-            fromRelationship: fields.fromRelationship === true,
-            ...(fields.referencedTable === undefined
+            ...(fields.formerKey === undefined
               ? {}
-              : { referencedTable: fields.referencedTable }),
+              : { formerKey: fields.formerKey }),
+            formerUnique: fields.formerUnique === true,
             unique: fields.unique === true,
           },
         ],
@@ -177,8 +192,11 @@ describe("a SQLite rebuild that changes a column's type", () => {
     `);
 
     await changeScoreTo("integer", undefined, {
-      fromRelationship: true,
-      referencedTable: "posts",
+      formerKey: {
+        ...POSTS_KEY,
+        columns: ["score"],
+        referencesColumns: ["id"],
+      },
     });
 
     expect(declared()).toBe("integer");
@@ -204,12 +222,46 @@ describe("a SQLite rebuild that changes a column's type", () => {
     `);
 
     await changeScoreTo("integer", undefined, {
-      fromRelationship: true,
-      referencedTable: "posts",
+      formerKey: {
+        ...POSTS_KEY,
+        columns: ["score"],
+        referencesColumns: ["id"],
+      },
     });
 
     expect(declared()).toBe("integer");
     expect(references(), "the table's references").toEqual(["authors"]);
+  });
+
+  // A key to the relationship's own target table that is not the key Nextly made (another target
+  // column, other actions) is matched by its whole identity, so it stays.
+  it("keeps a key to the same target that is not the relationship's own", async () => {
+    sqlite.exec(`
+      CREATE TABLE posts (id TEXT PRIMARY KEY, code TEXT UNIQUE);
+      CREATE TABLE single_home (
+        id TEXT PRIMARY KEY,
+        score TEXT,
+        FOREIGN KEY (score) REFERENCES posts(id) ON DELETE SET NULL,
+        FOREIGN KEY (score) REFERENCES posts(code) ON DELETE CASCADE
+      );
+      INSERT INTO single_home VALUES ('h1', NULL);
+    `);
+
+    await changeScoreTo("integer", undefined, {
+      formerKey: {
+        ...POSTS_KEY,
+        columns: ["score"],
+        referencesColumns: ["id"],
+      },
+    });
+
+    expect(declared()).toBe("integer");
+    expect(
+      sqlite
+        .prepare("SELECT \"to\" FROM pragma_foreign_key_list('single_home')")
+        .all(),
+      "the table's references"
+    ).toEqual([{ to: "code" }]);
   });
 
   // A reference added by hand, on a column whose field was never a relationship, is not one
@@ -248,7 +300,12 @@ describe("a SQLite rebuild that changes a column's type", () => {
       `);
 
       await changeScoreTo("integer", undefined, {
-        fromRelationship: true,
+        formerKey: {
+          ...POSTS_KEY,
+          columns: ["score"],
+          referencesColumns: ["id"],
+        },
+        formerUnique: true,
         unique,
       });
 
@@ -258,6 +315,31 @@ describe("a SQLite rebuild that changes a column's type", () => {
       );
     }
   );
+
+  // A many-to-one is not unique: a UNIQUE on its column was added by hand, and stays.
+  it("keeps an inline UNIQUE on a former relationship that was not unique", async () => {
+    sqlite.exec(`
+      CREATE TABLE posts (id TEXT PRIMARY KEY);
+      CREATE TABLE single_home (
+        id TEXT PRIMARY KEY,
+        score TEXT UNIQUE REFERENCES posts(id) ON DELETE SET NULL
+      );
+      INSERT INTO single_home VALUES ('h1', NULL);
+    `);
+
+    await changeScoreTo("integer", undefined, {
+      formerKey: {
+        ...POSTS_KEY,
+        columns: ["score"],
+        referencesColumns: ["id"],
+      },
+      formerUnique: false,
+      unique: false,
+    });
+
+    expect(declared()).toBe("integer");
+    expect(inlineUniques(), "the inline UNIQUE constraints").toHaveLength(1);
+  });
 
   it("declares the new type without the old declaration's modifier", async () => {
     sqlite.exec(`
