@@ -237,7 +237,12 @@ describe.each(getConfiguredTestDialects())(
       const [read] = await readVersions(ctx, "posts", id);
       if (read === undefined) throw new Error("the page's check kept no row");
       await removePage(ctx, read);
-      const again = { ...read, checkedAt: "2026-01-02T03:04:05.000Z" };
+      // Found changed: a row found as it was read is not written at all.
+      const again = {
+        ...read,
+        title: "Harbour at dawn",
+        checkedAt: "2026-01-02T03:04:05.000Z",
+      };
       await savePage(ctx, again, read);
       expect(await readVersions(ctx, "posts", id)).toEqual([again]);
     }, 120_000);
