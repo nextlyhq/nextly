@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   HISTORY_FORKED_REASON,
+  blankLineHeader,
+  blankLineIn,
   forkedHistoryError,
   mergedBy,
   nothingToRecordNotice,
@@ -67,6 +69,18 @@ function migration(
   );
 }
 
+/** A blank migration: a `.sql` file alone, stating its place in its header. */
+function blank(
+  base: string,
+  parent: string | null,
+  merges: string[] = []
+): void {
+  writeFileSync(
+    join(dir, `${base}.sql`),
+    `-- Migration: ${base}\n${blankLineHeader({ parent, merges })}--\n-- UP\n`
+  );
+}
+
 describe("the merges a migration history does not record", () => {
   it("finds none in a line, each migration written from the one before", async () => {
     migration("0001_a", null);
@@ -90,6 +104,7 @@ describe("the merges a migration history does not record", () => {
         members: ["0002_b", "0003_c"],
         newest: ["0003_c"],
         overlap: [],
+        blank: false,
       },
     ]);
   });
@@ -126,6 +141,7 @@ describe("the merges a migration history does not record", () => {
         members: ["0002_a", "0003_b", "0004_c"],
         newest: ["0003_b", "0004_c"],
         overlap: [],
+        blank: false,
       },
     ]);
   });
@@ -153,6 +169,92 @@ describe("the merges a migration history does not record", () => {
       dc_tags: ["id"],
     });
     expect((await unrecordedMerges(dir))[0].overlap).toEqual(["dc_tags"]);
+  });
+
+  it("counts an index on a column as a change to that column", async () => {
+    const posts = (columns: string[], indexed: string[]) => ({
+      version: 1,
+      snapshot: {
+        tables: [
+          {
+            name: "dc_posts",
+            columns: columns.map(name => ({ name, type: "text" })),
+            indexes: indexed.map(column => ({
+              name: `idx_${column}`,
+              columns: [column],
+            })),
+          },
+        ],
+      },
+    });
+    const write = (base: string, parent: string | null, file: object) => {
+      writeFileSync(join(dir, `${base}.sql`), "");
+      writeFileSync(
+        join(dir, "meta", `${base}.snapshot.json`),
+        JSON.stringify({ ...file, parent, migration: base })
+      );
+    };
+    write("0001_p", null, posts(["id", "x"], []));
+    // One branch drops `x`; the other adds an index on it.
+    write("0002_a", "0001_p", posts(["id"], []));
+    write("0003_b", "0001_p", posts(["id", "x"], ["x"]));
+
+    expect((await unrecordedMerges(dir))[0].overlap).toEqual(["dc_posts.x"]);
+
+    // An index on another column is no change to `x`.
+    write("0003_b", "0001_p", posts(["id", "x"], ["id"]));
+    expect((await unrecordedMerges(dir))[0].overlap).toEqual([]);
+  });
+
+  it("keeps two migrations written from the same parent apart where that parent was removed", async () => {
+    migration("0001_a", null);
+    migration("0003_b", "0002_removed");
+    migration("0004_c", "0002_removed");
+
+    expect((await unrecordedMerges(dir))[0]).toMatchObject({
+      parent: "0002_removed",
+      migrations: ["0003_b", "0004_c"],
+      // Nothing to compare them from: the parent's snapshot is gone.
+      overlap: undefined,
+    });
+  });
+
+  it("places a blank migration by its header: two written from the same history are a fork, and a blank written with both records them", async () => {
+    migration("0001_a", null);
+    expect(await blankLineIn(dir)).toEqual({ parent: "0001_a", merges: [] });
+    blank("0002_seed", "0001_a");
+    blank("0003_backfill", "0001_a");
+
+    const [merge] = await unrecordedMerges(dir);
+    expect(merge).toMatchObject({
+      parent: "0001_a",
+      migrations: ["0002_seed", "0003_backfill"],
+      blank: true,
+      overlap: undefined,
+    });
+    expect(forkedHistoryError([merge])?.publicMessage).toContain(
+      "Run `nextly migrate:create --blank --name record_merge` to record that they apply in this order; if they change the same thing, delete all but one of them"
+    );
+
+    // Written now, a blank migration stands after the newest and names the other end.
+    expect(await blankLineIn(dir)).toEqual({
+      parent: "0003_backfill",
+      merges: ["0002_seed"],
+    });
+    blank("0004_record_merge", "0003_backfill", ["0002_seed"]);
+    expect(await unrecordedMerges(dir)).toEqual([]);
+  });
+
+  it("counts a blank migration that states no place as no part of the line, and one after a migration as accounted for by the next", async () => {
+    migration("0001_a", null);
+    writeFileSync(join(dir, "0002_old_blank.sql"), "-- Migration: old\n");
+    blank("0003_seed", "0001_a");
+    // The next generated migration is written from the newest snapshot and
+    // names the blank one as the other end it was written with.
+    expect(await mergedBy(dir, "0001_a")).toEqual(["0003_seed"]);
+    migration("0004_b", "0001_a", undefined, ["0003_seed"]);
+
+    expect(await unrecordedMerges(dir)).toEqual([]);
   });
 
   it("takes the branch of the folder's newest snapshot as the newest, whichever end sorts last", async () => {
@@ -257,6 +359,7 @@ describe("the refusal of a merge nothing records", () => {
     members: ["0002_b", "0003_c"],
     newest: ["0003_c"],
     overlap: [] as string[] | undefined,
+    blank: false,
   };
 
   it("names both files and how to record the merge, where no database says which is applied", () => {

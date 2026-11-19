@@ -219,6 +219,10 @@ async function run(
 
 const migrateCreate = (config: unknown, name: string) =>
   run(config, context => runMigrateCreate(name, { cwd: dir }, context));
+const migrateCreateBlank = (config: unknown, name: string) =>
+  run(config, context =>
+    runMigrateCreate(name, { cwd: dir, blank: true }, context)
+  );
 const migrate = (config: unknown) =>
   run(config, context =>
     runMigrate({ cwd: dir, throwOnFailure: true }, context)
@@ -249,13 +253,21 @@ function parentOf(file: string): unknown {
 }
 
 /** Moves a migration and its snapshot between the folder and a place aside. */
-function move(file: string, to: "aside" | "back"): void {
+function move(
+  file: string,
+  to: "aside" | "back",
+  kind: "generated" | "blank" = "generated"
+): void {
   const snapshot = file.replace(/\.sql$/, ".snapshot.json");
+  // A blank migration is its file alone.
   const inFolder = [
     join(dir, "migrations", file),
-    join(dir, "migrations", "meta", snapshot),
+    ...(kind === "blank" ? [] : [join(dir, "migrations", "meta", snapshot)]),
   ];
-  const aside = [join(dir, "aside", file), join(dir, "aside", snapshot)];
+  const aside = [
+    join(dir, "aside", file),
+    ...(kind === "blank" ? [] : [join(dir, "aside", snapshot)]),
+  ];
   const [from, into] = to === "aside" ? [inFolder, aside] : [aside, inFolder];
   from.forEach((path, index) => renameSync(path, into[index]));
 }
@@ -501,6 +513,38 @@ describe.each(getConfiguredTestDialects())(
         `The configuration is what ${size} records, so there is no merge to write. ${color} was written without it`
       );
       expect(sqlFiles()).toHaveLength(3);
+    }, 120_000);
+
+    it("two blank migrations written from the same history are refused until a blank one records them", async () => {
+      // Hand-written SQL has no snapshot to compare, so each blank file
+      // states the migration it was written after.
+      const files: string[] = [];
+      for (const name of ["seed_posts", "backfill_posts"]) {
+        const created = await migrateCreateBlank(BASE, name);
+        expect(created.refused, created.said).toBe(false);
+        files.push(fileOf(name));
+        move(fileOf(name), "aside", "blank");
+        await pause(5);
+      }
+      for (const file of files) move(file, "back", "blank");
+
+      const refused = await migrate(BASE);
+      expect(refused.refused).toBe(true);
+      expect(refused.said).toContain(
+        `Two migrations were written from ${base}: ${files[0]} and ${files[1]}.`
+      );
+      expect(refused.said).toContain(
+        "Run `nextly migrate:create --blank --name record_merge` to record that they apply in this order"
+      );
+
+      await pause(5);
+      const recorded = await migrateCreateBlank(BASE, "record_merge");
+      expect(recorded.refused, recorded.said).toBe(false);
+      const applied = await migrate(BASE);
+      expect(applied.refused, applied.said).toBe(false);
+      // A run after it has nothing left to do, and nothing to refuse.
+      const again = await migrate(BASE);
+      expect(again.refused, again.said).toBe(false);
     }, 120_000);
 
     it("refuses a migration written beside another while the run waited for the lock, before its first write", async () => {

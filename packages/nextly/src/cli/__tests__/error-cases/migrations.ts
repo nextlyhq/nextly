@@ -207,6 +207,7 @@ export const MIGRATION_CASES = {
           members: ["20261021_090000_add_tags", "20261021_090500_add_price"],
           newest: ["20261021_090500_add_price"],
           overlap: [],
+          blank: false,
         },
       ],
       new Set(["20261020_120000_add_posts", "20261021_090000_add_tags"])

@@ -21,11 +21,13 @@
  *
  * @module domains/schema/migrate/history-line
  */
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
+
+import { compareMigrationBaseNames } from "./migration-order";
 
 /** Migrations written without each other, with no migration recording them together. */
 export interface UnrecordedMerge {
@@ -50,6 +52,8 @@ export interface UnrecordedMerge {
    * Undefined where the branches share no parent to compare them from.
    */
   overlap: string[] | undefined;
+  /** Whether a blank migration, written by hand, is among them. */
+  blank: boolean;
 }
 
 /** The `logContext.reason` of a refusal over a forked history. */
@@ -65,8 +69,93 @@ interface Placed {
   parent: string | null | undefined;
   /** The other branch ends its snapshot records a merge of. */
   merges: readonly string[];
-  /** The tables its snapshot records: each column's declaration as text, by table and column. */
+  /**
+   * The tables its snapshot records, by table and then by what a migration
+   * can change of it (`elementsOf`), each as text.
+   */
   tables: ReadonlyMap<string, ReadonlyMap<string, string>>;
+  /** Set for a blank migration: a file with no snapshot, placed by its own header. */
+  blank?: true;
+}
+
+/** The lines a blank migration's file states where it stands with, in its header. */
+const BLANK_PARENT = /^-- Parent: (.+)$/m;
+const BLANK_MERGES = /^-- Merges: (.+)$/m;
+
+/**
+ * The header lines a blank migration states its place with
+ * (`formatBlankFile`): the migration it was written after, and the other
+ * branch ends in the folder then. A blank migration has no snapshot to say
+ * so, and is written by hand, so two written without each other are as much
+ * a fork as two generated ones.
+ */
+export function blankLineHeader(line: {
+  parent: string | null;
+  merges: readonly string[];
+}): string {
+  return (
+    `-- Parent: ${line.parent ?? "none"}\n` +
+    (line.merges.length > 0
+      ? `-- Merges: ${[...line.merges].sort().join(", ")}\n`
+      : "")
+  );
+}
+
+/** Where a blank migration's `content` places `base`, or undefined where it says nothing. */
+function placedByHeader(content: string, base: string): Placed | undefined {
+  const parent = BLANK_PARENT.exec(content)?.[1].trim();
+  if (parent === undefined) return undefined;
+  return {
+    base,
+    parent: parent === "none" ? null : parent,
+    merges: (BLANK_MERGES.exec(content)?.[1] ?? "")
+      .split(",")
+      .map(each => each.trim())
+      .filter(each => each !== ""),
+    tables: new Map(),
+    blank: true,
+  };
+}
+
+/** The columns an element of a table names: an index's, a key's. */
+function columnsNamedBy(element: Record<string, unknown>): string[] {
+  const columns = Array.isArray(element.columns) ? element.columns : [];
+  return columns.flatMap((column: unknown) => {
+    if (typeof column === "string") return [column];
+    const named = (column as { name?: unknown; column?: unknown } | null) ?? {};
+    const name = named.name ?? named.column;
+    return typeof name === "string" ? [name] : [];
+  });
+}
+
+/**
+ * One table of a snapshot, by what a migration can change of it: each
+ * column under its own name, and each other element the snapshot lists
+ * (an index, a key, a check) under each column it names, or under its own
+ * name where it names none. So an index on a column and a change to that
+ * column are changes to the same thing.
+ */
+function elementsOf(table: Record<string, unknown>): Map<string, string> {
+  const elements = new Map<string, string[]>();
+  const add = (key: string, text: string) =>
+    elements.set(key, [...(elements.get(key) ?? []), text]);
+  for (const [kind, listed] of Object.entries(table)) {
+    if (!Array.isArray(listed)) continue;
+    listed.forEach((each: unknown, index) => {
+      if (typeof each !== "object" || each === null) return;
+      const element = each as Record<string, unknown>;
+      const text = `${kind}:${JSON.stringify(element)}`;
+      const name =
+        typeof element.name === "string" ? element.name : String(index);
+      if (kind === "columns") return add(name, text);
+      const columns = columnsNamedBy(element);
+      if (columns.length === 0) return add(`${kind} ${name}`, text);
+      for (const column of columns) add(column, text);
+    });
+  }
+  return new Map(
+    [...elements].map(([key, texts]) => [key, [...texts].sort().join("\n")])
+  );
 }
 
 /** The tables `snapshot`, a snapshot file's `snapshot`, records (`Placed.tables`). */
@@ -74,21 +163,9 @@ function tablesIn(snapshot: unknown): Placed["tables"] {
   const tables = (snapshot as { tables?: unknown } | undefined)?.tables;
   if (!Array.isArray(tables)) return new Map();
   return new Map(
-    tables.flatMap((table: { name?: unknown; columns?: unknown }) =>
+    tables.flatMap((table: Record<string, unknown>) =>
       typeof table.name === "string"
-        ? [
-            [
-              table.name,
-              new Map(
-                (Array.isArray(table.columns) ? table.columns : []).flatMap(
-                  (column: { name?: unknown }) =>
-                    typeof column.name === "string"
-                      ? [[column.name, JSON.stringify(column)] as const]
-                      : []
-                )
-              ),
-            ] as const,
-          ]
+        ? [[table.name, elementsOf(table)] as const]
         : []
     )
   );
@@ -168,7 +245,29 @@ async function placedIn(migrationsDir: string): Promise<Placed[]> {
       placedBy(await readFile(resolve(metaDir, file), "utf-8"), base)
     );
   }
-  return placed;
+  // And each blank migration that states its own place: a `.sql` file with
+  // no snapshot beside it.
+  const withSnapshot = new Set(placed.map(each => each.base));
+  for (const file of await sqlFilesIn(migrationsDir)) {
+    const base = file.slice(0, -".sql".length);
+    if (withSnapshot.has(base)) continue;
+    const blank = placedByHeader(
+      await readFile(resolve(migrationsDir, file), "utf-8"),
+      base
+    );
+    if (blank !== undefined) placed.push(blank);
+  }
+  return placed.sort((a, b) => compareMigrationBaseNames(a.base, b.base));
+}
+
+/** The `.sql` files of a folder, or none where there is no such folder. */
+async function sqlFilesIn(dir: string): Promise<string[]> {
+  try {
+    return (await readdir(dir)).filter(file => file.endsWith(".sql"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
 }
 
 /** The line as read: each migration, and what each accounts for. */
@@ -185,17 +284,20 @@ interface Line {
  */
 function lineOf(placed: readonly Placed[]): Line {
   const byBase = new Map(placed.map(each => [each.base, each]));
-  /** Every migration named before `base`: what one trusted in file order accounts for. */
+  /** Every migration that runs before `base`: what one trusted in file order accounts for. */
   const before = (base: string) =>
-    placed.filter(other => other.base < base).map(other => other.base);
+    placed
+      .filter(other => compareMigrationBaseNames(other.base, base) < 0)
+      .map(other => other.base);
   const steps = (each: Placed): readonly string[] => {
     if (each.parent === undefined) return before(each.base);
     if (each.parent === null) return each.merges;
-    // A parent that is no longer in the folder (removed on purpose) says
-    // nothing more: the migration is trusted in file order from there.
+    // A parent that is no longer in the folder (removed on purpose) stands
+    // for everything that ran before it: the migration accounts for those,
+    // and not for one written from the same parent beside it.
     return byBase.has(each.parent)
       ? [each.parent, ...each.merges]
-      : [...before(each.base), ...each.merges];
+      : [...before(each.parent), ...each.merges];
   };
   const memo = new Map<string, ReadonlySet<string>>();
   const known = (base: string): ReadonlySet<string> => {
@@ -271,7 +373,10 @@ export async function unrecordedMerges(
   const members = branches.flat().sort();
   // The folder's newest snapshot by name is the one a migration is written
   // from, whichever branch end sorts last.
-  const latest = line.placed.findLast(each => members.includes(each.base));
+  const inMerge = line.placed.filter(each => members.includes(each.base));
+  const blank = inMerge.some(each => each.blank === true);
+  const latest =
+    inMerge.findLast(each => each.blank !== true) ?? inMerge.at(-1);
   return [
     {
       parent,
@@ -279,8 +384,15 @@ export async function unrecordedMerges(
       members,
       newest:
         branches.find(branch => branch.includes(latest?.base ?? "")) ?? [],
+      // Read from snapshots, so only where every branch has one and the
+      // parent they share is in the folder to compare them from.
       overlap:
-        parent === undefined ? undefined : overlapOf(line, parent, heads),
+        parent === undefined ||
+        blank ||
+        (parent !== null && !line.placed.some(each => each.base === parent))
+          ? undefined
+          : overlapOf(line, parent, heads),
+      blank,
     },
   ];
 }
@@ -323,6 +435,22 @@ export async function mergedBy(
 ): Promise<string[]> {
   const line = lineOf(await placedIn(migrationsDir));
   return headsOf(line).filter(head => head !== parent);
+}
+
+/**
+ * Where a blank migration written now stands: after the folder's newest
+ * migration, and recording a merge of every other branch end
+ * (`blankLineHeader`).
+ */
+export async function blankLineIn(
+  migrationsDir: string
+): Promise<{ parent: string | null; merges: string[] }> {
+  const line = lineOf(await placedIn(migrationsDir));
+  const parent = line.placed.at(-1)?.base ?? null;
+  return {
+    parent,
+    merges: headsOf(line).filter(head => head !== parent),
+  };
 }
 
 /** `names` as a sentence lists them: "a and b", "a, b and c". */
@@ -383,8 +511,9 @@ function nextFor(
   done: readonly string[],
   pending: readonly string[]
 ): string {
-  const record =
-    "Run `nextly migrate:create --name record_merge` to record the merge";
+  const record = merge.blank
+    ? "Run `nextly migrate:create --blank --name record_merge` to record that they apply in this order"
+    : "Run `nextly migrate:create --name record_merge` to record the merge";
   const again =
     "then run `nextly migrate:create` again so its change is written after the other";
   const which =
@@ -488,6 +617,9 @@ export async function nothingToRecordNotice(
     `so there is no merge to write. ${listed(others.map(file))} ${one ? "was" : "were"} written ` +
     `without it: if ${one ? "its change is" : "their changes are"} the same, or no longer wanted, ` +
     `delete ${one ? "it and its snapshot" : "them and their snapshots"}; if ${one ? "it is" : "they are"} ` +
-    "wanted, make the change in the configuration and run `nextly migrate:create` again."
+    "wanted, make the change in the configuration and run `nextly migrate:create` again." +
+    (merge.blank
+      ? " To record that the blank migrations among them apply in this order, run `nextly migrate:create --blank --name record_merge`."
+      : "")
   );
 }

@@ -35,6 +35,8 @@ This changes what happens after two branches that each added a migration are mer
 
 It is also what stops a duplicate from a `migrate:create` that was stopped for longer than its hold on the migration files while another ran: both files may be written, and neither is applied. `nextly migrate:create` then finds nothing to record and names the one to delete.
 
+A blank migration (`nextly migrate:create --blank`) now states the migration it was written after in its header, since it has no snapshot, and two written without each other are refused in the same way; `nextly migrate:create --blank --name record_merge` records them.
+
 Migrations written before this release record no parent and are never refused; neither is a snapshot copied by hand for a hand-written migration, nor a migration whose parent was removed from the folder.
 
 A writer's hold on the migration files, renewed while another writer was taking it over, is now put back on file systems without hard links too.

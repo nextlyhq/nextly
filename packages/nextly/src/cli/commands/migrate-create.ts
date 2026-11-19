@@ -55,6 +55,8 @@ import { buildExtensionSchema } from "../../domains/schema/extension/build-exten
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
+  blankLineHeader,
+  blankLineIn,
   nothingToRecordNotice,
   refuseUnrecordableMerge,
 } from "../../domains/schema/migrate/history-line";
@@ -969,6 +971,9 @@ async function runBlankPath(
   // "-- Migration: 20260429_154500_123_custom_seed").
   const content = formatBlankFile(slugify(name), dialect, now, {
     transaction,
+    // The migration it is written after and the other branch ends in the
+    // folder, which no snapshot records for a blank file.
+    line: blankLineHeader(await blankLineIn(migrationsDir)),
   });
   // A dry run prints the file and its path, and writes neither the file nor its folder.
   if (dryRun) {
