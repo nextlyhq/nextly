@@ -52,6 +52,7 @@ import type { RequestActor } from "../../auth/request-actor";
 import { loadedDialect } from "../../database/dialect-tables";
 import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
+import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
 import {
   adapterForReads,
   runReadsInTransaction,
@@ -912,6 +913,10 @@ export class EmailDeliveryActivity {
         ],
       });
     }
+    // And outside any transaction the caller holds: its entry is written on
+    // a transaction of its own, and on SQLite's one connection would join the
+    // caller's, to be rolled back after the search was answered.
+    assertNoOpenTransaction(this.adapter, "emailDeliveries.search");
     let page: ActivityPage<ActivityEntry>;
     try {
       page = await this.activityPage(filter, address);

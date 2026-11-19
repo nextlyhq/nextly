@@ -516,8 +516,11 @@ for (const dialect of getConfiguredTestDialects()) {
       const activity = t.getService(
         "activityLogService"
       ) as unknown as ActivityLogService;
+      // Every search the reader has made, not the feed's first page: rows
+      // written in the same second come back in no particular order.
       const feed = await activity.getRecentActivity({
         userId: readerId,
+        limit: 50,
         scope: allResources(),
         caller: { user: { id: readerId, roles: [] } },
       });
@@ -597,6 +600,19 @@ for (const dialect of getConfiguredTestDialects()) {
         list.mockRestore();
       }
       expectNoAddress(logged.join("\n"), ADA);
+    });
+
+    it("refuses a search inside a transaction the caller holds, recording none", async () => {
+      const before = (await searchEntries()).length;
+      await expect(
+        t.adapter.transaction(() =>
+          t.nextly.emailDeliveries.search({
+            address: ADA,
+            user: { id: readerId },
+          })
+        )
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+      expect(await searchEntries()).toHaveLength(before);
     });
 
     it("answers no search it could not record", async () => {
