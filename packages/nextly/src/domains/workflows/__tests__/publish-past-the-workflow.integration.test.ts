@@ -1191,6 +1191,50 @@ describe.each(getConfiguredTestDialects())(
         expect([...ran].sort()).toEqual(["commit 2", "rollback 1"]);
       });
 
+      it("runs nothing a create's early answer held for the commit, so an undone item leaves none", async () => {
+        await boot(dialect);
+        const adapter = app().adapter;
+        const ran: string[] = [];
+        const judged: string[] = [];
+        let asked = 0;
+        // A gate whose early answer, asked before a create's row exists (no entry id), holds an
+        // effect for the commit. Its verdict on each written entry holds one too, and the first
+        // entry's fails as it settles, which undoes that item alone.
+        container.register<PublishGate>("publishGate", () => ({
+          refusals: () => Promise.resolve([]),
+          judge: async (_tx, question) => {
+            if (question.entryId === "") {
+              asked += 1;
+              const early = String(asked);
+              await adapter.afterCommit(() => ran.push(`early ${early}`));
+              return { refusals: [], settle: () => Promise.resolve() };
+            }
+            judged.push(question.entryId);
+            const item = String(judged.length);
+            await adapter.afterCommit(() => ran.push(`commit ${item}`));
+            return {
+              refusals: [],
+              settle: () =>
+                item === "1"
+                  ? Promise.reject(new Error("settle failed"))
+                  : Promise.resolve(),
+            };
+          },
+        }));
+
+        const result = await pluginService().createMany(PAGES, [
+          { title: "Undone", status: "published" },
+          { title: "Kept", status: "published" },
+        ]);
+
+        expect(result.failed, JSON.stringify(result)).toBe(1);
+        expect(asked).toBe(2);
+        expect((await storedPages()).map(page => page.title)).toEqual(["Kept"]);
+        // The early answer is a question only: what it held is dropped with it, the undone
+        // item's above all, and the kept item's verdict alone holds what its commit runs.
+        expect([...ran].sort()).toEqual(["commit 2"]);
+      });
+
       it("runs an undone batch item's compensation once when the whole batch then rolls back", async () => {
         await boot(dialect);
         const adapter = app().adapter;
