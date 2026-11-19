@@ -174,8 +174,10 @@ import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
 import {
   entityLabel,
   fieldTypeChangesOf,
+  judgeEntityTypeChanges,
+  type JudgedFieldTypeChange,
   perLanguageBefore,
-  refuseFieldTypeChanges,
+  throwTypeChangeRefusals,
 } from "../value-conversion/type-change/field-type-changes";
 
 import { asBuilderSaveDrift } from "./builder-save-drift";
@@ -203,6 +205,11 @@ import {
   withSettleFailure,
   type StoppedChange,
 } from "./stopped-save";
+import {
+  clearedFieldsOf,
+  type ConfirmedClear,
+  refuseChangedClearCounts,
+} from "./type-change-clears";
 
 /** What the writer works with: the app's database, config and folders. */
 export interface CollectionSaveDeps {
@@ -265,6 +272,13 @@ export interface CollectionSave {
    * (`deletionHoldOf`); absent, it deletes as it always has.
    */
   confirmedDeletions?: readonly ConfirmedDeletion[];
+  /**
+   * How many values of each field changing type the person confirmed clearing, in the save's
+   * review: a change that loses values goes ahead only for a field named here, and only while the
+   * values it clears are still that many (`refuseChangedClearCounts`). Absent, such a change is
+   * refused as it always has been.
+   */
+  confirmedClears?: readonly ConfirmedClear[];
   /**
    * The registry row's migration status before the save, where the caller read the row: a field
    * type change while the definition still awaits its migration is refused, since the columns do
@@ -1310,8 +1324,8 @@ async function refuseSaveTypeChanges(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string
-): Promise<void> {
-  if (save.previous === null || save.entity === null) return;
+): Promise<JudgedFieldTypeChange[]> {
+  if (save.previous === null || save.entity === null) return [];
   const kind = kindOf(save);
   const dialect = deps.adapter.getCapabilities().dialect;
   const previous = save.previous.fields as unknown as FieldDefinition[];
@@ -1330,20 +1344,29 @@ async function refuseSaveTypeChanges(
     builtBy: kind.builtBy,
     ...componentRow,
   });
-  if (changes.length === 0) return;
-  await refuseFieldTypeChanges(deps.adapter.getDrizzle(), dialect, {
-    label: entityLabel(kind.kind, save.slug),
-    table,
-    ...perLanguageBefore(save.previous, table, previous),
-    previous,
-    next,
-    renamed,
-    ...(await migrationStatusOf(deps, save, table)),
-    // No consent is taken here: a lossy type change is refused until the save clears the
-    // consented values before it converts the column.
-    builtBy: kind.builtBy,
-    ...componentRow,
-  });
+  if (changes.length === 0) return [];
+  const label = entityLabel(kind.kind, save.slug);
+  const { refusals, judged } = await judgeEntityTypeChanges(
+    deps.adapter.getDrizzle(),
+    dialect,
+    {
+      label,
+      table,
+      ...perLanguageBefore(save.previous, table, previous),
+      previous,
+      next,
+      renamed,
+      ...(await migrationStatusOf(deps, save, table)),
+      // A lossy change goes ahead only for a field whose clear the person confirmed, with the
+      // count of values it clears still holding (`refuseChangedClearCounts`).
+      acknowledged: clearedFieldsOf(save.confirmedClears),
+      builtBy: kind.builtBy,
+      ...componentRow,
+    }
+  );
+  throwTypeChangeRefusals(label, refusals);
+  refuseChangedClearCounts(judged, save.confirmedClears);
+  return judged;
 }
 
 /**

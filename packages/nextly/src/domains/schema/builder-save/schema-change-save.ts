@@ -22,6 +22,7 @@ import {
 
 import type { CollectionSave } from "./collection-save";
 import type { ConfirmedDeletion } from "./deletion-counts";
+import type { ConfirmedClear } from "./type-change-clears";
 
 /** A field's answer in the earlier per-field shape the admin still sends. */
 export interface PerFieldResolution {
@@ -40,6 +41,12 @@ export interface SchemaChangeAnswers {
    * the save deletes only where each still holds that many (`CollectionSave.confirmedDeletions`).
    */
   confirmedDeletions?: readonly ConfirmedDeletion[];
+  /**
+   * How many values of each field changing type the review showed and the person confirmed
+   * clearing: only those that cannot convert are cleared, and only while still that many
+   * (`CollectionSave.confirmedClears`).
+   */
+  confirmedClears?: readonly ConfirmedClear[];
   /**
    * A Single's one row given the default each field new to its table states, by field
    * (`singleRowFills`): not an answer the person gave, and judged as a Single's fill alone
@@ -154,6 +161,9 @@ export function saveOfSchemaChange(args: {
       ...(args.answers.confirmedDeletions === undefined
         ? {}
         : { confirmedDeletions: args.answers.confirmedDeletions }),
+      ...(args.answers.confirmedClears === undefined
+        ? {}
+        : { confirmedClears: args.answers.confirmedClears }),
       ...(args.junctions === undefined ? {} : { junctions: args.junctions }),
       ...(args.keys === undefined ? {} : { keys: args.keys }),
     },

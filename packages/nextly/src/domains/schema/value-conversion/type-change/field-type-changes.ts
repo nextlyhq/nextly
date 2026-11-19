@@ -515,6 +515,23 @@ export async function fieldTypeChangeRefusals(
   dialect: SupportedDialect,
   entity: EntityTypeChangeInput
 ): Promise<TypeChangeRefusal[]> {
+  return (await judgeEntityTypeChanges(db, dialect, entity)).refusals;
+}
+
+/**
+ * `entity`'s field type changes judged over the values their columns hold, with the refusals they
+ * give (`fieldTypeChangeRefusals`): a save that converts the values reads each one's readings and
+ * the values it clears from the same judgement. None judged where the definition awaits its
+ * migration, which is refused before any value is read.
+ */
+export async function judgeEntityTypeChanges(
+  db: unknown,
+  dialect: SupportedDialect,
+  entity: EntityTypeChangeInput
+): Promise<{
+  refusals: TypeChangeRefusal[];
+  judged: JudgedFieldTypeChange[];
+}> {
   const changes = fieldTypeChangesOf({
     previous: entity.previous,
     next: entity.next,
@@ -523,30 +540,30 @@ export async function fieldTypeChangeRefusals(
     builtBy: entity.builtBy,
     ...(entity.componentRow === true ? { componentRow: true } : {}),
   });
-  if (changes.length === 0) return [];
+  if (changes.length === 0) return { refusals: [], judged: [] };
   const pending =
     entity.migrationStatus === undefined
       ? null
       : pendingMigrationRefusal(entity.label, entity.migrationStatus, changes);
-  if (pending !== null) return [pending];
-  return typeChangeRefusals(
-    entity.label,
-    await judgeFieldTypeChanges({
-      db,
-      dialect,
-      builtBy: entity.builtBy,
-      ...(entity.componentRow === true ? { componentRow: true } : {}),
-      table: entity.table,
-      ...(entity.translationsTable !== undefined
-        ? { translationsTable: entity.translationsTable }
-        : {}),
-      ...(entity.translatedBefore !== undefined
-        ? { translated: entity.translatedBefore }
-        : {}),
-      changes,
-    }),
-    entity.acknowledged
-  );
+  if (pending !== null) return { refusals: [pending], judged: [] };
+  const judged = await judgeFieldTypeChanges({
+    db,
+    dialect,
+    builtBy: entity.builtBy,
+    ...(entity.componentRow === true ? { componentRow: true } : {}),
+    table: entity.table,
+    ...(entity.translationsTable !== undefined
+      ? { translationsTable: entity.translationsTable }
+      : {}),
+    ...(entity.translatedBefore !== undefined
+      ? { translated: entity.translatedBefore }
+      : {}),
+    changes,
+  });
+  return {
+    refusals: typeChangeRefusals(entity.label, judged, entity.acknowledged),
+    judged,
+  };
 }
 
 /** A refusal as a validation error lists it: by the field's path under `fields`. */
@@ -575,12 +592,27 @@ export async function refuseFieldTypeChanges(
   dialect: SupportedDialect,
   entity: EntityTypeChangeInput
 ): Promise<void> {
-  const refusals = await fieldTypeChangeRefusals(db, dialect, entity);
+  throwTypeChangeRefusals(
+    entity.label,
+    await fieldTypeChangeRefusals(db, dialect, entity)
+  );
+}
+
+/**
+ * Throw `refusals` of `entity`'s type changes as one validation error, each by its field, where
+ * there are any: every refusal at once, so the owner sees them all in one save.
+ *
+ * @throws {NextlyError} a validation error listing each refusal by its field
+ */
+export function throwTypeChangeRefusals(
+  entity: string,
+  refusals: readonly TypeChangeRefusal[]
+): void {
   if (refusals.length === 0) return;
   throw NextlyError.validation({
     errors: refusals.map(typeChangeError),
     logContext: {
-      entity: entity.label,
+      entity,
       fields: refusals.map(refusal => refusal.path),
     },
   });
