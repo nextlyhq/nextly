@@ -21,6 +21,7 @@
  * @module starter-pages/starter-pages
  */
 import {
+  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   forEachStyleValues,
   isComponentInstance,
@@ -43,6 +44,8 @@ import type { StarterPageDefinition } from "@nextlyhq/plugin-sdk/blocks";
 
 import { PAGE_BUILDER_PLUGIN } from "../blocks/registration-service";
 import { registryMediaProps } from "../transfer/transfer-references";
+
+import { starterFit, starterMisfitSentence } from "./starter-fit";
 
 /** Where a site's own starters are said to come from, in a boot error. */
 const SITE_STARTERS_SOURCE = "pageBuilder({ starterPages })";
@@ -102,17 +105,17 @@ function starterPagesIn(declaration: PluginDeclaration): {
   return { starters: declared };
 }
 
-/** A built-in starter's blocks need one the site doesn't have: it is left out. */
-const LEFT_OUT: unique symbol = Symbol("left out");
-
 /** What a starter's blocks are judged against: the site's blocks and devices. */
 export interface StarterJudgement {
   readonly blocks: BlockRegistryReader;
   readonly breakpoints: BreakpointSet;
   /**
-   * The bounds the site holds a page to, so a starter too large for them is
-   * refused here rather than offered and then refused at create. The
-   * engine's defaults where the site sets none.
+   * The bounds the site holds a page to. A site's or a plugin's own starter
+   * too large for them is refused here, since its author can make it fit. A
+   * built-in one is judged here against the engine's defaults only: whether
+   * this site's limits hold it is asked when starters are listed and used
+   * (`starter-fit`), so the server never fails to start over a page's size.
+   * The engine's defaults where the site sets none.
    */
   readonly limits?: DocumentLimits;
 }
@@ -211,16 +214,22 @@ function fallbackOf(node: BlockNode, prop: string): unknown {
 
 /**
  * Why a starter's blocks can't be offered, or `undefined` when they can:
- * a block the site doesn't have (asked of the page builder's own starters
- * only when `unknownBlocks` is "refuse"), a placed component, something to
- * load, then the engine's validation of them as a page.
+ * a placed component, a block the site doesn't have, something to load,
+ * then the engine's validation of them as a page.
+ *
+ * A built-in starter (`builtIn`) is the page builder's own, and its fit with
+ * this site is not asked here: a block the site doesn't have is skipped (the
+ * listing shows the starter as unavailable), and it is validated against the
+ * engine's default limits rather than the site's. Anything else wrong with it
+ * is a defect in the page builder and still stops the start.
  */
 function blocksProblem(
   blocks: readonly BlockNode[],
   judgement: StarterJudgement,
-  unknownBlocks: "refuse" | "leave out"
-): string | typeof LEFT_OUT | undefined {
-  let problem: string | typeof LEFT_OUT | undefined;
+  builtIn: boolean
+): string | undefined {
+  let problem: string | undefined;
+  let lacksBlock = false;
   walkNodes([...blocks], node => {
     if (problem !== undefined) return;
     if (isComponentInstance(node)) {
@@ -229,10 +238,9 @@ function blocksProblem(
       return;
     }
     if (!judgement.blocks.has(node.type)) {
-      problem =
-        unknownBlocks === "leave out"
-          ? LEFT_OUT
-          : `uses the block "${node.type}", which this site doesn't have`;
+      if (builtIn) lacksBlock = true;
+      else
+        problem = `uses the block "${node.type}", which this site doesn't have`;
       return;
     }
     const props = node.props ?? {};
@@ -247,6 +255,9 @@ function blocksProblem(
     }
   });
   if (problem !== undefined) return problem;
+  // A built-in starter using a block this site doesn't have can't be read as
+  // a page here; the listing says why it isn't available.
+  if (lacksBlock) return undefined;
   // The engine's own reading of the blocks as a page, strictly: what a save
   // would refuse, a starter is refused for, before any author meets it.
   const { issues } = validateDocument(
@@ -258,7 +269,11 @@ function blocksProblem(
     {
       breakpoints: judgement.breakpoints,
       mode: "strict",
-      ...(judgement.limits === undefined ? {} : { limits: judgement.limits }),
+      ...(builtIn
+        ? { limits: DEFAULT_LIMITS }
+        : judgement.limits === undefined
+          ? {}
+          : { limits: judgement.limits }),
       registry: judgement.blocks.lookup(),
       nesting: judgement.blocks.nestingSource(),
       definitions: judgement.blocks.blockSource(),
@@ -281,12 +296,15 @@ function refusal(read: ReadStarter, problem: string): Error {
 
 /**
  * Every starter, judged: the page builder's own (unless hidden), the site's,
- * then each plugin's, in that order. Throws the first refusal; leaves out a
- * built-in one needing a block the site doesn't have.
+ * then each plugin's, in that order. Throws the first refusal. A built-in one
+ * this site can't hold is registered all the same, listed as unavailable, and
+ * said once in the log, so a site owner can find out why.
  */
 function judgeStarterPages(
   read: readonly ReadStarter[],
-  judgement: StarterJudgement
+  judgement: StarterJudgement,
+  /** Says, one line each, which built-in starters this site can't use. */
+  log: (message: string) => void
 ): RegisteredStarterPage[] {
   const taken = new Map<string, string>();
   const registered: RegisteredStarterPage[] = [];
@@ -302,13 +320,18 @@ function judgeStarterPages(
       );
     }
     taken.set(starter.id, entry.source);
-    const problem = blocksProblem(
-      starter.blocks,
-      judgement,
-      entry.builtIn ? "leave out" : "refuse"
-    );
-    if (problem === LEFT_OUT) continue;
+    const problem = blocksProblem(starter.blocks, judgement, entry.builtIn);
     if (problem !== undefined) throw refusal(entry, problem);
+    if (entry.builtIn) {
+      // Its blocks and size against this site's; variables and shared
+      // styles aren't read before the site is, and the listing asks those.
+      const misfit = starterFit(
+        starter,
+        { blocks: judgement.blocks },
+        judgement.limits
+      );
+      if (misfit !== undefined) log(starterMisfitSentence(starter, misfit));
+    }
     registered.push({
       starter,
       source: entry.source,
@@ -331,7 +354,7 @@ export interface StarterPageOptions {
  * for one that is refused.
  */
 export function registerStarterPagesAtBoot(
-  ctx: Pick<PluginContext, "config">,
+  ctx: Pick<PluginContext, "config" | "logger">,
   options: StarterPageOptions,
   builtIn: readonly StarterPageDefinition[],
   judgement: StarterJudgement
@@ -358,5 +381,7 @@ export function registerStarterPagesAtBoot(
       read.push({ value, source: declaration.source, builtIn: false });
     }
   }
-  return judgeStarterPages(read, judgement);
+  return judgeStarterPages(read, judgement, message =>
+    ctx.logger.info(`[page-builder] ${message}`)
+  );
 }

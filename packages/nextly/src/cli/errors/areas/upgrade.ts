@@ -33,12 +33,12 @@ function whatThenNext(message: string, why: string): CliErrorParts {
 
 /**
  * What a backup refusal of the data steps left: nothing changed, or, where
- * the command had applied its migrations by then, those applied and the
- * stored data as it was.
+ * the command had changed the schema by then, those changes applied and
+ * the stored data as it was.
  */
 function leftAsItWas(error: NextlyError): string {
   return error.logContext?.afterMigrations === true
-    ? "The migrations of this run had applied by then, and stay applied; the stored data was left as it is."
+    ? "The schema changes of this run had applied by then, and stay applied; the stored data was left as it is."
     : "Nothing was changed.";
 }
 
@@ -56,6 +56,26 @@ export const UPGRADE_CODES = defineCodes({
     retired: {
       why: "`nextly upgrade` no longer changes stored data: `nextly migrate` and `nextly i18n:convert-zoned-dates` do, and without a confirmed backup or a terminal they end as `DATA_STEPS_BACKUP_NOT_CONFIRMED`.",
     },
+  },
+  UPGRADE_CANNOT_START: {
+    cause:
+      "`nextly upgrade` could not read the project it was run in, or the registry the project uses, so it changed nothing.",
+  },
+  UPGRADE_RELEASE_UNKNOWN: {
+    cause:
+      "`nextly upgrade` could not tell which release to move to: the one given is not published, or the installed release's channel names none, so it changed nothing.",
+  },
+  UPGRADE_PACKAGE_CANNOT_MOVE: {
+    cause:
+      "A Nextly package of the project cannot move to the release `nextly upgrade` was moving to, so no package was moved.",
+  },
+  UPGRADE_INSTALL_FAILED: {
+    cause:
+      "The package manager failed while `nextly upgrade` was moving the packages, and the project was put back as it was.",
+  },
+  UPGRADE_NOT_RESTORED: {
+    cause:
+      "The package manager failed while `nextly upgrade` was moving the packages, and the installed packages could not be put back.",
   },
   UPGRADE_WORK_MOVED: {
     cause:

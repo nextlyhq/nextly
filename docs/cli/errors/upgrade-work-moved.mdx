@@ -7,18 +7,19 @@ description: "`nextly upgrade` was run for the database work it used to do, whic
 
 `nextly upgrade` was run for the database work it used to do, which `nextly migrate` and `nextly i18n:convert-zoned-dates` now do, so it changed nothing.
 
-Earlier releases used `nextly upgrade` to bring stored data up to date. That work has moved. `nextly migrate` now hashes passwords stored before this release, removes passwords kept in version history and converts roles holding a retired manage permission, once its migrations have applied. `nextly i18n:convert-zoned-dates` converts translated date columns kept with a time zone. Run without `--reconcile-core`, `nextly upgrade` opens no database, changes nothing and exits 1, so a deploy script that still calls it fails here instead of passing with the work undone. Its `--confirm-backed-up` and `--force` flags no longer do anything.
+Earlier releases used `nextly upgrade` to bring an existing database up to date. That work has moved. `nextly migrate` now moves the migration records of an earlier release, brings Nextly's own tables up to date, hashes passwords stored before this release, removes passwords kept in version history and converts roles holding a retired manage permission. `nextly i18n:convert-zoned-dates` converts translated date columns kept with a time zone. `nextly upgrade` now moves the project's Nextly packages to a release. The flags of the earlier work (`--confirm-backed-up`, `-f`/`--force`, `--reconcile-core`, `--target-table-name`, `--force-unlock`, `--accept-data-loss`) still parse, and a run with one opens no database, moves no package, changes nothing and exits 1, so a deploy script that still passes one fails here instead of doing something else.
 
 ## Fix
 
 - Replace `nextly upgrade` in your deploy with `nextly migrate`. Where no terminal is attached, pass `--backup-confirmed` once the database is backed up; the flag is ignored when there is nothing to change.
+- A development database with no migrations gets the same work from `nextly db:sync`.
 - If a start or `nextly migrate` names a date column with a time zone, run `nextly i18n:convert-zoned-dates` once the release serves every instance.
 
 ## Example
 
 ```text
 ✗ `nextly upgrade` no longer changes the database, and changed nothing.
-  Why:  `nextly migrate` now hashes passwords stored before this release, removes passwords kept in version history and converts roles holding a retired manage permission, once its migrations have applied. `nextly i18n:convert-zoned-dates` converts translated date columns kept with a time zone.
-  Next: Run `nextly migrate` (`nextly migrate --backup-confirmed` where no terminal is attached). Once the release serves every instance, run `nextly i18n:convert-zoned-dates` if a start or `nextly migrate` named such a column.
+  Why:  `nextly migrate` now moves the migration records of an earlier release, brings Nextly's own tables up to date, hashes passwords stored before this release, removes passwords kept in version history and converts roles holding a retired manage permission. `nextly i18n:convert-zoned-dates` converts translated date columns kept with a time zone. `nextly upgrade` moves the project's Nextly packages to a release, and takes none of the flags that work had.
+  Next: Run `nextly migrate` (`nextly migrate --backup-confirmed` where no terminal is attached). Once the release serves every instance, run `nextly i18n:convert-zoned-dates` if a start or `nextly migrate` named such a column. To move the packages, run `nextly upgrade` without the flag.
   Docs: https://nextlyhq.com/docs/cli/errors/upgrade-work-moved  (UPGRADE_WORK_MOVED)
 ```

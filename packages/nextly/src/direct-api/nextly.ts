@@ -57,6 +57,7 @@ import { isServicesRegistered } from "../di/service-access";
 import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
+import type { IdentityService } from "../domains/auth/services/identity-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
@@ -158,6 +159,7 @@ import type {
   TimeseriesArgs,
   TimeseriesResult,
   CreateArgs,
+  CreateFromSourceArgs,
   RowFromCollectionSlug,
   RowFromSingleSlug,
   DeleteArgs,
@@ -238,6 +240,7 @@ import type {
   GetRolePermissionsArgs,
   ListApiKeysArgs,
   ListFoldersArgs,
+  ListUserIdentitiesArgs,
   BulkDeleteMediaArgs,
   PreviewEmailTemplateArgs,
   ReorderUserFieldsArgs,
@@ -250,6 +253,7 @@ import type {
   SetRolePermissionsArgs,
   SubmitFormArgs,
   TestEmailProviderArgs,
+  UnlinkIdentityArgs,
   UpdateApiKeyArgs,
   UpdateFieldGroupArgs,
   UpdateEmailProviderArgs,
@@ -598,6 +602,11 @@ export class Nextly implements NextlyContext {
     return container.get<ApiKeyService>("apiKeyService");
   }
 
+  /** @internal */
+  public get identityService(): IdentityService {
+    return container.get<IdentityService>("identityService");
+  }
+
   /**
    * Find multiple documents in a collection.
    *
@@ -736,6 +745,21 @@ export class Nextly implements NextlyContext {
   bulkDelete(args: BulkDeleteArgs): Promise<BulkOperationResult> {
     return runAsCaller(this.defaultConfig, args, callArgs =>
       collectionsNs.bulkDelete(this, callArgs)
+    );
+  }
+
+  /**
+   * @experimental Create a document that copies a stored one, reading the
+   * source as the caller first; nothing is created where that read is
+   * refused. The new document's field validators are told what it copies,
+   * so a value the source already holds may count as no change. Intended to
+   * become stable, since plugins call it. Not reachable over REST.
+   */
+  createFromSource<TSlug extends CollectionSlug>(
+    args: CreateFromSourceArgs<TSlug>
+  ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.createFromSource(this, callArgs)
     );
   }
 
@@ -1094,6 +1118,10 @@ export const nextly = {
     (await requireNextlyOnceStarted()).bulkDelete(args),
   duplicate: async <TSlug extends CollectionSlug>(args: DuplicateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).duplicate(args),
+  /** Create a document that copies a stored one, read as the caller first. @experimental */
+  createFromSource: async <TSlug extends CollectionSlug>(
+    args: CreateFromSourceArgs<TSlug>
+  ) => (await requireNextlyOnceStarted()).createFromSource(args),
 
   // Generic in `TCreate` as the method is, so this delegate answers the same
   // type for the same call. The answer type and the inner call's type
@@ -1258,7 +1286,11 @@ export const nextly = {
       (await requireNextlyOnceStarted()).users.update(args),
     delete: async (args: DeleteUserArgs) =>
       (await requireNextlyOnceStarted()).users.delete(args),
-  },
+    listIdentities: async (args: ListUserIdentitiesArgs) =>
+      (await requireNextlyOnceStarted()).users.listIdentities(args),
+    unlinkIdentity: async (args: UnlinkIdentityArgs) =>
+      (await requireNextlyOnceStarted()).users.unlinkIdentity(args),
+  } satisfies UsersNamespace,
 
   media: {
     upload: async (args: UploadMediaArgs) =>

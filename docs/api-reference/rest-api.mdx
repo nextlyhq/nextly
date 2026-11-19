@@ -943,7 +943,8 @@ These routes read and move review state for collections and Singles that have a 
           "kind": "approve",
           "to": "cleared",
           "mayTake": true,
-          "primary": true
+          "primary": true,
+          "commentRequired": false
         },
         {
           "name": "bounce",
@@ -951,7 +952,8 @@ These routes read and move review state for collections and Singles that have a 
           "kind": "request-changes",
           "to": "writing",
           "mayTake": true,
-          "primary": false
+          "primary": false,
+          "commentRequired": true
         },
         {
           "name": "park",
@@ -959,7 +961,8 @@ These routes read and move review state for collections and Singles that have a 
           "kind": "move",
           "to": "hold",
           "mayTake": false,
-          "primary": false
+          "primary": false,
+          "commentRequired": true
         }
       ],
       "waitingFor": { "kind": "user", "id": "rita", "name": "Rita" },
@@ -972,7 +975,8 @@ These routes read and move review state for collections and Singles that have a 
         "comment": "Ready for legal"
       }
     }
-  ]
+  ],
+  "mayPublishWithoutReview": false
 }
 ```
 
@@ -985,10 +989,12 @@ What the fields mean:
 - **`steps`:** the steps out of the part's stage.
   - **`mayTake`:** whether the caller may take the step on this part. The server judges it with the same checks the step itself makes of who takes it: the step's permission (or the right to edit or publish, where it names none), a signed-in person for an approval or a request for changes (so an API key's is always `false`), and no self-approval where the step refuses it. A step can still be refused when taken, for what the caller saw being out of date, a missing comment, or fields the approver cannot read. Approvals are made by people: trusted server code may take every other step, and sees `mayTake: false` for an approval or a request for changes.
   - **`primary`:** `true` on the stage's primary step (its only step out, or the one marked `primary`), `false` on the others.
+  - **`commentRequired`:** whether the step is taken only with a comment: always for a request for changes, and for any other step whose definition asks for one.
 - **`waitingFor`:** in order, the part's assignee; else its stage's default reviewer, where they may take the stage's primary step; else the roles that may take it (`{ "kind": "roles", "roles": [{ "id", "name" }] }`). It is `null` in a stage with no step out of it.
 - **`lastMove`:** the part's latest workflow event other than an assignment; `null` for a part that never moved.
+- **`mayPublishWithoutReview`:** whether the caller may publish the document without review, judged as a publish that asks to is: `true` for a person holding `publish-without-review-<slug>` and for trusted server code, never for an API key, whatever it holds.
 
-A document whose collection or Single has no workflow attached answers `200` with `{ "workflow": null, "parts": [] }`. The read check runs first, so a missing document, or one the caller may not read, is still `404 NOT_FOUND` whether or not a workflow is attached. Taking a step or assigning on such a document is refused with `WORKFLOW_NOT_ATTACHED`.
+A document whose collection or Single has no workflow attached answers `200` with `{ "workflow": null, "parts": [], "mayPublishWithoutReview": false }`. The read check runs first, so a missing document, or one the caller may not read, is still `404 NOT_FOUND` whether or not a workflow is attached. Taking a step or assigning on such a document is refused with `WORKFLOW_NOT_ATTACHED`.
 
 #### Steps
 

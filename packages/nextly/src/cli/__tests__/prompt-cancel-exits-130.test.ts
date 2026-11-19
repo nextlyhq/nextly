@@ -35,7 +35,6 @@ import { generateWidgetAction } from "../commands/generate-widget";
 import { runInit } from "../commands/init";
 import { pruneApproval, runPrune } from "../commands/prune";
 import { i18nConvertZonedDatesAction } from "../commands/i18n-convert-zoned-dates";
-import { upgradeAction } from "../commands/upgrade";
 import type { CommandContext } from "../program";
 import { askToDeleteInTerminal } from "../utils/data-loss-consent";
 
@@ -592,30 +591,6 @@ describe("a cancelled prompt exits 130 and changes nothing", () => {
       expect(process.exitCode).toBe(1);
       expect(printedError()).toContain("(DATA_STEPS_BACKUP_DECLINED)");
       expect(seen.stepRun).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("upgrade", () => {
-    it("a cancel at the --reconcile-core question exits 130 and reconciles nothing", async () => {
-      seen.confirm.mockResolvedValue(CANCEL);
-      await run(() =>
-        upgradeAction({ reconcileCore: true }, {
-          optsWithGlobals: () => ({}),
-        } as unknown as Command)
-      );
-      expect(exits[0]).toBe(130);
-      expect(seen.reconciled).not.toHaveBeenCalled();
-    });
-
-    it("a no at the --reconcile-core question still ends as a refusal, exit 1", async () => {
-      seen.confirm.mockResolvedValue(false);
-      await upgradeAction({ reconcileCore: true }, {
-        optsWithGlobals: () => ({}),
-      } as unknown as Command);
-      expect(exits).toEqual([]);
-      expect(process.exitCode).toBe(1);
-      expect(printedError()).toContain("(DATA_LOSS_DECLINED)");
-      expect(seen.reconciled).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,17 +1,19 @@
 /**
  * Auth / RBAC dispatch handlers.
  *
- * Groups two closely related method maps into one file:
+ * Groups three closely related method maps into one file:
  *
  * - `AUTH_METHODS` — login, register, password flows, email verification
  *   against `container.auth`.
  * - `RBAC_METHODS` — role / permission / role-permission / user-role /
  *   role-inheritance operations that need access to multiple sub-services
  *   on the container, so the handler receives the full `ServiceContainer`.
+ * - `IDENTITY_METHODS` — a user's external identities, listed and unlinked
+ *   through the container's identity service.
  *
  * Every handler returns a Response built via the respondX helpers in
- * `../../api/response-shapes.ts`. See spec §5.1 for the canonical shape
- * contract.
+ * `../../api/response-shapes.ts`. The dispatcher passes the Response
+ * through unchanged. See spec §5.1 for the canonical shape contract.
  */
 
 import { z } from "zod";
@@ -22,6 +24,7 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  withSessionCacheHeaders,
 } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ServiceContainer } from "../../services";
@@ -35,6 +38,7 @@ import {
 import type { MethodHandler, Params } from "../types";
 
 type AuthService = ServiceContainer["auth"];
+type IdentityService = ServiceContainer["identities"];
 type RbacContainer = ServiceContainer;
 
 // ============================================================
@@ -587,6 +591,60 @@ export function dispatchAuth(
   const handler = AUTH_METHODS[method];
   if (!handler) throw new Error(`Unknown method: ${method}`);
   return handler.execute(services.auth, params, body);
+}
+
+/**
+ * A user's external identities: the listing and the unlink of the rows the
+ * user's account owns, answered in the canonical shapes — the listing as one
+ * page of `{ items, meta }`, the unlink as `{ message, item }` naming the
+ * identity removed, as the Direct API answers both. The listing is told to
+ * one caller, so its answer is never cached for another.
+ */
+const IDENTITY_METHODS: Record<string, MethodHandler<IdentityService>> = {
+  listUserIdentities: {
+    execute: async (svc, p) => {
+      const identities = await svc.listExternalIdentities(
+        requireParam(p, "userId", "UserId")
+      );
+      // Every identity in one page: the listing is not paginated.
+      const limit = Math.max(identities.length, 1);
+      return withSessionCacheHeaders(
+        respondList(
+          identities,
+          toPaginationMeta({
+            total: identities.length,
+            page: 1,
+            limit,
+            totalPages: 1,
+          })
+        )
+      );
+    },
+  },
+  unlinkUserIdentity: {
+    execute: async (svc, p) => {
+      const userId = requireParam(p, "userId", "UserId");
+      const identityId = requireParam(p, "identityId", "IdentityId");
+      await svc.unlinkExternalIdentity(userId, identityId);
+      return respondMutation("Identity unlinked.", { id: identityId });
+    },
+  },
+};
+
+/**
+ * Dispatch an identities method call. The handlers take the container's
+ * identity service, as the auth ones take its auth service: it is the one
+ * service they reach.
+ */
+export function dispatchIdentities(
+  services: ServiceContainer,
+  method: string,
+  params: Params,
+  body: unknown
+): Promise<unknown> {
+  const handler = IDENTITY_METHODS[method];
+  if (!handler) throw new Error(`Unknown method: ${method}`);
+  return handler.execute(services.identities, params, body);
 }
 
 export function dispatchRbac(

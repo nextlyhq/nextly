@@ -20,6 +20,7 @@
  * @since 1.0.0
  */
 import { NextlyError } from "../errors/nextly-error";
+import { traceDeclaredEntities } from "../shared/lib/declared-entity-trace";
 import { copyPlainValues, isPlainObject } from "../shared/lib/plain-copy";
 
 import { setupConfigKeysOf } from "./plugin-config-view";
@@ -268,6 +269,9 @@ export function setupTransformerInput<C extends object>(
   plugins: readonly PluginDefinition[]
 ): C & { plugins: PluginDefinition[] } {
   const input = copyPlainValues(setupConfigKeysOf(config));
+  // Each entity's copy carries the place the app declared it, into whatever a transformer returns
+  // for it, so the configuration's check finds it there even when a transformer renamed it.
+  traceDeclaredEntities(input);
   input.plugins = copyPluginDefinitions(plugins);
   const db = input.db;
   if (isPlainObject(db) && Array.isArray(db.rawSqlPlugins)) {

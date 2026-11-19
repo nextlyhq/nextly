@@ -16,7 +16,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { BindableField } from "./binding-controls";
+import { BindableField } from "./bindings/binding-controls";
 import {
   PropExposeControl,
   type ComponentFieldsBinding,

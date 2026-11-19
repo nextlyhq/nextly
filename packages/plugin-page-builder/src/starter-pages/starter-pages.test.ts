@@ -36,6 +36,17 @@ function declaring(name: string, value: unknown) {
   };
 }
 
+/** What the boot said in the log, one line each. */
+let logged: string[] = [];
+
+/** The boot's context: the site's plugins, and a log kept in `logged`. */
+function context(plugins: unknown[] = []) {
+  return {
+    config: { plugins } as never,
+    logger: { info: (line: string) => logged.push(line) } as never,
+  };
+}
+
 /** A boot of a site with `options` and `plugins`, its built-in set `builtIn`. */
 function boot(
   options: StarterPageOptions,
@@ -43,7 +54,7 @@ function boot(
   builtIn: readonly StarterPageDefinition[] = []
 ) {
   return registerStarterPagesAtBoot(
-    { config: { plugins } as never },
+    context(plugins),
     options,
     builtIn,
     judgement
@@ -135,7 +146,9 @@ describe("refusing a starter page at start-up", () => {
     );
   });
 
-  it("leaves out a built-in starter needing a block the site doesn't have, rather than refusing the start", () => {
+  it("keeps a built-in starter needing a block the site doesn't have, rather than refusing the start, and says so", () => {
+    // Listed as unavailable, with why; never a reason not to start.
+    logged = [];
     const registered = boot(
       {},
       [],
@@ -144,7 +157,40 @@ describe("refusing a starter page at start-up", () => {
         fixtureStarter("ours"),
       ]
     );
-    expect(registered.map(entry => entry.starter.id)).toEqual(["ours"]);
+    expect(registered.map(entry => entry.starter.id)).toEqual([
+      "broken",
+      "ours",
+    ]);
+    expect(logged).toEqual([
+      `[page-builder] The starter page "${fixtureStarter().label}" isn't available on this site. Uses the Hero block, which this site doesn't have.`,
+    ]);
+  });
+
+  it("keeps a built-in starter larger than the site's limits, and says why, while a site's own is refused", () => {
+    // The same starter twice: the page builder's own is the site's to use or
+    // not, and listed as unavailable; the site's own its author can fix.
+    const tight = { ...judgement, limits: { ...DEFAULT_LIMITS, maxNodes: 3 } };
+    logged = [];
+    const registered = registerStarterPagesAtBoot(
+      context(),
+      {},
+      [fixtureStarter()],
+      tight
+    );
+    expect(registered.map(entry => entry.starter.id)).toEqual(["test-welcome"]);
+    expect(logged).toEqual([
+      expect.stringMatching(
+        /^\[page-builder\] The starter page ".+" isn't available on this site\. Has \d+ blocks; this site allows 3\.$/
+      ),
+    ]);
+    expect(() =>
+      registerStarterPagesAtBoot(
+        context(),
+        { starterPages: [fixtureStarter()] },
+        [],
+        tight
+      )
+    ).toThrow("fails validation");
   });
 
   it.each([
@@ -316,7 +362,7 @@ describe("refusing a starter page at start-up", () => {
   it("refuses a starter larger than the site's document limits allow", () => {
     expect(() =>
       registerStarterPagesAtBoot(
-        { config: { plugins: [] } as never },
+        context(),
         { starterPages: [fixtureStarter()] },
         [],
         { ...judgement, limits: { ...DEFAULT_LIMITS, maxNodes: 3 } }

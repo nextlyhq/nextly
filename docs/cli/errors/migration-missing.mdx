@@ -9,7 +9,7 @@ A migration recorded as applied has no file in the migrations folder.
 
 The database records the migration as applied, and no removal of it is recorded, but its file is not in the migrations folder. A build older than the database, or a file deleted by hand, does this. The same refusal names a migration the folder lacks that a newer build tried and did not finish, since the database may hold part of it.
 
-`nextly migrate` (and the boot migrate step), `migrate:down`, `migrate:baseline` and `nextly upgrade --reconcile-core` all stop with exit code 3 before they change anything, core tables included. A plugin's modules are never counted.
+`nextly migrate` (and the boot migrate step), `migrate:down` and `migrate:baseline` all stop with exit code 3 before they change anything, core tables included. A plugin's modules are never counted.
 
 ## Fix
 

@@ -83,11 +83,18 @@ export function isCssWideKeyword(value: string): boolean {
   return CSS_WIDE_KEYWORDS.has(asciiLower(value));
 }
 
-/** Parse a CSS value, or `null` when it is not one. */
-export function parseValue(value: string): CssNode | null {
+/**
+ * Parse a CSS value, or `null` when it is not one. With `positions`, each
+ * node carries where its text sits, for a caller that rewrites it in place.
+ */
+export function parseValue(
+  value: string,
+  options: { readonly positions?: boolean } = {}
+): CssNode | null {
   try {
     return parse(value, {
       context: "value",
+      positions: options.positions === true,
       onParseError: error => {
         throw error;
       },

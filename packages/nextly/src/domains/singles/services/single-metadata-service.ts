@@ -248,6 +248,19 @@ export interface UpdateSingleSchemaResult {
    * the fields were recorded without them; empty when they were applied or none was asked for.
    */
   refusedSettings: { field: string; setting: "required" | "unique" }[];
+  /**
+   * Where this save's migration failed past its main change (`migrationStatus` "failed", its row
+   * kept so a retry has one describing the table): why, as the admin is told it, and the migration
+   * files the writer kept, recorded applied nowhere, in run order; empty where none was kept. `next`
+   * says what to do where none was kept and saving again would not help.
+   */
+  failure?: {
+    reason: string;
+    keptFiles: string[];
+    /** Of `keptFiles`, the one a resolve checks against the database (the writer's `checked`). */
+    checked?: string | null;
+    next?: string;
+  };
 }
 
 /** One Required or Unique setting of a field leaving translation, and the SQL that undoes it. */
@@ -276,6 +289,41 @@ function withoutRefusedSettings<F extends { name: string }>(
       .filter(r => r.field === f.name)
       .reduce<F>((field, r) => ({ ...field, [r.setting]: false }), f)
   );
+}
+
+/**
+ * The registry columns an update writes, as the row recorded them before it: what puts the row
+ * back when the update's change landed but its files could not be recorded applied. A column the
+ * row held no value in is written empty, so no requested value stays behind.
+ */
+function recordedRowOf(
+  input: UpdateSingleSchemaInput
+): Partial<DynamicSingleInsert> {
+  const existing = input.existing as unknown as Record<string, unknown>;
+  return Object.fromEntries(
+    [...Object.keys(input.updateData), "migrationStatus"].map(key => [
+      key,
+      existing[key] ?? null,
+    ])
+  );
+}
+
+/**
+ * A migration that failed past its main change: the writer kept its files, recorded applied
+ * nowhere, in development as outside it, and `result` names them, so the admin is told which.
+ */
+function noteKeptFiles(
+  result: UpdateSingleSchemaResult | undefined,
+  written:
+    | { files: readonly string[]; applied: boolean; checked?: string | null }
+    | undefined
+): void {
+  if (result?.failure && written?.applied === false) {
+    result.failure.keptFiles = [...written.files];
+    if (written.checked !== undefined) {
+      result.failure.checked = written.checked;
+    }
+  }
 }
 
 /**
@@ -1086,7 +1134,15 @@ export class SingleMetadataService {
     let migrationStatus = input.existing.migrationStatus;
     const updateData = { ...input.updateData };
     let refusedSettings: UpdateSingleSchemaResult["refusedSettings"] = [];
+    let failure: UpdateSingleSchemaResult["failure"];
     if (outcome) {
+      if (outcome.status === "failed" && outcome.reason !== undefined) {
+        failure = {
+          reason: outcome.reason,
+          keptFiles: [],
+          ...(outcome.next === undefined ? {} : { next: outcome.next }),
+        };
+      }
       const { status: applied, refused } = outcome;
       if (applied !== undefined) {
         updateData.migrationStatus = applied;
@@ -1118,7 +1174,12 @@ export class SingleMetadataService {
       this.registry.updateSingle(input.slug, updateData, { source: "ui" })
     );
 
-    return { record, migrationStatus, refusedSettings };
+    return {
+      record,
+      migrationStatus,
+      refusedSettings,
+      ...(failure === undefined ? {} : { failure }),
+    };
   }
 
   /**
@@ -1140,10 +1201,11 @@ export class SingleMetadataService {
    * the schema writes its settings-only migration, as a collection's does.
    *
    * A failure before the apply, or in its main migration, is thrown as before, with nothing
-   * written. Past the main migration the apply reports rather than throws, and so does this: where
+   * written. Past the main migration the apply reports rather than throws, and so does this. Where
    * the writer then refuses to record the files applied (the database does not stand as their
-   * snapshot says), the files are kept and the outcome is recorded as a failed migration, so the
-   * registry row is still written.
+   * snapshot says), the change has landed and its files are kept: the row is put back as it was
+   * recorded and the writer's refusal is thrown, naming the files and the steps that finish the
+   * change, the last of them a `nextly migrate` that brings the row in step with the files.
    */
   private async writeUpdate(
     deps: CollectionSaveDeps,
@@ -1192,8 +1254,9 @@ export class SingleMetadataService {
       // recorded applied nowhere, never taken as applied.
       return ran.outcome?.status === "failed" ? "partly-applied" : undefined;
     };
+    let written: Awaited<ReturnType<typeof writeEntitySave>>;
     try {
-      await writeEntitySave(deps, save, applyAndRecord);
+      written = await writeEntitySave(deps, save, applyAndRecord);
     } catch (error) {
       if (ran.result === undefined) throw error;
       this.logger.error(
@@ -1201,13 +1264,22 @@ export class SingleMetadataService {
           error instanceof Error ? error.message : String(error)
         }`
       );
-      return this.recordUpdate(
-        input,
-        { refused: [], ...ran.outcome, status: "failed" },
-        leaving
+      // The row the step wrote describes the requested shape, which no applied file records: it
+      // goes back to what was recorded, and the steps the refusal names bring it forward.
+      await writeRegistryRowsWith(this.adapter, () =>
+        this.registry.updateSingle(input.slug, recordedRowOf(input), {
+          source: "ui",
+        })
       );
+      // The apply registered the requested shape with the running server, which the table does
+      // not stand as: forgotten, so the next use rebuilds it from the table as it is.
+      if (this.adapter) {
+        this.retractRuntimeSchema(this.adapter, input.existing.tableName);
+      }
+      throw error;
     }
     if ("rowError" in ran) throw ran.rowError;
+    noteKeptFiles(ran.result, written);
     if (plan && leaving.length > 0 && ran.outcome?.status !== "failed") {
       const outcome = ran.outcome;
       const refused = await this.applyLeavingStep(
@@ -1381,10 +1453,45 @@ export class SingleMetadataService {
     plan: UpdateDdlPlan | null,
     save: CollectionSave
   ): Promise<UpdateSingleSchemaResult> {
-    const { writeEntitySave } = await loadEntitySave();
+    const [{ writeEntitySave }, { appliedFieldsOf }] = await Promise.all([
+      loadEntitySave(),
+      import("../../schema/builder-save/stopped-save"),
+    ]);
     // `apply` does not run where the writer runs the file itself.
     await writeEntitySave(deps, save, () => Promise.resolve(undefined), {
       runsFile: true,
+      // A file that stops part way is settled to what of it applied: the row then records the
+      // fields as far as the database holds them, and the save is thrown as the report of it.
+      onSettled: async report => {
+        const fields = appliedFieldsOf(
+          (input.existing.fields ?? []) as unknown as FieldDefinition[],
+          input.fields ?? [],
+          report
+        );
+        await this.recordUpdate(
+          {
+            ...input,
+            fields,
+            updateData: {
+              ...input.updateData,
+              fields,
+              schemaHash: calculateSchemaHash(
+                fields as unknown as FieldConfig[]
+              ),
+            },
+          },
+          { status: "applied", refused: [] }
+        );
+        // The running server's table follows the fields the row records, as after an apply.
+        if (plan) {
+          await this.registerUpdatedRuntimeSchema(
+            input,
+            { ...plan, fields },
+            deps.adapter,
+            input.isLocalized
+          );
+        }
+      },
     });
     const outcome = plan
       ? await this.applyUpdateDdl(input, plan, false, "file")
@@ -2657,6 +2764,10 @@ export class SingleMetadataService {
     status: SingleMigrationStatus | undefined;
     /** The leaving settings refused, so the fields are recorded without them; else empty. */
     refused: LeavingSettingStep[];
+    /** Why a "failed" status was reached, as the admin is told it; the database's words go to the log. */
+    reason?: string;
+    /** What to do, where saving again would not clear the failure. */
+    next?: string;
   }> {
     const adapter = this.adapter;
     const tableName = input.existing.tableName;
@@ -2699,7 +2810,11 @@ export class SingleMetadataService {
         this.logger.error(
           `[Singles] Table "${tableName}" not found after migration update`
         );
-        return { status: "failed", refused: [] };
+        return {
+          status: "failed",
+          refused: [],
+          reason: "its table was not found after the change",
+        };
       }
 
       // 🔴 Past this point the MAIN table holds `plan.fields`. The companion may or may not follow,
@@ -2759,7 +2874,11 @@ export class SingleMetadataService {
               : String(companionError)
           }`
         );
-        return { status: "failed", refused: [] };
+        return {
+          status: "failed",
+          refused: [],
+          reason: "its translations table did not follow the change",
+        };
       }
 
       // The Required and Unique settings of fields leaving translation, now that their shared
@@ -2826,7 +2945,13 @@ export class SingleMetadataService {
           `[Singles] "${tableName}" is recorded as a failed migration and this save only ` +
             `describes a change to it, so its status is left as failed`
         );
-        return { status: "failed", refused: [] };
+        return {
+          status: "failed",
+          refused: [],
+          reason:
+            "an earlier change to it did not finish, and a change to some of its fields does not clear that",
+          next: "The server log holds the earlier failure: check the table against the Single's fields.",
+        };
       }
 
       return { status: "applied", refused: [] };
@@ -2856,7 +2981,11 @@ export class SingleMetadataService {
       if (plan.migrationSQL) {
         this.logger.error(`[Singles] Migration SQL was: ${plan.migrationSQL}`);
       }
-      return { status: "failed", refused: [] };
+      return {
+        status: "failed",
+        refused: [],
+        reason: "the database refused a step after the change to its table",
+      };
     }
   }
 

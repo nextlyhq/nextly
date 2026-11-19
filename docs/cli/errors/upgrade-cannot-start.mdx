@@ -1,0 +1,25 @@
+---
+title: UPGRADE_CANNOT_START
+description: "`nextly upgrade` could not read the project it was run in, or the registry the project uses, so it changed nothing."
+---
+
+## Cause
+
+`nextly upgrade` could not read the project it was run in, or the registry the project uses, so it changed nothing.
+
+`nextly upgrade` moves the Nextly packages a project's `package.json` declares, with the project's own package manager, and asks that manager which releases the registry has. It stops here, before choosing a release, when it cannot do one of those: the folder has no `package.json` it can read, the `package.json` declares no Nextly package, or declares Nextly only as a peer dependency (a peer range is yours to set, and the command never rewrites one), the project is installed with Yarn Plug'n'Play (not supported yet), or the registry could not be asked. The message says which.
+
+## Fix
+
+- Run `nextly upgrade` in the folder whose `package.json` depends on `nextly`, or name that folder with `--cwd`.
+- Where the registry could not be asked, check the registry the project's package manager is configured with (`.npmrc`, `.yarnrc.yml`), and the network.
+- With Yarn Plug'n'Play, set each Nextly package to the release in `package.json` and run `yarn install`.
+
+## Example
+
+```text
+✗ No `package.json` could be read in /srv/app.
+  Why:  `nextly upgrade` moves the Nextly packages a project's `package.json` declares, with the project's own package manager. Nothing was changed.
+  Next: Run `nextly upgrade` in the project's folder, or name it with `--cwd`.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-cannot-start  (UPGRADE_CANNOT_START)
+```

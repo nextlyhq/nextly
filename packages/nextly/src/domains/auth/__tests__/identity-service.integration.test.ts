@@ -3,15 +3,19 @@
  * real reader and writer: a linked identity resolving to its account, the
  * explicit link attaching its row through a real completing session, a
  * refused hand-off leaving the table exactly as it was, a case-variant
- * subject resolving nothing under each dialect's real collation, and a
- * repeated link answering with the standing row.
+ * subject resolving nothing under each dialect's real collation, a repeated
+ * link answering with the standing row, and the provisioning branch creating
+ * a real account through the real creation primitive with exactly the
+ * configured roles — its refusals leaving every table untouched.
  *
- * The linking policy is the port, answered here by a fake that enables
- * every key: the policy's own matrix is another change's, and what these
- * legs prove is the service's behaviour on each database. The completing
- * session is real — a token signed with the instance's secret, judged by
- * core's own session read against the booted adapter — because the link's
- * session rule is only proven by the machinery that will enforce it.
+ * The linking policy is the port, answered here by fakes that enable every
+ * key: the policy's own matrix is another change's, and what these legs
+ * prove is the service's behaviour on each database. Everything else is
+ * real — the completing session (a token signed with the instance's secret,
+ * judged by core's own session read), the role slug lookup, and the
+ * user-creation primitive — because the link's session rule and the
+ * provisioning refusals are only proven by the machinery that will enforce
+ * them.
  */
 
 // Sessions sign with keys derived from this; set before any module reads env.
@@ -21,12 +25,15 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { COOKIE_NAMES } from "../../../auth/cookies/cookie-config";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { verifyAccessToken } from "../../../auth/jwt/verify";
+import { getDialectTables } from "../../../database/index";
+import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import {
@@ -36,6 +43,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { externalIdentityKeyDigest } from "../../../schemas/external-identities";
+import { ServiceContainer } from "../../../services/index";
 import {
   IdentityService,
   pluginIdentityBinding,
@@ -59,6 +67,9 @@ const ACME: PluginDefinition = {
 
 /** A linking policy that enables every key: the matrix is another change's. */
 const EVERY_KEY_ENABLED: LinkingPolicyPort = {
+  policyFor() {
+    return { enabled: true };
+  },
   requireEnabled(providerKey: string) {
     return {
       providerKey,
@@ -68,11 +79,124 @@ const EVERY_KEY_ENABLED: LinkingPolicyPort = {
   },
 };
 
-/** The service on the booted instance's adapter and logger. */
-function serviceOn(handle: TestNextly): IdentityService {
+/**
+ * A linking policy that enables every key to provision exactly the roles
+ * named — as the real policy would answer for a configured `provision.roles`.
+ */
+function provisioningPolicy(roles: readonly string[]): LinkingPolicyPort {
+  return {
+    policyFor() {
+      return { enabled: true };
+    },
+    requireEnabled(providerKey: string) {
+      return {
+        providerKey,
+        trustedForImplicitLinking: false,
+        provisioning: { mayProvision: true, roles },
+      };
+    },
+  };
+}
+
+/** A linking policy that enables only the keys it is handed. */
+function enablingOnly(...keys: string[]): LinkingPolicyPort {
+  return {
+    policyFor(providerKey: string) {
+      return { enabled: keys.includes(providerKey) };
+    },
+    requireEnabled(providerKey: string) {
+      if (!keys.includes(providerKey)) {
+        throw NextlyError.forbidden({
+          logContext: { reason: "provider-key-not-enabled", providerKey },
+        });
+      }
+      return EVERY_KEY_ENABLED.requireEnabled(providerKey);
+    },
+  };
+}
+
+/** The service on the booted instance's adapter, with the real provisioning deps. */
+function serviceOn(
+  handle: TestNextly,
+  linkingPolicy: LinkingPolicyPort = EVERY_KEY_ENABLED
+): IdentityService {
+  const services = new ServiceContainer(handle.adapter);
   return new IdentityService(handle.adapter, handle.getService("logger"), {
-    linkingPolicy: EVERY_KEY_ENABLED,
+    linkingPolicy,
+    roles: services.roles,
+    users: services.users,
   });
+}
+
+/**
+ * A gate both racing unlinks pass through at their delete, after their
+ * check: each arrival waits, and the second opens the way for both. An
+ * unlink that held no lock across its check would let both arrive and both
+ * delete, each having read the other's identity as still there. Under the
+ * account's lock the second never reaches the gate while the first holds
+ * it, so the first is let through by the timeout instead and the second
+ * reads what it left.
+ */
+function startGate(timeoutMs = 1500): { enter: () => Promise<void> } {
+  let arrived = 0;
+  let open!: () => void;
+  const gate = new Promise<void>(resolve => (open = resolve));
+  return {
+    async enter(): Promise<void> {
+      arrived += 1;
+      if (arrived === 2) open();
+      await Promise.race([
+        gate,
+        new Promise<void>(resolve => setTimeout(resolve, timeoutMs)),
+      ]);
+    },
+  };
+}
+
+/** The adapter, every transaction's delete held at `gate` first. */
+function gatedAtTheDelete(
+  adapter: DrizzleAdapter,
+  gate: { enter: () => Promise<void> }
+): DrizzleAdapter {
+  const gatedTransaction = (tx: object): object =>
+    new Proxy(tx, {
+      get(target, property) {
+        const value: unknown = Reflect.get(target, property);
+        if (typeof value !== "function") return value;
+        if (property === "delete") {
+          return async (...args: unknown[]) => {
+            await gate.enter();
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return (value as (...a: unknown[]) => unknown).bind(target);
+      },
+    });
+  return new Proxy(adapter, {
+    get(target, property) {
+      if (property === "transaction") {
+        return (work: (tx: object) => Promise<unknown>, ...rest: unknown[]) =>
+          (target.transaction as (...a: unknown[]) => Promise<unknown>).call(
+            target,
+            (tx: object) => work(gatedTransaction(tx)),
+            ...rest
+          );
+      }
+      const value: unknown = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+/** A booted instance, with the core auth tables the SQLite auto-sync leaves unmade. */
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  current = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
+  if (dialect === "sqlite") {
+    for (const statement of generateSqliteCoreTableStatements()) {
+      await current.adapter.executeQuery(statement);
+    }
+  }
+  return current;
 }
 
 /** A well-formed hand-off, overridable field by field. */
@@ -90,7 +214,7 @@ function handOff(
   };
 }
 
-/** One identity row, written straight to the table as the fixture does. */
+/** One identity row, written straight to the table as the fixture does. Its id. */
 async function insertIdentity(
   handle: TestNextly,
   row: {
@@ -99,10 +223,13 @@ async function insertIdentity(
     subject: string;
     userId: string;
     address?: string;
+    /** When the link was made; the fixed moment unless a test says otherwise. */
+    createdAt?: Date;
   }
-): Promise<void> {
+): Promise<string> {
+  const id = randomUUID();
   await handle.adapter.insert("nextly_external_identities", {
-    id: randomUUID(),
+    id,
     providerKey: row.providerKey,
     issuer: row.issuer,
     subject: row.subject,
@@ -115,13 +242,83 @@ async function insertIdentity(
     ),
     ...(row.address !== undefined ? { address: row.address } : {}),
     userId: row.userId,
-    createdAt: new Date("2020-01-01T00:00:00Z"),
+    createdAt: row.createdAt ?? new Date("2020-01-01T00:00:00Z"),
   });
+  return id;
 }
 
 /** Every identity row the table holds, for before-and-after counts. */
 async function identityRows(handle: TestNextly): Promise<unknown[]> {
   return handle.adapter.select("nextly_external_identities");
+}
+
+/**
+ * A role row, written directly — the `create-external-user` suite's seeding:
+ * what is under test is which roles a provisioned account ends up with, not
+ * how a role is built.
+ */
+async function seedRole(handle: TestNextly, slug: string): Promise<string> {
+  const db = handle.adapter.getDrizzle() as unknown as {
+    insert: (table: unknown) => { values: (v: unknown) => Promise<unknown> };
+  };
+  const { roles } = getDialectTables();
+  const id = `role-${slug}`;
+  await db.insert(roles).values({
+    id,
+    name: slug,
+    slug,
+    level: 10,
+    isSystem: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  return id;
+}
+
+/** The rows the three tables a provisioning writes hold, for before/after. */
+async function provisioningFootprint(handle: TestNextly): Promise<{
+  users: number;
+  identities: number;
+  userRoles: number;
+}> {
+  const [users, identities, userRoles] = await Promise.all([
+    handle.adapter.select("users"),
+    handle.adapter.select("nextly_external_identities"),
+    handle.adapter.select("user_roles"),
+  ]);
+  return {
+    users: users.length,
+    identities: identities.length,
+    userRoles: userRoles.length,
+  };
+}
+
+/**
+ * Resolve one provisioning hand-off and expect the refusal named, with every
+ * table exactly as it was: a refusal that had written anything shows in the
+ * footprint even when the thrown error is the right one.
+ */
+async function refusedWritingNothing(
+  handle: TestNextly,
+  policy: LinkingPolicyPort,
+  payload: ExternalIdentityHandOff,
+  expected: { code: string; reason?: string }
+): Promise<void> {
+  const before = await provisioningFootprint(handle);
+  const error = await serviceOn(handle, policy)
+    .resolveSignInIdentity(pluginIdentityBinding(ACME), payload)
+    .then(
+      () => {
+        throw new Error("expected the provisioning to be refused");
+      },
+      (err: unknown) => err
+    );
+  expect(error).toBeInstanceOf(NextlyError);
+  expect(error).toMatchObject({ code: expected.code });
+  if (expected.reason !== undefined) {
+    expect(error).toMatchObject({ logContext: { reason: expected.reason } });
+  }
+  expect(await provisioningFootprint(handle)).toEqual(before);
 }
 
 /**
@@ -353,6 +550,335 @@ describe.each(getConfiguredTestDialects())(
           handOff()
         )
       ).toEqual({ userId: "owner" });
+      expect(await identityRows(handle)).toHaveLength(1);
+    });
+
+    it("provisions a first sign-in: an active, verified, passwordless account with exactly the configured roles, the identity attached", async () => {
+      const handle = await boot(dialect);
+      // An account, so the install is not empty; a role the configuration names.
+      await handle.adapter.insert("users", {
+        id: "founder",
+        email: "founder@example.com",
+        isActive: true,
+      });
+      const editor = await seedRole(handle, "editor");
+
+      const resolved = await serviceOn(
+        handle,
+        provisioningPolicy(["editor"])
+      ).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person" })
+      );
+
+      expect(resolved.userId).toBeTypeOf("string");
+      // The account, exactly as the creation primitive shapes it.
+      const users = (await handle.adapter.select("users")) as Array<
+        Record<string, unknown>
+      >;
+      const provisioned = users.find(row => row.email === "person@example.com");
+      expect(provisioned).toMatchObject({
+        id: resolved.userId,
+        isActive: true,
+        passwordHash: null,
+      });
+      expect(provisioned?.emailVerified).not.toBeNull();
+      // Exactly the configured roles, and no other.
+      expect(
+        await new ServiceContainer(handle.adapter).userRoles.listUserRoles(
+          String(resolved.userId)
+        )
+      ).toEqual([editor]);
+      // The identity attached to the account it made, under the stamped key,
+      // stamped with the digest the next sign-in will look it up by.
+      const rows = (await identityRows(handle)) as Array<
+        Record<string, unknown>
+      >;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        providerKey: "acme-auth:google",
+        subject: "new-person",
+        address: "person@example.com",
+        userId: resolved.userId,
+        // The digest the provisioning stamped the row's uniqueness by,
+        // derived from exactly the facts it handed over — the same spelling
+        // the link's row carries.
+        keyDigest: externalIdentityKeyDigest(
+          "acme-auth:google",
+          "https://accounts.google.com",
+          "new-person"
+        ),
+      });
+    });
+
+    it("refuses each provisioning refusal, writing nothing", async () => {
+      const handle = await boot(dialect);
+      await handle.adapter.insert("users", {
+        id: "founder",
+        email: "founder@example.com",
+        isActive: true,
+      });
+      await seedRole(handle, "editor");
+      // The real administrator role, so the configuration naming it is
+      // refused by the creation, not by the slug mapping.
+      const { id: superAdminId } = await new ServiceContainer(
+        handle.adapter
+      ).roles.ensureSuperAdminRole();
+      expect(superAdminId).toBeTruthy();
+      // An account holding the address the hand-off will carry.
+      await handle.adapter.insert("users", {
+        id: "holder",
+        email: "person@example.com",
+        isActive: true,
+      });
+
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy([]),
+        handOff({ subject: "empty-roles" }),
+        { code: "VALIDATION_ERROR", reason: "provisioning-roles-empty" }
+      );
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy(["editor", "ghost-role"]),
+        handOff({ subject: "unknown-role" }),
+        { code: "VALIDATION_ERROR", reason: "provisioning-role-unknown" }
+      );
+      // A case-variant of a role that exists names no role on any dialect:
+      // the slugs are matched bytewise, not by MySQL's case-insensitive
+      // collation alone.
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy(["EDITOR"]),
+        handOff({ subject: "case-variant-role" }),
+        { code: "VALIDATION_ERROR", reason: "provisioning-role-unknown" }
+      );
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy(["super-admin"]),
+        // A fresh address: this refusal must be the role's, not the held
+        // address's — the duplicate check runs before the role checks.
+        handOff({ subject: "escalate", address: "escalate@example.com" }),
+        { code: "FORBIDDEN" }
+      );
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy(["editor"]),
+        handOff({ subject: "taken-address" }),
+        { code: "DUPLICATE" }
+      );
+
+      // The control: the same key, after every refusal, still provisions an
+      // address nobody holds — the refusals refused the provisioning, not the
+      // table or the connection.
+      const resolved = await serviceOn(
+        handle,
+        provisioningPolicy(["editor"])
+      ).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "after-refusals", address: "fresh@example.com" })
+      );
+      const users = (await handle.adapter.select("users")) as Array<
+        Record<string, unknown>
+      >;
+      expect(users.find(row => row.email === "fresh@example.com")?.id).toBe(
+        resolved.userId
+      );
+    });
+
+    it("refuses to provision on an install with no user, writing nothing", async () => {
+      const handle = await boot(dialect);
+      await seedRole(handle, "editor");
+
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy(["editor"]),
+        handOff({ subject: "first-ever" }),
+        { code: "FORBIDDEN", reason: "external-user-on-empty-install" }
+      );
+    });
+
+    it("lists and unlinks an account's identities, scoped to that account", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+      const service = serviceOn(handle);
+
+      await handle.adapter.insert("users", {
+        id: "owner",
+        email: "owner@example.com",
+        isActive: true,
+      });
+      await handle.adapter.insert("users", {
+        id: "other",
+        email: "other@example.com",
+        isActive: true,
+      });
+      await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "first-linked",
+        userId: "owner",
+        createdAt: new Date("2020-01-01T00:00:00Z"),
+      });
+      const removed = await insertIdentity(handle, {
+        providerKey: "acme-auth:github",
+        issuer: "",
+        subject: "second-linked",
+        userId: "owner",
+        createdAt: new Date("2021-01-01T00:00:00Z"),
+      });
+      const theirs = await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "someone-elses",
+        userId: "other",
+        createdAt: new Date("2019-01-01T00:00:00Z"),
+      });
+
+      // The listing names the owner's two, in link order, and neither row
+      // of the other account.
+      const listed = await service.listExternalIdentities("owner");
+      expect(listed.map(identity => identity.subject)).toEqual([
+        "first-linked",
+        "second-linked",
+      ]);
+      expect(listed[0]).toMatchObject({
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        userId: "owner",
+      });
+      expect(listed.map(identity => identity.createdAt.getTime())).toEqual([
+        new Date("2020-01-01T00:00:00Z").getTime(),
+        new Date("2021-01-01T00:00:00Z").getTime(),
+      ]);
+
+      // The unlink removes the named row alone, on the real table.
+      await service.unlinkExternalIdentity("owner", removed);
+      expect(
+        (await service.listExternalIdentities("owner")).map(
+          identity => identity.subject
+        )
+      ).toEqual(["first-linked"]);
+
+      // A second unlink of the same identity: a clean not-found, writing
+      // nothing.
+      await expect(
+        service.unlinkExternalIdentity("owner", removed)
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      // An identity the other account holds is refused the same way, and
+      // the other account keeps it.
+      await expect(
+        service.unlinkExternalIdentity("owner", theirs)
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(await service.listExternalIdentities("other")).toHaveLength(1);
+    });
+
+    it("refuses to unlink the last way in when the other identity's provider is disabled", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+      // No password: the account signs in only through its identities.
+      await handle.adapter.insert("users", {
+        id: "owner",
+        email: "owner@example.com",
+        isActive: true,
+      });
+      await insertIdentity(handle, {
+        providerKey: "acme-auth:github",
+        issuer: "",
+        subject: "at-a-disabled-provider",
+        userId: "owner",
+      });
+      const target = await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "target",
+        userId: "owner",
+      });
+
+      // The identity left behind is at a provider the policy no longer
+      // enables, so it is no way in, and the unlink is refused.
+      await expect(
+        serviceOn(
+          handle,
+          enablingOnly("acme-auth:google")
+        ).unlinkExternalIdentity("owner", target)
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(await identityRows(handle)).toHaveLength(2);
+
+      // The control: with the other provider enabled, the same unlink runs.
+      await serviceOn(
+        handle,
+        enablingOnly("acme-auth:google", "acme-auth:github")
+      ).unlinkExternalIdentity("owner", target);
+      expect(await identityRows(handle)).toHaveLength(1);
+    });
+
+    it("unlinks an account's only identity when it has a password", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+      await handle.adapter.insert("users", {
+        id: "owner",
+        email: "owner@example.com",
+        isActive: true,
+        // In the shape core's bcrypt writes: a password sign-in takes.
+        passwordHash:
+          "$2b$10$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      });
+      const only = await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "only",
+        userId: "owner",
+      });
+
+      await serviceOn(handle).unlinkExternalIdentity("owner", only);
+      expect(await identityRows(handle)).toHaveLength(0);
+    });
+
+    it("two unlinks at once of a password-less account's two usable identities: exactly one succeeds", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+      await handle.adapter.insert("users", {
+        id: "racer",
+        email: "racer@example.com",
+        isActive: true,
+      });
+      const first = await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "race-one",
+        userId: "racer",
+      });
+      const second = await insertIdentity(handle, {
+        providerKey: "acme-auth:github",
+        issuer: "",
+        subject: "race-two",
+        userId: "racer",
+      });
+      const services = new ServiceContainer(handle.adapter);
+      const service = new IdentityService(
+        gatedAtTheDelete(handle.adapter, startGate()),
+        handle.getService("logger"),
+        {
+          linkingPolicy: EVERY_KEY_ENABLED,
+          roles: services.roles,
+          users: services.users,
+        }
+      );
+
+      // Each alone is allowed (the other identity is a way in) but not
+      // both: whichever goes second must read the first's removal.
+      const results = await Promise.allSettled([
+        service.unlinkExternalIdentity("racer", first),
+        service.unlinkExternalIdentity("racer", second),
+      ]);
+
+      expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+      const refused = results.find(
+        (r): r is PromiseRejectedResult => r.status === "rejected"
+      );
+      expect(refused?.reason).toMatchObject({ code: "CONFLICT" });
       expect(await identityRows(handle)).toHaveLength(1);
     });
   }

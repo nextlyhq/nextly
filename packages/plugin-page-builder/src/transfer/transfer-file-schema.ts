@@ -13,7 +13,7 @@
  *
  * @module transfer/transfer-file-schema
  */
-import { isDefaultLook } from "@nextlyhq/blocks-engine";
+import { isDefaultLook, resolveTokenPrefix } from "@nextlyhq/blocks-engine";
 import { z } from "nextly/zod";
 
 import {
@@ -129,6 +129,15 @@ const TransferFileSchema = z
         })
       )
       .max(MAX_ITEMS),
+    // A prefix by the engine's own rule, the one a site's prefix is held to,
+    // since every `var()` an import writes is written under one.
+    tokenPrefix: z
+      .string()
+      .max(MAX_TEXT)
+      .refine(prefix => resolveTokenPrefix(prefix).prefix === prefix, {
+        message: "The file's variable prefix is not one a site can use.",
+      })
+      .optional(),
     breakpoints: z.array(breakpoint).max(14),
     media: z.array(media).max(MAX_ITEMS),
     blockTypes: z.array(text).max(MAX_ITEMS),

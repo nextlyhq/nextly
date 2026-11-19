@@ -30,7 +30,10 @@ import type { EditClasses } from "./block-style-actions";
 import type { CatalogueFamilyView, FontCatalogue } from "./font-catalogue-view";
 import { FontChoicesContext } from "./font-family-field";
 import { exportDtcgWithTheme } from "./tokens-transfer";
-import { useVariablesTransfer } from "./variables-transfer";
+import {
+  useVariablesTransfer,
+  type VariablesStored,
+} from "./variables-transfer";
 
 const MORE = "More design actions";
 
@@ -92,8 +95,8 @@ function Host({
   onChange?: (tokens: SiteTokenSet) => void;
   onEditClasses?: EditClasses;
   catalogue?: FontCatalogue;
-  /** The host's write at once, answering whether it was stored. */
-  storeNow?: (tokens: SiteTokenSet) => Promise<boolean>;
+  /** The host's write at once, answering what of it was stored. */
+  storeNow?: (tokens: SiteTokenSet) => Promise<boolean | VariablesStored>;
   /** The variables as an edit made meanwhile leaves them, read as current. */
   meanwhile?: (tokens: SiteTokenSet) => SiteTokenSet;
 }): React.JSX.Element {
@@ -242,7 +245,21 @@ describe("importing a file with text styles and the site's design data", () => {
     // style naming a variable it doesn't hold, so the variables go first;
     // it refuses to remove a text style a row still follows, so the rows go
     // last and Undo takes them back first, then the text styles, then the
-    // variables.
+    // variables. The file's text style names one of its variables and a
+    // Site text row follows that style, so each write is checked for what
+    // the next one depends on.
+    const lead: NamedClass = {
+      id: "ts-lead",
+      slug: "lead",
+      label: "Lead",
+      orderIndex: 0,
+      role: "text",
+      styles: { base: { base: { fontFamily: { $token: "font.heading" } } } },
+    };
+    const dependent: SiteTokenSet = {
+      ...SOURCE,
+      siteText: { ...SOURCE.siteText, h2: { textStyle: lead.id } },
+    };
     const onChange = vi.fn();
     let stored: (done: boolean) => void = () => undefined;
     const storeNow = vi.fn(
@@ -266,7 +283,10 @@ describe("importing a file with text styles and the site's design data", () => {
         storeNow={storeNow}
       />
     );
-    await chooseFile("variables.tokens.json", exported());
+    await chooseFile(
+      "variables.tokens.json",
+      exportDtcgWithTheme(dependent, [lead])[0]?.text ?? ""
+    );
     const preview = await screen.findByRole("dialog", {
       name: "Import variables",
     });
@@ -285,13 +305,25 @@ describe("importing a file with text styles and the site's design data", () => {
     });
     await waitFor(() => expect(onEditClasses).toHaveBeenCalledTimes(1));
     expect(onChange).not.toHaveBeenCalled();
+    // The second write: the class edit stores the text style, which names a
+    // variable the first write stored.
+    const compose = onEditClasses.mock.calls[0]?.[0];
+    if (compose === undefined) throw new Error("no class edit was made");
+    const made = compose([]);
+    const classes = "classes" in made ? made.classes : [];
+    const style = classes.find(entry => entry.id === lead.id);
+    expect(style?.styles).toEqual(lead.styles);
+    expect(variables.tokens.map(token => token.name)).toContain("font.heading");
     await act(async () => {
       finish(undefined);
     });
     await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect((onChange.mock.calls[0]?.[0] as SiteTokenSet).siteText).toEqual(
-      SOURCE.siteText
-    );
+    // The third write: the rows, one following the text style the second
+    // write stored.
+    const last = onChange.mock.calls[0]?.[0] as SiteTokenSet | undefined;
+    const rows = last?.siteText;
+    expect(rows).toEqual(dependent.siteText);
+    expect(classes.map(entry => entry.id)).toContain(rows?.h2?.textStyle);
     expect(
       await screen.findByText("Imported 3 variables and 1 text style.")
     ).toBeDefined();
@@ -420,6 +452,101 @@ describe("importing a file with text styles and the site's design data", () => {
       )
     ).toBeDefined();
     expect(onEditClasses).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("says the variables were saved in part, and why, when the host stored only some", async () => {
+    const onEditClasses = vi.fn<EditClasses>(async () => undefined);
+    const onChange = vi.fn();
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        onChange={onChange}
+        onEditClasses={onEditClasses}
+        storeNow={async () => ({
+          stored: "part",
+          why: "Card shadow: the value isn't a shadow.",
+        })}
+      />
+    );
+    await chooseFile("variables.tokens.json", exported());
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    expect(
+      await screen.findByText(
+        "Only some of the variables were saved, so the text styles and Site text weren't imported."
+      )
+    ).toBeDefined();
+    expect(
+      screen.getByText("Card shadow: the value isn't a shadow.")
+    ).toBeDefined();
+    // Neither "nothing was imported" nor a count of every variable: some
+    // were stored, and not all.
+    expect(screen.queryByText(/nothing was imported/)).toBeNull();
+    expect(screen.queryByText(/^Imported /)).toBeNull();
+    // The text styles name variables the site may not hold, so they wait.
+    expect(onEditClasses).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("says a file with no text styles was saved in part when the host stored only some", async () => {
+    const onChange = vi.fn();
+    const storeNow = vi.fn(
+      async (): Promise<VariablesStored> => ({
+        stored: "part",
+        why: "Card shadow: the value isn't a shadow.",
+      })
+    );
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        onChange={onChange}
+        storeNow={storeNow}
+      />
+    );
+    await chooseFile(
+      "variables.tokens.json",
+      exportDtcgWithTheme(SOURCE, [])[0]?.text ?? ""
+    );
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    expect(
+      await screen.findByText("Only some of the variables were saved.")
+    ).toBeDefined();
+    expect(
+      screen.getByText("Card shadow: the value isn't a shadow.")
+    ).toBeDefined();
+    // Stored through the write that answers what it stored, never the
+    // edit at the author's pause, whose answer nobody reads.
+    expect(storeNow).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByText(/^Imported /)).toBeNull();
+  });
+
+  it("counts a file with no text styles once the host says it stored all", async () => {
+    const onChange = vi.fn();
+    const storeNow = vi.fn(async () => true);
+    render(
+      <WithFonts
+        tokens={{ tokens: [] }}
+        onChange={onChange}
+        storeNow={storeNow}
+      />
+    );
+    await chooseFile(
+      "variables.tokens.json",
+      exportDtcgWithTheme(SOURCE, [])[0]?.text ?? ""
+    );
+    const preview = await screen.findByRole("dialog", {
+      name: "Import variables",
+    });
+    fireEvent.click(within(preview).getByRole("button", { name: "Import" }));
+    expect(await screen.findByText("Imported 3 variables.")).toBeDefined();
+    expect(storeNow).toHaveBeenCalledTimes(1);
     expect(onChange).not.toHaveBeenCalled();
   });
 

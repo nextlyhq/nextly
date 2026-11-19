@@ -255,7 +255,7 @@
 }
 
 .nx-style-inspector__contrast[data-level="fail"] {
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 /*
@@ -572,7 +572,7 @@
   margin: 0;
   font-size: 0.75rem;
   line-height: 1.4;
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 /*

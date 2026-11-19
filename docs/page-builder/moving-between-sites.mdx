@@ -24,7 +24,7 @@ The file holds:
 
 - the item itself, in the form visitors get, or as its draft if it was never published;
 - the components it places, and the ones those place;
-- the shared styles its blocks wear and the variables their styles use;
+- the shared styles its blocks wear and the variables their styles and custom CSS use;
 - the breakpoints its styles and per-device hide settings name;
 - the images and other uploads it shows, with their bytes;
 - the list of block types it uses.
@@ -61,6 +61,13 @@ The import cannot be confirmed when:
 - its components place each other in a loop;
 - a block in it breaks a lock;
 - you may not add one of the kinds of item it holds.
+
+Styles and custom CSS can name a variable as CSS, such as `var(--site-color-brand)`. Each
+site writes its variables under its own prefix (**Settings**), and a variable the import
+renames takes a new name. The import points every such name at the variable as this site
+writes it, so `var(--acme-color-brand)` from a site using `--acme-` reads
+`var(--site-color-brand)` here. A `var()` naming something that isn't one of the file's
+variables is left as written.
 
 When the site changes between the preview and the import (a breakpoint's width, say),
 the import is not applied: the preview is shown again for you to confirm.
