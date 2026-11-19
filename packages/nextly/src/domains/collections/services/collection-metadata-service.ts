@@ -96,6 +96,24 @@ export interface MetadataServiceResult {
 }
 
 /**
+ * A NextlyError as a MetadataServiceResult failure: its public message, and the status its code
+ * owns. NextlyError instances already carry public/log payloads in the right shape, so the
+ * logContext is dropped here.
+ */
+function failureOf(error: NextlyError): MetadataServiceResult {
+  return {
+    success: false,
+    statusCode: error.statusCode,
+    message: error.publicMessage,
+    data: null,
+    // The code above all: a boundary rebuilding from status alone cannot tell
+    // a DUPLICATE from a CONFLICT, and an occupied slug would be reported as
+    // a stale-resource conflict.
+    ...errorEnvelopeFields(error),
+  };
+}
+
+/**
  * Convert any thrown error to a MetadataServiceResult failure shape.
  *
  * Maps DbErrors via NextlyError.fromDatabaseError; non-DbError throwables
@@ -109,20 +127,7 @@ function errorToMetadataResult(
   fallback: { statusCode: number; defaultMessage: string },
   dialect: SupportedDialect
 ): MetadataServiceResult {
-  // NextlyError instances already carry public/log payloads in the right
-  // shape; surface the publicMessage and statusCode and drop logContext.
-  if (NextlyError.is(error)) {
-    return {
-      success: false,
-      statusCode: error.statusCode,
-      message: error.publicMessage,
-      data: null,
-      // The code above all: a boundary rebuilding from status alone cannot tell
-      // a DUPLICATE from a CONFLICT, and an occupied slug would be reported as
-      // a stale-resource conflict.
-      ...errorEnvelopeFields(error),
-    };
-  }
+  if (NextlyError.is(error)) return failureOf(error);
   // Best-effort DbError detection — fromDatabaseError handles both DbError
   // and arbitrary throwables and never leaks driver text. Free helper takes
   // dialect explicitly (no `this`); without normalising via toDbError(dialect)
@@ -1436,7 +1441,7 @@ export class CollectionMetadataService extends BaseService {
               this.logger.error(
                 `Table "${existingCollection.tableName}" not found after migration update`
               );
-              return errorToMetadataResult(
+              return failureOf(
                 new NextlyError({
                   code: "NEXTLY_MIGRATION_APPLY_FAILED",
                   // The table's name stays in the log, as storage details do.
@@ -1448,12 +1453,7 @@ export class CollectionMetadataService extends BaseService {
                     slug: params.collectionName,
                     tableName: existingCollection.tableName,
                   },
-                }),
-                {
-                  statusCode: 500,
-                  defaultMessage: "The schema change could not be applied",
-                },
-                this.dialect
+                })
               );
             }
           } catch (migrationError: unknown) {
@@ -1463,14 +1463,26 @@ export class CollectionMetadataService extends BaseService {
             // Without the save writer nothing is recorded yet, so the update is answered as failed
             // with no row written. With it, the change and its row were recorded together, and
             // only this process's view of the table could not be brought up to them.
+            // Its status is its code's (`NEXTLY_MIGRATION_APPLY_FAILED`), never one chosen here.
             if (!writtenInSave) {
-              return errorToMetadataResult(
-                migrationError,
-                {
-                  statusCode: 500,
-                  defaultMessage: "The schema change could not be applied",
-                },
-                this.dialect
+              return failureOf(
+                NextlyError.is(migrationError)
+                  ? migrationError
+                  : new NextlyError({
+                      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+                      publicMessage: "The schema change could not be applied.",
+                      logMessage:
+                        migrationError instanceof Error
+                          ? migrationError.message
+                          : String(migrationError),
+                      logContext: {
+                        reason: "update-not-brought-up",
+                        slug: params.collectionName,
+                      },
+                      ...(migrationError instanceof Error
+                        ? { cause: migrationError }
+                        : {}),
+                    })
               );
             }
           }

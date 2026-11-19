@@ -82,7 +82,7 @@ describeEachDialect("a collection update's registry write", dialect => {
   /** An update (by default the one adding `extra`), as what it threw or what it answered. */
   async function update(
     body: Record<string, unknown> = { fields: AFTER }
-  ): Promise<{ failed: boolean; said: string }> {
+  ): Promise<{ failed: boolean; said: string; status?: unknown }> {
     try {
       const answer = await dispatchCollections(
         {} as ServiceContainer,
@@ -102,6 +102,7 @@ describeEachDialect("a collection update's registry write", dialect => {
       return {
         failed: true,
         said: error instanceof Error ? error.message : String(error),
+        status: (error as { statusCode?: unknown }).statusCode,
       };
     }
   }
@@ -301,7 +302,7 @@ describeEachDialect("a collection update's registry write", dialect => {
       }
     );
 
-    const { failed, said } = await update();
+    const { failed, said, status } = await update();
 
     // Control: the check after the change was reached.
     expect(
@@ -313,6 +314,8 @@ describeEachDialect("a collection update's registry write", dialect => {
     expect(said, "the answer").toBe(
       "The collection's table was not found after the schema change, so its record was left as it was."
     );
+    // The status its code owns (`NEXTLY_MIGRATION_APPLY_FAILED`).
+    expect(status, "the answer's status").toBe(500);
     expect(await recorded(t), "the registry row").toEqual(before);
   });
 
