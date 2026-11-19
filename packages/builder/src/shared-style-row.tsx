@@ -101,7 +101,6 @@ export function StyleRow({
             <button
               type="button"
               className="nx-vars__row nx-shared-styles__row"
-              aria-label={rowLabel(row, name, sentence, tile)}
               title={sentence === "" ? undefined : sentence}
               data-shared-style={row.id}
             >
@@ -111,6 +110,14 @@ export function StyleRow({
                 reach={details.reach}
                 tile={tile}
               />
+              {/* The row's whole name, in one element: the name and class it
+                  shows first, then its marks and reach. Text rather than an
+                  aria-label, which must hold every drawn word, the tile's
+                  "Aa" included; one element, so no browser puts a space
+                  before its commas. */}
+              <span className="nx-sr-only">
+                {rowLabel(row, name, sentence, tile)}
+              </span>
             </button>
           </PopoverTrigger>
         </DarkModeTip>
@@ -205,7 +212,8 @@ function RowContent({
           <Moon className="nx-shared-styles__dark-flag" size={8} />
         ) : null}
       </span>
-      <span className="nx-shared-styles__names">
+      {/* Drawn only: the row's screen-reader name starts with them. */}
+      <span className="nx-shared-styles__names" aria-hidden="true">
         <span className="nx-vars__name" title={name}>
           {name}
         </span>

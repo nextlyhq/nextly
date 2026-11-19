@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { QueuedEmailActivity } from "@admin/services/emailActivityApi";
 
-import { useEmailActivity } from "../useEmailActivity";
+import { useActivityDetail, useEmailActivity } from "../useEmailActivity";
 
 const listDeliveryActivity = vi.fn();
 const listQueuedEmailActivity = vi.fn();
@@ -23,7 +23,10 @@ vi.mock("@admin/services/emailActivityApi", () => ({
   listQueuedEmailActivity: (...args: unknown[]) =>
     listQueuedEmailActivity(...args),
   getQueuedEmailOverdue: vi.fn(),
+  getDeliveryDetail: vi.fn(),
+  getQueuedEmailDetail: (...args: unknown[]) => getQueuedEmailDetail(...args),
 }));
+const getQueuedEmailDetail = vi.fn();
 
 function queued(state: QueuedEmailActivity["state"]): QueuedEmailActivity {
   return {
@@ -58,6 +61,7 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 afterEach(() => {
+  getQueuedEmailDetail.mockReset();
   vi.useRealTimers();
   listDeliveryActivity.mockReset();
   listQueuedEmailActivity.mockReset();
@@ -135,5 +139,53 @@ describe("useEmailActivity", () => {
         listDeliveryActivity.mock.calls.length -
         before
     ).toBe(0);
+  });
+});
+
+describe("useActivityDetail", () => {
+  it("reads a sheet's detail afresh each time it opens, whatever the cache's freshness", async () => {
+    // The admin's own client keeps data fresh for five minutes; a sheet
+    // reopened inside that must still read again, since its email may have
+    // settled since.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5 * 60_000 } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    getQueuedEmailDetail.mockResolvedValue({ ...queued("sent") });
+    const open = { source: "queued" as const, id: "q1" };
+    const first = renderHook(() => useActivityDetail(open), {
+      wrapper: shared,
+    });
+    await waitFor(() => expect(first.result.current.data).toBeDefined());
+    first.unmount();
+    const second = renderHook(() => useActivityDetail(open), {
+      wrapper: shared,
+    });
+    await waitFor(() => expect(getQueuedEmailDetail).toHaveBeenCalledTimes(2));
+    second.unmount();
+  });
+
+  it("reads it afresh when the same sheet closes and reopens on a row, without remounting", async () => {
+    // The screen keeps one sheet mounted and only changes which row is open.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5 * 60_000 } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    getQueuedEmailDetail.mockReset();
+    getQueuedEmailDetail.mockResolvedValue({ ...queued("sent") });
+    const row = { source: "queued" as const, id: "q1" };
+    const sheet = renderHook(
+      ({ open }: { open: typeof row | null }) => useActivityDetail(open),
+      { wrapper: shared, initialProps: { open: row as typeof row | null } }
+    );
+    await waitFor(() => expect(getQueuedEmailDetail).toHaveBeenCalledTimes(1));
+    sheet.rerender({ open: null });
+    sheet.rerender({ open: row });
+    await waitFor(() => expect(getQueuedEmailDetail).toHaveBeenCalledTimes(2));
+    sheet.unmount();
   });
 });

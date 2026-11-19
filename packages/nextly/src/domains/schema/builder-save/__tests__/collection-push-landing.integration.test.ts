@@ -13,7 +13,7 @@
  * Each save switches a relationship from one entry to many (`reachesRelationStorage`), a change
  * the push applies on every dialect.
  */
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -122,6 +122,31 @@ for (const dialect of getConfiguredTestDialects()) {
       }
       await rm(basePath, { recursive: true, force: true });
     });
+
+    /**
+     * The history's snapshots of `table` without the index `name`, as a history written before
+     * that index was made would read: only the snapshots change, so no applied file's checksum
+     * moves.
+     */
+    const forgetIndexInHistory = (table: string, name: string) => {
+      const meta = join(migrationsDir(), "meta");
+      for (const file of readdirSync(meta).filter(f =>
+        f.endsWith(".snapshot.json")
+      )) {
+        const path = join(meta, file);
+        const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+          snapshot: {
+            tables: { name: string; indexes?: { name: string }[] }[];
+          };
+        };
+        for (const entry of parsed.snapshot.tables) {
+          if (entry.name === table && entry.indexes !== undefined) {
+            entry.indexes = entry.indexes.filter(index => index.name !== name);
+          }
+        }
+        writeFileSync(path, JSON.stringify(parsed, null, 2));
+      }
+    };
 
     const adapterOf = () => t.adapter as unknown as DrizzleAdapter;
     const exec = <R>(sql: string) =>
@@ -450,9 +475,12 @@ for (const dialect of getConfiguredTestDialects()) {
             author: (writer.item as { id: string }).id,
           },
         } as never);
-        // An older table whose relation column carries no index: the switch then drops none, and
-        // what runs before the failure is the values' rewrite alone.
+        // A table from an older Nextly, whose relation column carries no index and whose history
+        // never recorded one: the table stands as the history says (one the history records with
+        // an index the database lacks would be refused as drift before the push). The switch then
+        // drops no index, and what runs before the failure is the values' rewrite alone.
         await exec('DROP INDEX "idx_dc_posts_author"');
+        forgetIndexInHistory("dc_posts", "idx_dc_posts_author");
         const rows = () => exec("SELECT * FROM dc_posts");
         const rowsBefore = await rows();
         const filesBefore = Object.keys(filesIn(migrationsDir(), ".sql"));

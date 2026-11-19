@@ -642,10 +642,13 @@ function SiteDefaultLine({ read }: { read: SiteSettingsRead }): JSX.Element {
         <span className="font-medium">{name}</span>
       </p>
       {openSets !== null ? (
+        // In the text colour, underlined, as is the link below: the primary
+        // token is a fill a brand may set to any colour, and small text drawn
+        // in it can fall under AA.
         <button
           type="button"
           onClick={openSets}
-          className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+          className="text-sm font-medium text-foreground underline underline-offset-4"
         >
           Change in Pages ▸ Header & footer
         </button>
@@ -654,7 +657,7 @@ function SiteDefaultLine({ read }: { read: SiteSettingsRead }): JSX.Element {
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+          className="text-sm font-medium text-foreground underline underline-offset-4"
         >
           Change in Pages ▸ Header & footer
           <span className="sr-only"> (opens in a new tab)</span>
