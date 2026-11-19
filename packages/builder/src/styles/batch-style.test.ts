@@ -28,7 +28,7 @@ import {
   batchStyleWritesOps,
   sharedValueAt,
 } from "./batch-style";
-import { applyOp, applyOps } from "./ops";
+import { applyOp, applyOps } from "../ops";
 import type { StyleAddress } from "./style-values";
 
 const AT: StyleAddress = {

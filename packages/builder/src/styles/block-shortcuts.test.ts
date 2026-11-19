@@ -23,7 +23,7 @@ import {
   reachingBeneath,
   sizeOf,
 } from "./block-shortcuts";
-import { applyOp } from "./ops";
+import { applyOp } from "../ops";
 import type { StyleProvenance } from "./style-provenance";
 
 const padding = {

@@ -29,6 +29,10 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
+import { designReadOnlyReason, type LockView } from "../inspector/inspector";
+import { stateLabel } from "../inspector/style-inspector/state-switcher";
+import { sameStyleValue, type BuilderOp } from "../op-vocabulary";
+
 import { liveBreakpointsFor } from "./breakpoints";
 import {
   appliedClasses,
@@ -36,9 +40,6 @@ import {
   withClassApplied,
   withClassRemoved,
 } from "./class-library";
-import { designReadOnlyReason, type LockView } from "./inspector/inspector";
-import { stateLabel } from "./inspector/style-inspector/state-switcher";
-import { sameStyleValue, type BuilderOp } from "./op-vocabulary";
 import {
   renameSharedStyle,
   sharedStyleRows,

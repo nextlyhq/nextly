@@ -62,8 +62,8 @@ import {
   fluidValue,
   type FluidRangeWidths,
   type FluidSizes,
-} from "../../fluid-size";
-import { lineHeightFromText } from "../../style-folded";
+} from "../../styles/fluid-size";
+import { lineHeightFromText } from "../../styles/style-folded";
 
 import {
   colourOrder,

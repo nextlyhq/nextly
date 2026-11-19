@@ -18,8 +18,9 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
+import { blockLabel } from "../panels/add/inserter-catalog";
+
 import type { SkippedSettings, StyleSource } from "./batch-style";
-import { blockLabel } from "./panels/add/inserter-catalog";
 
 /** Said when "Paste style" is chosen before any style was copied. */
 export const NOTHING_COPIED_YET =

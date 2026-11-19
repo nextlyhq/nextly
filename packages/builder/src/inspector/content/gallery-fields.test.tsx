@@ -40,7 +40,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ContentServices, MediaPickerProps } from "./content-services";
 import { useEditorState, type EditorState } from "../../editor-state";
 import { InspectorPanel } from "../inspector-panel";
-import { readStyleValue } from "../../style-values";
+import { readStyleValue } from "../../styles/style-values";
 
 beforeAll(() => {
   Element.prototype.scrollIntoView ??= () => {};

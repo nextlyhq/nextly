@@ -11,7 +11,7 @@ import type { SiteTokenSet, StyleValue } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
 import { VariableChoice } from "../../panels/design/variable-choice";
-import type { StyleControl } from "../../style-controls";
+import type { StyleControl } from "../../styles/style-controls";
 
 import { ShadowControl } from "./shadow-control";
 import type { CommitOutcome } from "./style-field-surroundings";

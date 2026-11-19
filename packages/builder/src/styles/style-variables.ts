@@ -18,8 +18,9 @@ import type {
   TokenMode,
 } from "@nextlyhq/blocks-engine";
 
+import { typeScaleProperty } from "../panels/design/tokens-studio";
+
 import { lengthInPx } from "./fluid-size";
-import { typeScaleProperty } from "./panels/design/tokens-studio";
 import { variableLabel, variablesFor, type SiteVariable } from "./style-colour";
 
 /**

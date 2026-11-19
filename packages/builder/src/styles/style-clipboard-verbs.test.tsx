@@ -20,13 +20,13 @@ import { act, renderHook } from "@testing-library/react";
 import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { useEditorState } from "./editor-state";
+import { useEditorState } from "../editor-state";
 import { NOTHING_COPIED_YET } from "./style-clipboard";
 import { useStyleClipboardVerbs } from "./style-clipboard-verbs";
 import {
   useStyleTarget,
   type SharedStylesHost,
-} from "./inspector/style-inspector/style-target";
+} from "../inspector/style-inspector/style-target";
 
 const eyebrow: NamedClass = {
   id: "t-eyebrow",

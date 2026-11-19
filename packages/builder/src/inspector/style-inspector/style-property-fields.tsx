@@ -13,33 +13,33 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { batchStyleClearOps } from "../../batch-style";
-import { propertyWordsFor, wordedProperty } from "../../block-style-words";
 import type { EditorState } from "../../editor-state";
 import { radioGroupStep } from "../../roving-radios";
-import type { SideOrientation } from "../../side-orientation";
+import { batchStyleClearOps } from "../../styles/batch-style";
+import type { SideOrientation } from "../../styles/side-orientation";
 import {
   formNamesOf,
   type StyleControl,
   type StyleControlVariants,
-} from "../../style-controls";
-import { foldedControlFor } from "../../style-folded";
+} from "../../styles/style-controls";
+import { foldedControlFor } from "../../styles/style-folded";
 import {
   isLogicalSide,
   physicalCornerName,
   physicalSideName,
   sideBoxFor,
   sideOf,
-} from "../../style-sides";
+} from "../../styles/style-sides";
 import {
   readStyleValue,
   type StyleAddress,
   type StylePolicy,
-} from "../../style-values";
+} from "../../styles/style-values";
 import { CssHint } from "../css-hint";
 import { fieldLabel } from "../inspector";
 
 import { APPEAR_PROPERTY, AppearPlay } from "./appear-play";
+import { propertyWordsFor, wordedProperty } from "./block-style-words";
 import { SideBoxFrame } from "./spacing-box-fields";
 import { flowOf } from "./style-alignment-icons";
 import { StyleControlField } from "./style-field-shell";

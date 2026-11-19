@@ -45,7 +45,6 @@ import { cn } from "@nextlyhq/ui/utils";
 import { ChevronDown, Laptop, Monitor, Smartphone, Tablet } from "lucide-react";
 import * as React from "react";
 
-import { authoredBreakpoints, BASE_DEVICE_LABEL } from "../breakpoints";
 import { PreviewWidthText } from "../canvas/canvas-preview-width-field";
 import {
   baseWidth,
@@ -55,6 +54,7 @@ import {
 } from "../canvas/canvas-width";
 import { ChromeTooltip } from "../chrome-tooltip";
 import { radioGroupStep } from "../roving-radios";
+import { authoredBreakpoints, BASE_DEVICE_LABEL } from "../styles/breakpoints";
 
 /**
  * Props for BreakpointSwitcher.

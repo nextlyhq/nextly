@@ -44,7 +44,8 @@ import {
   type ValidationIssue,
 } from "@nextlyhq/blocks-engine";
 
-import { sameStyleValue, type BuilderOp } from "./op-vocabulary";
+import { sameStyleValue, type BuilderOp } from "../op-vocabulary";
+
 import {
   readStyleValue,
   styleClearOp,

@@ -21,9 +21,12 @@ import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import type { EditorState } from "../../editor-state";
-import type { SideOrientation } from "../../side-orientation";
-import type { BreakpointBadge, StyleProvenance } from "../../style-provenance";
-import type { StylePolicy } from "../../style-values";
+import type { SideOrientation } from "../../styles/side-orientation";
+import type {
+  BreakpointBadge,
+  StyleProvenance,
+} from "../../styles/style-provenance";
+import type { StylePolicy } from "../../styles/style-values";
 
 import type { StyleTarget } from "./style-target";
 

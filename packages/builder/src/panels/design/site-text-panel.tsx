@@ -38,8 +38,8 @@ import * as React from "react";
 
 import { EDITOR_WORDS } from "../../editor-words";
 import { CssHint, CssNamesLine } from "../../inspector/css-hint";
-import { sharedStyleName } from "../../shared-style-library";
-import { lineHeightFromText } from "../../style-folded";
+import { sharedStyleName } from "../../styles/shared-style-library";
+import { lineHeightFromText } from "../../styles/style-folded";
 
 import { commitFocusedField } from "./editor-field-commit";
 import { FluidButton, type FluidHook } from "./fluid-popover";

@@ -25,11 +25,11 @@ import {
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
 
-import { nodeHasRoom } from "../../class-library";
-import { lengthInPx } from "../../fluid-size";
 import { designReadOnlyReason, type LockView } from "../../inspector/inspector";
 import type { BuilderOp } from "../../op-vocabulary";
-import { sharedStyleName } from "../../shared-style-library";
+import { nodeHasRoom } from "../../styles/class-library";
+import { lengthInPx } from "../../styles/fluid-size";
+import { sharedStyleName } from "../../styles/shared-style-library";
 
 import { pairWords, valueText } from "./site-text-rows";
 

@@ -53,7 +53,10 @@ import * as React from "react";
 
 import { typedNumber, useLiveDraft } from "../../live-draft";
 import { radioGroupStep } from "../../roving-radios";
-import { fitsSideBySide, type SideBySideRoom } from "../../style-numeric";
+import {
+  fitsSideBySide,
+  type SideBySideRoom,
+} from "../../styles/style-numeric";
 import { propWrites } from "../code-hints";
 import { commitOnEnter } from "../commit-on-enter";
 import { CssHint } from "../css-hint";

@@ -17,6 +17,9 @@
 
 import type { NamedClass } from "@nextlyhq/blocks-engine";
 
+import { EDITOR_WORDS } from "../editor-words";
+import { blockLabel } from "../panels/add/inserter";
+
 import {
   duplicateBlockStylePlan,
   newBlockStylePlan,
@@ -25,8 +28,6 @@ import {
   withHiddenBlockStyle,
   type BlockStylePlan,
 } from "./block-style-plans";
-import { EDITOR_WORDS } from "./editor-words";
-import { blockLabel } from "./panels/add/inserter";
 
 /** A write that makes a block style: the new style's id, or why it wasn't made. */
 export type BlockStyleMade =

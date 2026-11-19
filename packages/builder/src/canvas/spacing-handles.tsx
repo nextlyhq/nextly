@@ -74,17 +74,17 @@ import {
   type ScrubSession,
   type ScrubTravel,
 } from "../scrub-gesture";
-import type { SideOrientation } from "../side-orientation";
+import type { SideOrientation } from "../styles/side-orientation";
 import {
   scrubCommitOps,
   scrubPreviewCss,
   type ScrubTarget,
-} from "../style-scrub";
+} from "../styles/style-scrub";
 import {
   readStyleValue,
   type StyleAddress,
   type StyleWrite,
-} from "../style-values";
+} from "../styles/style-values";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
