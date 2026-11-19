@@ -27,6 +27,7 @@ import { COOKIE_NAMES } from "../../auth/cookies/cookie-config";
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../auth/session/session-standing";
+import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import { externalIdentityKeyDigest } from "../../schemas/external-identities";
 import {
   createTestNextly,
@@ -39,6 +40,23 @@ import { Nextly } from "../nextly";
 
 /** The origin the test requests are addressed to, which is the app's own. */
 const OWN_ORIGIN = "http://localhost";
+
+/** A request through the catch-all REST handler, made with an API key. */
+async function restWithKey(
+  key: string,
+  method: "GET" | "DELETE",
+  segments: string[]
+): Promise<Response> {
+  const request = new Request(`${OWN_ORIGIN}/api/${segments.join("/")}`, {
+    method,
+    headers: { authorization: `Bearer ${key}` },
+  });
+  const context = { params: Promise.resolve({ params: segments }) };
+  const handlers = createDynamicHandlers();
+  return method === "GET"
+    ? handlers.GET(request, context)
+    : handlers.DELETE(request, context);
+}
 
 /** A request through the catch-all REST handler, signed in as `userId`. */
 async function rest(
@@ -164,7 +182,7 @@ describe.each(getConfiguredTestDialects())(
 
     /** The identities an account holds, as trusted server code reads them. */
     async function heldBy(userId: string): Promise<IdentityRow[]> {
-      return trusted.users.listIdentities({ userId });
+      return (await trusted.users.listIdentities({ userId })).items;
     }
 
     beforeAll(async () => {
@@ -207,7 +225,15 @@ describe.each(getConfiguredTestDialects())(
         const listed = await trusted.users.listIdentities({
           userId: managerId,
         });
-        expect(listed.map(identity => identity.id).sort()).toEqual(
+        // One page holding every identity, in the canonical list shape.
+        expect(listed.meta).toMatchObject({
+          total: 2,
+          page: 1,
+          totalPages: 1,
+          hasNext: false,
+          hasPrev: false,
+        });
+        expect(listed.items.map(identity => identity.id).sort()).toEqual(
           [kept.id, removed.id].sort()
         );
 
@@ -233,7 +259,7 @@ describe.each(getConfiguredTestDialects())(
         const theirs = await identityFor(managed, "managed for someone else");
 
         const listed = await as.users.listIdentities({ userId: managed });
-        expect(listed.map(identity => identity.id)).toEqual([theirs.id]);
+        expect(listed.items.map(identity => identity.id)).toEqual([theirs.id]);
 
         await as.users.unlinkIdentity({
           userId: managed,
@@ -275,7 +301,7 @@ describe.each(getConfiguredTestDialects())(
         const as = checkedAs(readerId);
 
         const listed = await as.users.listIdentities({ userId: target });
-        expect(listed.map(identity => identity.id)).toEqual([kept.id]);
+        expect(listed.items.map(identity => identity.id)).toEqual([kept.id]);
 
         await expect(
           as.users.unlinkIdentity({
@@ -309,14 +335,16 @@ describe.each(getConfiguredTestDialects())(
 
         const response = await rest(lackerId, "GET", ["me", "identities"]);
         const body = (await response.json()) as {
-          identities: Record<string, unknown>[];
+          items: Record<string, unknown>[];
+          meta: Record<string, unknown>;
         };
 
         expect(response.status, JSON.stringify(body)).toBe(200);
-        expect(body.identities.map(identity => identity.id)).toContain(own.id);
+        expect(body.items.map(identity => identity.id)).toContain(own.id);
+        expect(body.meta).toMatchObject({ page: 1, totalPages: 1 });
         // The link's own record and nothing else: no field a provider token
         // could ride in.
-        for (const identity of body.identities) {
+        for (const identity of body.items) {
           expect(Object.keys(identity).sort()).toEqual(
             [
               "address",
@@ -342,6 +370,12 @@ describe.each(getConfiguredTestDialects())(
         ]);
 
         expect(response.status, await response.clone().text()).toBe(200);
+        // The canonical mutation shape, naming the identity removed as the
+        // Direct API's unlink does.
+        expect(await response.json()).toEqual({
+          message: "Identity unlinked.",
+          item: { id: own.id },
+        });
         expect((await heldBy(lackerId)).map(i => i.id)).not.toContain(own.id);
       });
 
@@ -350,7 +384,7 @@ describe.each(getConfiguredTestDialects())(
         const as = checkedAs(lackerId);
 
         const listed = await as.users.listIdentities({ userId: lackerId });
-        expect(listed.map(identity => identity.id)).toContain(own.id);
+        expect(listed.items.map(identity => identity.id)).toContain(own.id);
 
         await as.users.unlinkIdentity({ userId: lackerId, identityId: own.id });
         expect((await heldBy(lackerId)).map(i => i.id)).not.toContain(own.id);
@@ -389,12 +423,10 @@ describe.each(getConfiguredTestDialects())(
           "identities",
         ]);
         const body = (await listing.json()) as {
-          identities: { id: string }[];
+          items: { id: string }[];
         };
         expect(listing.status, JSON.stringify(body)).toBe(200);
-        expect(body.identities.map(identity => identity.id)).toEqual([
-          theirs.id,
-        ]);
+        expect(body.items.map(identity => identity.id)).toEqual([theirs.id]);
 
         const unlink = await rest(managerId, "DELETE", [
           "users",
@@ -442,6 +474,95 @@ describe.each(getConfiguredTestDialects())(
         expect(response.status).toBe(403);
         expect(body.error.code).toBe("CSRF_FAILED");
         expect((await heldBy(target)).map(i => i.id)).toEqual([theirs.id]);
+      });
+    });
+
+    describe("the listing's caching", () => {
+      it("marks a successful listing private to the caller", async () => {
+        const response = await rest(lackerId, "GET", ["me", "identities"]);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toContain("private");
+        expect(response.headers.get("cache-control")).toContain("no-store");
+        expect(response.headers.get("vary")).toBeTruthy();
+      });
+    });
+
+    describe("an API key on its own maker's identities", () => {
+      /** A full-access key `userId` makes, carrying that person's grants. */
+      async function keyOf(userId: string): Promise<string> {
+        const apiKeys = t.getService(
+          "apiKeyService"
+        ) as unknown as ApiKeyService;
+        const { key } = await apiKeys.createApiKey(userId, {
+          name: `identities-${randomUUID()}`,
+          tokenType: "full-access",
+          expiresIn: "unlimited",
+        });
+        return key;
+      }
+
+      it("is refused over REST without the user-management grants, and the identity stays", async () => {
+        const own = await identityFor(
+          lackerId,
+          "kept from a key without grants"
+        );
+        const key = await keyOf(lackerId);
+
+        const listing = await restWithKey(key, "GET", ["me", "identities"]);
+        expect(listing.status).toBe(403);
+
+        const unlink = await restWithKey(key, "DELETE", [
+          "me",
+          "identities",
+          own.id,
+        ]);
+        expect(unlink.status).toBe(403);
+        expect((await heldBy(lackerId)).map(i => i.id)).toContain(own.id);
+      });
+
+      it("lists and unlinks over REST with the user-management grants", async () => {
+        const own = await identityFor(managerId, "managed by its maker's key");
+        const key = await keyOf(managerId);
+
+        const listing = await restWithKey(key, "GET", ["me", "identities"]);
+        expect(listing.status, await listing.clone().text()).toBe(200);
+
+        const unlink = await restWithKey(key, "DELETE", [
+          "me",
+          "identities",
+          own.id,
+        ]);
+        expect(unlink.status, await unlink.clone().text()).toBe(200);
+        expect((await heldBy(managerId)).map(i => i.id)).not.toContain(own.id);
+      });
+
+      it("is refused through the Direct API without the grants, and allowed with them", async () => {
+        const own = await identityFor(lackerId, "kept from a scoped key");
+        const keyed = (permissions: string[]) =>
+          new Nextly({
+            overrideAccess: false,
+            user: { id: lackerId },
+            actor: { actorType: "apiKey", permissions },
+          });
+
+        const without = keyed([]);
+        await expect(
+          without.users.listIdentities({ userId: lackerId })
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        await expect(
+          without.users.unlinkIdentity({ userId: lackerId, identityId: own.id })
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        expect((await heldBy(lackerId)).map(i => i.id)).toContain(own.id);
+
+        const granted = keyed(["read-users", "update-users"]);
+        const listed = await granted.users.listIdentities({ userId: lackerId });
+        expect(listed.items.map(identity => identity.id)).toContain(own.id);
+        await granted.users.unlinkIdentity({
+          userId: lackerId,
+          identityId: own.id,
+        });
+        expect((await heldBy(lackerId)).map(i => i.id)).not.toContain(own.id);
       });
     });
   }

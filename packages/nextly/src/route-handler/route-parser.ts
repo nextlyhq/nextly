@@ -343,6 +343,7 @@ function parseUserRoutes(
     id,
     subresource,
     subId,
+    additionalParams,
     httpMethod,
     routeParams
   );
@@ -357,10 +358,14 @@ function parseUserIdentityRoutes(
   id: string | undefined,
   subresource: string | undefined,
   subId: string | undefined,
+  additionalParams: string[],
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  if (!id || subresource !== "identities") return null;
+  // A longer path is another route, not this one with its tail ignored.
+  if (!id || subresource !== "identities" || additionalParams.length > 0) {
+    return null;
+  }
 
   if (!subId && httpMethod === "GET") {
     // GET /api/users/123/identities → list the user's external identities

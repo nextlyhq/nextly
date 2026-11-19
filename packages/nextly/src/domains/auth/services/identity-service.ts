@@ -48,6 +48,7 @@ import { verifyAccessToken } from "../../../auth/jwt/verify";
 import { sessionTokenIsCurrent } from "../../../auth/session/session-standing";
 import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
+import { appPasswordDigester } from "../../../di/password-digester";
 import { NextlyError } from "../../../errors/nextly-error";
 import { env } from "../../../lib/env";
 import { bootNameOf } from "../../../plugins/plugin-consent";
@@ -966,7 +967,13 @@ export class IdentityService extends BaseService {
     });
   }
 
-  /** Whether the account has a password to sign in with, read in the unlink's transaction. */
+  /**
+   * Whether the account has a password to sign in with, read in the unlink's
+   * transaction: a stored value the app's password digester takes for a
+   * hash, the same answer the users service gives an account's
+   * `hasPassword`. A value it does not take signs nobody in, so it is no
+   * way in.
+   */
   private async holdsPassword(
     tx: TransactionContext,
     userId: string
@@ -975,7 +982,7 @@ export class IdentityService extends BaseService {
       columns: ["passwordHash"],
       where: { and: [{ column: "id", op: "=", value: userId }] },
     });
-    return typeof user?.passwordHash === "string" && user.passwordHash !== "";
+    return appPasswordDigester().isHash(user?.passwordHash);
   }
 
   /**

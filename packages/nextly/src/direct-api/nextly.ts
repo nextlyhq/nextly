@@ -240,6 +240,7 @@ import type {
   GetRolePermissionsArgs,
   ListApiKeysArgs,
   ListFoldersArgs,
+  ListUserIdentitiesArgs,
   BulkDeleteMediaArgs,
   PreviewEmailTemplateArgs,
   ReorderUserFieldsArgs,
@@ -252,6 +253,7 @@ import type {
   SetRolePermissionsArgs,
   SubmitFormArgs,
   TestEmailProviderArgs,
+  UnlinkIdentityArgs,
   UpdateApiKeyArgs,
   UpdateFieldGroupArgs,
   UpdateEmailProviderArgs,
@@ -1284,7 +1286,11 @@ export const nextly = {
       (await requireNextlyOnceStarted()).users.update(args),
     delete: async (args: DeleteUserArgs) =>
       (await requireNextlyOnceStarted()).users.delete(args),
-  },
+    listIdentities: async (args: ListUserIdentitiesArgs) =>
+      (await requireNextlyOnceStarted()).users.listIdentities(args),
+    unlinkIdentity: async (args: UnlinkIdentityArgs) =>
+      (await requireNextlyOnceStarted()).users.unlinkIdentity(args),
+  } satisfies UsersNamespace,
 
   media: {
     upload: async (args: UploadMediaArgs) =>

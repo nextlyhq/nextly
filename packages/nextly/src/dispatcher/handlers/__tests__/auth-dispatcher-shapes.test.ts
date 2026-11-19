@@ -352,7 +352,7 @@ describe("dispatchRbac — actions (respondAction)", () => {
 });
 
 describe("dispatchIdentities — a user's external identities", () => {
-  it("listUserIdentities returns { identities } and reads the named user's", async () => {
+  it("listUserIdentities returns { items, meta }, private to the caller, and reads the named user's", async () => {
     const identities = [
       {
         id: "i1",
@@ -376,19 +376,32 @@ describe("dispatchIdentities — a user's external identities", () => {
       undefined
     );
 
-    const body = await (result as Response).json();
+    const response = result as Response;
+    const body = await response.json();
     // The wire form of the listing: a Response body carries the rows as
     // JSON wrote them, a Date as its ISO string, so that is the body
-    // asserted — not the in-memory shape the service answered with.
+    // asserted — not the in-memory shape the service answered with. One
+    // page holds every identity.
     expect(body).toEqual({
-      identities: [
+      items: [
         { ...identities[0], createdAt: identities[0].createdAt.toISOString() },
       ],
+      meta: {
+        total: 1,
+        page: 1,
+        limit: 1,
+        totalPages: 1,
+        hasNext: false,
+        hasPrev: false,
+      },
     });
+    // Told to one caller, so no shared cache keeps it for the next.
+    expect(response.headers.get("cache-control")).toContain("private");
+    expect(response.headers.get("cache-control")).toContain("no-store");
     expect(listExternalIdentities).toHaveBeenCalledWith("u1");
   });
 
-  it("unlinkUserIdentity unlinks through the service with both ids", async () => {
+  it("unlinkUserIdentity returns { message, item } and unlinks through the service with both ids", async () => {
     const unlinkExternalIdentity = vi.fn().mockResolvedValue(undefined);
     const container = {
       identities: { unlinkExternalIdentity },
@@ -404,8 +417,7 @@ describe("dispatchIdentities — a user's external identities", () => {
     const body = await (result as Response).json();
     expect(body).toEqual({
       message: "Identity unlinked.",
-      userId: "u1",
-      identityId: "i1",
+      item: { id: "i1" },
     });
     expect(unlinkExternalIdentity).toHaveBeenCalledWith("u1", "i1");
   });

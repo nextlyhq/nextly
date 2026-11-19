@@ -24,6 +24,7 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  withSessionCacheHeaders,
 } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ServiceContainer } from "../../services";
@@ -594,10 +595,10 @@ export function dispatchAuth(
 
 /**
  * A user's external identities: the listing and the unlink of the rows the
- * user's account owns. Answered in the user-role operations' own shapes — a
- * named-field list, an action with the ids it acted on — because an identity
- * is the same kind of thing on the user's edit surface: one row another door
- * attached, removed by naming it.
+ * user's account owns, answered in the canonical shapes — the listing as one
+ * page of `{ items, meta }`, the unlink as `{ message, item }` naming the
+ * identity removed, as the Direct API answers both. The listing is told to
+ * one caller, so its answer is never cached for another.
  */
 const IDENTITY_METHODS: Record<string, MethodHandler<IdentityService>> = {
   listUserIdentities: {
@@ -605,7 +606,19 @@ const IDENTITY_METHODS: Record<string, MethodHandler<IdentityService>> = {
       const identities = await svc.listExternalIdentities(
         requireParam(p, "userId", "UserId")
       );
-      return respondData({ identities });
+      // Every identity in one page: the listing is not paginated.
+      const limit = Math.max(identities.length, 1);
+      return withSessionCacheHeaders(
+        respondList(
+          identities,
+          toPaginationMeta({
+            total: identities.length,
+            page: 1,
+            limit,
+            totalPages: 1,
+          })
+        )
+      );
     },
   },
   unlinkUserIdentity: {
@@ -613,7 +626,7 @@ const IDENTITY_METHODS: Record<string, MethodHandler<IdentityService>> = {
       const userId = requireParam(p, "userId", "UserId");
       const identityId = requireParam(p, "identityId", "IdentityId");
       await svc.unlinkExternalIdentity(userId, identityId);
-      return respondAction("Identity unlinked.", { userId, identityId });
+      return respondMutation("Identity unlinked.", { id: identityId });
     },
   },
 };

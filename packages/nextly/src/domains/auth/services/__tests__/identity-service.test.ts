@@ -61,6 +61,9 @@ const ORBIT: PluginDefinition = {
 };
 
 const GOOGLE_ISSUER = "https://accounts.google.com";
+/** A stored value in the shape core's bcrypt writes: a password sign-in takes. */
+const STORED_HASH =
+  "$2b$10$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 let testDb: TestDb;
 /** Every read and write the service made, counted at its database handle. */
@@ -1479,7 +1482,9 @@ describe("the unlink of one identity", () => {
   });
 
   it("refuses an identity another user holds, leaving both accounts as they were", async () => {
-    await plantUser("owner", "owner@example.com", { passwordHash: "hash" });
+    await plantUser("owner", "owner@example.com", {
+      passwordHash: STORED_HASH,
+    });
     await plantUser("other");
     const theirs = await plantIdentity({
       providerKey: "acme-auth:google",
@@ -1504,7 +1509,9 @@ describe("the unlink of one identity", () => {
   });
 
   it("answers a second unlink of the same identity as a clean not-found", async () => {
-    await plantUser("owner", "owner@example.com", { passwordHash: "hash" });
+    await plantUser("owner", "owner@example.com", {
+      passwordHash: STORED_HASH,
+    });
     const removed = await plantIdentity({
       providerKey: "acme-auth:google",
       issuer: GOOGLE_ISSUER,
@@ -1572,8 +1579,33 @@ describe("the unlink of the last way in (L8)", () => {
     expect(await identitiesOf("owner")).toBe(2);
   });
 
+  it("refuses the only identity of an account whose stored password no sign-in takes", async () => {
+    // A non-empty value that is no hash core's digester recognises signs
+    // nobody in, so it is no way in either.
+    await plantUser("owner", "owner@example.com", {
+      passwordHash: "not-a-password-hash",
+    });
+    const only = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "only",
+      userId: "owner",
+    });
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyEnabling("acme-auth:google"),
+      }).unlinkExternalIdentity("owner", only)
+    );
+
+    expect(error.code).toBe("CONFLICT");
+    expect(await identitiesOf("owner")).toBe(1);
+  });
+
   it("unlinks the only identity of an account that has a password", async () => {
-    await plantUser("owner", "owner@example.com", { passwordHash: "hash" });
+    await plantUser("owner", "owner@example.com", {
+      passwordHash: STORED_HASH,
+    });
     const only = await plantIdentity({
       providerKey: "acme-auth:google",
       issuer: GOOGLE_ISSUER,

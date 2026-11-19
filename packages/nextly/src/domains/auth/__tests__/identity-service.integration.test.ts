@@ -821,7 +821,9 @@ describe.each(getConfiguredTestDialects())(
         id: "owner",
         email: "owner@example.com",
         isActive: true,
-        passwordHash: "a-stored-hash",
+        // In the shape core's bcrypt writes: a password sign-in takes.
+        passwordHash:
+          "$2b$10$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       });
       const only = await insertIdentity(handle, {
         providerKey: "acme-auth:google",

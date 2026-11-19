@@ -42,6 +42,19 @@ describe("user identity routes", () => {
     expect(
       parseRestRoute(["users", "u1", "identities", "i1"], "PATCH")
     ).toEqual({});
+    // A longer path is another route, not one of these with its tail ignored.
+    expect(
+      parseRestRoute(["users", "u1", "identities", "i1", "extra"], "DELETE")
+    ).toEqual({});
+    expect(
+      parseRestRoute(["users", "u1", "identities", "i1", "extra"], "GET")
+    ).toEqual({});
+    expect(
+      parseRestRoute(
+        ["users", "u1", "identities", "i1", "extra", "more"],
+        "DELETE"
+      )
+    ).toEqual({});
   });
 });
 
@@ -76,5 +89,8 @@ describe("the caller's own identity routes", () => {
     expect(
       parseRestRoute(["me", "identities", "i1", "extra"], "DELETE")
     ).toEqual({});
+    expect(parseRestRoute(["me", "identities", "i1", "extra"], "GET")).toEqual(
+      {}
+    );
   });
 });

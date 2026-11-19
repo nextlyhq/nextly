@@ -46,10 +46,12 @@ import { hiddenUserFieldPaths, withoutHiddenPaths } from "./hidden-fields";
 
 /**
  * The check an identities method runs first, as REST's two doors ask it: a
- * checked caller acting on its own account needs only to be named, as the
+ * person acting on their own account needs only to be named, as the
  * signed-in caller of `/api/me/identities` needs only a session; another
- * account's identities take the user-management `grant`. A trusted call is
- * server code, and runs unchecked as every other trusted call does.
+ * account's identities take the user-management `grant`, and so does every
+ * call made under an API key, its maker's own account included, as REST
+ * asks of a key at either door. A trusted call is server code, and runs
+ * unchecked as every other trusted call does.
  */
 async function checkIdentityAccess(
   ctx: NextlyContext,
@@ -58,7 +60,10 @@ async function checkIdentityAccess(
   grant: RouteGrant
 ): Promise<void> {
   const caller = checkedCaller(ctx.defaultConfig, args);
-  if (caller && caller.userId !== userId) await authorizeChecked(caller, grant);
+  if (!caller) return;
+  const ownSession =
+    caller.authMethod === "session" && caller.userId === userId;
+  if (!ownSession) await authorizeChecked(caller, grant);
 }
 
 /**
@@ -74,10 +79,10 @@ export interface UsersNamespace {
   create(args: CreateUserArgs): Promise<MutationResult<User>>;
   update(args: UpdateUserArgs): Promise<MutationResult<User>>;
   delete(args: DeleteUserArgs): Promise<MutationResult<{ id: string }>>;
-  /** The account's linked sign-in identities, oldest link first. */
+  /** The account's linked sign-in identities, oldest link first, as one page. */
   listIdentities(
     args: ListUserIdentitiesArgs
-  ): Promise<ListedExternalIdentity[]>;
+  ): Promise<ListResult<ListedExternalIdentity>>;
   /** Remove one linked identity from the account, and nothing else. */
   unlinkIdentity(
     args: UnlinkIdentityArgs
@@ -283,7 +288,7 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
 
     async listIdentities(
       args: ListUserIdentitiesArgs
-    ): Promise<ListedExternalIdentity[]> {
+    ): Promise<ListResult<ListedExternalIdentity>> {
       if (!args.userId) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -301,7 +306,16 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         args.userId,
         SYSTEM_READ_POLICY.users.read
       );
-      return ctx.identityService.listExternalIdentities(args.userId);
+      const identities = await ctx.identityService.listExternalIdentities(
+        args.userId
+      );
+      // Every identity in one page: an account holds a handful, and the
+      // listing is not paginated at either door.
+      return toListResult(
+        { data: identities, pagination: { total: identities.length } },
+        Math.max(identities.length, 1),
+        1
+      );
     },
 
     async unlinkIdentity(

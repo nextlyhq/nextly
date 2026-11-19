@@ -1842,6 +1842,16 @@ async function serveServiceRequest(
       if (routeParams) {
         routeParams.userId = authResult.userId;
       }
+      const keyRefusal = await refuseKeyWithoutIdentityGrant(
+        req,
+        service,
+        method,
+        operation,
+        routeParams,
+        httpMethod,
+        authResult
+      );
+      if (keyRefusal) return keyRefusal;
       authorizedUser = authResult;
     }
     // Check if endpoint requires auth only (no specific permission)
@@ -2451,6 +2461,37 @@ function gateRuleCouldNotRun(req: Request, error: unknown): Response {
 }
 
 /**
+ * The grant an API key needs for its own account's identities at
+ * `/api/me/identities`: the user read to list, the user update to unlink —
+ * the gates `/api/users/:id/identities` asks. Only a session's own person
+ * manages their identities with no permission; a key is a credential its
+ * holder scoped, and acting on its maker's account does not lift that
+ * scope, as it does not for any other route a key reaches.
+ */
+async function refuseKeyWithoutIdentityGrant(
+  req: Request,
+  service: string,
+  method: string,
+  operation: string,
+  routeParams: Record<string, string> | undefined,
+  httpMethod: string,
+  caller: AuthContext
+): Promise<Response | null> {
+  if (service !== "identities" || caller.authMethod !== "api-key") {
+    return null;
+  }
+  const granted = await resolveAuthorization(
+    req,
+    service,
+    method,
+    operation,
+    routeParams,
+    httpMethod
+  );
+  return isErrorResponse(granted) ? refuseRequest(req, method, granted) : null;
+}
+
+/**
  * The cross-site check an identity's unlink takes: a write the session
  * cookie authenticated is refused unless it came from the app's own origin,
  * or one the app allows — the origin half of the check the plugin route
@@ -2534,6 +2575,10 @@ const SESSION_PRIVATE_METHODS = new Set([
   // may publish, naming only the fields they may read.
   "previewPublishAllSingleLocales",
   "previewPublishAllLocales",
+  // An account's linked identities are told to that account's person, or to
+  // someone allowed to manage it, so neither the list nor its refusal is
+  // shared between callers.
+  "listUserIdentities",
 ]);
 
 // Re-exported from its neutral home so the dispatchers that import it from
