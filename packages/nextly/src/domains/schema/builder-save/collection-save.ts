@@ -1051,7 +1051,17 @@ async function writeSave(
     // The definition last, once the migration files and their snapshots are in place, and only
     // while the save still holds the migration folder: a save stopped or failed before it leaves
     // the definition as it was, so nothing says the change happened that no migration records.
-    await writeDefinitionHeld(deps, definitionPath, plan.next);
+    try {
+      await writeDefinitionHeld(deps, definitionPath, plan.next);
+    } catch (error) {
+      // A rename the file system made and then reported failed leaves the new definition in place:
+      // read back, it counts as replaced, so a withdrawal puts the old one back.
+      definitionReplaced = await holdsText(
+        definitionPath,
+        serializeUiSchema(plan.next)
+      );
+      throw error;
+    }
     definitionReplaced = true;
     return { files, names, table: plan.table, undo, started };
   } catch (error) {
@@ -2071,6 +2081,15 @@ function withEntity(
   return entity === null
     ? mutateManifest(manifest, { type: "delete", kind: kind.manifest, slug })
     : mutateManifest(manifest, { type: "upsert", kind: kind.manifest, entity });
+}
+
+/** Whether `path` reads as `text` now; a file that cannot be read does not. */
+async function holdsText(path: string, text: string): Promise<boolean> {
+  try {
+    return (await readIfPresent(path)) === text;
+  } catch {
+    return false;
+  }
 }
 
 /** A file's text, or undefined where there is none. */
