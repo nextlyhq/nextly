@@ -31,6 +31,7 @@ import {
   vi,
 } from "vitest";
 
+import { labelNotInName } from "../label-in-name.fixture";
 import { CHROME_ATTRIBUTE, CONDITIONED_ATTRIBUTE, Canvas } from "./canvas";
 import { CANVAS_FRAME_SHEET } from "./canvas-frame-sheet";
 import type { CanvasProps } from "./canvas-props";
@@ -330,6 +331,26 @@ describe("the regions of a page's Layout on the canvas", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it("is named by its own hidden text, not a label over the header it draws", () => {
+    renderCanvas([regionOf("header", "Top")], vi.fn());
+    const header = regionNamed("Site header, from the Main header & footer");
+    // A label over the region would have to hold every word its content
+    // draws, the site's own header included, which is a picture here, not
+    // its name. So the drawn content is hidden from a screen reader and the
+    // region is named by one hidden text inside it.
+    expect(header.getAttribute("aria-label")).toBeNull();
+    expect(labelNotInName(header)).toBeNull();
+    const content = screen
+      .getByText("Top")
+      .closest(".nx-canvas-region__content");
+    expect(content?.getAttribute("aria-hidden")).toBe("true");
+    // That text is hidden on screen by the frame's own sheet, since the
+    // editor's styles do not reach the canvas.
+    expect(CANVAS_FRAME_SHEET).toMatch(
+      /\.nx-canvas-region__name\s*\{[^}]*position:\s*absolute;[^}]*clip-path:\s*inset\(50%\);/
+    );
+  });
+
   it("is one Tab stop named for it, which Enter or Space selects", () => {
     const onSelectRegion = vi.fn();
     renderCanvas(
@@ -610,7 +631,8 @@ describe("the regions of a page's Layout on the canvas", () => {
       />
     );
     const view = await act(async () => render(canvasOf(page, render1)));
-    const logo = screen.getByRole("img", { name: "Logo" });
+    // Hidden from a screen reader with the rest of the region's content.
+    const logo = screen.getByRole("img", { name: "Logo", hidden: true });
     const before = lateRenders.count;
     expect(before).toBeGreaterThan(0);
     const drawn = countedDraws.count;
@@ -628,7 +650,7 @@ describe("the regions of a page's Layout on the canvas", () => {
       view.rerender(canvasOf(inserted, { ...render1 }));
     });
     expect(screen.getByText("New")).toBeTruthy();
-    expect(screen.getByRole("img", { name: "Logo" })).toBe(logo);
+    expect(screen.getByRole("img", { name: "Logo", hidden: true })).toBe(logo);
     expect(lateRenders.count).toBe(before);
     // Nor was the header drawn again at all: its inputs held the same values.
     expect(countedDraws.count).toBe(drawn);

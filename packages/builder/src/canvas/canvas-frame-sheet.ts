@@ -739,6 +739,20 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
   opacity: var(--nx-builder-region-opacity, 0.6);
 }
 
+/* The region's name, heard and not drawn: the editor's own hidden-text rule
+   does not reach the canvas, so the frame says it here. */
+.nx-canvas-region__name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border-width: 0;
+}
+
 /* Where the region meets the page: a quiet line. */
 .nx-canvas-region[data-nx-region="header"] {
   border-bottom: 1px dashed var(--nx-builder-border);
