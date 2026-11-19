@@ -12,7 +12,7 @@
  */
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
-import { Lock } from "lucide-react";
+import { Copy, Lock } from "lucide-react";
 import type React from "react";
 import { useCallback, useMemo, useState } from "react";
 
@@ -41,10 +41,9 @@ import { useWorkflowSettingsSave } from "./useWorkflowSettingsSave";
 import { workflowSettingsAccess } from "./workflow-permissions";
 import {
   attachmentsPhrase,
-  reviewStages,
   reviewerOptions,
-  reviewerStillHolds,
   rolesHoldingPrimary,
+  staleReviewers,
 } from "./workflow-settings-model";
 import { WorkflowDiagram } from "./WorkflowDiagram";
 import { WorkflowEmailSection } from "./WorkflowEmailSection";
@@ -85,6 +84,31 @@ function Section({
       </div>
       {children}
     </section>
+  );
+}
+
+/**
+ * Copies the configuration file's path, and says so in its own name for a
+ * moment, so a screen reader hears the copy happen.
+ */
+function CopyPathButton({ path }: { path: string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-label={copied ? "Path copied" : "Copy path"}
+      onClick={() => {
+        void navigator.clipboard?.writeText(path).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        });
+      }}
+    >
+      <Copy aria-hidden="true" className="size-3.5" />
+      {copied ? "Copied" : "Copy path"}
+    </Button>
   );
 }
 
@@ -194,12 +218,6 @@ export function WorkflowSettingsDetail({
     );
   }
 
-  const staleStages = reviewStages(workflow)
-    .map(stage => stage.name)
-    .filter(
-      stage =>
-        reviewerStillHolds(workflow, settings, roleItems, stage) === false
-    );
   const grantableRoles = roleItems.filter(
     role => role.builtIn === undefined && role.assignable !== false
   );
@@ -212,8 +230,17 @@ export function WorkflowSettingsDetail({
     <SettingsLayout
       {...header(
         workflow.label,
-        <span className="flex flex-wrap items-center gap-2">
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <DefinedInCodeBadge />
+          {workflow.configPath !== null && (
+            <span className="inline-flex flex-wrap items-center gap-1">
+              Registered in{" "}
+              <code className="rounded bg-muted px-1.5 py-0.5 text-xs text-foreground">
+                {workflow.configPath}
+              </code>
+              <CopyPathButton path={workflow.configPath} />
+            </span>
+          )}
           <span>Used by {attachmentsPhrase(workflow)}</span>
         </span>
       )}
@@ -230,7 +257,7 @@ export function WorkflowSettingsDetail({
         <WorkflowNotices
           workflow={workflow}
           settings={settings}
-          staleStages={staleStages}
+          stale={staleReviewers(workflow, settings)}
           nameOf={nameOf}
         />
 

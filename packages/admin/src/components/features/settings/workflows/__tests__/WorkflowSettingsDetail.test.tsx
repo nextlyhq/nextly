@@ -2,14 +2,16 @@
  * One workflow in Settings, rendered against the server's answers, with the
  * settings service watched for what each control sends.
  *
- * - Read-only: the definition (attachments, diagram, steps and permissions)
- *   is shown, and a reader without `update-settings` gets no control at all.
+ * - Read-only: the definition (where it is registered, attachments, the
+ *   diagram with its documents per stage, steps and permissions) is shown, and
+ *   a reader without `update-settings` gets no control but Copy path.
  * - Grants: the dialog starts from the roles holding the step, lists a role
  *   holding it on some collections only (unticked, saying what saving does),
  *   names the steps sharing its permission, and sends the exact set for that
  *   step alone.
  * - Default reviewer: only those holding the stage's primary step are offered,
- *   and a role reviewer no longer granted it is warned about.
+ *   and a reviewer the server says no longer holds it, a role or a person, is
+ *   warned about.
  * - Labels: Reset sends `null`; each email switch sends its own trigger.
  * - A permission no role holds is an alert.
  * - A conflict reads the settings again and keeps the pending choice; a
@@ -91,15 +93,18 @@ beforeEach(() => {
 });
 
 describe("a workflow in Settings", () => {
-  it("shows the definition read-only: where it is used, the diagram, and each step's permission", async () => {
+  it("shows the definition read-only: where it is registered and used, the diagram with its documents, and each step's permission", async () => {
     await open();
 
+    expect(screen.getByText("src/nextly.config.ts")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copy path" })).toBeTruthy();
     expect(screen.getByText("Used by posts, pages and banner")).toBeTruthy();
     expect(screen.getByText("Defined in code")).toBeTruthy();
     const diagram = within(section("Stages and steps")).getByRole("img");
     expect(diagram.getAttribute("aria-label")).toContain(
-      "Legal check: Clear moves it to Cleared; Bounce moves it to Writing; Park moves it to On hold."
+      "Legal check, 2 documents: Clear moves it to Cleared; Bounce moves it to Writing, with a comment; Park moves it to On hold, with a comment."
     );
+    expect(within(diagram).getByText("4 documents")).toBeTruthy();
     const clear = within(section("Who takes each step")).getByRole(
       "rowheader",
       { name: /^Clear/ }
@@ -109,15 +114,19 @@ describe("a workflow in Settings", () => {
     const send = within(section("Who takes each step")).getByRole("rowheader", {
       name: /^Send to legal/,
     }).parentElement as HTMLElement;
+    // A step naming no permission of its own needs the collection's own, named.
+    expect(within(send).getByText("update")).toBeTruthy();
     expect(
-      within(send).getByText("The collection's own permissions")
-    ).toBeTruthy();
+      within(send).queryByRole("button", { name: /Change who takes/ })
+    ).toBeNull();
   });
 
-  it("gives a reader without update-settings no control at all", async () => {
+  it("gives a reader without update-settings no control but Copy path", async () => {
     await open(settingsOf(), ["read-settings"]);
 
-    expect(screen.queryAllByRole("button")).toEqual([]);
+    expect(
+      screen.queryAllByRole("button").map(button => button.textContent)
+    ).toEqual(["Copy path"]);
     expect(screen.queryAllByRole("switch")).toEqual([]);
     expect(screen.queryAllByRole("textbox")).toEqual([]);
     expect(screen.queryAllByRole("combobox")).toEqual([]);
@@ -200,11 +209,25 @@ describe("a workflow in Settings", () => {
     ]);
   });
 
+  it("warns when a person reviewer is deactivated, as the server says", async () => {
+    await open(
+      settingsOf({
+        defaultReviewers: { hold: { kind: "user", id: "u-ed" } },
+        defaultReviewerHolds: { hold: "deactivated" },
+      })
+    );
+
+    expect(
+      screen.getByText(/The default reviewer of On hold, Ed, is deactivated/)
+    ).toBeTruthy();
+  });
+
   it("warns when a role reviewer no longer holds the stage's primary step, and saves a new one", async () => {
     const user = userEvent.setup();
     await open(
       settingsOf({
         defaultReviewers: { legal: { kind: "role", id: "r-editors" } },
+        defaultReviewerHolds: { legal: "lacks" },
       })
     );
     api.updateWorkflowSettings.mockResolvedValue(settingsOf({ revision: 4 }));

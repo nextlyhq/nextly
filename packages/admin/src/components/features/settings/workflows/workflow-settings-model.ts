@@ -15,6 +15,7 @@ import type { Role } from "@admin/types/entities";
 import type { UserApiResponse } from "@admin/types/user";
 import type {
   WorkflowAssignee,
+  WorkflowHolderAnswer,
   WorkflowSettingsView,
   WorkflowStageSummary,
   WorkflowStepSummary,
@@ -22,28 +23,22 @@ import type {
 } from "@admin/types/workflows";
 
 /**
- * A stage's primary step: its only step out, or the one its code marks
- * primary. The step a stage's default reviewer must hold.
+ * A stage's primary step, as the server names it: the step a stage's default
+ * reviewer must hold.
  */
 export function primaryStepOf(
   workflow: WorkflowSummary,
   stage: string
 ): WorkflowStepSummary | undefined {
-  const outgoing = workflow.steps.filter(step => step.from.includes(stage));
-  return outgoing.length === 1
-    ? outgoing[0]
-    : outgoing.find(step => step.primary);
+  const name = workflow.stages.find(each => each.name === stage)?.primaryStep;
+  return workflow.steps.find(step => step.name === name);
 }
 
-/** The review stages: each with a step of kind approve out of it, in order. */
+/** The review stages, as the server marks them, in order. */
 export function reviewStages(
   workflow: WorkflowSummary
 ): WorkflowStageSummary[] {
-  return workflow.stages.filter(stage =>
-    workflow.steps.some(
-      step => step.kind === "approve" && step.from.includes(stage.name)
-    )
-  );
+  return workflow.stages.filter(stage => stage.review);
 }
 
 /** A stage's label as shown: the one set in settings, else the code's. */
@@ -208,21 +203,26 @@ export function reviewerOptions(
   ];
 }
 
+/** A default reviewer who no longer holds their stage's primary step, and why. */
+export interface StaleReviewer {
+  stage: string;
+  answer: Exclude<WorkflowHolderAnswer, "holds">;
+}
+
 /**
- * Whether a stage's default reviewer no longer holds its primary step, as far
- * as the grants tell: a role neither granted it nor super-admin. `null` where
- * they cannot tell: a person, or a step the grants do not cover.
+ * The review stages whose default reviewer no longer holds the primary step,
+ * as the server answers it for a person or a role (`defaultReviewerHolds`).
  */
-export function reviewerStillHolds(
+export function staleReviewers(
   workflow: WorkflowSummary,
-  settings: WorkflowSettingsView,
-  roles: readonly Role[],
-  stage: string
-): boolean | null {
-  const reviewer = settings.defaultReviewers[stage];
-  if (!reviewer || reviewer.kind !== "role") return null;
-  const holding = rolesHoldingPrimary(workflow, settings, roles, stage);
-  return holding === null ? null : holding.has(reviewer.id);
+  settings: WorkflowSettingsView
+): StaleReviewer[] {
+  return workflow.stages.flatMap(({ name }) => {
+    const answer = settings.defaultReviewerHolds[name];
+    return answer === undefined || answer === "holds"
+      ? []
+      : [{ stage: name, answer }];
+  });
 }
 
 /** The key two assignees share when they are the same person or role. */
@@ -256,24 +256,35 @@ export function issuesByField(
   return byField;
 }
 
+/** "1 document", "3 documents". */
+export const documentsPhrase = (count: number): string =>
+  `${count} ${count === 1 ? "document" : "documents"}`;
+
 /**
- * The workflow told as sentences, one per stage in order: what may be done
- * with a document there and where each step out of it leads. The diagram's
- * label for a screen reader, and its list.
+ * The workflow told as sentences: one per stage in order, saying how many
+ * documents are recorded there and where each step out of it leads, then
+ * where an edit to approved content and the next draft after a publish go.
+ * The diagram's label for a screen reader, and its list.
  */
 export function diagramSentences(
   workflow: WorkflowSummary,
   labelOf: (stage: string) => string
 ): string[] {
-  return workflow.stages.map(stage => {
-    const name = `${labelOf(stage.name)}${stage.allowsPublish ? " (may be published)" : ""}`;
+  const stages = workflow.stages.map(stage => {
+    const name = `${labelOf(stage.name)}${stage.allowsPublish ? " (may be published)" : ""}, ${documentsPhrase(workflow.stageCounts[stage.name] ?? 0)}`;
     const outgoing = workflow.steps.filter(step =>
       step.from.includes(stage.name)
     );
     if (outgoing.length === 0) return `${name}: no step leads out of it.`;
     const steps = outgoing.map(
-      step => `${step.label} moves it to ${labelOf(step.to)}`
+      step =>
+        `${step.label} moves it to ${labelOf(step.to)}${step.commentRequired ? ", with a comment" : ""}`
     );
     return `${name}: ${steps.join("; ")}.`;
   });
+  return [
+    ...stages,
+    `An edit to approved content returns it to ${labelOf(workflow.onEdit.to)}.`,
+    `Once published, the next draft starts at ${labelOf(workflow.afterPublish)}.`,
+  ];
 }

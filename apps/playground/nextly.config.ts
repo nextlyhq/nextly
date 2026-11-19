@@ -31,6 +31,7 @@ import {
   defineConfig,
   date,
   defineSingle,
+  reviewWorkflow,
   text,
   textarea,
   upload,
@@ -148,6 +149,23 @@ const SeoHome = defineSingle({
     text({ name: "title", label: "Title" }),
     textarea({ name: "summary", label: "Summary" }),
   ],
+});
+
+/**
+ * A collection with the review workflow attached, for the browser test of
+ * Settings › Workflows (`e2e/tests/settings-workflows.spec.ts`): the preset,
+ * so the screen shows a workflow with a step of its own to grant, a review
+ * stage, labels and emails. Registered for the e2e run only, by the switch
+ * the other fixtures use, so a contributor's site gains no workflow.
+ */
+const ReviewedNotes = defineCollection({
+  slug: "reviewed-notes",
+  labels: { singular: "Reviewed note", plural: "Reviewed notes" },
+  // A workflow runs on drafts.
+  status: true,
+  versions: { drafts: true },
+  workflow: reviewWorkflow(),
+  fields: [text({ name: "title", label: "Title", required: true })],
 });
 
 /**
@@ -296,6 +314,9 @@ export default defineConfig({
     // field group, so a past version can be read in that layout; registered
     // for the e2e run only, by the same switch.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [HistoryNotes] : []),
+    // The browser test of Settings › Workflows needs a workflow attached;
+    // registered for the e2e run only, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [ReviewedNotes] : []),
     // The browser test of a document editable in one language and read-only
     // in another needs a rule that answers by language; registered for the
     // e2e run only, by the same switch.

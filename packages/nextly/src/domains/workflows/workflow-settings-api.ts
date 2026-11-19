@@ -16,6 +16,8 @@
  * @module domains/workflows/workflow-settings-api
  * @experimental
  */
+import { isAbsolute, relative, sep } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
@@ -23,6 +25,7 @@ import type { RequestActor } from "../../auth/request-actor";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
+import { REVIEW_STATES_TABLE } from "../../schemas/review-states";
 import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
 import type { Logger } from "../../services/shared";
 import { consoleLogger } from "../../shared/types";
@@ -38,11 +41,17 @@ import { RolePermissionService } from "../auth/services/role-permission-service"
 import { RoleService } from "../auth/services/role-service";
 import { PLUGIN_SETTINGS_ACTIVITY_COLLECTION } from "../plugins/settings-activity";
 
-import { holderAnswer, holderAnswerOnceGranted, namesOf } from "./holders";
+import { isReviewStage, primaryStep } from "./define-workflow";
+import {
+  holderAnswer,
+  holderAnswerOnceGranted,
+  namesOf,
+  type HolderAnswer,
+} from "./holders";
 import { BUILT_IN_ACTIONS, WORKFLOW_PERMISSION_GROUP } from "./permissions";
 import { registeredWorkflows, type RegisteredWorkflow } from "./registry";
 import type { ReviewAssignee, ReviewStatesDb } from "./review-state-repository";
-import { primaryAction } from "./steps";
+import { primaryAction, stepAction } from "./steps";
 import type { Workflow, WorkflowStepKind } from "./types";
 import {
   readWorkflowSettings,
@@ -102,11 +111,29 @@ export const WORKFLOW_DEFINITION_KEYS: readonly string[] = [
   "onEdit",
 ];
 
-/** A registered workflow, as a reader of its settings is told it. @experimental */
+/**
+ * A registered workflow, as a reader of its settings is told it: everything a diagram of it
+ * draws, and how many documents are recorded in each stage.
+ *
+ * @experimental
+ */
 export interface WorkflowSummary {
   slug: string;
   label: string;
-  stages: { name: string; label: string; allowsPublish: boolean }[];
+  /**
+   * The configuration file that registers it, relative to the project root; null where none was
+   * found, or where it lies outside the root, whose layout is the server's own.
+   */
+  configPath: string | null;
+  stages: {
+    name: string;
+    label: string;
+    allowsPublish: boolean;
+    /** The step its default reviewer must hold: its only step out, or the one marked primary. */
+    primaryStep: string | null;
+    /** Whether it is a review stage: one with a step of kind approve out of it. */
+    review: boolean;
+  }[];
   steps: {
     name: string;
     label: string;
@@ -116,7 +143,24 @@ export interface WorkflowSummary {
     primary: boolean;
     /** Whether which roles hold it is a setting: a step naming a permission of its own. */
     grantable: boolean;
+    /**
+     * The action taking it needs on each attachment: its own, or the collection's `publish` into
+     * a stage that allows publishing and `update` otherwise.
+     */
+    permission: string;
+    commentRequired: boolean;
   }[];
+  /** Where an edit to approved content moves it, and the fields whose edits keep the approval. */
+  onEdit: { to: string; exemptFields: string[] };
+  /** The stage a part's next draft starts at once it is published. */
+  afterPublish: string;
+  /**
+   * How many documents are recorded in each stage, by stage name: a document with several parts
+   * in one stage counts once there. A part recorded in a stage the workflow no longer has counts
+   * in the first stage, where every step reads it. A document none of whose parts has moved yet
+   * has no record, and is not counted.
+   */
+  stageCounts: Record<string, number>;
   collections: string[];
   singles: string[];
 }
@@ -152,6 +196,12 @@ export interface WorkflowSettingsView {
   grants: Record<string, string[]>;
   /** What else an editor of `grants` needs to see of each grantable step, by step name. */
   grantableSteps: Record<string, GrantableStepView>;
+  /**
+   * Whether each stage's default reviewer still holds the stage's primary step on every
+   * collection and Single the workflow is attached to, by stage name: `holds`, or why not (a
+   * person deactivated or gone, or a person or role lacking it somewhere).
+   */
+  defaultReviewerHolds: Record<string, HolderAnswer>;
 }
 
 /**
@@ -216,17 +266,83 @@ const attachedTo = (registered: RegisteredWorkflow): string[] => [
   ...registered.singles,
 ];
 
-/** Every registered workflow, with its stages, steps and attachments. @experimental */
-export function listWorkflowSummaries(): WorkflowSummary[] {
-  return registeredWorkflows().map(({ workflow, collections, singles }) => {
+/**
+ * A configuration file's path relative to the project root (the working directory), or null
+ * where there is none or it lies outside the root: a reader is told where in the project to look,
+ * never the server's own layout.
+ */
+function projectPath(path: string | null): string | null {
+  if (path === null) return null;
+  const within = relative(process.cwd(), path);
+  if (within === "" || isAbsolute(within)) return null;
+  if (within === ".." || within.startsWith(`..${sep}`)) return null;
+  return within;
+}
+
+/** The columns that name one document of a review state, which a count of documents counts once. */
+const DOCUMENT_COLUMNS = ["scopeKind", "scopeSlug", "entryId"];
+
+/**
+ * How many documents are recorded in each stage of `registered`, one count per stage, each
+ * counting a document once however many of its parts are there. A part recorded in a stage the
+ * workflow no longer has reads as its first stage (`implicit-stage`), so it is counted there.
+ */
+async function stageCountsOf(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow
+): Promise<Record<string, number>> {
+  const { workflow } = registered;
+  const slugs = attachedTo(registered);
+  const names = workflow.stages.map(stage => stage.name);
+  const counts: Record<string, number> = {};
+  for (const name of names) {
+    if (slugs.length === 0) {
+      counts[name] = 0;
+      continue;
+    }
+    const inStage =
+      name === workflow.firstStage
+        ? {
+            or: [
+              { column: "stage", op: "=" as const, value: name },
+              { column: "stage", op: "NOT IN" as const, value: names },
+            ],
+          }
+        : { column: "stage", op: "=" as const, value: name };
+    counts[name] = await adapter.count(REVIEW_STATES_TABLE, {
+      // Collections and Singles share one namespace of slugs, so the slug alone names each.
+      where: {
+        and: [{ column: "scopeSlug", op: "IN", value: [...slugs] }, inStage],
+      },
+      distinctOn: DOCUMENT_COLUMNS,
+    });
+  }
+  return counts;
+}
+
+/**
+ * Every registered workflow: its stages and steps as a diagram draws them, where it is
+ * registered, its attachments, and how many documents are recorded in each stage.
+ *
+ * @experimental
+ */
+export async function listWorkflowSummaries(
+  adapter: DrizzleAdapter
+): Promise<WorkflowSummary[]> {
+  const summaries: WorkflowSummary[] = [];
+  for (const registered of registeredWorkflows()) {
+    const { workflow, collections, singles } = registered;
     const grantable = grantableActions(workflow);
-    return {
+    summaries.push({
       slug: workflow.slug,
       label: workflow.label,
+      configPath: projectPath(registered.configPath),
       stages: workflow.stages.map(stage => ({
         name: stage.name,
         label: stage.label,
         allowsPublish: stage.allowsPublish,
+        primaryStep: primaryStep(workflow, stage.name)?.name ?? null,
+        review: isReviewStage(workflow, stage.name),
       })),
       steps: workflow.steps.map(step => ({
         name: step.name,
@@ -236,11 +352,20 @@ export function listWorkflowSummaries(): WorkflowSummary[] {
         to: step.to,
         primary: step.primary,
         grantable: grantable.has(step.name),
+        permission: stepAction(workflow, step),
+        commentRequired: step.commentRequired,
       })),
+      onEdit: {
+        to: workflow.onEdit.to,
+        exemptFields: [...workflow.onEdit.exemptFields],
+      },
+      afterPublish: workflow.afterPublish,
+      stageCounts: await stageCountsOf(adapter, registered),
       collections: [...collections],
       singles: [...singles],
-    };
-  });
+    });
+  }
+  return summaries;
 }
 
 /** The registered workflow `slug`, or not found. */
@@ -375,6 +500,27 @@ async function rolesGranted(
   return { everywhere: everywhere.sort(), partly: partly.sort() };
 }
 
+/**
+ * Whether `reviewer` holds `stage`'s primary step on every collection and Single the workflow is
+ * attached to, by the grants in force: `holds`, or the first attachment where they do not and
+ * why. A stage with no step out of it is one nobody holds. The one answer both the settings read
+ * (`defaultReviewerHolds`) and a write's check of a reviewer give.
+ */
+async function reviewerStanding(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow,
+  stage: string,
+  reviewer: ReviewAssignee
+): Promise<{ answer: HolderAnswer; slug: string | null }> {
+  const action = primaryAction(registered.workflow, stage);
+  if (action === null) return { answer: "lacks", slug: null };
+  for (const slug of attachedTo(registered)) {
+    const answer = await holderAnswer(adapter, reviewer, action, slug);
+    if (answer !== "holds") return { answer, slug };
+  }
+  return { answer: "holds", slug: null };
+}
+
 const DEFAULT_EMAILS: WorkflowEmailSettings = {
   assigned: true,
   approved: true,
@@ -424,6 +570,17 @@ async function viewOf(
         .map(([other]) => other),
     };
   }
+  // Each stage's reviewer asked as a write would ask, so the read never says one holds the step
+  // that a save would refuse.
+  const defaultReviewerHolds: Record<string, HolderAnswer> = {};
+  for (const [stage, reviewer] of Object.entries(
+    settings.defaultReviewers ?? {}
+  )) {
+    if (!hasStage(registered.workflow, stage)) continue;
+    defaultReviewerHolds[stage] = (
+      await reviewerStanding(adapter, registered, stage, reviewer)
+    ).answer;
+  }
   return {
     workflow: registered.workflow.slug,
     revision: stored?.revision ?? 0,
@@ -432,6 +589,7 @@ async function viewOf(
     emails: { ...DEFAULT_EMAILS, ...settings.emails },
     grants,
     grantableSteps,
+    defaultReviewerHolds,
   };
 }
 
@@ -494,12 +652,14 @@ async function reviewerProblems(
         lacking = `they would not hold its primary step once this write's grants are stored (${answer})`;
       }
     } else {
-      for (const slug of attachedTo(registered)) {
-        const answer = await holderAnswer(adapter, reviewer, action, slug);
-        if (answer !== "holds") {
-          lacking = `they cannot take its primary step on \`${slug}\` (${answer})`;
-          break;
-        }
+      const standing = await reviewerStanding(
+        adapter,
+        registered,
+        stage,
+        reviewer
+      );
+      if (standing.answer !== "holds") {
+        lacking = `they cannot take its primary step on \`${standing.slug ?? "?"}\` (${standing.answer})`;
       }
     }
     if (lacking !== null) {

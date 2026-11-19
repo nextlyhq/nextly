@@ -2,8 +2,8 @@
 
 /**
  * The registered workflows, one card each: its label, that it is defined in
- * code, the collections and Singles using it, and its stages. A card opens the
- * workflow's own page.
+ * code, the collections and Singles using it, and its stages with how many
+ * documents are recorded in each. A card opens the workflow's own page.
  */
 
 import { Badge } from "@nextlyhq/ui";
@@ -52,15 +52,20 @@ export function WorkflowList({
               <p className="text-sm text-muted-foreground">
                 Used by {attachmentsPhrase(workflow)}
               </p>
-              <div className="flex flex-wrap gap-1.5">
+              <ul className="flex flex-wrap gap-x-3 gap-y-1.5">
                 {workflow.stages.map(stage => (
-                  <StagePill
+                  <li
                     key={stage.name}
-                    label={stage.label}
-                    colour={undefined}
-                  />
+                    className="inline-flex items-center gap-1.5 text-sm"
+                  >
+                    <StagePill label={stage.label} colour={undefined} />
+                    <span className="font-medium">
+                      {workflow.stageCounts[stage.name] ?? 0}
+                      <span className="sr-only"> documents</span>
+                    </span>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </div>
             <ChevronRight
               aria-hidden="true"

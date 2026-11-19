@@ -850,6 +850,8 @@ await nextly.workflows.settings.update({
 });
 ```
 
+`list` answers the same items as `GET /admin/api/workflows`, `configPath`, the diagram's data and `stageCounts` included, and `settings.read` the same settings, `defaultReviewerHolds` included.
+
 `stepMany` and `assignMany` answer `{ moved, refused }` and `{ assigned, refused }`, each refusal naming its `document` as you named it (`{ collection, id }`, or a Single's `{ single }` alone), its `code` and its `message`. The other shapes and refusals are those of the REST routes; see [Workflows](/docs/api-reference/rest-api#workflows-experimental).
 
 ## Other namespaces

@@ -5,8 +5,8 @@
  * the permission it needs, and the roles holding that permission on every
  * collection and Single the workflow is attached to. A step with a permission
  * of its own has "Change", which opens the roles dialog, for a reader who may
- * change grants; any other step needs only the collections' own permissions,
- * granted on each role, and has nothing to change here.
+ * change grants; any other step needs the collections' own update or publish,
+ * named here and granted on each role, and has nothing to change here.
  */
 
 import { Button } from "@nextlyhq/ui";
@@ -73,6 +73,7 @@ export function StepGrantsTable({
                   <span className="block">{step.label}</span>
                   <span className="block text-xs font-normal text-muted-foreground">
                     {listPhrase(step.from.map(labelOf))} → {labelOf(step.to)}
+                    {step.commentRequired ? " · comment required" : ""}
                   </span>
                 </th>
                 <td className="py-3 pr-4">
@@ -82,7 +83,10 @@ export function StepGrantsTable({
                     </code>
                   ) : (
                     <span className="text-muted-foreground">
-                      The collection&apos;s own permissions
+                      <code className="rounded bg-muted px-1.5 py-0.5 text-xs text-foreground">
+                        {step.permission}
+                      </code>{" "}
+                      on each collection
                     </span>
                   )}
                 </td>

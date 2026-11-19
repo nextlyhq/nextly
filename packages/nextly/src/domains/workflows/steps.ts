@@ -370,9 +370,15 @@ export function allowsPublish(workflow: Workflow, stage: string): boolean {
 /**
  * The action a step needs: the one it names, else `publish` into a stage that allows publishing,
  * else `update`. Kept as the action, since a permission's slug cannot be split back into its
- * action and resource (a resource may itself hold a hyphen).
+ * action and resource (a resource may itself hold a hyphen). Exported so Settings shows the
+ * permission each step needs from this one answer.
+ *
+ * @experimental
  */
-function stepAction(workflow: Workflow, step: ResolvedWorkflowStep): string {
+export function stepAction(
+  workflow: Workflow,
+  step: ResolvedWorkflowStep
+): string {
   if (step.permission !== null) return step.permission;
   return allowsPublish(workflow, step.to) ? "publish" : "update";
 }

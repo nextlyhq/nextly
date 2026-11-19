@@ -528,10 +528,13 @@ export const workflowOperations = {
     return { assigned, refused: namedRefusals(refused) };
   },
 
-  /** The registered workflows, each with its stages, steps and attachments. */
+  /**
+   * The registered workflows, each with what its diagram draws, its attachments and how many
+   * documents are recorded in each stage.
+   */
   async list(asker: WorkflowAsker) {
     await assertGrant(asker, SETTINGS_READ);
-    const items = listWorkflowSummaries();
+    const items = await listWorkflowSummaries(adapter());
     return {
       items,
       meta: {

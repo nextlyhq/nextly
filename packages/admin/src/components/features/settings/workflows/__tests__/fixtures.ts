@@ -2,7 +2,9 @@
  * A workflow and its settings as the server answers them, for the settings
  * screen's tests: `editorial`, where Writing → Legal check → Cleared, Legal
  * check can be parked On hold, and Clear and Bounce share the permission
- * `sign-off`. Send, Park, Resume and Fast-track name none of their own.
+ * `sign-off`. Send, Park, Resume and Fast-track name none of their own. As the
+ * server lists it: each stage's primary step and whether it is a review stage,
+ * each step's permission and comment rule, and the documents in each stage.
  */
 import type { Role } from "@admin/types/entities";
 import type { UserApiResponse } from "@admin/types/user";
@@ -15,10 +17,34 @@ export const EDITORIAL: WorkflowSummary = {
   slug: "editorial",
   label: "Editorial",
   stages: [
-    { name: "writing", label: "Writing", allowsPublish: false },
-    { name: "legal", label: "Legal check", allowsPublish: false },
-    { name: "hold", label: "On hold", allowsPublish: false },
-    { name: "cleared", label: "Cleared", allowsPublish: true },
+    {
+      name: "writing",
+      label: "Writing",
+      allowsPublish: false,
+      primaryStep: "send",
+      review: false,
+    },
+    {
+      name: "legal",
+      label: "Legal check",
+      allowsPublish: false,
+      primaryStep: "clear",
+      review: true,
+    },
+    {
+      name: "hold",
+      label: "On hold",
+      allowsPublish: false,
+      primaryStep: "resume",
+      review: true,
+    },
+    {
+      name: "cleared",
+      label: "Cleared",
+      allowsPublish: true,
+      primaryStep: "bounce",
+      review: false,
+    },
   ],
   steps: [
     {
@@ -29,6 +55,8 @@ export const EDITORIAL: WorkflowSummary = {
       to: "legal",
       primary: true,
       grantable: false,
+      permission: "update",
+      commentRequired: false,
     },
     {
       name: "clear",
@@ -38,6 +66,8 @@ export const EDITORIAL: WorkflowSummary = {
       to: "cleared",
       primary: true,
       grantable: true,
+      permission: "sign-off",
+      commentRequired: false,
     },
     {
       name: "bounce",
@@ -47,6 +77,8 @@ export const EDITORIAL: WorkflowSummary = {
       to: "writing",
       primary: false,
       grantable: true,
+      permission: "sign-off",
+      commentRequired: true,
     },
     {
       name: "park",
@@ -56,6 +88,8 @@ export const EDITORIAL: WorkflowSummary = {
       to: "hold",
       primary: false,
       grantable: false,
+      permission: "update",
+      commentRequired: true,
     },
     {
       name: "resume",
@@ -65,6 +99,8 @@ export const EDITORIAL: WorkflowSummary = {
       to: "legal",
       primary: true,
       grantable: false,
+      permission: "update",
+      commentRequired: false,
     },
     {
       name: "fastTrack",
@@ -74,8 +110,14 @@ export const EDITORIAL: WorkflowSummary = {
       to: "cleared",
       primary: false,
       grantable: false,
+      permission: "publish",
+      commentRequired: false,
     },
   ],
+  onEdit: { to: "legal", exemptFields: [] },
+  afterPublish: "writing",
+  stageCounts: { writing: 4, legal: 2, hold: 0, cleared: 1 },
+  configPath: "src/nextly.config.ts",
   collections: ["posts", "pages"],
   singles: ["banner"],
 };
@@ -103,6 +145,7 @@ export function settingsOf(
         sharesPermissionWith: ["clear"],
       },
     },
+    defaultReviewerHolds: {},
     ...overrides,
   };
 }

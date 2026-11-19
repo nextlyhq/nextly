@@ -1,15 +1,16 @@
 /**
  * What the settings screen reads off a workflow and its settings, without
- * rendering: a stage's primary step (its only step out, or the one marked),
- * the review stages, which permissions no role holds, who may be offered as a
- * default reviewer and whether a role reviewer still holds the step, and where
- * a refused change lands.
+ * rendering: a stage's primary step and the review stages as the server names
+ * them, which permissions no role holds, who may be offered as a default
+ * reviewer, which default reviewers the server says no longer hold their step,
+ * and where a refused change lands.
  *
- * The plausible broken readings: a primary step taken from the `primary` flag
- * alone (missing a stage's only step), a notice per step rather than per
- * permission, reviewers offered from every role, the super-admin role left out
- * of who holds a step, and an issue path keyed in full so `labels.x.colour`
- * misses the label row.
+ * The plausible broken readings: a primary step taken from the steps' own
+ * `primary` flag (missing a stage's only step), a notice per step rather than
+ * per permission, reviewers offered from every role, the super-admin role left
+ * out of who holds a step, a stale reviewer judged from the grants (blind to a
+ * person, or to a deactivated one), and an issue path keyed in full so
+ * `labels.x.colour` misses the label row.
  */
 import { describe, expect, it } from "vitest";
 
@@ -19,15 +20,15 @@ import {
   primaryStepOf,
   reviewStages,
   reviewerOptions,
-  reviewerStillHolds,
+  staleReviewers,
   unheldPermissions,
 } from "../workflow-settings-model";
 
 import { EDITORIAL, ROLES, USERS, settingsOf } from "./fixtures";
 
 describe("the workflow settings model", () => {
-  it("takes a stage's only step out as its primary step, or the one marked when there are several", () => {
-    // Writing's only step is marked; Cleared's only step (Bounce) is not.
+  it("takes a stage's primary step as the server names it, an only step out the code does not mark included", () => {
+    // Cleared's only step (Bounce) is not marked primary in code; the server names it.
     expect(primaryStepOf(EDITORIAL, "cleared")?.name).toBe("bounce");
     expect(primaryStepOf(EDITORIAL, "legal")?.name).toBe("clear");
     expect(primaryStepOf(EDITORIAL, "hold")?.name).toBe("resume");
@@ -93,36 +94,20 @@ describe("the workflow settings model", () => {
     ]);
   });
 
-  it("says a role reviewer no longer holds the step once it is not granted it, and cannot tell for a person", () => {
-    const reviewing = (kind: "role" | "user", id: string) =>
-      settingsOf({ defaultReviewers: { legal: { kind, id } } });
+  it("says which default reviewers no longer hold their step, as the server answers it for a person or a role", () => {
     expect(
-      reviewerStillHolds(
+      staleReviewers(
         EDITORIAL,
-        reviewing("role", "r-editors"),
-        ROLES,
-        "legal"
+        settingsOf({
+          defaultReviewers: {
+            legal: { kind: "user", id: "u-rita" },
+            hold: { kind: "role", id: "r-editors" },
+          },
+          defaultReviewerHolds: { legal: "deactivated", hold: "holds" },
+        })
       )
-    ).toBe(false);
-    expect(
-      reviewerStillHolds(
-        EDITORIAL,
-        reviewing("role", "r-lawyers"),
-        ROLES,
-        "legal"
-      )
-    ).toBe(true);
-    expect(
-      reviewerStillHolds(
-        EDITORIAL,
-        reviewing("role", "r-admin"),
-        ROLES,
-        "legal"
-      )
-    ).toBe(true);
-    expect(
-      reviewerStillHolds(EDITORIAL, reviewing("user", "u-ed"), ROLES, "legal")
-    ).toBeNull();
+    ).toEqual([{ stage: "legal", answer: "deactivated" }]);
+    expect(staleReviewers(EDITORIAL, settingsOf())).toEqual([]);
   });
 
   it("keys a refused change by the setting its path names, whatever part of it follows", () => {
@@ -138,16 +123,20 @@ describe("the workflow settings model", () => {
     });
   });
 
-  it("tells the workflow as one sentence per stage, each step and where it leads", () => {
+  it("tells the workflow as one sentence per stage, its documents, each step and where it leads, then where edits and publishes go", () => {
     const sentences = diagramSentences(
       EDITORIAL,
       stage => EDITORIAL.stages.find(each => each.name === stage)!.label
     );
     expect(sentences[1]).toBe(
-      "Legal check: Clear moves it to Cleared; Bounce moves it to Writing; Park moves it to On hold."
+      "Legal check, 2 documents: Clear moves it to Cleared; Bounce moves it to Writing, with a comment; Park moves it to On hold, with a comment."
     );
     expect(sentences[3]).toBe(
-      "Cleared (may be published): Bounce moves it to Writing."
+      "Cleared (may be published), 1 document: Bounce moves it to Writing, with a comment."
     );
+    expect(sentences.slice(4)).toEqual([
+      "An edit to approved content returns it to Legal check.",
+      "Once published, the next draft starts at Writing.",
+    ]);
   });
 });

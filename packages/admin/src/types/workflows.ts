@@ -23,6 +23,10 @@ export interface WorkflowStageSummary {
   /** The label the code gives it. */
   label: string;
   allowsPublish: boolean;
+  /** The step its default reviewer must hold: its only step out, or the one marked primary. */
+  primaryStep: string | null;
+  /** Whether it is a review stage: one with a step of kind approve out of it. */
+  review: boolean;
 }
 
 /** A step of a registered workflow. */
@@ -36,17 +40,35 @@ export interface WorkflowStepSummary {
   primary: boolean;
   /** Whether which roles hold it is a setting: a step naming a permission of its own. */
   grantable: boolean;
+  /** The action taking it needs: its own, or the collection's `update` or `publish`. */
+  permission: string;
+  commentRequired: boolean;
 }
 
 /** A registered workflow, as `GET /workflows` lists it. */
 export interface WorkflowSummary {
   slug: string;
   label: string;
+  /** The configuration file registering it, relative to the project root, or null. */
+  configPath: string | null;
   stages: WorkflowStageSummary[];
   steps: WorkflowStepSummary[];
+  /** Where an edit to approved content moves it, and the fields whose edits keep the approval. */
+  onEdit: { to: string; exemptFields: string[] };
+  /** The stage a part's next draft starts at once it is published. */
+  afterPublish: string;
+  /** How many documents are recorded in each stage, by stage name. */
+  stageCounts: Record<string, number>;
   collections: string[];
   singles: string[];
 }
+
+/** Whether a person or role holds a step: `holds`, or why not. */
+export type WorkflowHolderAnswer =
+  | "holds"
+  | "lacks"
+  | "not-found"
+  | "deactivated";
 
 /** A default reviewer: a person or a whole role. */
 export interface WorkflowAssignee {
@@ -91,6 +113,8 @@ export interface WorkflowSettingsView {
   /** The roles holding each grantable step everywhere, super-admin left out. */
   grants: Record<string, string[]>;
   grantableSteps: Record<string, GrantableStepView>;
+  /** Whether each stage's default reviewer still holds its primary step everywhere. */
+  defaultReviewerHolds: Record<string, WorkflowHolderAnswer>;
 }
 
 /**

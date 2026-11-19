@@ -3,8 +3,8 @@
 /**
  * What needs an admin's attention on a workflow, above its settings:
  * - a step no role holds (only super admins can take it): an alert;
- * - a default reviewer who no longer holds their stage's primary step: a
- *   warning, announced politely;
+ * - a default reviewer who no longer holds their stage's primary step, a
+ *   person or a role, as the server answers it: a warning, announced politely;
  * - a role holding a step on some collections only: a note, since saving that
  *   step's roles takes it from the role unless it is ticked.
  */
@@ -26,25 +26,33 @@ import {
   primaryStepOf,
   stageLabel,
   unheldPermissions,
+  type StaleReviewer,
 } from "./workflow-settings-model";
+
+/** Why a default reviewer no longer holds their step, as a clause. */
+const WHY: Record<StaleReviewer["answer"], (step: string) => string> = {
+  lacks: step => `no longer holds ${step}`,
+  deactivated: () => "is deactivated",
+  "not-found": () => "no longer exists",
+};
 
 export interface WorkflowNoticesProps {
   workflow: WorkflowSummary;
   settings: WorkflowSettingsView;
-  /** The review stages whose default reviewer no longer holds the primary step. */
-  staleStages: readonly string[];
+  /** The default reviewers who no longer hold their stage's primary step, and why. */
+  stale: readonly StaleReviewer[];
   nameOf: (assignee: WorkflowAssignee) => string;
 }
 
 export function WorkflowNotices({
   workflow,
   settings,
-  staleStages,
+  stale,
   nameOf,
 }: WorkflowNoticesProps): React.JSX.Element | null {
   const unheld = unheldPermissions(workflow, settings);
   const partly = partlyHeldPermissions(workflow, settings);
-  if (unheld.length === 0 && staleStages.length === 0 && partly.length === 0) {
+  if (unheld.length === 0 && stale.length === 0 && partly.length === 0) {
     return null;
   }
   return (
@@ -67,17 +75,18 @@ export function WorkflowNotices({
           </Alert>
         );
       })}
-      {staleStages.map(stage => {
+      {stale.map(({ stage, answer }) => {
         const reviewer = settings.defaultReviewers[stage];
-        const primary = primaryStepOf(workflow, stage);
-        if (!reviewer || !primary) return null;
+        const step = primaryStepOf(workflow, stage)?.label ?? "its step";
+        if (!reviewer) return null;
         return (
           <Alert key={stage} variant="warning" role="status">
             <AlertTriangle aria-hidden="true" className="size-4" />
             <AlertDescription>
               The default reviewer of {stageLabel(workflow, settings, stage)},{" "}
-              {nameOf(reviewer)}, no longer holds {primary.label}. Choose
-              another default reviewer, or give them {primary.label} again.
+              {nameOf(reviewer)}, {WHY[answer](step)}. Choose another default
+              reviewer{answer === "lacks" ? `, or give them ${step} again` : ""}
+              .
             </AlertDescription>
           </Alert>
         );
