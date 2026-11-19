@@ -86,7 +86,7 @@ import {
 } from "./pending-entities";
 import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
-import { reachStopPoint } from "./stop-points";
+import { isStoppedAtPoint, reachStopPoint } from "./stop-points";
 
 /**
  * The logging surface a CALLER supplies, structural so the CLI's own context
@@ -566,9 +566,10 @@ async function leftoversOfDroppedEntities(
         : { prepareTables: deps.prepareLeftoverTables }),
     });
   } catch (error) {
-    // A run that lost the schema lock stops; anything else costs only this
-    // removal, which the next run tries again, and is owed to it.
-    if (isSchemaLockLost(error)) throw error;
+    // A run that lost the schema lock stops, as does a test's stop at a point
+    // (`stop-points.ts`); anything else costs only this removal, which the
+    // next run tries again, and is owed to it.
+    if (isSchemaLockLost(error) || isStoppedAtPoint(error)) throw error;
     logger.warn(
       `Could not remove what deleted entities left: ${
         error instanceof Error ? error.message : String(error)

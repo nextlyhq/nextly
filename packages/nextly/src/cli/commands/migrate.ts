@@ -129,6 +129,7 @@ import {
   type AppMigrationStanding,
   type FirstRun,
 } from "../../domains/schema/migrate/first-run";
+import { refuseForkedHistory } from "../../domains/schema/migrate/history-line";
 import {
   outsideTransactionNotice,
   runMigrationStatements,
@@ -169,7 +170,6 @@ import {
   asServiceLogger,
   reconcileMigrationMetadata,
 } from "../../domains/schema/migrate/reconcile-metadata";
-import { refuseForkedHistory } from "../../domains/schema/migrate/history-line";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
   findRegistryDisagreements,
@@ -5306,7 +5306,6 @@ export async function runFileMigrations(args: {
         }),
       });
       // The file and its ledger row have committed (`stop-points.ts`).
-      await reachStopPoint(`${filename}: recorded applied`);
       applied++;
       lastApplied = filename;
       appliedFiles.push(filename);
@@ -5322,6 +5321,9 @@ export async function runFileMigrations(args: {
           previous,
         });
       }
+      // The file, its ledger row and what applying it marks have committed (`stop-points.ts`): a
+      // later run passes over a recorded file, so nothing of it may be left for one.
+      await reachStopPoint(`${filename}: recorded applied`);
       before = target;
       beforeContributions = targetFile?.contributions ?? {};
       beforeFile = targetFile;

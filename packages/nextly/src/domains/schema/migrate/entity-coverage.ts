@@ -20,11 +20,13 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { chooseRegistryTable } from "../../field-groups/storage/resolve-storage-names";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectTableNames } from "../pipeline/diff/introspect-live";
 import { collectionOwnTables } from "../services/field-column-descriptor";
 import { readIdentifierCaseRules } from "../utils/read-identifier-case";
 import {
+  identifierCaseRules,
   indexCatalog,
   resolveCatalogName,
   type CatalogIndex,
@@ -274,9 +276,25 @@ export async function readCoveredEntities(
   } catch {
     return [];
   }
+  // A database may hold the field-group registry under both names, as a stopped storage
+  // migration leaves it: only the one every reader of it uses is read, so a field group is never
+  // read twice and made to dispute its own table.
+  const fieldGroupRegistry = chooseRegistryTable(
+    [...present],
+    // The names are read lower-cased above, so they are compared folded on every server.
+    dialect === "mysql"
+      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+      : identifierCaseRules({ dialect })
+  ).name;
   const entities: CoveredEntity[] = [];
   for (const registry of REGISTRIES) {
     if (!present.has(registry.table)) continue;
+    if (
+      registry.kind === "fieldGroup" &&
+      registry.table !== fieldGroupRegistry
+    ) {
+      continue;
+    }
     let rows: RegistryRow[];
     try {
       rows = await querySqlRows<RegistryRow>(

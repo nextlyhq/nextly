@@ -28,6 +28,7 @@ import {
   retiredByRun,
   withEntityCoverage,
 } from "../entity-shared-rows";
+import { coveredEntitiesOf } from "../../migrate-create/generate";
 
 const manyToMany = (name: string, target: string, junctionTable?: string) => ({
   name,
@@ -720,5 +721,68 @@ describe("a field group the run drops", () => {
     } finally {
       rmSync(meta, { recursive: true, force: true });
     }
+  });
+});
+
+describe("a field group's registry and table, under either storage naming", () => {
+  const sqlite = new SQLiteDialect();
+
+  it("reads the field groups from the one registry every reader uses, where both names stand", async () => {
+    // A stopped storage migration leaves both: the same field group in each.
+    const db = {
+      all: (query: SQL) => {
+        const { sql: text } = sqlite.sqlToQuery(query);
+        if (text.includes("sqlite_master")) {
+          return [
+            { name: "dynamic_collections" },
+            { name: "dynamic_singles" },
+            { name: "dynamic_components" },
+            { name: "dynamic_field_groups" },
+          ];
+        }
+        const registry = /FROM "([^"]+)"/.exec(text)?.[1];
+        return registry === "dynamic_components" ||
+          registry === "dynamic_field_groups"
+          ? [
+              {
+                slug: "seo",
+                table_name: "comp_seo",
+                fields: [],
+                source: "code",
+              },
+            ]
+          : [];
+      },
+    };
+    const entities = await readCoveredEntities(db, "sqlite");
+    expect(
+      entities.filter(entity => entity.kind === "fieldGroup")
+    ).toHaveLength(1);
+    // So the field group, alone in naming its table, owns it.
+    expect(entityOwners(entities).mainOf("comp_seo")?.slug).toBe("seo");
+  });
+
+  it("names a recorded field group's table as the last snapshot records it", () => {
+    const record = {
+      collections: {},
+      singles: {},
+      fieldGroups: { seo: { source: "code", settings: { slug: "seo" } } },
+    };
+    const args = {
+      collections: [],
+      singles: [],
+      components: [],
+    } as unknown as Parameters<typeof coveredEntitiesOf>[0];
+    // After the storage migration the snapshot holds `fg_seo`; before it, `comp_seo`.
+    expect(
+      coveredEntitiesOf(args, record as never, new Set(["fg_seo"])).map(
+        e => e.table
+      )
+    ).toEqual(["fg_seo"]);
+    expect(
+      coveredEntitiesOf(args, record as never, new Set(["comp_seo"])).map(
+        e => e.table
+      )
+    ).toEqual(["comp_seo"]);
   });
 });
