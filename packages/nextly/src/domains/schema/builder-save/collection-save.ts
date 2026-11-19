@@ -111,7 +111,11 @@ import {
   type AddedStatements,
   type GenerateArgs,
 } from "../migrate-create/generate";
-import { loadLatestSnapshot } from "../migrate-create/snapshot-io";
+import {
+  type LatestSnapshot,
+  loadLatestSnapshot,
+  parseSnapshotFile,
+} from "../migrate-create/snapshot-io";
 import { isWriterOvertaken } from "../migrate-create/writer-hold";
 import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
 import { diffSnapshots } from "../pipeline/diff/diff";
@@ -372,6 +376,20 @@ export async function writeCollectionSave(
     inLastTransaction?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult> {
+  // A drift refusal leaves the save's files withdrawn, so it is told with the Builder's way on.
+  try {
+    return await writeCollectionSaveOnce(deps, save, options);
+  } catch (error) {
+    throw asBuilderSaveDrift(error);
+  }
+}
+
+/** `writeCollectionSave`'s save, made once. */
+async function writeCollectionSaveOnce(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  options: Parameters<typeof writeCollectionSave>[2] = {}
+): Promise<CollectionSaveResult> {
   // The save's record that it is in progress is cleared when this scope ends, or the caller's
   // where one is open around it (`withSaveRecords`), as its outcome allows.
   return withSaveRecords(async () => {
@@ -432,6 +450,46 @@ export async function writeCollectionSave(
       throw error;
     }
   }, deps.logger);
+}
+
+/**
+ * `error` told with the Builder's way on (`migrationDriftError`'s `builderSave`) where it is a
+ * drift refusal naming its differences: the file road's reconcile, the push's check before it
+ * (`refuseDriftBeforePush`) and the translations table's (`refuseCompanionDrift`). Each refuses
+ * before anything runs, and the save withdraws its files, so `nextly migrate`'s recoveries, which
+ * name the file or compare the definitions with the history, have nothing to act on. Any other
+ * error is answered as it is: a database never adopted has its own recovery, and a refusal after
+ * the push (`recordWhatWasPushed`) keeps the files and names the one to record.
+ */
+function asBuilderSaveDrift(error: unknown): unknown {
+  if (!NextlyError.is(error) || error.code !== "NEXTLY_MIGRATION_DRIFT") {
+    return error;
+  }
+  const context = error.logContext ?? {};
+  const driftItems: unknown = context.driftItems;
+  if (
+    !Array.isArray(driftItems) ||
+    !driftItems.every(isDriftItem) ||
+    context.unadoptedDatabase === true ||
+    typeof context.migration !== "string"
+  ) {
+    return error;
+  }
+  return migrationDriftError({
+    migration: context.migration,
+    file: `${context.migration}.sql`,
+    driftItems,
+    builderSave: true,
+  });
+}
+
+/** Whether `value` is a drift line as `migrationDriftError` records it. */
+function isDriftItem(value: unknown): value is DriftItem {
+  if (typeof value !== "object" || value === null) return false;
+  const { kind, detail } = value as { kind?: unknown; detail?: unknown };
+  return (
+    (kind === "+" || kind === "-" || kind === "?") && typeof detail === "string"
+  );
 }
 
 /**
@@ -556,7 +614,9 @@ async function writeSave(
   // the file's statements are planned from the history's record of it, and a push changes it too,
   // after which only the main table is compared (`recordWhatWasPushed`).
   if (options.runsFile === true || options.pushes === true) {
-    await refuseCompanionDrift(deps, save, plan.table);
+    await refuseCompanionDrift(deps, save, plan.table, {
+      runsFile: options.runsFile === true,
+    });
   }
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
@@ -1603,11 +1663,17 @@ function collectionOf(save: CollectionSave): UiSchemaEntity {
  * translated column to tell it from a missing one, and a file planned from a history that records
  * none creates it again. Names are compared as the dialect compares them (`identifierKey`), since
  * MySQL and SQLite take `TITLE` and `title` for one column, and the file's statements would too.
+ *
+ * A translated column the main table keeps is counted only where the save runs its file
+ * (`runsFile`), which is planned from the history and would add the column again. Unattended
+ * provisioning (boot, `db:sync`, the development reload) keeps such columns by design, and a push
+ * plans the database as it stands, restoring a kept column's value rather than adding it.
  */
 async function companionDriftItems(
   deps: CollectionSaveDeps,
   table: string,
-  recordedTable: TableSpec
+  recordedTable: TableSpec,
+  runsFile: boolean
 ): Promise<DriftItem[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const key = (name: string) => identifierKey(dialect, name);
@@ -1641,10 +1707,10 @@ async function companionDriftItems(
   );
   const liveKeys = new Set(live.map(key));
   // A translated column the main table holds too, where the history records it on the
-  // translations table alone: turning translation off would add it to the main table again.
+  // translations table alone: a file turning translation off would add it to the main table again.
   const recordedOnMain = new Set(recordedTable.columns.map(c => key(c.name)));
   const onMain =
-    recorded.length === 0
+    !runsFile || recorded.length === 0
       ? []
       : (await liveColumnsOf(deps.adapter, table))
           .map(c => c.name)
@@ -1752,10 +1818,10 @@ async function companionIndexDriftItems(
  * migration (`NEXTLY_MIGRATION_DRIFT`), naming each column the database has
  * that the history does not (`+`) and each it lacks (`-`). A translated
  * column the main table holds as well, which the history records on the
- * translations table alone, is drift too: turning translation off would add
- * it to the main table again. So are a translations table there or missing
- * against the history, and a per-language unique index that is
- * (`companionDriftItems`).
+ * translations table alone, is drift too where the save runs its file:
+ * turning translation off would add it to the main table again. So are a
+ * translations table there or missing against the history, and a
+ * per-language unique index that is (`companionDriftItems`).
  *
  * Judged only for a save that is translated before or after, and only where
  * the newest snapshot records the table and says which of its tables were
@@ -1765,12 +1831,13 @@ async function companionIndexDriftItems(
 async function refuseCompanionDrift(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  table: string
+  table: string,
+  road: { runsFile: boolean }
 ): Promise<void> {
   if (save.previous?.localized !== true && save.entity?.localized !== true) {
     return;
   }
-  const latest = await loadLatestSnapshot(join(deps.migrationsDir, "meta"));
+  const latest = await newestReachedSnapshot(deps);
   const recordedTable = latest?.data.snapshot.tables.find(
     t => t.name === table
   );
@@ -1780,7 +1847,12 @@ async function refuseCompanionDrift(
     latest.data.snapshot.tables.some(t => t.localized === true);
   if (!recordsTranslations) return;
 
-  const driftItems = await companionDriftItems(deps, table, recordedTable);
+  const driftItems = await companionDriftItems(
+    deps,
+    table,
+    recordedTable,
+    road.runsFile
+  );
   if (driftItems.length === 0) return;
   const migration = latest.filename.replace(/\.snapshot\.json$/, "");
   throw migrationDriftError({
@@ -1788,6 +1860,42 @@ async function refuseCompanionDrift(
     file: join(deps.migrationsDir, `${migration}.sql`),
     driftItems,
   });
+}
+
+/**
+ * The newest snapshot this database's history reaches: the newest at or before the newest file the
+ * ledger records applied. A file after that one is recorded applied nowhere. A pushed save refused
+ * part-way keeps its files so, and the database then stands between the applied history and that
+ * file's target: judged against the kept file, the table the save left would read as drift, and
+ * no later save could get past it. Where the ledger records no file applied, the newest snapshot
+ * stands.
+ */
+async function newestReachedSnapshot(
+  deps: CollectionSaveDeps
+): Promise<LatestSnapshot | null> {
+  const metaDir = join(deps.migrationsDir, "meta");
+  const files = await sqlFiles(deps.migrationsDir);
+  const repo = new SchemaEventsRepository(
+    deps.adapter.getDrizzle(),
+    deps.adapter.getCapabilities().dialect
+  );
+  let reached: string | undefined;
+  for (const filename of [...files].reverse()) {
+    if (await repo.isFileApplied(filename)) {
+      reached = filename;
+      break;
+    }
+  }
+  if (reached === undefined) return loadLatestSnapshot(metaDir);
+  const upTo = reached;
+  for (const filename of files.filter(f => f <= upTo).reverse()) {
+    const name = filename.replace(/\.sql$/, ".snapshot.json");
+    const content = await readIfPresent(join(metaDir, name));
+    if (content !== undefined) {
+      return { filename: name, data: parseSnapshotFile(content, name) };
+    }
+  }
+  return null;
 }
 
 /** A slug as a migration name spells it. */
@@ -2489,6 +2597,12 @@ async function liveTable(
  * (`NEXTLY_MIGRATION_DRIFT`, naming each difference). Pushed over such a table, the change would
  * stand in the database while no file could be recorded for it. A save that adopts its table
  * writes a file describing the table as it stands, so it has nothing to judge.
+ *
+ * Two differences are not judged, since neither can leave the push's change unrecorded:
+ * - A table the database lacks. The push builds it whole (a Single's save over its missing table
+ *   plans the whole table again), and the table it leaves is compared with the save's file before
+ *   anything is recorded (`recordWhatWasPushed`).
+ * - A translated column the main table keeps (`withoutKeptTranslatedColumns`).
  */
 async function refuseDriftBeforePush(
   deps: CollectionSaveDeps,
@@ -2497,8 +2611,14 @@ async function refuseDriftBeforePush(
 ): Promise<void> {
   const first = files.change[0];
   if (files.adopt !== undefined || first === undefined) return;
+  if (!(await deps.adapter.tableExists(table))) return;
   const before = await scopedSnapshotBefore(deps, first, table);
-  const live = await liveTable(deps, table);
+  const live = withoutKeptTranslatedColumns(
+    deps,
+    await liveTable(deps, table),
+    before,
+    table
+  );
   if (snapshotsEquivalent(live, before)) return;
   const migration = first.replace(/\.sql$/, "");
   throw migrationDriftError({
@@ -2506,6 +2626,38 @@ async function refuseDriftBeforePush(
     file: join(deps.migrationsDir, first),
     driftItems: diffSnapshots(before, live).map(toDriftItem),
   });
+}
+
+/**
+ * `live` without the columns of `table` that `before` records as translated (on the translations
+ * table alone) and the main table keeps as well. Unattended provisioning (boot, `db:sync`, the
+ * development reload) seeds a translations table without dropping the columns it copied from, by
+ * design, and a push plans the database as it stands: it restores a kept column's value rather
+ * than adding the column again. Names are compared as the dialect compares them.
+ */
+function withoutKeptTranslatedColumns(
+  deps: CollectionSaveDeps,
+  live: NextlySchemaSnapshot,
+  before: NextlySchemaSnapshot,
+  table: string
+): NextlySchemaSnapshot {
+  const recorded = before.tables.find(t => t.name === table);
+  if (recorded?.localizedColumns === undefined) return live;
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const key = (name: string) => identifierKey(dialect, name);
+  const onMain = new Set(recorded.columns.map(c => key(c.name)));
+  const kept = new Set(
+    recorded.localizedColumns.map(key).filter(name => !onMain.has(name))
+  );
+  if (kept.size === 0) return live;
+  return {
+    ...live,
+    tables: live.tables.map(t =>
+      t.name !== table
+        ? t
+        : { ...t, columns: t.columns.filter(c => !kept.has(key(c.name))) }
+    ),
+  };
 }
 
 /**

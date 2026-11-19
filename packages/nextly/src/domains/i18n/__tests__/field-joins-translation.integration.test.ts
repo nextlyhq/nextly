@@ -81,6 +81,21 @@ function quote(dialect: TestDialect, name: string): string {
   return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 }
 
+/**
+ * A refused save's drift, told with the way on that works for a save, and no command: the save
+ * withdrew its files, so none is left for `nextly migrate:resolve` to record.
+ */
+function expectBuilderDriftWayOn(refusal: unknown): void {
+  // Read as text: a path that answers rather than throws hands its answer on in an Error.
+  const told = `${refusal instanceof Error ? refusal.message : String(refusal)} ${String(
+    (refusal as { publicMessage?: unknown } | undefined)?.publicMessage
+  )}`;
+  expect(told).toContain("schema drift detected");
+  expect(told).toContain("put the table back as the history records it");
+  expect(told).not.toContain("migrate:resolve");
+  expect(told).not.toContain("migrate:create");
+}
+
 describeEachDialect("a shared field that becomes translated", dialect => {
   let current: TestNextly;
 
@@ -455,7 +470,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     // apply with the column, and its value, still in place: the drop is never let through on a
     // move that did not happen. PostgreSQL takes the whole apply back; SQLite and MySQL keep the
     // companion's new, empty column, which the history does not record, so the next save is
-    // judged as drift before its push runs and refused with the recovery steps.
+    // judged as drift before its push runs and refused with the way on: that column, dropped by
+    // hand, lets the same save finish.
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
@@ -489,16 +505,15 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     );
 
     if (leftColumn) {
-      const told = `${retried instanceof Error ? retried.message : String(retried)} ${String(
-        (retried as { publicMessage?: unknown } | undefined)?.publicMessage
-      )}`;
-      expect(told).toContain("schema drift detected");
-      expect(told).toContain("pnpm nextly db:sync");
-      expect(told).toContain("pnpm nextly migrate:resolve --applied");
+      expectBuilderDriftWayOn(retried);
       expect(await mainHeading("dc_posts", id)).toBe("Hello");
-      return;
+      await query(
+        `ALTER TABLE ${quote(dialect, "dc_posts_locales")} DROP COLUMN ${quote(dialect, "heading")}`
+      );
+      await dialog.change(TRANSLATED);
+    } else {
+      expect(retried).toBeUndefined();
     }
-    expect(retried).toBeUndefined();
     expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
     expect(await readCollection(id)).toBe("Hello");
   });
@@ -1000,15 +1015,16 @@ describeEachDialect("a shared field that becomes translated", dialect => {
         expect(await mainHeading(table, id)).toBe("Hello");
         return;
       }
-      // Read as text: a path that answers rather than throws hands its answer on in an Error.
-      const told = `${refusal instanceof Error ? refusal.message : String(refusal)} ${String(
-        (refusal as { publicMessage?: unknown } | undefined)?.publicMessage
-      )}`;
-      expect(told).toContain("schema drift detected");
-      expect(told).toContain("pnpm nextly db:sync");
-      expect(told).toContain("pnpm nextly migrate:resolve --applied");
+      expectBuilderDriftWayOn(refusal);
       expect(await mainHeading(table, id)).toBe("Hello");
       expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+
+      // The way on, followed: the default taken off by hand, and the same save made again.
+      await query(
+        `ALTER TABLE ${quote(dialect, table)} ALTER COLUMN ${quote(dialect, "heading")} DROP DEFAULT`
+      );
+      await change(TRANSLATED);
+      expect((await companionHeadings(table, id)).en).toBe("Hello");
     }
   );
 
