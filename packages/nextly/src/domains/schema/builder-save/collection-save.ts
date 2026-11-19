@@ -636,9 +636,11 @@ async function afterPartWayPush(
  *
  * Undefined, with nothing written, where the save is not one this can judge (`judgeableStop`), or
  * the table stands as no judgement explains. A failure reading what it judges from is answered
- * the same way, as nothing has been written yet. Any later failure, the transaction's included,
- * puts the stopped file, its snapshot and the definition back as the save left them, so the stop
- * stays as it was for `nextly migrate:resolve`, and is thrown.
+ * the same way, as nothing has been written yet. The stopped file and its snapshot are set aside,
+ * not deleted, until the replacement is recorded. Any later failure, the transaction's included,
+ * puts them and the definition back as the save left them, so the stop stays as it was for
+ * `nextly migrate:resolve`, and is thrown; one overtaken by another writer once the folder holds
+ * something new keeps them set aside instead, named in its refusal.
  */
 async function settleStoppedSave(
   deps: CollectionSaveDeps,
@@ -659,21 +661,20 @@ async function settleStoppedSave(
   }
   if (judged === undefined) return undefined;
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
-  // What the save left, read before anything of it is replaced, to be put back where the
-  // replacement cannot be recorded.
-  const left = {
-    definition: await readIfPresent(definitionPath),
-    files: await readSaveFiles(deps, written.files.change),
-  };
+  // The definition as the save left it, put back where the replacement cannot be recorded.
+  const definitionLeft = await readIfPresent(definitionPath);
+  const stopped = written.files.change;
   const replacement: string[] = [];
-  // The migration files once the stopped one is removed: one of the replacement's own name that is
-  // new against them was put in place, though its generation was refused before naming it.
-  let sqlAfterRemoval: string[] = [];
+  // The folder once the stopped file is set aside: an overtaken settle puts it back only where
+  // nothing is new against this, so nothing of the settle's can be standing beside it.
+  let sqlAside: string[] = [];
+  let snapshotsAside: string[] = [];
   try {
-    for (const filename of written.files.change) {
-      await removeFileAndSnapshot(deps, filename);
-    }
-    sqlAfterRemoval = await sqlFiles(deps.migrationsDir);
+    // Set aside, never deleted, while the settle's outcome is uncertain: under a name no migration
+    // listing reads, so a stop or an overtaking writer anywhere after leaves it on disk.
+    for (const filename of stopped) await setAside(deps, filename);
+    sqlAside = await sqlFiles(deps.migrationsDir);
+    snapshotsAside = await snapshotFiles(deps.migrationsDir);
     const settled = settledSaveOf(save, judged.applied, judged.report);
     const plan = await planSave(deps, settled);
     const files = await writeFiles(deps, settled, plan, names =>
@@ -693,81 +694,118 @@ async function settleStoppedSave(
         deps.adapter.getCapabilities().dialect
       );
       await recordUnits(units, repo);
-      for (const filename of written.files.change) {
+      for (const filename of stopped) {
         await settleAttempts(deps, repo, filename);
       }
       await onSettled(judged.report);
     });
   } catch (error) {
-    // Overtaken by another writer, nothing the other writer may already read is removed: a
-    // replacement put in place stays, with the definition, and the record that the save is in
-    // progress with it. The replacement is known by the files its generation named, or, where it
-    // was refused after publishing and before naming them, by a file of its own name new in the
-    // folder; another writer's files are not taken for it. Where none of it was put in place,
-    // the stopped file and its snapshot, removed first and perhaps applied in part, are written
-    // back, so no history the ledger names is lost.
-    const placed =
+    // Overtaken by another writer, the folder may hold the settle's replacement, published before
+    // its generation was refused and so never named, or the other writer's files, and nothing
+    // tells them apart: the stopped file stays set aside, with the record that the save is in
+    // progress, for the stop to be settled again with nothing lost. Only where nothing is new
+    // since it was set aside is it put back. Any other failure puts it back.
+    const keptAside =
       isWriterOvertaken(error) &&
       (replacement.length > 0 ||
-        (await replacementPlaced(deps, save, sqlAfterRemoval)));
-    if (!placed) await putBack(deps, left, replacement, definitionPath);
+        (await folderGrewSince(deps, sqlAside, snapshotsAside)));
+    if (keptAside) throw keptAsideError(error, stopped);
+    await putBack(
+      deps,
+      { definition: definitionLeft, files: stopped },
+      replacement,
+      definitionPath
+    );
     throw error;
+  }
+  // Recorded: the copies set aside go. One that cannot be removed is no migration any listing
+  // reads, and is named in the log.
+  for (const filename of stopped) {
+    await dropAside(deps, filename).catch((error: unknown) =>
+      deps.logger.warn(
+        `The stopped migration set aside as ${asideName(filename)} could not be removed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      )
+    );
   }
   return judged.report;
 }
 
+/** The name a stopped migration file is set aside under: one no migration listing reads. */
+function asideName(filename: string): string {
+  return `${filename}.stopped`;
+}
+
+/** Set a stopped migration file and its snapshot aside, under names no listing reads. */
+async function setAside(
+  deps: CollectionSaveDeps,
+  filename: string
+): Promise<void> {
+  await rename(
+    join(deps.migrationsDir, filename),
+    join(deps.migrationsDir, asideName(filename))
+  );
+  const snapshot = snapshotPathOf(deps, filename);
+  if (existsSync(snapshot)) await rename(snapshot, asideName(snapshot));
+}
+
+/** Put a stopped migration file and its snapshot back from where they were set aside. */
+async function restoreAside(
+  deps: CollectionSaveDeps,
+  filename: string
+): Promise<void> {
+  await rename(
+    join(deps.migrationsDir, asideName(filename)),
+    join(deps.migrationsDir, filename)
+  );
+  const snapshot = snapshotPathOf(deps, filename);
+  if (existsSync(asideName(snapshot))) {
+    await rename(asideName(snapshot), snapshot);
+  }
+}
+
+/** Remove a stopped migration file and its snapshot from where they were set aside. */
+async function dropAside(
+  deps: CollectionSaveDeps,
+  filename: string
+): Promise<void> {
+  await rm(join(deps.migrationsDir, asideName(filename)), { force: true });
+  await rm(asideName(snapshotPathOf(deps, filename)), { force: true });
+}
+
 /**
- * Whether the folder holds a migration file of the settle's replacement, by its name (the save's
- * entity and change, as `writeFiles` names it), that `before` did not: a folder that cannot be
- * read is taken as holding one, so nothing is written back over it.
+ * The refusal of a settle another writer overtook once the folder held something new: the stopped
+ * migration kept set aside, named, beside whatever the folder now holds.
  */
-async function replacementPlaced(
-  deps: CollectionSaveDeps,
-  save: CollectionSave,
-  before: readonly string[]
-): Promise<boolean> {
-  const own = `_${migrationSlug(save.slug)}_${save.change}.sql`;
-  try {
-    return (await sqlFiles(deps.migrationsDir)).some(
-      file => !before.includes(file) && file.endsWith(own)
-    );
-  } catch {
-    return true;
-  }
-}
-
-/** A migration file the save wrote, and its snapshot where it has one, as text. */
-interface SaveFileText {
-  filename: string;
-  sql: string;
-  snapshot: string | undefined;
-}
-
-/** The files `filenames` names, each with its snapshot, as they stand. */
-async function readSaveFiles(
-  deps: CollectionSaveDeps,
-  filenames: readonly string[]
-): Promise<SaveFileText[]> {
-  const files: SaveFileText[] = [];
-  for (const filename of filenames) {
-    files.push({
-      filename,
-      sql: await readFile(join(deps.migrationsDir, filename), "utf-8"),
-      snapshot: await readIfPresent(snapshotPathOf(deps, filename)),
-    });
-  }
-  return files;
+function keptAsideError(error: unknown, stopped: readonly string[]): unknown {
+  if (!NextlyError.is(error)) return error;
+  return NextlyError.serviceUnavailable({
+    publicMessage:
+      "Another migration writer took this project's migration files while a Builder save that " +
+      `stopped part way was being settled. Its stopped migration was kept, set aside as ${stopped
+        .map(asideName)
+        .join(
+          ", "
+        )}, beside the files the folder now holds. Compare the newest migrations with ` +
+      "it, then rename it back or remove it, and save again.",
+    logContext: {
+      reason: WRITER_HOLD_LOST_REASON,
+      keptAside: stopped.map(asideName),
+    },
+    cause: error,
+  });
 }
 
 /**
  * Put a stopped save back as it left itself, after a settle that could not record its
- * replacement: the replacement's files removed, the stopped file and its snapshot written again,
- * and the definition as the save wrote it. A failure here is logged; the settle's own is what is
+ * replacement: the replacement's files removed, the stopped file and its snapshot renamed back from
+ * where they were set aside, and the definition as the save wrote it. A failure here is logged; the settle's own is what is
  * thrown.
  */
 async function putBack(
   deps: CollectionSaveDeps,
-  left: { definition: string | undefined; files: readonly SaveFileText[] },
+  left: { definition: string | undefined; files: readonly string[] },
   replacement: readonly string[],
   definitionPath: string
 ): Promise<void> {
@@ -775,12 +813,7 @@ async function putBack(
     for (const filename of replacement) {
       await removeFileAndSnapshot(deps, filename);
     }
-    for (const { filename, sql, snapshot } of left.files) {
-      await writeAtomically(join(deps.migrationsDir, filename), sql);
-      if (snapshot !== undefined) {
-        await writeAtomically(snapshotPathOf(deps, filename), snapshot);
-      }
-    }
+    for (const filename of left.files) await restoreAside(deps, filename);
     if (left.definition === undefined) {
       await rm(definitionPath, { force: true });
     } else {
