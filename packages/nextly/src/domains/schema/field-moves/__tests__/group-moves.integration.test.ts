@@ -16,6 +16,7 @@
  * A move the save cannot keep the values of is refused before anything is written or run: the
  * definition, the migration files, the table and every entry stand as they were.
  */
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -448,6 +449,165 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(rows.map(row => row.summary)).toEqual(["First", "Second"]);
       expect(await required()).toBe(false);
+    });
+
+    it("undoes a move into a nested group with nextly migrate:down, each group as it was before", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      const hint: Field = { name: "hint", type: "text" };
+      await createPosts(t, SLUG, {
+        fields: [summary, group("meta", [NOTE, group("seo", [hint])])],
+      });
+      for (const slug of ["bare", "plain", "nested"]) {
+        await t.nextly.create({
+          collection: SLUG,
+          data: { title: slug, slug, summary: `${slug} summary` },
+        });
+      }
+      // No group at all, a group without the nested one, and one holding it: each kept as written.
+      for (const [slug, meta] of [
+        ["bare", "NULL"],
+        ["plain", `'{"note":"n"}'`],
+        ["nested", `'{"note":"n","seo":{"hint":"h"}}'`],
+      ] as const) {
+        await run(
+          t,
+          `UPDATE ${q(TABLE)} SET ${q("meta")} = ${meta} WHERE ${q("slug")} = '${slug}'`
+        );
+      }
+      const before = await storedGroups(t);
+      await save(
+        t,
+        [group("meta", [NOTE, group("seo", [hint, summary])])],
+        [{ from: ["summary"], to: ["meta", "seo", "summary"] }]
+      );
+      // The way in makes the containers it needs, for every entry.
+      expect((await storedGroups(t)).bare).toEqual({
+        seo: { summary: "bare summary" },
+      });
+
+      await migrateDown(t);
+
+      expect(await storedGroups(t)).toEqual(before);
+      const rows = await run<{ summary: string }>(
+        t,
+        `SELECT ${q("summary")} AS summary FROM ${q(TABLE)} ORDER BY ${q("slug")}`
+      );
+      expect(rows.map(row => row.summary)).toEqual([
+        "bare summary",
+        "nested summary",
+        "plain summary",
+      ]);
+    });
+
+    it("moves the media library's record of a use with the field, both ways", async () => {
+      const t = await boot(dialect);
+      await createPosts(t, SLUG, { fields: INSIDE });
+      const { item } = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one", meta: { summary: "First" } },
+      });
+      const entryId = String((item as { id: unknown }).id);
+      const now = new Date();
+      const mediaId = randomUUID();
+      await t.adapter.insert("media", {
+        id: mediaId,
+        filename: `${mediaId}.png`,
+        originalFilename: "used.png",
+        mimeType: "image/png",
+        size: 1,
+        url: `/uploads/${mediaId}.png`,
+        uploadedAt: now,
+        updatedAt: now,
+      });
+      const use = (fieldPath: string, subjectSlug = SLUG) =>
+        t.adapter.insert("nextly_media_usage", {
+          id: randomUUID(),
+          mediaId,
+          subjectKind: "collection",
+          subjectSlug,
+          documentId: entryId,
+          fieldPath,
+          locale: "",
+        });
+      // The moved field's use; a sibling's; one whose name only starts with the field's; another
+      // collection's at the same path.
+      for (const path of ["meta.summary", "meta.note", "meta.summaryx"]) {
+        await use(path);
+      }
+      await use("meta.summary", "gmv_other");
+      const paths = async () =>
+        (
+          await run<{ slug: string; path: string }>(
+            t,
+            `SELECT ${q("subject_slug")} AS slug, ${q("field_path")} AS path FROM ${q("nextly_media_usage")}`
+          )
+        )
+          .map(row => `${row.slug}:${row.path}`)
+          .sort();
+
+      await save(t, OUTSIDE, OUT);
+      expect(await paths()).toEqual(
+        [
+          `${SLUG}:meta.note`,
+          `${SLUG}:meta.summaryx`,
+          `${SLUG}:summary`,
+          "gmv_other:meta.summary",
+        ].sort()
+      );
+
+      await migrateDown(t);
+      expect(await paths()).toEqual(
+        [
+          `${SLUG}:meta.note`,
+          `${SLUG}:meta.summary`,
+          `${SLUG}:meta.summaryx`,
+          "gmv_other:meta.summary",
+        ].sort()
+      );
+    });
+
+    it("keeps a use already recorded at the field's new path, rather than break the record's key", async () => {
+      const t = await boot(dialect);
+      await createPosts(t, SLUG, { fields: INSIDE });
+      const { item } = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one", meta: { summary: "First" } },
+      });
+      const entryId = String((item as { id: unknown }).id);
+      const now = new Date();
+      const mediaId = randomUUID();
+      await t.adapter.insert("media", {
+        id: mediaId,
+        filename: `${mediaId}.png`,
+        originalFilename: "used.png",
+        mimeType: "image/png",
+        size: 1,
+        url: `/uploads/${mediaId}.png`,
+        uploadedAt: now,
+        updatedAt: now,
+      });
+      // A row left at the new path by a field once there, for the same entry, item and language.
+      for (const fieldPath of ["meta.summary", "summary"]) {
+        await t.adapter.insert("nextly_media_usage", {
+          id: randomUUID(),
+          mediaId,
+          subjectKind: "collection",
+          subjectSlug: SLUG,
+          documentId: entryId,
+          fieldPath,
+          locale: "",
+        });
+      }
+      await save(t, OUTSIDE, OUT);
+      const rows = await run<{ path: string }>(
+        t,
+        `SELECT ${q("field_path")} AS path FROM ${q("nextly_media_usage")}`
+      );
+      expect(rows.map(row => row.path).sort()).toEqual([
+        "meta.summary",
+        "summary",
+      ]);
     });
 
     describe("a required field moved out of a group, onto a table holding entries", () => {

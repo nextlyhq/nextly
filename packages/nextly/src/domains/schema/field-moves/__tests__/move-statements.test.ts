@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 
 import type { StoragePlace } from "../check-move";
 import {
+  emptiedContainers,
+  mediaUsePathStatement,
   moveDataStatements,
   movesAsTheSameDate,
   type MoveColumn,
@@ -46,6 +48,86 @@ describe("moveDataStatements on SQLite", () => {
     );
     return db;
   }
+
+  it("puts each group back as it was once a move into a nested group is undone", () => {
+    const db = table("title text");
+    db.exec(
+      `INSERT INTO dc_posts (id, title, meta) VALUES (1, 'a', NULL), (2, 'b', '{"note":"n"}'), (3, NULL, '{"note":"n","seo":{"hint":"h"}}'), (4, 'd', '{"seo":{}}');`
+    );
+    const into = { from: column("title"), to: key("meta", "seo", "title") };
+    const target = sqlite("text");
+    run(db, moveDataStatements(into, target).copy);
+    expect(db.prepare("SELECT meta FROM dc_posts WHERE id = 1").get()).toEqual({
+      meta: '{"seo":{"title":"a"}}',
+    });
+    db.exec("UPDATE dc_posts SET title = NULL;");
+    const back = moveDataStatements({ from: into.to, to: into.from }, target);
+    run(db, [
+      ...back.copy,
+      ...back.clearSource,
+      ...emptiedContainers(
+        into.to as Extract<StoragePlace, { kind: "json" }>,
+        target,
+        true
+      ),
+    ]);
+    expect(
+      db.prepare("SELECT id, title, meta FROM dc_posts ORDER BY id").all()
+    ).toEqual([
+      { id: 1, title: "a", meta: null },
+      { id: 2, title: "b", meta: '{"note":"n"}' },
+      { id: 3, title: null, meta: '{"note":"n","seo":{"hint":"h"}}' },
+      // A container that was already empty reads the same as one the way in made: both go.
+      { id: 4, title: "d", meta: null },
+    ]);
+  });
+
+  it("keeps a required group's empty object, whose column cannot be NULL", () => {
+    expect(
+      emptiedContainers(
+        key("meta", "title") as Extract<StoragePlace, { kind: "json" }>,
+        sqlite("text"),
+        false
+      )
+    ).toEqual([]);
+  });
+
+  it("moves a media use's recorded path with the field, and the paths under it, for one entity only", () => {
+    const db = new Database(":memory:");
+    db.exec(
+      "CREATE TABLE nextly_media_usage (id text primary key, media_id text, subject_kind text, subject_slug text, document_id text, field_path text, locale text, UNIQUE (subject_kind, subject_slug, document_id, field_path, locale, media_id));"
+    );
+    const row = (id: string, slug: string, path: string) =>
+      `('${id}', 'm', 'collection', '${slug}', 'd', '${path}', '')`;
+    db.exec(
+      `INSERT INTO nextly_media_usage VALUES ${[
+        row("1", "posts", "meta.hero"),
+        row("2", "posts", "meta.hero.alt"),
+        row("3", "posts", "meta.heroic"),
+        row("4", "pages", "meta.hero"),
+        row("5", "posts", "meta.note"),
+      ].join(", ")};`
+    );
+    run(db, [
+      mediaUsePathStatement(
+        "sqlite",
+        { kind: "collection", slug: "posts" },
+        ["meta", "hero"],
+        ["hero"]
+      ),
+    ]);
+    expect(
+      db
+        .prepare("SELECT id, field_path FROM nextly_media_usage ORDER BY id")
+        .all()
+    ).toEqual([
+      { id: "1", field_path: "hero" },
+      { id: "2", field_path: "hero.alt" },
+      { id: "3", field_path: "meta.heroic" },
+      { id: "4", field_path: "meta.hero" },
+      { id: "5", field_path: "meta.note" },
+    ]);
+  });
 
   it("copies a text column into the group, an empty one as JSON null, and back out", () => {
     const db = table("title text");

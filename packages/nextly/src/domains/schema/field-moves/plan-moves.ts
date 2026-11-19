@@ -36,7 +36,12 @@ import {
   type StoragePlace,
 } from "./check-move";
 import { fieldsThatLeft } from "./move-candidates";
-import { moveDataStatements, type MoveColumn } from "./move-statements";
+import {
+  emptiedContainers,
+  mediaUsePathStatement,
+  moveDataStatements,
+  type MoveColumn,
+} from "./move-statements";
 
 /** Statements for the start and the end of one direction of a migration file. */
 interface Placed {
@@ -96,29 +101,84 @@ function rowColumns(fields: readonly FieldDefinition[]): Set<string> {
 /** Where a planned move's statements go in the file, in each direction. */
 function placed(
   move: PlannedMove,
-  target: MoveColumn
+  target: MoveColumn,
+  beside: Beside
 ): { up: Placed; down: Placed } {
-  const up = moveDataStatements(move, target);
-  const down = moveDataStatements({ from: move.to, to: move.from }, target);
+  const forth = moveDataStatements(move, target);
+  const back = moveDataStatements({ from: move.to, to: move.from }, target);
+  const way = {
+    up: [...forth.copy, ...forth.clearSource, ...beside.up],
+    down: [...back.copy, ...back.clearSource, ...beside.undo, ...beside.down],
+  };
   if (move.from.kind === "column") {
     // Into a group: copied before the column is dropped; back after the way down adds it again.
     return {
-      up: { first: up.copy, last: [] },
-      down: { first: [], last: [...down.copy, ...down.clearSource] },
+      up: { first: way.up, last: [] },
+      down: { first: [], last: way.down },
     };
   }
   if (move.to.kind === "column") {
     // Out of a group: copied after the column is added; back before the way down drops it.
     return {
-      up: { first: [], last: [...up.copy, ...up.clearSource] },
-      down: { first: down.copy, last: [] },
+      up: { first: [], last: way.up },
+      down: { first: way.down, last: [] },
     };
   }
   // Between two groups, whose columns stand throughout.
   return {
-    up: { first: [...up.copy, ...up.clearSource], last: [] },
-    down: { first: [...down.copy, ...down.clearSource], last: [] },
+    up: { first: way.up, last: [] },
+    down: { first: way.down, last: [] },
   };
+}
+
+/**
+ * What a move's statements carry beside its values: the media library's record of each use moved
+ * with the field's path, both ways, and on the way back from a group, the containers the way in
+ * made, removed again once empty (`emptiedContainers`).
+ */
+interface Beside {
+  up: string[];
+  down: string[];
+  undo: string[];
+}
+
+function besideOf(
+  move: PlannedMove,
+  request: FieldMoveRequest,
+  target: MoveColumn,
+  args: {
+    after: readonly FieldDefinition[];
+    mediaUses?: { kind: "collection" | "single"; slug: string };
+  }
+): Beside {
+  const uses = args.mediaUses;
+  const { to } = move;
+  const undo =
+    to.kind === "json"
+      ? emptiedContainers(to, target, !groupIsRequired(args.after, to.column))
+      : [];
+  return {
+    up: uses
+      ? [mediaUsePathStatement(target.dialect, uses, request.from, request.to)]
+      : [],
+    down: uses
+      ? [mediaUsePathStatement(target.dialect, uses, request.to, request.from)]
+      : [],
+    undo,
+  };
+}
+
+/** Whether the group whose column is `column` is required, so its column is never NULL. */
+function groupIsRequired(
+  fields: readonly FieldDefinition[],
+  column: string
+): boolean {
+  return fieldsStoredOnRow(fields).some(
+    field =>
+      field.type === "group" &&
+      toSnakeCase(field.name) === column &&
+      field.required === true
+  );
 }
 
 /**
@@ -552,6 +612,8 @@ export function planEntityMoves(args: {
   admin?: AdminReferences;
   /** The hooks the entity's definition stores after the save, whose settings name fields. */
   hooks?: readonly StoredHookReference[];
+  /** Whose record of media uses the moved fields' paths are kept in, where the entity has one. */
+  mediaUses?: { kind: "collection" | "single"; slug: string };
 }): EntityMoves {
   const result: EntityMoves = {
     up: { first: [], last: [] },
@@ -598,7 +660,11 @@ export function planEntityMoves(args: {
     if (move.from.kind === "column" && move.to.kind === "column") continue;
     if (sameJsonPlace(move.from, move.to)) continue;
     const target = moveColumn(move, args.table, args.dialect);
-    const statements = placed(move, target);
+    const statements = placed(
+      move,
+      target,
+      besideOf(move, request, target, args)
+    );
     for (const way of ["up", "down"] as const) {
       result[way].first.push(...statements[way].first);
       result[way].last.push(...statements[way].last);

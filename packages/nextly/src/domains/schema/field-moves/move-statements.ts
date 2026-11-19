@@ -17,6 +17,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { quoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import type { ColumnKind } from "../services/field-column-descriptor";
 
@@ -79,6 +80,8 @@ interface JsonDialect {
   jsonNull: string;
   /** Whether the value at `keys` is an object, so a key can be set inside it. */
   isObject(column: string, keys: readonly string[]): string;
+  /** Whether the value at `keys` (the whole column, with none) is an object with no keys. */
+  isEmptyObject(column: string, keys: readonly string[]): string;
   /** A column's value as the JSON a group holds for it. */
   toJson(column: string, target: MoveColumn): string;
   /** The value at `keys` as `target`'s column stores it. */
@@ -112,6 +115,7 @@ const POSTGRES: JsonDialect = {
   emptyObject: "'{}'::jsonb",
   jsonNull: "'null'::jsonb",
   isObject: (c, k) => `jsonb_typeof(${c} #> ${pgPath(k)}) = 'object'`,
+  isEmptyObject: (c, k) => `(${c} #> ${pgPath(k)}) = '{}'::jsonb`,
   toJson: (c, target) => {
     if (target.kind === "json") return c;
     if (target.kind === "timestamp") {
@@ -151,6 +155,8 @@ const MYSQL: JsonDialect = {
   jsonNull: "CAST('null' AS JSON)",
   isObject: (c, k) =>
     `JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) = 'OBJECT'`,
+  isEmptyObject: (c, k) =>
+    `(JSON_TYPE(JSON_EXTRACT(${c}, ${dollarPath(k)})) = 'OBJECT' AND JSON_LENGTH(JSON_EXTRACT(${c}, ${dollarPath(k)})) = 0)`,
   toJson: (c, target) => {
     if (target.kind === "boolean") {
       return `IF(${c}, CAST('true' AS JSON), CAST('false' AS JSON))`;
@@ -208,6 +214,8 @@ const SQLITE: JsonDialect = {
   emptyObject: "json('{}')",
   jsonNull: "json('null')",
   isObject: (c, k) => `json_type(${c}, ${dollarPath(k)}) = 'object'`,
+  isEmptyObject: (c, k) =>
+    `(json_type(${c}, ${dollarPath(k)}) = 'object' AND json_extract(${c}, ${dollarPath(k)}) = '{}')`,
   toJson: (c, target) => {
     switch (target.kind) {
       case "boolean":
@@ -430,6 +438,85 @@ function unkeptDatesStop(
     `INSERT INTO ${guard} (${reason}) SELECT CASE WHEN substr(strftime('%f', ${value}), 4) <> '000' THEN NULL ELSE CAST(strftime('%s', ${value}) AS INTEGER) END FROM ${table} WHERE ${SQLITE.holds(q(from.column), from.keys)};`,
     `DROP TABLE ${guard};`,
   ];
+}
+
+/**
+ * Statements putting a group back as it was where a move into it is undone: the way in sets the
+ * key on every entry (JSON null where there was no value) and makes each container above it an
+ * object, so once the way back clears the key, each container left with no keys is removed,
+ * deepest first, and a group left with none is NULL again, as an entry with no group value holds
+ * it. A container that held keys keeps them, so only what nothing else needs goes. A required
+ * group's column (`nullable` false) cannot be NULL and keeps its empty object.
+ */
+export function emptiedContainers(
+  place: Extract<StoragePlace, { kind: "json" }>,
+  target: MoveColumn,
+  nullable: boolean
+): string[] {
+  const json = DIALECTS[target.dialect];
+  const table = quoteIdent(target.table, target.dialect);
+  const column = quoteIdent(place.column, target.dialect);
+  const statements: string[] = [];
+  for (let depth = place.keys.length - 1; depth >= 1; depth--) {
+    const above = place.keys.slice(0, depth);
+    statements.push(
+      `UPDATE ${table} SET ${column} = ${json.remove(column, above)} WHERE ${json.isEmptyObject(column, above)};`
+    );
+  }
+  if (nullable) {
+    statements.push(
+      `UPDATE ${table} SET ${column} = NULL WHERE ${json.isEmptyObject(column, [])};`
+    );
+  }
+  return statements;
+}
+
+/**
+ * The statement moving the media library's record of where an item is used along with a moved
+ * field: each use recorded at `from` (the field's names joined by dots, as the record keeps a
+ * path) or under it is recorded at `to` instead, for the entries of `subject`. Left at the old
+ * path, a use would no longer be found in the document it names, so the library would stop
+ * reporting it and could list the item as unused. A use already recorded at the new path for the
+ * same entry, item and language (a row left by a field once there) keeps that row, and the one at
+ * the old path stays where nothing reads it, so the unique key is never broken.
+ */
+export function mediaUsePathStatement(
+  dialect: SupportedDialect,
+  subject: { kind: "collection" | "single"; slug: string },
+  from: readonly string[],
+  to: readonly string[]
+): string {
+  const q = (name: string) => quoteIdent(name, dialect);
+  const literal = (text: string) => `'${safeLiteral(text)}'`;
+  const oldPath = from.map(safeKey).join(".");
+  const newPath = to.map(safeKey).join(".");
+  const table = q(MEDIA_USAGE_TABLE);
+  // The path a row takes: the new one for the field itself, or the new one before the rest of a
+  // path under it. Every key is a plain name (`safeKey`), so characters and bytes count alike.
+  const rest = (path: string) => `SUBSTR(${path}, ${oldPath.length + 1})`;
+  const moved = (path: string) =>
+    dialect === "mysql"
+      ? `CONCAT(${literal(newPath)}, ${rest(path)})`
+      : `(${literal(newPath)} || ${rest(path)})`;
+  const field = q("field_path");
+  const under = (path: string) =>
+    `(${path} = ${literal(oldPath)} OR SUBSTR(${path}, 1, ${oldPath.length + 1}) = ${literal(`${oldPath}.`)})`;
+  const same = (column: string) =>
+    `${q("taken")}.${q(column)} = ${table}.${q(column)}`;
+  // Read through a derived table, which MySQL lets an UPDATE read its own table by.
+  return `UPDATE ${table} SET ${field} = ${moved(field)} WHERE ${q("subject_kind")} = ${literal(subject.kind)} AND ${q("subject_slug")} = ${literal(subject.slug)} AND ${under(field)} AND NOT EXISTS (SELECT 1 FROM (SELECT ${q("subject_kind")}, ${q("subject_slug")}, ${q("document_id")}, ${q("locale")}, ${q("media_id")}, ${q("field_path")} FROM ${table} WHERE ${q("subject_kind")} = ${literal(subject.kind)} AND ${q("subject_slug")} = ${literal(subject.slug)}) AS ${q("taken")} WHERE ${same("subject_kind")} AND ${same("subject_slug")} AND ${same("document_id")} AND ${same("locale")} AND ${same("media_id")} AND ${q("taken")}.${field} = ${moved(`${table}.${field}`)});`;
+}
+
+/** Text written as an SQL string literal: refused where it would need more than plain characters. */
+function safeLiteral(text: string): string {
+  if (!/^[A-Za-z0-9_.$-]+$/.test(text)) {
+    throw new NextlyError({
+      code: "VALIDATION_ERROR",
+      publicMessage: "A moved field's entity cannot be named in its migration.",
+      logContext: { text },
+    });
+  }
+  return text;
 }
 
 /**

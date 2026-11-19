@@ -2107,6 +2107,8 @@ function plannedMovesOf(
     ...(save.entity.admin === undefined ? {} : { admin: save.entity.admin }),
     // The hooks it stores, whose settings name top-level fields as the admin settings do.
     ...(save.entity.hooks === undefined ? {} : { hooks: save.entity.hooks }),
+    // The media library records each use by the field's path, which the moves carry along.
+    mediaUses: { kind: "collection", slug: save.slug },
   });
   refuseDeletesBeforeRefill(save, planned);
   return planned;
