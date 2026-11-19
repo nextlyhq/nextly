@@ -36,6 +36,8 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { readableContent, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
+import { answering } from "./answer";
+
 /**
  * How this CMS expects to be asked, written once and never composed.
  *
@@ -117,7 +119,7 @@ export const INITIAL_CONTEXT_TOOL = "get_initial_context";
  */
 export function registerInitialContext(
   server: McpServer,
-  ctx: PluginRouteContext
+  ctx: Pick<PluginRouteContext, "user" | "authenticatedScope" | "logger">
 ): void {
   server.registerTool(
     INITIAL_CONTEXT_TOOL,
@@ -127,27 +129,30 @@ export function registerInitialContext(
         "Read this first. Returns what this Nextly install lets you read, and how this CMS expects to be asked. Call it once before any other tool.",
       outputSchema: OUTPUT,
     },
-    async () => {
-      // A route reaches here authenticated, so `user` is present. Narrowed
-      // rather than asserted: a `public` route would carry none, and answering
-      // with the whole registry for a caller nobody identified is the exact
-      // disclosure this tool filters to avoid.
-      const user = ctx.user;
-      const structuredContent = user
-        ? await readableContent({
-            user,
-            ...(ctx.authenticatedScope
-              ? { authenticatedScope: ctx.authenticatedScope }
-              : {}),
-          })
-        : { entities: [], complete: false };
+    // A failure answers as every tool's does (`answering`): the protocol library would otherwise
+    // put a thrown message, which can quote a connection string, in front of the agent.
+    () =>
+      answering(ctx.logger, async () => {
+        // A route reaches here authenticated, so `user` is present. Narrowed
+        // rather than asserted: a `public` route would carry none, and answering
+        // with the whole registry for a caller nobody identified is the exact
+        // disclosure this tool filters to avoid.
+        const user = ctx.user;
+        const structuredContent = user
+          ? await readableContent({
+              user,
+              ...(ctx.authenticatedScope
+                ? { authenticatedScope: ctx.authenticatedScope }
+                : {}),
+            })
+          : { entities: [], complete: false };
 
-      return {
-        // The prose and the data are separate fields on purpose; see the module
-        // comment. Nothing from `structuredContent` is interpolated.
-        content: [{ type: "text" as const, text: HOW_THIS_CMS_WORKS }],
-        structuredContent,
-      };
-    }
+        return {
+          // The prose and the data are separate fields on purpose; see the module
+          // comment. Nothing from `structuredContent` is interpolated.
+          content: [{ type: "text" as const, text: HOW_THIS_CMS_WORKS }],
+          structuredContent,
+        };
+      })
   );
 }

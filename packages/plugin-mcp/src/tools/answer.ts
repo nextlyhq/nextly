@@ -80,7 +80,7 @@ function callFramesOf(error: Error): string[] {
  * A refusal for whatever `error` is: the public JSON of a `NextlyError`, or one constant sentence
  * for anything else, logged with the id the answer names so an operator can find it.
  */
-function refused(caller: ToolCaller, error: unknown): CallToolResult {
+function refused(logger: ToolCaller["logger"], error: unknown): CallToolResult {
   const requestId = randomUUID();
   if (NextlyError.is(error)) {
     return {
@@ -93,7 +93,7 @@ function refused(caller: ToolCaller, error: unknown): CallToolResult {
   // error's message can quote a connection string or a token, and a stack's first line repeats
   // that message, so only its call frames are kept. A thrown value that is not an Error is
   // named by its type alone, for the same reason.
-  caller.logger.error("@nextlyhq/plugin-mcp: a tool failed", {
+  logger.error("@nextlyhq/plugin-mcp: a tool failed", {
     requestId,
     error:
       error instanceof Error
@@ -136,6 +136,22 @@ export async function forCaller(
         : {}),
     });
   } catch (error) {
-    return refused(caller, error);
+    return refused(caller.logger, error);
+  }
+}
+
+/**
+ * Answers with what `work` returns, or with the refusal for whatever it threw: the one way every
+ * tool answers a failure, so none lets the protocol library put a thrown message in front of the
+ * agent. For a tool that asks nothing of the workflows service (`get_initial_context`).
+ */
+export async function answering(
+  logger: ToolCaller["logger"],
+  work: () => Promise<CallToolResult>
+): Promise<CallToolResult> {
+  try {
+    return await work();
+  } catch (error) {
+    return refused(logger, error);
   }
 }
