@@ -598,7 +598,13 @@ const KEPT_TESTS: Record<
         // An ISO date, or one with a time and its offset; whole seconds, at an instant its
         // TIMESTAMP holds. A day or time that does not exist reads as NULL, which stops it too.
         const instant = MYSQL_READS.timestamp?.(text, text, target) ?? text;
-        return `(CASE WHEN NOT (${text} REGEXP ${SQL_ISO_DATE}) OR ${text} REGEXP '[.][0-9]*[1-9]' THEN FALSE ELSE ${instant} BETWEEN '1970-01-01 00:00:01' AND '2038-01-19 03:14:07' END)`;
+        // Each step guards the next: in strict mode a cast of a day that does not exist is an
+        // error, not a NULL, so the calendar is judged before the date is read.
+        const part = (from: number, length: number) =>
+          `SUBSTRING(${text}, ${from}, ${length})`;
+        const day = `(${part(9, 2)} >= '01' AND CAST(${part(9, 2)} AS UNSIGNED) <= DAY(LAST_DAY(CONCAT(${part(1, 7)}, '-01'))))`;
+        const time = `(CHAR_LENGTH(${text}) = 10 OR (${part(12, 2)} <= '23' AND ${part(15, 2)} <= '59' AND (${part(17, 1)} <> ':' OR ${part(18, 2)} <= '59')))`;
+        return `(CASE WHEN NOT (${text} REGEXP ${SQL_ISO_DATE}) OR ${text} REGEXP '[.][0-9]*[1-9]' THEN FALSE WHEN NOT (${part(6, 2)} BETWEEN '01' AND '12' AND ${part(1, 4)} BETWEEN '1969' AND '2038') THEN FALSE WHEN NOT (${day} AND ${time}) THEN FALSE ELSE ${instant} BETWEEN '1970-01-01 00:00:01' AND '2038-01-19 03:14:07' END)`;
       }
       default:
         return widthTest(target, `CHAR_LENGTH(${text})`, `LENGTH(${text})`);
