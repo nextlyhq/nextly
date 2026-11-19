@@ -7,8 +7,8 @@
 import { Check, EyeOff } from "lucide-react";
 import * as React from "react";
 
-import type { UnbindAnswer } from "./composition-actions";
-import { fieldLabel } from "./inspector";
+import type { UnbindAnswer } from "../composition-actions";
+import { fieldLabel } from "../inspector";
 
 /**
  * What an unbind said, and how: kept as visitors saw it, kept in place of a
