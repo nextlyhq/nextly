@@ -3,15 +3,19 @@
  * real reader and writer: a linked identity resolving to its account, the
  * explicit link attaching its row through a real completing session, a
  * refused hand-off leaving the table exactly as it was, a case-variant
- * subject resolving nothing under each dialect's real collation, and a
- * repeated link answering with the standing row.
+ * subject resolving nothing under each dialect's real collation, a repeated
+ * link answering with the standing row, and the provisioning branch creating
+ * a real account through the real creation primitive with exactly the
+ * configured roles — its refusals leaving every table untouched.
  *
- * The linking policy is the port, answered here by a fake that enables
- * every key: the policy's own matrix is another change's, and what these
- * legs prove is the service's behaviour on each database. The completing
- * session is real — a token signed with the instance's secret, judged by
- * core's own session read against the booted adapter — because the link's
- * session rule is only proven by the machinery that will enforce it.
+ * The linking policy is the port, answered here by fakes that enable every
+ * key: the policy's own matrix is another change's, and what these legs
+ * prove is the service's behaviour on each database. Everything else is
+ * real — the completing session (a token signed with the instance's secret,
+ * judged by core's own session read), the role slug lookup, and the
+ * user-creation primitive — because the link's session rule and the
+ * provisioning refusals are only proven by the machinery that will enforce
+ * them.
  */
 
 // Sessions sign with keys derived from this; set before any module reads env.
@@ -27,6 +31,8 @@ import { COOKIE_NAMES } from "../../../auth/cookies/cookie-config";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { verifyAccessToken } from "../../../auth/jwt/verify";
+import { getDialectTables } from "../../../database/index";
+import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import {
@@ -36,6 +42,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { externalIdentityKeyDigest } from "../../../schemas/external-identities";
+import { ServiceContainer } from "../../../services/index";
 import {
   IdentityService,
   pluginIdentityBinding,
@@ -68,11 +75,44 @@ const EVERY_KEY_ENABLED: LinkingPolicyPort = {
   },
 };
 
-/** The service on the booted instance's adapter and logger. */
-function serviceOn(handle: TestNextly): IdentityService {
+/**
+ * A linking policy that enables every key to provision exactly the roles
+ * named — as the real policy would answer for a configured `provision.roles`.
+ */
+function provisioningPolicy(roles: readonly string[]): LinkingPolicyPort {
+  return {
+    requireEnabled(providerKey: string) {
+      return {
+        providerKey,
+        trustedForImplicitLinking: false,
+        provisioning: { mayProvision: true, roles },
+      };
+    },
+  };
+}
+
+/** The service on the booted instance's adapter, with the real provisioning deps. */
+function serviceOn(
+  handle: TestNextly,
+  linkingPolicy: LinkingPolicyPort = EVERY_KEY_ENABLED
+): IdentityService {
+  const services = new ServiceContainer(handle.adapter);
   return new IdentityService(handle.adapter, handle.getService("logger"), {
-    linkingPolicy: EVERY_KEY_ENABLED,
+    linkingPolicy,
+    roles: services.roles,
+    users: services.users,
   });
+}
+
+/** A booted instance, with the core auth tables the SQLite auto-sync leaves unmade. */
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  current = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
+  if (dialect === "sqlite") {
+    for (const statement of generateSqliteCoreTableStatements()) {
+      await current.adapter.executeQuery(statement);
+    }
+  }
+  return current;
 }
 
 /** A well-formed hand-off, overridable field by field. */
@@ -122,6 +162,75 @@ async function insertIdentity(
 /** Every identity row the table holds, for before-and-after counts. */
 async function identityRows(handle: TestNextly): Promise<unknown[]> {
   return handle.adapter.select("nextly_external_identities");
+}
+
+/**
+ * A role row, written directly — the `create-external-user` suite's seeding:
+ * what is under test is which roles a provisioned account ends up with, not
+ * how a role is built.
+ */
+async function seedRole(handle: TestNextly, slug: string): Promise<string> {
+  const db = handle.adapter.getDrizzle() as unknown as {
+    insert: (table: unknown) => { values: (v: unknown) => Promise<unknown> };
+  };
+  const { roles } = getDialectTables();
+  const id = `role-${slug}`;
+  await db.insert(roles).values({
+    id,
+    name: slug,
+    slug,
+    level: 10,
+    isSystem: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  return id;
+}
+
+/** The rows the three tables a provisioning writes hold, for before/after. */
+async function provisioningFootprint(handle: TestNextly): Promise<{
+  users: number;
+  identities: number;
+  userRoles: number;
+}> {
+  const [users, identities, userRoles] = await Promise.all([
+    handle.adapter.select("users"),
+    handle.adapter.select("nextly_external_identities"),
+    handle.adapter.select("user_roles"),
+  ]);
+  return {
+    users: users.length,
+    identities: identities.length,
+    userRoles: userRoles.length,
+  };
+}
+
+/**
+ * Resolve one provisioning hand-off and expect the refusal named, with every
+ * table exactly as it was: a refusal that had written anything shows in the
+ * footprint even when the thrown error is the right one.
+ */
+async function refusedWritingNothing(
+  handle: TestNextly,
+  policy: LinkingPolicyPort,
+  payload: ExternalIdentityHandOff,
+  expected: { code: string; reason?: string }
+): Promise<void> {
+  const before = await provisioningFootprint(handle);
+  const error = await serviceOn(handle, policy)
+    .resolveSignInIdentity(pluginIdentityBinding(ACME), payload)
+    .then(
+      () => {
+        throw new Error("expected the provisioning to be refused");
+      },
+      (err: unknown) => err
+    );
+  expect(error).toBeInstanceOf(NextlyError);
+  expect(error).toMatchObject({ code: expected.code });
+  if (expected.reason !== undefined) {
+    expect(error).toMatchObject({ logContext: { reason: expected.reason } });
+  }
+  expect(await provisioningFootprint(handle)).toEqual(before);
 }
 
 /**
@@ -354,6 +463,142 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toEqual({ userId: "owner" });
       expect(await identityRows(handle)).toHaveLength(1);
+    });
+
+    it("provisions a first sign-in: an active, verified, passwordless account with exactly the configured roles, the identity attached", async () => {
+      const handle = await boot(dialect);
+      // An account, so the install is not empty; a role the configuration names.
+      await handle.adapter.insert("users", {
+        id: "founder",
+        email: "founder@example.com",
+        isActive: true,
+      });
+      const editor = await seedRole(handle, "editor");
+
+      const resolved = await serviceOn(
+        handle,
+        provisioningPolicy(["editor"])
+      ).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person" })
+      );
+
+      expect(resolved.userId).toBeTypeOf("string");
+      // The account, exactly as the creation primitive shapes it.
+      const users = (await handle.adapter.select("users")) as Array<
+        Record<string, unknown>
+      >;
+      const provisioned = users.find(row => row.email === "person@example.com");
+      expect(provisioned).toMatchObject({
+        id: resolved.userId,
+        isActive: true,
+        passwordHash: null,
+      });
+      expect(provisioned?.emailVerified).not.toBeNull();
+      // Exactly the configured roles, and no other.
+      expect(
+        await new ServiceContainer(handle.adapter).userRoles.listUserRoles(
+          String(resolved.userId)
+        )
+      ).toEqual([editor]);
+      // The identity attached to the account it made, under the stamped key,
+      // stamped with the digest the next sign-in will look it up by.
+      const rows = (await identityRows(handle)) as Array<
+        Record<string, unknown>
+      >;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        providerKey: "acme-auth:google",
+        subject: "new-person",
+        address: "person@example.com",
+        userId: resolved.userId,
+        // The digest the provisioning stamped the row's uniqueness by,
+        // derived from exactly the facts it handed over — the same spelling
+        // the link's row carries.
+        keyDigest: externalIdentityKeyDigest(
+          "acme-auth:google",
+          "https://accounts.google.com",
+          "new-person"
+        ),
+      });
+    });
+
+    it("refuses each provisioning refusal, writing nothing", async () => {
+      const handle = await boot(dialect);
+      await handle.adapter.insert("users", {
+        id: "founder",
+        email: "founder@example.com",
+        isActive: true,
+      });
+      await seedRole(handle, "editor");
+      // The real administrator role, so the configuration naming it is
+      // refused by the creation, not by the slug mapping.
+      const { id: superAdminId } = await new ServiceContainer(
+        handle.adapter
+      ).roles.ensureSuperAdminRole();
+      expect(superAdminId).toBeTruthy();
+      // An account holding the address the hand-off will carry.
+      await handle.adapter.insert("users", {
+        id: "holder",
+        email: "person@example.com",
+        isActive: true,
+      });
+
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy([]),
+        handOff({ subject: "empty-roles" }),
+        { code: "VALIDATION_ERROR", reason: "provisioning-roles-empty" }
+      );
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy(["editor", "ghost-role"]),
+        handOff({ subject: "unknown-role" }),
+        { code: "VALIDATION_ERROR", reason: "provisioning-role-unknown" }
+      );
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy(["super-admin"]),
+        // A fresh address: this refusal must be the role's, not the held
+        // address's — the duplicate check runs before the role checks.
+        handOff({ subject: "escalate", address: "escalate@example.com" }),
+        { code: "FORBIDDEN" }
+      );
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy(["editor"]),
+        handOff({ subject: "taken-address" }),
+        { code: "DUPLICATE" }
+      );
+
+      // The control: the same key, after every refusal, still provisions an
+      // address nobody holds — the refusals refused the provisioning, not the
+      // table or the connection.
+      const resolved = await serviceOn(
+        handle,
+        provisioningPolicy(["editor"])
+      ).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "after-refusals", address: "fresh@example.com" })
+      );
+      const users = (await handle.adapter.select("users")) as Array<
+        Record<string, unknown>
+      >;
+      expect(users.find(row => row.email === "fresh@example.com")?.id).toBe(
+        resolved.userId
+      );
+    });
+
+    it("refuses to provision on an install with no user, writing nothing", async () => {
+      const handle = await boot(dialect);
+      await seedRole(handle, "editor");
+
+      await refusedWritingNothing(
+        handle,
+        provisioningPolicy(["editor"]),
+        handOff({ subject: "first-ever" }),
+        { code: "FORBIDDEN", reason: "external-user-on-empty-install" }
+      );
     });
   }
 );
