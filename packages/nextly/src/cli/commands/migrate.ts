@@ -273,6 +273,7 @@ import { UserExtSchemaService } from "../../domains/users/services/user-ext-sche
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
 import { NextlyError, describeError } from "../../errors";
 import { configWatchAllowed } from "../../runtime/hmr-listener";
+import { getCoreTableNames } from "../../schemas/core-schema";
 import type { UserConfig } from "../../users/config/types";
 import { busyTableNotices } from "../busy-table-options";
 import { reportDryRun } from "../dry-run";
@@ -1539,7 +1540,9 @@ export async function previewMigrate(args: {
     [...moduleRuns, ...pendingFiles.map(file => fileUnit(file, dialect))],
     db,
     dialect,
-    { adapter, migrationsDir: args.migrationsDir }
+    { adapter, migrationsDir: args.migrationsDir },
+    // The run this previews reconciles Nextly's own tables first.
+    true
   );
   const moduleDeletions = new Map(
     judged
@@ -3653,7 +3656,9 @@ async function judgeFileDeletions(
     units,
     deps.db,
     deps.dialect,
-    { adapter: deps.adapter, migrationsDir: deps.migrationsDir }
+    { adapter: deps.adapter, migrationsDir: deps.migrationsDir },
+    // This run reconciles Nextly's own tables first (Phase 1), before a module or a file.
+    true
   )) {
     const source = deletionSource(unit.label, unit.text);
     for (const deletion of deletions) sources.set(deletion, source);
@@ -3817,9 +3822,14 @@ export async function pendingPluginDeletions(
   // install applies the same modules through the same phase, so a module renaming onto a name
   // already there is refused before it starts (`refuseRenamesOntoTakenTargets`).
   await refuseRenamesOntoTakenTargets(units, deps.db, deps.dialect);
-  return (await pendingRunDeletions(units, deps.db, deps.dialect)).map(
-    ({ unit, deletions }) => ({ label: unit.label, text: unit.text, deletions })
-  );
+  // An install runs the modules alone: nothing makes Nextly's own tables first.
+  return (
+    await pendingRunDeletions(units, deps.db, deps.dialect, undefined, false)
+  ).map(({ unit, deletions }) => ({
+    label: unit.label,
+    text: unit.text,
+    deletions,
+  }));
 }
 
 /**
@@ -3862,6 +3872,31 @@ function pluginModuleUnits(
 }
 
 /**
+ * Nextly's own tables as the run's first phase makes them, by the names the deletion facts
+ * use: the core schema's, with the field-group registry under the name that phase resolves
+ * for this database (`resolveRegistryNameFromCatalog`, as Phase 1 asks it). None where that
+ * name could not be read, so nothing is taken for made that may not be.
+ */
+async function coreTablesTheRunMakes(
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<ReadonlySet<string>> {
+  try {
+    const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
+      dialect,
+      getDrizzle: <T>() => db as T,
+    });
+    return new Set(
+      getCoreTableNames({ fieldGroupRegistryTable }).map(name =>
+        name.toLowerCase()
+      )
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+/**
  * What each unit of a run deletes, the run read as one list
  * (`runDeletions`): a unit is judged against the schema as the units before
  * it leave it, so a table an earlier one creates holds only what the run
@@ -3879,10 +3914,24 @@ async function pendingRunDeletions(
   units: readonly RunUnit[],
   db: unknown,
   dialect: SupportedDialect,
-  entities?: { adapter?: unknown; migrationsDir: string }
+  entities: { adapter?: unknown; migrationsDir: string } | undefined,
+  /**
+   * Whether the run these units belong to makes Nextly's own tables before any of them runs:
+   * `nextly migrate` and a start's migrations do, in their first phase (the core reconcile),
+   * so a registry row a unit writes on a database that holds nothing lands in a plain new
+   * table. An install of a plugin's modules makes nothing first.
+   */
+  makesCoreTablesFirst: boolean
 ): Promise<{ unit: RunUnit; deletions: Deletion[] }[]> {
   const lists = units.map(unit => unit.statements);
-  const facts = await readDeletionFacts(db, dialect, runStatements(lists));
+  const facts = await readDeletionFacts(
+    db,
+    dialect,
+    runStatements(lists),
+    makesCoreTablesFirst
+      ? { madeBeforeTheFiles: await coreTablesTheRunMakes(db, dialect) }
+      : {}
+  );
   const read = runDeletions(lists, dialect, facts);
   const retires =
     entities === undefined

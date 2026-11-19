@@ -47,6 +47,7 @@ import {
   type StoredParams,
 } from "./named-query-model";
 import { RelationControl } from "./relation-control";
+import { useStoredDraft } from "./stored-draft";
 
 /** The mark a custom source wears in the Source control, beside a related one's. */
 export const CUSTOM_SOURCE_MARK: React.JSX.Element = (
@@ -105,8 +106,9 @@ function useTypedDraft(
   send: () => void;
   keys: (event: React.KeyboardEvent) => void;
 } {
-  const [draft, setDraft] = React.useState(stored);
-  React.useEffect(() => setDraft(stored), [stored]);
+  // The inspector's own draft: an edit in progress from the first
+  // keystroke, which Save pressed from here writes first and Escape puts back.
+  const [draft, setDraft] = useStoredDraft(stored);
   const send = () => {
     if (draft !== stored) onDone(draft);
   };

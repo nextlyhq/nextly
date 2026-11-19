@@ -53,6 +53,7 @@ import {
   type RowProblem,
 } from "./custom-attributes";
 import type { EditorState } from "./editor-state";
+import { useDraftFieldEdit } from "./field-edit";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
 import { SettingSlot } from "./settings-filter";
 
@@ -155,6 +156,14 @@ export function AdvancedPanel({
    */
   const loaded = React.useRef<Draft>(draft);
   const [refusal, setRefusal] = React.useState<string | undefined>(undefined);
+  /*
+   * A keystroke in the anchor or an attribute begins the field's edit, as in
+   * every other field of the block: the page counts the draft as unsaved
+   * work, Save pressed with focus still here writes it first (by the field's
+   * own blur, below), and Escape puts back what was loaded.
+   */
+  const edit = useDraftFieldEdit();
+  const typed = (): void => edit.begin(() => setDraft(loaded.current));
   React.useEffect(() => {
     const written = lastWritten.current;
     // Asked through the same function that decides whether a write is needed,
@@ -363,6 +372,7 @@ export function AdvancedPanel({
   );
 
   const change = (index: number, part: Partial<AttributeRow>): void => {
+    typed();
     setDraft(current => ({
       ...current,
       rows: current.rows.map((row, at) =>
@@ -448,9 +458,10 @@ export function AdvancedPanel({
                 idProblem === undefined ? undefined : "nx-css-id-problem"
               }
               aria-invalid={idProblem === undefined ? undefined : true}
-              onChange={event =>
-                setDraft(current => ({ ...current, id: event.target.value }))
-              }
+              onChange={event => {
+                typed();
+                setDraft(current => ({ ...current, id: event.target.value }));
+              }}
               onBlur={() => settle(latest.current)}
               onKeyDown={event => {
                 if (event.key !== "Enter") return;
@@ -625,6 +636,9 @@ function CssClassesField({
   // The text the field was filled with or last saved at: leaving a field
   // nobody changed writes nothing, even where the stored text would tidy.
   const loaded = React.useRef(stored ?? "");
+  // A keystroke begins the field's edit, as the panel's other fields do: Save
+  // pressed from here writes it first, and Escape puts back what was loaded.
+  const edit = useDraftFieldEdit();
   // What this field last wrote, so its own echo is told from an undo.
   const lastWritten = React.useRef<string | null>(null);
   React.useEffect(() => {
@@ -716,6 +730,10 @@ function CssClassesField({
           aria-describedby={refused.length === 0 ? hintId : refusedId}
           aria-invalid={refused.length === 0 ? undefined : true}
           onChange={event => {
+            edit.begin(() => {
+              setDraft(loaded.current);
+              setFinished(true);
+            });
             setDraft(event.target.value);
             setFinished(false);
           }}

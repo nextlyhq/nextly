@@ -1484,3 +1484,228 @@ describe("a release nothing about retrying could fix is STOPPED", () => {
     expect(result.blocked).toBe(0);
   });
 });
+
+describe("applyDueReleases asks whether each document going live is held back", () => {
+  const blockedIn = (d: ApplyDueReleasesDeps): string[] =>
+    vi
+      .mocked(d.repository.blockReleases)
+      .mock.calls.flatMap(call => call[0].map(entry => entry.id));
+
+  it("refuses a held publish without writing it, and stops its release rather than retrying it", async () => {
+    const publish = vi.fn(async () => {});
+    const held = member({ entryId: "e1" });
+    const d: ApplyDueReleasesDeps = {
+      ...deps({ members: [held], mutations: { publish } }),
+      notApproved: async documents =>
+        new Set(documents.map(document => document.id)),
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(result.outcomes.map(outcome => outcome.failure)).toEqual([
+      "NOT_APPROVED",
+    ]);
+    expect(blockedIn(d)).toEqual(["r1"]);
+    expect(result).toMatchObject({ applied: 0, blocked: 1, published: 0 });
+  });
+
+  it("asks about every publish of a release before writing any, so a held later member leaves none of it live", async () => {
+    const publish = vi.fn(async () => {});
+    const unpublish = vi.fn(async () => {});
+    const first = member({ id: "m-first", entryId: "e1" });
+    const coming = member({
+      id: "m-down",
+      entryId: "e2",
+      action: "unpublish",
+    });
+    const later = member({ id: "m-later", entryId: "e3" });
+    const asked = vi.fn(
+      async (documents: readonly { id: string }[]) =>
+        new Set(
+          documents.map(document => document.id).filter(id => id === "m-later")
+        )
+    );
+    const d: ApplyDueReleasesDeps = {
+      ...deps({
+        members: [first, coming, later],
+        mutations: { publish, unpublish },
+      }),
+      notApproved: asked,
+    };
+
+    const result = await applyDueReleases(d);
+
+    // One question for the release's publishes, asked before its first write.
+    expect(asked.mock.calls.map(call => call[0].map(doc => doc.id))).toEqual([
+      ["m-first", "m-later"],
+    ]);
+    expect(publish).not.toHaveBeenCalled();
+    expect(unpublish).not.toHaveBeenCalled();
+    expect(
+      result.outcomes.map(outcome => [outcome.memberId, outcome.failure])
+    ).toEqual([
+      ["m-first", "NOT_APPROVED"],
+      ["m-down", "NOT_APPROVED"],
+      ["m-later", "NOT_APPROVED"],
+    ]);
+    // Only the held member is named as held; the others say what they wait for.
+    expect(
+      result.outcomes.find(outcome => outcome.memberId === "m-later")?.detail
+    ).toBeUndefined();
+    expect(
+      result.outcomes.find(outcome => outcome.memberId === "m-first")?.detail
+    ).toContain("m-later");
+    expect(blockedIn(d)).toEqual(["r1"]);
+    expect(result).toMatchObject({ applied: 0, blocked: 1, published: 0 });
+  });
+
+  it("keeps a release an earlier pass began scheduled when a later member is held, and finishes it once approved", async () => {
+    // Stopped, it would stay half live for good: the first document went live on a pass that was
+    // cut off, and nothing would ever write the second.
+    const publish = vi.fn(async () => {});
+    const done = member({ id: "m-done", entryId: "e1" });
+    const rest = member({ id: "m-rest", entryId: "e2" });
+    const notApproved = vi
+      .fn<NonNullable<ApplyDueReleasesDeps["notApproved"]>>()
+      .mockResolvedValueOnce(new Set(["m-rest"]))
+      .mockResolvedValue(new Set<string>());
+    const d: ApplyDueReleasesDeps = {
+      // The first member's mark, left by the pass that wrote it, for the release's revision.
+      ...deps({
+        members: [done, rest],
+        mutations: { publish },
+        marks: new Map([["m-done", 0]]),
+      }),
+      notApproved,
+    };
+
+    const first = await applyDueReleases(d);
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(
+      first.outcomes.find(outcome => outcome.memberId === "m-rest")?.failure
+    ).toBe("NOT_APPROVED");
+    expect(blockedIn(d)).toEqual([]);
+    expect(first).toMatchObject({ blocked: 0, published: 0 });
+
+    const second = await applyDueReleases(d);
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(second).toMatchObject({ blocked: 0, published: 1 });
+  });
+
+  it("counts a release as begun from a receipt the planner drops, a losing publish's included", async () => {
+    // r1 published e1 on a pass that was cut off; r2, due since, takes e1 down and wins it, so
+    // the plan holds r2's takedown and not r1's applied publish. r1's other document is held.
+    const unpublish = vi.fn(async () => {});
+    const d: ApplyDueReleasesDeps = {
+      ...deps({
+        releases: [
+          release(),
+          release({
+            id: "r2",
+            scheduledAt: new Date("2026-03-01T00:00:00.000Z"),
+          }),
+        ],
+        members: [
+          member({ id: "m-pub", releaseId: "r1", entryId: "e1" }),
+          member({ id: "m-held", releaseId: "r1", entryId: "e2" }),
+          member({
+            id: "m-down",
+            releaseId: "r2",
+            entryId: "e1",
+            action: "unpublish",
+          }),
+        ],
+        mutations: { unpublish },
+        marks: new Map([["m-pub", 0]]),
+      }),
+      notApproved: async documents =>
+        new Set(
+          documents.map(document => document.id).filter(id => id === "m-held")
+        ),
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(unpublish).not.toHaveBeenCalled();
+    expect(blockedIn(d)).toEqual([]);
+    expect(result).toMatchObject({ blocked: 0, published: 0 });
+  });
+
+  it("asks about the member it is about to publish, by its id and document", async () => {
+    const asked = vi.fn(
+      async (_documents: readonly { id: string; entryId: string }[]) =>
+        new Set<string>()
+    );
+    const d: ApplyDueReleasesDeps = {
+      ...deps({ members: [member({ id: "m-pub", entryId: "e7" })] }),
+      notApproved: asked,
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(asked.mock.calls.map(call => call[0])).toEqual([
+      [
+        {
+          id: "m-pub",
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          entryId: "e7",
+        },
+      ],
+    ]);
+    expect(result).toMatchObject({ applied: 1, published: 1 });
+  });
+
+  it("never asks about a document coming down", async () => {
+    const asked = vi.fn(async () => new Set(["anything"]));
+    const unpublish = vi.fn(async () => {});
+    const d: ApplyDueReleasesDeps = {
+      ...deps({
+        members: [member({ action: "unpublish" })],
+        mutations: { unpublish },
+      }),
+      notApproved: asked,
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(asked).not.toHaveBeenCalled();
+    expect(unpublish).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ applied: 1, blocked: 0, published: 1 });
+  });
+
+  it("writes nothing and retries when the question itself fails, without stopping the release", async () => {
+    const publish = vi.fn(async () => {});
+    const notApproved = vi
+      .fn<NonNullable<ApplyDueReleasesDeps["notApproved"]>>()
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValue(new Set<string>());
+    const d: ApplyDueReleasesDeps = {
+      ...deps({ mutations: { publish } }),
+      notApproved,
+    };
+
+    const result = await applyDueReleases(d);
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(result.outcomes[0]).toMatchObject({
+      failure: "APPROVAL_CHECK_FAILED",
+      detail: "connection reset",
+    });
+    expect(blockedIn(d)).toEqual([]);
+    expect(result).toMatchObject({ blocked: 0, published: 0 });
+
+    // The next pass, the question answered, writes the member and settles its release.
+    const retried = await applyDueReleases(d);
+
+    // Asked again about the same member, not published on the strength of nothing.
+    expect(
+      notApproved.mock.calls.map(call => call[0].map(doc => doc.entryId))
+    ).toEqual([["e1"], ["e1"]]);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(retried).toMatchObject({ applied: 1, blocked: 0, published: 1 });
+  });
+});

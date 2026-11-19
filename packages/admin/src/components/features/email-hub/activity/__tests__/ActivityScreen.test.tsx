@@ -14,8 +14,8 @@ import {
   useEmailActivity,
 } from "@admin/hooks/queries/useEmailActivity";
 
-import { deliveryRow } from "../activity-model";
-import { ActivityScreen, ProviderFilterNote } from "../ActivityScreen";
+import { activityRow } from "../activity-model";
+import { ActivityScreen } from "../ActivityScreen";
 
 vi.mock("@admin/hooks/queries/useEmailActivity", () => ({
   useEmailActivity: vi.fn(),
@@ -40,15 +40,17 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   }),
 }));
 
-const ROW = deliveryRow({
+const ROW = activityRow({
+  kind: "delivery",
   id: "d1",
   createdAt: "2026-11-16T11:00:00.000Z",
-  outcome: "sent",
-  templateSlug: "password-reset",
-  provider: { id: null, type: "smtp" },
-  recipientKind: "to",
+  status: "sent",
+  template: { slug: "password-reset" },
+  provider: { id: null, type: "smtp", origin: "code" },
+  recipientKinds: ["to"],
   failureReason: null,
-  namedPerson: false,
+  attempts: null,
+  nextAttemptAt: null,
   erased: false,
 });
 
@@ -79,20 +81,6 @@ describe("the Activity screen when a read fails", () => {
     activity({ rows: [], isError: true, error: new Error("Network down") });
     render(<ActivityScreen />);
     expect(screen.getByText(/Activity couldn.t be loaded/)).toBeTruthy();
-  });
-});
-
-describe("the note shown while a provider is chosen", () => {
-  it("says every queued email is left out, not only those waiting for a first attempt", () => {
-    render(<ProviderFilterNote provider={{ type: "smtp" }} />);
-    const note = screen.getByText(/queued email/i);
-    expect(note.textContent).toMatch(/no queued email is listed/i);
-    expect(note.textContent).not.toMatch(/waiting for its first attempt/i);
-  });
-
-  it("is not shown while no provider is chosen", () => {
-    const { container } = render(<ProviderFilterNote provider={undefined} />);
-    expect(container.textContent).toBe("");
   });
 });
 

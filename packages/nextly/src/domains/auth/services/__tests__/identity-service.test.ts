@@ -13,8 +13,16 @@
  */
 import { randomUUID } from "node:crypto";
 
-import { eq } from "drizzle-orm";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { and, eq } from "drizzle-orm";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
 
 import {
   createTestDb,
@@ -26,13 +34,18 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import { externalIdentityKeyDigest } from "../../../../schemas/external-identities";
 
+import { UserMutationService } from "../../../../domains/users/services/user-mutation-service";
 import {
   IdentityService,
   pluginIdentityBinding,
   type CompletingSession,
   type ExternalIdentityHandOff,
+  type ExternalUserCreator,
   type LinkingPolicyPort,
+  type ProviderProvisioningPolicy,
+  type ProvisioningRoleResolver,
 } from "../identity-service";
+import { RoleQueryService } from "../role/role-query-service";
 
 /** The plugin whose hand-offs most tests stand in for: stamps `acme-auth:`. */
 const ACME: PluginDefinition = {
@@ -53,12 +66,32 @@ let testDb: TestDb;
 /** Every read and write the service made, counted at its database handle. */
 let seen: { selects: number; inserts: number };
 
+/**
+ * The webhook recording activation singleton, snapshotted: the REAL creation
+ * primitive the provisioning branch runs records `user.created` inside its
+ * transaction, and recording chains a refresh onto the activation state — a
+ * field this file would otherwise leave changed for the next file in the
+ * worker. Put back exactly as found, field for field — and where it was
+ * absent at the start, removed again, since a singleton this file created
+ * would otherwise outlive it in a worker that does not isolate files.
+ */
+const globalForActivation = globalThis as {
+  __nextly_webhookActivation?: Record<string, unknown>;
+};
+let activationAtStart: Record<string, unknown> | undefined;
+let activationExistedAtStart = false;
+
 // The service resolves its identity table from the loaded dialect bundle at
 // construction; the fixture's adapter does not load it (core's `createAdapter`
 // does), so this suite loads the one dialect it runs on, as an app's adapter
 // would.
 beforeAll(async () => {
   await loadDialectTables("sqlite");
+  activationExistedAtStart =
+    globalForActivation.__nextly_webhookActivation !== undefined;
+  activationAtStart = globalForActivation.__nextly_webhookActivation
+    ? { ...globalForActivation.__nextly_webhookActivation }
+    : undefined;
 });
 
 beforeEach(async () => {
@@ -67,6 +100,20 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await testDb.close();
+});
+
+afterAll(() => {
+  if (!activationExistedAtStart) {
+    delete globalForActivation.__nextly_webhookActivation;
+  } else if (
+    activationAtStart !== undefined &&
+    globalForActivation.__nextly_webhookActivation !== undefined
+  ) {
+    Object.assign(
+      globalForActivation.__nextly_webhookActivation,
+      activationAtStart
+    );
+  }
 });
 
 /**
@@ -129,6 +176,22 @@ function policyEnabling(
   };
 }
 
+/**
+ * A linking policy that enables every key with one branch answer, so a test
+ * states exactly the provisioning (and, where it matters, the trust) its key
+ * carries — as the real policy would answer from a configuration row.
+ */
+function policyProvisioning(
+  provisioning: ProviderProvisioningPolicy,
+  trustedForImplicitLinking = false
+): LinkingPolicyPort {
+  return {
+    requireEnabled(providerKey: string) {
+      return { providerKey, trustedForImplicitLinking, provisioning };
+    },
+  };
+}
+
 /** A session reader answering one fixed session, or nobody. */
 function sessionReading(
   session: CompletingSession | null
@@ -151,12 +214,25 @@ function handOff(
   };
 }
 
-/** The service under test, wired to the counting adapter. */
+/**
+ * The service under test, wired to the counting adapter.
+ *
+ * The provisioning deps default to the REAL role slug lookup and the REAL
+ * user-creation primitive on the same adapter — the composition the branch
+ * ships with — so a test that proves a provisioning refusal proves it at the
+ * layer that makes it, not at a fake that merely agrees. Tests that need a
+ * stand-in pass their own.
+ */
 function service(deps: {
   linkingPolicy: LinkingPolicyPort;
+  roles?: ProvisioningRoleResolver;
+  users?: ExternalUserCreator;
   sessionOf?: () => Promise<CompletingSession | null>;
 }): IdentityService {
-  return new IdentityService(countedAdapter(), testLogger, {
+  const adapter = countedAdapter();
+  return new IdentityService(adapter, testLogger, {
+    roles: new RoleQueryService(adapter, testLogger),
+    users: new UserMutationService(adapter, testLogger),
     // A link completing where nobody is signed in, unless the test says
     // otherwise: an unset reader must refuse rather than wave a link through.
     sessionOf: sessionReading(null),
@@ -165,10 +241,13 @@ function service(deps: {
 }
 
 /** A user row the identity table's foreign key can point at. */
-async function plantUser(id: string): Promise<void> {
+async function plantUser(
+  id: string,
+  email = `${id}@example.com`
+): Promise<void> {
   await testDb.db
     .insert(testDb.schema.users)
-    .values({ id, email: `${id}@example.com`, isActive: true });
+    .values({ id, email, isActive: true });
 }
 
 /** One identity row, written straight to the table as the fixture does. */
@@ -204,6 +283,70 @@ async function identitiesOf(userId: string): Promise<number> {
     .from(testDb.schema.nextlyExternalIdentities)
     .where(eq(testDb.schema.nextlyExternalIdentities.userId, userId));
   return rows.length;
+}
+
+/**
+ * A role row, written straight to the table — the slug is what both the
+ * mapping and the creation primitive's refusals read, so the rest of the row
+ * is the minimum the table takes.
+ */
+async function plantRole(slug: string): Promise<string> {
+  const id = `role-${slug}`;
+  await testDb.db.insert(testDb.schema.roles).values({
+    id,
+    name: slug,
+    slug,
+    level: 10,
+    isSystem: false,
+    createdAt: new Date("2020-01-01T00:00:00Z"),
+    updatedAt: new Date("2020-01-01T00:00:00Z"),
+  });
+  return id;
+}
+
+/** The account rows the users table holds, read straight from the table. */
+async function usersCount(): Promise<number> {
+  const rows = await testDb.db
+    .select({ id: testDb.schema.users.id })
+    .from(testDb.schema.users);
+  return rows.length;
+}
+
+/** The one account holding an address, or none. */
+async function userHolding(
+  email: string
+): Promise<Record<string, unknown> | undefined> {
+  const rows = await testDb.db
+    .select()
+    .from(testDb.schema.users)
+    .where(eq(testDb.schema.users.email, email));
+  return rows[0];
+}
+
+/** The role ids one account was granted, read straight from the table. */
+async function rolesOf(userId: string): Promise<string[]> {
+  const rows = await testDb.db
+    .select({ roleId: testDb.schema.userRoles.roleId })
+    .from(testDb.schema.userRoles)
+    .where(eq(testDb.schema.userRoles.userId, userId));
+  return rows.map(row => row.roleId);
+}
+
+/** The identity row one stamped key and subject resolve, or none. */
+async function identityRowOf(
+  providerKey: string,
+  subject: string
+): Promise<Record<string, unknown> | undefined> {
+  const rows = await testDb.db
+    .select()
+    .from(testDb.schema.nextlyExternalIdentities)
+    .where(
+      and(
+        eq(testDb.schema.nextlyExternalIdentities.providerKey, providerKey),
+        eq(testDb.schema.nextlyExternalIdentities.subject, subject)
+      )
+    );
+  return rows[0];
 }
 
 /** The refusal a promise settled to, failing the test when it resolved. */
@@ -535,6 +678,452 @@ describe("the sign-in hand-off intake", () => {
     expect(result).toEqual({ userId: null });
     expect(seen.inserts).toBe(0);
     expect(await identitiesOf("bystander")).toBe(0);
+  });
+});
+
+describe("the provisioning branch", () => {
+  // The roles and the creation primitive are the real ones (see `service`),
+  // so every refusal below proves the layer that actually makes it: the
+  // empty set, the unknown name and the unproved address at the service's
+  // own mapping; the empty install, the held address and super-admin at the
+  // creation primitive the branch runs.
+
+  it("provisions on a first sign-in: active, verified, without a password, the identity attached, exactly the configured roles", async () => {
+    await plantUser("first"); // the install is not empty
+    const editor = await plantRole("editor");
+
+    const result = await service({
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+    }).resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "new-person" })
+    );
+
+    // The account, exactly as R-7 shapes it: usable at once, its address
+    // already verified, no credential anywhere on it. Its name is the
+    // address — the one string the provider vouched for.
+    const account = await userHolding("person@example.com");
+    expect(account).toMatchObject({
+      id: result.userId,
+      isActive: true,
+      passwordHash: null,
+      name: "person@example.com",
+    });
+    expect(
+      (account as { emailVerified?: unknown } | undefined)?.emailVerified
+    ).toBeInstanceOf(Date);
+
+    // Exactly the configured roles, and no other.
+    expect(await rolesOf(String(result.userId))).toEqual([editor]);
+
+    // The identity attached to the account it made, under the plugin's
+    // stamped key, holding the address the provider asserted.
+    expect(await identitiesOf(String(result.userId))).toBe(1);
+    expect(await identityRowOf("acme-auth:google", "new-person")).toMatchObject(
+      {
+        userId: result.userId,
+        address: "person@example.com",
+      }
+    );
+  });
+
+  it("resolves every configured role in one read, however many the configuration names", async () => {
+    await plantUser("first");
+    const editor = await plantRole("editor");
+    const author = await plantRole("author");
+    const reviewer = await plantRole("reviewer");
+
+    // The real slug lookup, every call to it recorded: a resolution that
+    // asked once per name would show one call per role here, not one.
+    const real = new RoleQueryService(testDb.adapter, testLogger);
+    const asked: string[][] = [];
+    const roles: ProvisioningRoleResolver = {
+      findRoleIdsBySlugs(slugs) {
+        asked.push([...slugs]);
+        return real.findRoleIdsBySlugs(slugs);
+      },
+    };
+
+    const result = await service({
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        // A repeated name is one role, asked for once.
+        roles: ["editor", "author", "reviewer", "editor"],
+      }),
+      roles,
+    }).resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "new-person" })
+    );
+
+    expect(asked).toEqual([["editor", "author", "reviewer"]]);
+    expect((await rolesOf(String(result.userId))).sort()).toEqual(
+      [author, editor, reviewer].sort()
+    );
+  });
+
+  it("names the first configured role no role carries, in the configuration's order", async () => {
+    // Two names resolve to nothing; the refusal names the one the
+    // configuration lists first — not the alphabetically first, and not
+    // whichever the read happened to leave out first.
+    await plantUser("first");
+    await plantRole("editor");
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyProvisioning({
+          mayProvision: true,
+          roles: ["zeta-ghost", "editor", "alpha-ghost"],
+        }),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person" })
+      )
+    );
+
+    expect(error.logContext).toMatchObject({
+      reason: "provisioning-role-unknown",
+      role: "zeta-ghost",
+    });
+    expect(seen.inserts).toBe(0);
+    expect(await usersCount()).toBe(1);
+  });
+
+  it("attaches the provisioned identity under the digest the next sign-in resolves it by", async () => {
+    // The account the branch makes is half of the first sign-in: the row it
+    // attaches is the one the SAME identity's next sign-in must resolve,
+    // and every lookup reads the digest — so the attach has to write
+    // exactly the digest the intake derived, or the person arrives once and
+    // is a stranger the second time.
+    await plantUser("founder"); // the install is not empty
+    await plantRole("editor");
+    const first = await service({
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+    }).resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "arriving-person" })
+    );
+    expect(first.userId).toBeTypeOf("string");
+
+    // The second sign-in — the same identity, through a key with neither
+    // branch answer — resolves the account the first one made and writes
+    // nothing more: one account, one row, no second provisioning.
+    const accounts = await usersCount();
+    expect(
+      await service({
+        linkingPolicy: policyEnabling("acme-auth:google"),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "arriving-person" })
+      )
+    ).toEqual({ userId: first.userId });
+    expect(await usersCount()).toBe(accounts);
+    expect(await identitiesOf(String(first.userId))).toBe(1);
+
+    // The row the branch attached carries exactly the digest the lookup
+    // reads, derived from the stamped key, the issuer and the subject.
+    expect(
+      await identityRowOf("acme-auth:google", "arriving-person")
+    ).toMatchObject({
+      keyDigest: externalIdentityKeyDigest(
+        "acme-auth:google",
+        GOOGLE_ISSUER,
+        "arriving-person"
+      ),
+    });
+
+    // A case-variant of the provisioned subject is a different identity:
+    // the digest the row was written under does not fold it together,
+    // however the database's collation compares the text columns.
+    expect(
+      await service({
+        linkingPolicy: policyEnabling("acme-auth:google"),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "Arriving-Person" })
+      )
+    ).toEqual({ userId: null });
+  });
+
+  it("signs a linked identity in through a key with neither trust nor provision — and without re-provisioning even when the key may", async () => {
+    // The branch answers govern only their branches: a linked identity
+    // resolves its own account through a key carrying neither, and — the
+    // stronger case — through one that may provision, without a second
+    // account being made for it.
+    await plantUser("owner");
+    await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "subject-one",
+      userId: "owner",
+    });
+
+    expect(
+      await service({
+        linkingPolicy: policyProvisioning({ mayProvision: false }),
+      }).resolveSignInIdentity(pluginIdentityBinding(ACME), handOff())
+    ).toEqual({ userId: "owner" });
+
+    expect(
+      await service({
+        linkingPolicy: policyProvisioning({
+          mayProvision: true,
+          roles: ["editor"],
+        }),
+      }).resolveSignInIdentity(pluginIdentityBinding(ACME), handOff())
+    ).toEqual({ userId: "owner" });
+
+    // No account was made for the linked identity, and its row is unchanged.
+    expect(await usersCount()).toBe(1);
+    expect(await identitiesOf("owner")).toBe(1);
+  });
+
+  it("refuses provisioning through a key that may not provision, writing nothing", async () => {
+    await plantUser("first");
+    await plantRole("editor");
+
+    const result = await service({
+      linkingPolicy: policyProvisioning({ mayProvision: false }),
+    }).resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "new-person" })
+    );
+
+    expect(result).toEqual({ userId: null });
+    expect(seen.inserts).toBe(0);
+    expect(await usersCount()).toBe(1);
+    expect(
+      await identityRowOf("acme-auth:google", "new-person")
+    ).toBeUndefined();
+  });
+
+  it("provisions nothing through a key trusted for implicit linking but not provisioning", async () => {
+    // The negative side of the trust branch: trust governs implicit linking
+    // alone, which is not built here, so a trusted key that may not
+    // provision still provisions nothing.
+    await plantUser("first");
+    await plantRole("editor");
+
+    const result = await service({
+      linkingPolicy: policyProvisioning(
+        { mayProvision: false },
+        /* trustedForImplicitLinking: */ true
+      ),
+    }).resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "new-person" })
+    );
+
+    expect(result).toEqual({ userId: null });
+    expect(seen.inserts).toBe(0);
+    expect(await usersCount()).toBe(1);
+  });
+
+  it("refuses to provision a hand-off with no address, writing nothing", async () => {
+    await plantUser("first");
+    await plantRole("editor");
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyProvisioning({
+          mayProvision: true,
+          roles: ["editor"],
+        }),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person", address: null })
+      )
+    );
+
+    expect(error.logContext).toMatchObject({
+      reason: "provisioning-address-missing",
+    });
+    expect(seen.inserts).toBe(0);
+    expect(await usersCount()).toBe(1);
+  });
+
+  it("refuses to provision an address the provider did not prove", async () => {
+    // The account would be created with its address stamped verified; a
+    // proof the provider never made would counterfeit that stamp.
+    await plantUser("first");
+    await plantRole("editor");
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyProvisioning({
+          mayProvision: true,
+          roles: ["editor"],
+        }),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person", addressProved: false })
+      )
+    );
+
+    expect(error.logContext).toMatchObject({
+      reason: "provisioning-address-unproved",
+    });
+    expect(seen.inserts).toBe(0);
+    expect(await usersCount()).toBe(1);
+  });
+
+  it("refuses an empty configured role set before any account is made", async () => {
+    await plantUser("first");
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyProvisioning({
+          mayProvision: true,
+          roles: [],
+        }),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person" })
+      )
+    );
+
+    expect(error.logContext).toMatchObject({
+      reason: "provisioning-roles-empty",
+    });
+    expect(seen.inserts).toBe(0);
+    expect(await usersCount()).toBe(1);
+  });
+
+  it("refuses a configured role name no role carries, naming it", async () => {
+    await plantUser("first");
+    await plantRole("editor"); // the first name resolves; the second must not
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyProvisioning({
+          mayProvision: true,
+          roles: ["editor", "ghost-role"],
+        }),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person" })
+      )
+    );
+
+    // Naming the role, so the operator can fix the configuration: the
+    // refusal says which name resolved to nothing.
+    expect(error.code).toBe("VALIDATION_ERROR");
+    const errors = (
+      error.publicData as { errors?: Array<{ message?: string }> } | undefined
+    )?.errors;
+    expect(errors?.[0]?.message).toContain("ghost-role");
+    expect(error.logContext).toMatchObject({
+      reason: "provisioning-role-unknown",
+      role: "ghost-role",
+    });
+    expect(seen.inserts).toBe(0);
+    expect(await usersCount()).toBe(1);
+  });
+
+  it("refuses the super-admin role the configuration names — the creation refuses it, not the mapping", async () => {
+    // The slug resolves (the role exists), so the refusal is the primitive's
+    // own: core still refuses what the configuration may name.
+    await plantUser("first");
+    await plantRole("super-admin");
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyProvisioning({
+          mayProvision: true,
+          roles: ["super-admin"],
+        }),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person" })
+      )
+    );
+
+    expect(error.code).toBe("FORBIDDEN");
+    expect(error.logContext).toMatchObject({
+      reason: "external-user-super-admin-refused",
+    });
+    expect(await userHolding("person@example.com")).toBeUndefined();
+    expect(await usersCount()).toBe(1);
+  });
+
+  it("refuses to provision an address another account already holds", async () => {
+    await plantUser("holder", "person@example.com");
+    await plantRole("editor");
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyProvisioning({
+          mayProvision: true,
+          roles: ["editor"],
+        }),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person" })
+      )
+    );
+
+    expect(error.code).toBe("DUPLICATE");
+    // The holder keeps the address alone: no second account, no identity row.
+    expect(await usersCount()).toBe(1);
+    expect(
+      await identityRowOf("acme-auth:google", "new-person")
+    ).toBeUndefined();
+  });
+
+  it("refuses to provision on an install with no user", async () => {
+    // The first account decides who administers the site; a provider must
+    // never be what mints it.
+    await plantRole("editor");
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyProvisioning({
+          mayProvision: true,
+          roles: ["editor"],
+        }),
+      }).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person" })
+      )
+    );
+
+    expect(error.code).toBe("FORBIDDEN");
+    expect(error.logContext).toMatchObject({
+      reason: "external-user-on-empty-install",
+    });
+    expect(await usersCount()).toBe(0);
+  });
+
+  it("takes provisioning roles from the configuration, never from the hand-off", async () => {
+    await plantUser("first");
+    const editor = await plantRole("editor");
+    await plantRole("intruder");
+
+    // A hand-off carrying roles-shaped extra data — the most a plugin could
+    // hand over — provisions only the configured set. The intruder role
+    // exists, so an implementation that read the hand-off would grant it and
+    // this assertion would see more than the configured role.
+    const payload = Object.assign(handOff({ subject: "new-person" }), {
+      roles: ["intruder"],
+      provision: { roles: ["intruder"] },
+    });
+
+    const result = await service({
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+    }).resolveSignInIdentity(pluginIdentityBinding(ACME), payload);
+
+    const account = await userHolding("person@example.com");
+    expect(account).toMatchObject({ id: result.userId });
+    expect(await rolesOf(String(result.userId))).toEqual([editor]);
   });
 });
 

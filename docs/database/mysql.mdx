@@ -7,7 +7,7 @@ import { Tab, Tabs } from "fumadocs-ui/components/tabs";
 
 MySQL is supported. Use it when you already run MySQL or a MySQL-compatible cloud database. The adapter uses [`mysql2`](https://github.com/sidorares/node-mysql2) and emulates features MySQL lacks (`RETURNING`, `ILIKE`) on top of the shared `DrizzleAdapter` core.
 
-> **MySQL is second-class to PostgreSQL in Nextly.** Some features Nextly relies on -- savepoints, JSONB, array types, native `ILIKE`, native `RETURNING` -- either don't exist or are emulated. PostgreSQL is the recommended production database; pick MySQL only if it is already part of your stack. See the [feature comparison](/docs/database#feature-comparison).
+> **MySQL is second-class to PostgreSQL in Nextly.** Some features Nextly relies on -- savepoints for nested transactions, JSONB, array types, native `ILIKE`, native `RETURNING` -- either don't exist or are emulated. PostgreSQL is the recommended production database; pick MySQL only if it is already part of your stack. See the [feature comparison](/docs/database#feature-comparison).
 
 > **Minimum version: MySQL 8.0.** Older real MySQL hard-fails at connect with a clear upgrade pointer. MySQL-compatible variants (MariaDB, TiDB, Aurora MySQL, PlanetScale, Vitess) warn and proceed -- see [database support](/docs/database/support) for the variant policy.
 
@@ -184,7 +184,7 @@ const adapter = createMySqlAdapter({
 The adapter handles each of these automatically, but they are worth knowing:
 
 - **No `RETURNING`.** After `INSERT`, the adapter issues a follow-up `SELECT` (using `insertId` for auto-increment, otherwise filtering by inserted column values) to return the row. Bulk inserts return rows by reading `result.insertId..result.insertId + affectedRows - 1`.
-- **No savepoints.** The MySQL adapter sets `savepoint`, `rollbackToSavepoint`, and `releaseSavepoint` to `undefined` on the transaction context for safety. Nested transactions are not supported.
+- **Nested transactions join flat.** A `transaction()` called inside another's work runs as part of it, on its connection, with no savepoint of its own: its failure fails the whole transaction, even when the outer work catches it. `supportsSavepoints` is therefore `false`. The transaction context's own `savepoint`, `rollbackToSavepoint` and `releaseSavepoint` do set InnoDB savepoints, which Nextly uses to undo one failed item of a batch create and keep the rest. On TiDB, which refuses `SAVEPOINT` before 6.2 and in a pessimistic transaction unless `tidb_constraint_check_in_place_pessimistic` is on, the three methods are `undefined`, and a batch item that fails after its row is written aborts the whole batch instead.
 - **No native `ILIKE`.** Case-insensitive search is rewritten to `LOWER(column) LIKE LOWER(value)`.
 - **No JSONB.** MySQL has a native `JSON` type but no JSONB-style binary-indexed variant.
 - **No array types.** Store arrays as JSON.

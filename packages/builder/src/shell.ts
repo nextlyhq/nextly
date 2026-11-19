@@ -641,8 +641,21 @@ export {
  * handler and an agent all reach the same `apply`, so undo covers every one of
  * them rather than only the path that happened to implement it.
  */
-export { MAX_HISTORY, useEditorState } from "./editor-state";
-export type { EditorState, UseEditorStateArgs } from "./editor-state";
+export { MAX_HISTORY, useDocumentView, useEditorState } from "./editor-state";
+
+/**
+ * A handler that keeps its identity across renders and calls the newest one,
+ * for a surface memoised so a selection draws it nothing again.
+ */
+export {
+  useLatestCallback,
+  useLatestOptionalCallback,
+} from "./latest-callback";
+export type {
+  EditorDocumentView,
+  EditorState,
+  UseEditorStateArgs,
+} from "./editor-state";
 
 /**
  * Why `EditorState.lockRefusalFor` refuses an edit: a slot lock a block

@@ -19,6 +19,10 @@ import * as React from "react";
 import type { CanvasZoom } from "../canvas/canvas-zoom";
 import { CanvasZoomControl } from "../canvas/canvas-zoom-control";
 import { ChromeTooltip } from "../chrome-tooltip";
+import {
+  useLatestCallback,
+  useLatestOptionalCallback,
+} from "../latest-callback";
 
 import type { BuilderShellProps } from "./shell-props";
 import { PANEL_DIVIDER_CLASS } from "./shell-stylesheet";
@@ -40,8 +44,49 @@ export const DEFAULT_EXIT_LABEL = "Exit editor";
  * and once it is at its shortest the bar is crowded (`data-crowded`), and the
  * words marked `data-topbar-word` step aside, keeping their icons and names
  * (`top-bar-room`). Nothing else shortens.
+ *
+ * Drawn again only when something it shows changes. The shell renders again
+ * for every change of what it holds, a selection among them, and hands the
+ * bar a new header ref and new handlers each time; those are read when
+ * called, so the memoised bar is handed the same functions, and a host whose
+ * columns keep their identity has its whole bar left alone. Whether a handler
+ * is there at all is kept as given, since the bar draws the exit and the
+ * left panel's toggle only for a handler there is.
  */
-export function ShellTopBar({
+export function ShellTopBar(props: TopBarProps): React.JSX.Element {
+  const headerRef = useLatestCallback(props.headerRef);
+  const onExit = useLatestOptionalCallback(props.onExit);
+  const onLeft = useLatestOptionalCallback(props.onLeft);
+  const onInspector = useLatestCallback(props.onInspector);
+  return (
+    <KeptTopBar
+      {...props}
+      headerRef={headerRef}
+      onExit={onExit}
+      onLeft={onLeft}
+      onInspector={onInspector}
+    />
+  );
+}
+
+/** The top bar's props, from the shell's own and the host's. */
+type TopBarProps = Pick<
+  BuilderShellProps,
+  "onExit" | "exitLabel" | "title" | "topBar" | "topBarCenter" | "topBarEnd"
+> & {
+  headerRef: (element: HTMLElement | null) => void;
+  zoom: CanvasZoom;
+  appliedScale: number;
+  onZoomPick: ((next: CanvasZoom) => void) | undefined;
+  leftShown: boolean;
+  inspectorShown: boolean;
+  /** Absent when the host offers no left panel, so there is nothing to show. */
+  onLeft: (() => void) | undefined;
+  onInspector: () => void;
+};
+
+/** The bar itself, memoised, so it draws again only for a prop that changed. */
+const KeptTopBar = React.memo(function TopBar({
   headerRef,
   onExit,
   exitLabel = DEFAULT_EXIT_LABEL,
@@ -56,20 +101,7 @@ export function ShellTopBar({
   inspectorShown,
   onLeft,
   onInspector,
-}: Pick<
-  BuilderShellProps,
-  "onExit" | "exitLabel" | "title" | "topBar" | "topBarCenter" | "topBarEnd"
-> & {
-  headerRef: (element: HTMLElement | null) => void;
-  zoom: CanvasZoom;
-  appliedScale: number;
-  onZoomPick: ((next: CanvasZoom) => void) | undefined;
-  leftShown: boolean;
-  inspectorShown: boolean;
-  /** Absent when the host offers no left panel, so there is nothing to show. */
-  onLeft: (() => void) | undefined;
-  onInspector: () => void;
-}): React.JSX.Element {
+}: TopBarProps): React.JSX.Element {
   // The bar itself, kept here as well as handed to the shell, so it can be
   // measured for room.
   const { ref, crowded } = useTopBarRoom(headerRef);
@@ -177,7 +209,7 @@ export function ShellTopBar({
       </div>
     </header>
   );
-}
+});
 
 /**
  * The host's controls at the bar's end, after a thin rule. `null` and

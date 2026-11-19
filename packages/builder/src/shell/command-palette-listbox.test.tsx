@@ -10,7 +10,10 @@
  * The walk below follows the rule as axe-core 4.14 writes it: an element a
  * screen reader skips (`aria-hidden`) is passed over, one with no role and no
  * ARIA attribute of its own is looked through, a group is looked into, and
- * anything else is a child the listbox owns.
+ * anything else is a child the listbox owns. Words reached on the way are
+ * owned too: a listbox holding words and no option fails the rule ("Required
+ * ARIA children role not present"), which is what a search that found nothing
+ * drew.
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ShortcutProvider } from "@nextlyhq/ui";
@@ -43,25 +46,39 @@ function search(text: string): void {
   fireEvent.change(screen.getByRole("combobox"), { target: { value: text } });
 }
 
+/**
+ * What one node reached by the walk is: a role the listbox owns, words it
+ * owns ("#text"), a node to look through ("through"), or nothing a screen
+ * reader meets (`null`).
+ */
+function ownedAs(node: Node): string | null {
+  if (!(node instanceof Element)) {
+    return node.nodeType === Node.TEXT_NODE && node.textContent?.trim()
+      ? "#text"
+      : null;
+  }
+  if (node.getAttribute("aria-hidden") === "true") return null;
+  const role = node.getAttribute("role");
+  const presentational = role === "none" || role === "presentation";
+  const ownAria = [...node.attributes].some(
+    attribute =>
+      attribute.name.startsWith("aria-") && attribute.name !== "aria-hidden"
+  );
+  if ((role === null || presentational) && !ownAria) return "through";
+  return role ?? `<${node.tagName.toLowerCase()}>`;
+}
+
 /** The roles of what the listbox owns, as axe walks them. */
 function ownedRoles(listbox: Element): string[] {
   const roles: string[] = [];
-  const queue = [...listbox.children];
-  for (let element = queue.shift(); element; element = queue.shift()) {
-    if (element.getAttribute("aria-hidden") === "true") continue;
-    const role = element.getAttribute("role");
-    const presentational = role === "none" || role === "presentation";
-    const ownAria = [...element.attributes].some(
-      attribute =>
-        attribute.name.startsWith("aria-") && attribute.name !== "aria-hidden"
-    );
-    if ((role === null || presentational) && !ownAria) {
-      queue.push(...element.children);
-    } else if (role === "group") {
-      roles.push(role);
-      queue.push(...element.children);
-    } else {
-      roles.push(role ?? `<${element.tagName.toLowerCase()}>`);
+  const queue = [...listbox.childNodes];
+  for (let node = queue.shift(); node; node = queue.shift()) {
+    const owned = ownedAs(node);
+    if (owned === null) continue;
+    if (owned !== "through") roles.push(owned);
+    // A group is looked into, as an element without a role is looked through.
+    if (owned === "through" || owned === "group") {
+      queue.push(...node.childNodes);
     }
   }
   return roles;
@@ -111,5 +128,21 @@ describe("the palette's list", () => {
     const status = screen.getByRole("status");
     expect(status.textContent).toBe("Searching pages…");
     expect(screen.getByRole("listbox").contains(status)).toBe(false);
+  });
+
+  it("owns no words when a search finds nothing, and says so from outside the list", () => {
+    render(
+      <ShortcutProvider>
+        <CommandPalette open commands={[command("Heading", "Add")]} />
+      </ShortcutProvider>
+    );
+    search("zzz");
+    const listbox = screen.getByRole("listbox");
+    // The control: the message is still drawn in the list.
+    expect(listbox.textContent).toContain("No matching commands.");
+    expect(ownedRoles(listbox)).toEqual([]);
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("No matching commands.");
+    expect(listbox.contains(status)).toBe(false);
   });
 });

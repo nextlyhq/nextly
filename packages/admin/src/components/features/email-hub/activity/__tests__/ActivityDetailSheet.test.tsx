@@ -35,7 +35,7 @@ const ATTEMPT: DeliveryAttempt = {
   createdAt: "2026-11-16T11:00:00.000Z",
   outcome: "failed",
   recipientKind: "to",
-  provider: { id: null, type: "smtp" },
+  provider: { id: null, type: "smtp", origin: "code" },
   failureKind: "refused",
   failureStatus: null,
   failureReason: "The Reply-To set by the template wasn't a valid address.",
@@ -165,7 +165,44 @@ describe("the detail sheet", () => {
       "Failed: the provider refused it"
     );
     const attempts = screen.getByRole("region", { name: "Attempts" });
-    expect(attempts.textContent).toContain("smtp · To · refused");
+    expect(attempts.textContent).toContain("smtp (in code) · To · refused");
+  });
+
+  it("names each attempt's provider as the details do: a stored one by name, any other by where it came from", () => {
+    showing(
+      queuedDetail({
+        templateCaused: false,
+        timeline: [
+          {
+            ...ATTEMPT,
+            id: "a1",
+            provider: { id: "p1", type: "smtp", origin: "stored" },
+          },
+          {
+            ...ATTEMPT,
+            id: "a2",
+            provider: { id: null, type: "smtp", origin: "deleted" },
+          },
+        ],
+      })
+    );
+    render(
+      <ActivityDetailSheet
+        open={{ source: "queued", id: "q1" }}
+        onClose={vi.fn()}
+        names={{
+          template: () => undefined,
+          provider: id => (id === "p1" ? "Transactional" : undefined),
+        }}
+        now={NOW}
+        fixTemplateHref={() => undefined}
+      />
+    );
+    const items = screen
+      .getByRole("region", { name: "Attempts" })
+      .querySelectorAll("li");
+    expect(items[0].textContent).toContain("Transactional · To");
+    expect(items[1].textContent).toContain("smtp (deleted) · To");
   });
 
   it("says the attempt count isn't recorded once its job was pruned", () => {
@@ -302,7 +339,7 @@ describe("the detail sheet", () => {
         createdAt: "2026-11-16T11:00:00.000Z",
         outcome: "failed",
         templateSlug: "order-shipped",
-        provider: { id: null, type: "resend" },
+        provider: { id: null, type: "resend", origin: "code" },
         recipientKind: "to",
         failureReason: "Resend answered 503",
         namedPerson: true,

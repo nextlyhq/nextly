@@ -209,6 +209,7 @@ function buildNextlyInstance(
     timeseries: directAPI.timeseries.bind(directAPI),
     bulkDelete: directAPI.bulkDelete.bind(directAPI),
     duplicate: directAPI.duplicate.bind(directAPI),
+    createFromSource: directAPI.createFromSource.bind(directAPI),
     findSingle: directAPI.findSingle.bind(directAPI),
     updateSingle: directAPI.updateSingle.bind(directAPI),
     findSingles: directAPI.findSingles.bind(directAPI),
