@@ -37,6 +37,7 @@ import { Button, Switch } from "@nextlyhq/ui";
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import * as React from "react";
 
+import { SizeValue } from "../../panels/design/variable-value-controls";
 import {
   NEW_SHADOW_LAYER,
   readShadow,
@@ -49,7 +50,6 @@ import {
 } from "../../shadow-css";
 import { variableFor } from "../../style-colour";
 import { styleControlsFor, type StyleControl } from "../../style-controls";
-import { SizeValue } from "../../variable-value-controls";
 import { CssHint, CssNamesLine } from "../css-hint";
 
 import { ColourField } from "./style-colour-field";

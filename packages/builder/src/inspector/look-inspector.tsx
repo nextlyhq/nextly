@@ -37,14 +37,14 @@ import {
 import { ArrowLeft } from "lucide-react";
 import * as React from "react";
 
+import { useSiteOrientation } from "../canvas/use-canvas-reading";
+import type { EditorState } from "../editor-state";
+import { blockLabel } from "../panels/add/inserter";
 import {
   lookReachWords,
   type BlockLookRow,
   type LookKey,
-} from "../block-look-rows";
-import { useSiteOrientation } from "../canvas/use-canvas-reading";
-import type { EditorState } from "../editor-state";
-import { blockLabel } from "../panels/add/inserter";
+} from "../panels/design/block-look-rows";
 import { deviceLabel } from "../shell/breakpoint-switcher";
 
 import { stateLookLine } from "./style-inspector/editing-bar";

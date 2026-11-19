@@ -258,7 +258,7 @@ export type {
 export { ImageBindingFallback } from "./bindings/image-binding-fallback";
 export type { ImageBindingFallbackProps } from "./bindings/image-binding-fallback";
 // What a host tells the inspector about the component it edits, beside it.
-export type { ComponentFieldsHost } from "./component-fields";
+export type { ComponentFieldsHost } from "./panels/components/component-fields";
 // The banner over a component's own view: its name, its reach, and Back.
 export { ComponentBanner } from "./component-banner";
 export type { ComponentBannerProps } from "./component-banner";
@@ -267,7 +267,7 @@ export type {
   ComponentVariantsHost,
   VariantPreviewBinding,
   VariantUse,
-} from "./component-variants";
+} from "./panels/components/component-variants";
 // The variant open in a component's view, previewed on the host's canvas.
 export { useVariantPreview, VariantPreviewTag } from "./variant-preview";
 export type { VariantPreviewState } from "./variant-preview";
@@ -311,8 +311,8 @@ export {
   selectionAnchor,
 } from "./panels/add/insert-picker-anchor";
 export { InsertUsageContext } from "./panels/add/insert-usage";
-export { ComponentsPanel } from "./components-panel";
-export type { ComponentsPanelProps } from "./components-panel";
+export { ComponentsPanel } from "./panels/components/components-panel";
+export type { ComponentsPanelProps } from "./panels/components/components-panel";
 // The shape a host hands the panel for the pattern tier. Published beside the
 // panel because supplying `patterns` is impossible without it: a caller loads
 // rows from a plugin's collection and has to know which fields the palette
@@ -575,13 +575,16 @@ export { VisitorUnreadableProvider } from "./visitor-unreadable-context";
  * provided once around the shell so every colour picker in it, a block's and
  * a colour variable's, reads and adds to the one list.
  */
-export { RecentColoursStore } from "./recent-colours";
+export { RecentColoursStore } from "./panels/design/recent-colours";
 /**
  * @experimental The colours every colour picker in the builder leaves out
  * while the site hides its unused built-in colours, provided once around
  * the shell, and the read a host provides it from.
  */
-export { HiddenColours, useHiddenColoursRead } from "./built-in-colours";
+export {
+  HiddenColours,
+  useHiddenColoursRead,
+} from "./panels/design/built-in-colours";
 /**
  * @experimental A template's document with an entry's own blocks composed
  * into its Entry content block, as the canvas draws it, for a host asking
@@ -828,38 +831,38 @@ export type {
  * The tokens studio. A host that mounts it owns the site style document and
  * decides when an edit is persisted; this exports the surface, not the save.
  */
-export { GroupToggle } from "./design-group-toggle";
-export { TokensPanel, useVariablesHeader } from "./tokens-panel";
+export { GroupToggle } from "./panels/design/design-group-toggle";
+export { TokensPanel, useVariablesHeader } from "./panels/design/tokens-panel";
 export type {
   GroupFolds,
   TokensPanelProps,
   VariablesHeader,
-} from "./tokens-panel";
+} from "./panels/design/tokens-panel";
 // What a host's variables write made at once answers it stored, so an import
 // can say a save the site took only in part as exactly that.
-export type { VariablesStored } from "./variables-transfer";
+export type { VariablesStored } from "./panels/design/variables-transfer";
 // Which variable groups each Design tab lists, and the one variable search,
 // so a tab's count and the rows it lists come from the same rule.
 export {
   DESIGN_TAB_GROUPS,
   searchVariableGroups,
   variableMatchesByTab,
-} from "./tokens-studio";
+} from "./panels/design/tokens-studio";
 // How many of the Styles tab's styles a search matches, by the tab's own rule,
 // and the way a host hands the tab its search.
-export { stylesTabMatches } from "./styles-tab-matches";
-export { SharedStylesHostSearch } from "./shared-styles-panel";
+export { stylesTabMatches } from "./panels/design/styles-tab-matches";
+export { SharedStylesHostSearch } from "./panels/design/shared-styles-panel";
 // Where a block type's styles sit in the Styles tab, so a host sending the
 // author there ("Edit block styles") reveals the group the tab draws.
-export { blockStyleFoldId } from "./block-looks-group";
+export { blockStyleFoldId } from "./panels/design/block-looks-group";
 // The site's fonts, for every Font control the host draws: the block panel's
 // and a font variable's in Design.
-export { FontChoicesContext } from "./font-family-field";
-export type { FontChoices } from "./font-family-field";
+export { FontChoicesContext } from "./panels/design/font-family-field";
+export type { FontChoices } from "./panels/design/font-family-field";
 // The top of Design's Type tab: the Body and Headings fonts every page uses.
-export { SiteFontRoles } from "./site-font-roles";
-export type { SiteFontRolesProps } from "./site-font-roles";
-export type { DesignTab, VariableGroup } from "./tokens-studio";
+export { SiteFontRoles } from "./panels/design/site-font-roles";
+export type { SiteFontRolesProps } from "./panels/design/site-font-roles";
+export type { DesignTab, VariableGroup } from "./panels/design/tokens-studio";
 /*
  * How widely variables are used, as a host reads it for the Variables view.
  * Experimental, as the view's `usage` is.
@@ -872,7 +875,7 @@ export type {
   VariableUse,
   VariableUseKind,
   VariableUsesPage,
-} from "./variable-usage";
+} from "./panels/design/variable-usage";
 export { SelectionBreadcrumb } from "./shell/breadcrumb";
 export type { SelectionBreadcrumbProps } from "./shell/breadcrumb";
 /*
@@ -910,8 +913,8 @@ export type { ClassSelectorProps } from "./class-selector";
  * the block verb, and what the Style tab borrows from the host to edit a
  * shared style as its target.
  */
-export { SaveSharedStyleDialog } from "./shared-style-save-dialog";
-export type { SaveSharedStyleDialogProps } from "./shared-style-save-dialog";
+export { SaveSharedStyleDialog } from "./panels/design/shared-style-save-dialog";
+export type { SaveSharedStyleDialogProps } from "./panels/design/shared-style-save-dialog";
 export type { SharedStylesHost } from "./inspector/style-inspector/style-target";
 export type {
   SharedStyleChange,
@@ -931,14 +934,14 @@ export { sharedStyleNameTaken } from "./shared-style-target";
  */
 export { useNoticeQueue } from "./shell/builder-notices";
 export type { NoticeQueue, RaiseNotice } from "./shell/builder-notices";
-export { SharedStylesPanel } from "./shared-styles-panel";
+export { SharedStylesPanel } from "./panels/design/shared-styles-panel";
 /**
  * Design → Type → "Text styles": the site's text styles and their parts.
  *
  * @experimental Settles with text styles.
  */
-export { TextStylesSection } from "./text-styles-section";
-export type { TextStylesSectionProps } from "./text-styles-section";
+export { TextStylesSection } from "./panels/design/text-styles-section";
+export type { TextStylesSectionProps } from "./panels/design/text-styles-section";
 // The whole-list class write the Styles tab's Block styles make, copy,
 // rename and hide block styles and move ★ through.
 export type { ClassListEdit, EditClasses } from "./block-style-actions";
@@ -947,7 +950,7 @@ export type {
   PageClassBlocks,
   SharedStylesAccess,
   SharedStylesPanelProps,
-} from "./shared-styles-panel";
+} from "./panels/design/shared-styles-panel";
 export type {
   SharedStyleHereParts,
   SharedStyleKind,
@@ -991,14 +994,14 @@ export type {
  *
  * @experimental The catalogue's shapes may change while the feature settles.
  */
-export { FontsPanel } from "./fonts-panel";
+export { FontsPanel } from "./panels/design/fonts-panel";
 /**
  * The one Fonts screen around that list: what the builder opens over its
  * Design panel and the admin draws as its Fonts page.
  *
  * @experimental Its props may change while the screen settles.
  */
-export { FontsScreen } from "./fonts-panel";
+export { FontsScreen } from "./panels/design/fonts-panel";
 export type {
   CatalogueAddRequest,
   CatalogueFamilyView,
@@ -1006,20 +1009,20 @@ export type {
   FontsPanelProps,
   FontsScreenProps,
   FontFaceUpload,
-} from "./fonts-panel";
+} from "./panels/design/fonts-panel";
 export {
   fontTokenRows,
   readStack,
   rowsNeedingAttention,
   withoutFamily,
-} from "./font-library";
+} from "./panels/design/font-library";
 export type {
   FamilyReading,
   FamilySource,
   FontTokenRow,
   SiteFamily,
   StackReading,
-} from "./font-library";
+} from "./panels/design/font-library";
 
 /**
  * Which values each placement of a new component may change: the picker the
