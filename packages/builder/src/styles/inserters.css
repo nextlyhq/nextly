@@ -212,14 +212,17 @@
 }
 
 /*
- * A grid of equal rows, so a tile with a reason under it doesn't leave its
- * row taller than the rest: every tile is as tall as the tallest, and each
- * column as wide as a tile's 8rem picture with its padding and border.
+ * Two columns, the tiles of a row as tall as each other, so a tile with a
+ * reason under it and the one beside it line up; each row only as tall as its
+ * own tiles, so the card stays short enough to fit the canvas. Two, because
+ * the card is at most 28rem wide, and a column is as wide as a tile's 8rem
+ * picture with its padding and border; stated, since the card is as wide as
+ * its content and a grid that fits columns to its width would get one. A
+ * column narrows on a canvas too narrow for two.
  */
 .nx-page-start__tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, 9.25rem);
-  grid-auto-rows: 1fr;
+  grid-template-columns: repeat(2, minmax(0, 9.25rem));
   justify-content: center;
   gap: 0.5rem;
   margin: 0;
@@ -229,6 +232,13 @@
 
 .nx-page-start__tiles > li {
   display: flex;
+}
+
+/* A last tile alone in its row sits in the middle, as a wrapped row put it. */
+.nx-page-start__tiles > li:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+  justify-self: center;
+  width: min(9.25rem, 100%);
 }
 
 .nx-page-start__tile {
