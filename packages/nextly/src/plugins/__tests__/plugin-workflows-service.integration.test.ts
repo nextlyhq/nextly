@@ -31,11 +31,13 @@ import type { ApiKeyService } from "../../domains/auth/services/api-key-service"
 import {
   bootSteps,
   entry,
+  giveRole,
   partOf,
   person,
   role,
   seedState,
   stateOf,
+  superAdminRole,
   versionOf,
   workflowEvents,
   type Grant,
@@ -442,6 +444,30 @@ describe.each(getConfiguredTestDialects())(
 
         expect(posts.error).toMatchObject({ status: 404, code: "NOT_FOUND" });
         expect(missing.error).toEqual(posts.error);
+      });
+
+      it("answers a super-admin naming a collection, a Single or a document that does not exist: not found", async () => {
+        await boot(dialect);
+        // A super-admin may read anything that exists, so only existence can refuse here.
+        await person(app(), "ada", []);
+        await giveRole(app(), "ada", await superAdminRole(app()));
+        const ada = { person: "ada" };
+
+        const control = resultOf(
+          await run(ada, "definitionOf", { collection: PAGES })
+        );
+        expect(control.workflow).toMatchObject({ slug: "editorial" });
+
+        for (const [op, input] of [
+          ["definitionOf", { collection: "nope" }],
+          ["definitionOf", { single: "nope" }],
+          ["reviewState", { document: { collection: "nope", id: "x" } }],
+        ] as const) {
+          expect(
+            (await run(ada, op, input)).error,
+            `${op} ${JSON.stringify(input)}`
+          ).toMatchObject({ status: 404, code: "NOT_FOUND" });
+        }
       });
     });
 

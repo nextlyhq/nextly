@@ -37,7 +37,10 @@ import {
 } from "../domains/auth/system-write-policy";
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
-import { documentTableOf } from "../domains/workflows/part-versions";
+import {
+  documentTableOf,
+  documentTableOn,
+} from "../domains/workflows/part-versions";
 import { registeredWorkflows } from "../domains/workflows/registry";
 import {
   assignMany,
@@ -376,16 +379,20 @@ async function documentOf(
 }
 
 /**
- * Throws not found unless the asker may read the collection or Single `slug` at all, as a read
- * route authorizes before it runs: the first half of every read check here, and the whole of a
- * definition's. Not found rather than forbidden, so a caller who may not read it is not told it
- * exists. Trusted code is not asked.
+ * Throws not found unless the collection or Single `slug` exists and the asker may read it at
+ * all, as a read route authorizes before it runs: the first half of every read check here, and
+ * the whole of a definition's. Existence is asked of every caller, trusted code included, since
+ * a read check that a caller passes for everything (a super-admin's) would otherwise answer for
+ * a name that is not there. Not found rather than forbidden, and the same not found either way,
+ * so a caller who may not read it is not told it exists. Trusted code is not asked to read.
  */
 async function assertEntityReadable(
   asker: WorkflowAsker,
   scopeKind: "collection" | "single",
   scopeSlug: string
 ): Promise<void> {
+  // The registry's own lookup, which answers not found for a name it does not hold.
+  await documentTableOn({ scopeKind, scopeSlug });
   if (asker === null) return;
   const readsEntity = await canReadEntity(
     scopeSlug,
