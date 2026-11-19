@@ -86,12 +86,14 @@ export async function refuseUnansweredDialogQuestions(args: {
   // keeping its values and `drop_and_add` the consent to lose them. A resolution naming any other
   // pair answers nothing. Unanswered, the file would drop every language's values with nobody
   // asked.
+  // Asked of where the values are stored, as the apply's `resolveCompanionRename` is: under
+  // per-language storage an untranslated entity keeps them in the translations table too.
   const offered = await offeredCompanionRename({
     tableName: args.tableName,
     oldFields: args.oldFields,
     newFields: args.newFields,
-    wasLocalized: args.wasLocalized,
-    isLocalized: args.isLocalized,
+    wasLocalized: wasStored,
+    isLocalized: storesPerLanguage({ localized: args.isLocalized }),
     dialect: args.dialect,
     builtBy: args.builtBy,
   });

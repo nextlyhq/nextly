@@ -460,3 +460,68 @@ for (const dialect of getConfiguredTestDialects()) {
     }, 60_000);
   });
 }
+
+// Under per-language storage an untranslated entity keeps its translatable values in the
+// translations table too, so the rename the dialog offers there is answered as it is for a
+// translated one, and the save goes through.
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a dialog save under per-language storage (${dialect})`, () => {
+    let t: TestNextly;
+    let basePath: string;
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        perLanguageStorage: true,
+      });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: "notice", label: "Notice", fields: [text("heading")] }
+      );
+      await t.nextly.updateSingle({
+        slug: "notice",
+        locale: "en",
+        data: { heading: "Hello", _overwrite: true },
+      } as never);
+    });
+
+    afterEach(async () => {
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    // The answer to the offered rename answers the drop it covers, so the save is not refused as a
+    // question left unanswered. What the save does after the questions is not this check's.
+    it("does not refuse the answer to the rename the dialog offered on the translations table", async () => {
+      const outcome = await dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "notice" },
+        {
+          fields: [text("title2")],
+          confirmed: true,
+          schemaVersion: await versionOf(t, "dynamic_singles", "notice"),
+          renameResolutions: [
+            {
+              tableName: "single_notice_locales",
+              fromColumn: "heading",
+              toColumn: "title2",
+              choice: "rename",
+            },
+          ],
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(String(outcome)).not.toMatch(/cancelled/);
+    }, 60_000);
+  });
+}
