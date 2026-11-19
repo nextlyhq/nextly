@@ -38,6 +38,10 @@ import {
 import { toast } from "@admin/components/ui";
 import { useTakeStep } from "@admin/hooks/queries/useReviewState";
 import { versionKeys } from "@admin/hooks/queries/useVersions";
+import {
+  editorMainAction,
+  useDialogReturnFocus,
+} from "@admin/hooks/useDialogReturnFocus";
 import type { VersionScope } from "@admin/services/versionApi";
 import type { PartReview } from "@admin/types/workflows";
 
@@ -54,6 +58,7 @@ import {
   usePartName,
   usePartPair,
 } from "./part-changes";
+import { announceReview } from "./step-announcement";
 import { stepRefusalWords } from "./step-refusal";
 import { STEP_COMMENT_MAX_LENGTH } from "./StepCommentDialog";
 
@@ -77,6 +82,10 @@ export function ApproveAllDialog({
 }: ApproveAllDialogProps): JSX.Element {
   const document = reviewDocumentOf(scope);
   const mutation = useTakeStep(document);
+  // Opened from state, so focus is handed back by hand when it closes: to
+  // "Approve all languages…", or, where the approval has redrawn the page
+  // without it, to the editor's main action.
+  const returnFocus = useDialogReturnFocus(open, editorMainAction);
   const queryClient = useQueryClient();
   const nameOf = usePartName();
   // Inside a sentence the shared part reads in lower case.
@@ -113,6 +122,9 @@ export function ApproveAllDialog({
       const left = approval.out.map(part =>
         outWords(part, nameOf(part.part), approval.step.name)
       );
+      // Said to assistive technology as well as in the toast: the approval is
+      // the dialog's whole point, and the dialog closes on it.
+      announceReview(`Approved ${names}, each for the version you saw.`);
       toast.success(
         [`Approved ${names}, each for the version you saw.`, ...left]
           .map(sentence => (sentence.endsWith(".") ? sentence : `${sentence}.`))
@@ -122,6 +134,7 @@ export function ApproveAllDialog({
     } catch (reason) {
       const moved = staleParts(reason);
       if (moved === undefined) {
+        // Drawn in the dialog as an alert, which assistive technology reads.
         setRefusal(stepRefusalWords(reason, approval.step.label));
         return;
       }
@@ -145,7 +158,10 @@ export function ApproveAllDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent
+        className="max-h-[85vh] overflow-y-auto sm:max-w-3xl"
+        onCloseAutoFocus={returnFocus}
+      >
         <DialogHeader>
           <DialogTitle>Approve all languages</DialogTitle>
           <DialogDescription>

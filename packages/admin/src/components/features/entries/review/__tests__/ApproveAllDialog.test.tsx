@@ -427,4 +427,56 @@ describe("Approve all languages", () => {
       )
     );
   });
+
+  it("gives focus back to Approve all languages… when closed", async () => {
+    const { dialog } = await openDialog([inReview("en"), inReview("es")]);
+    expect(dialog).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Approve all languages" })
+      ).toBeNull()
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Approve all languages…" })
+      ).toHaveFocus()
+    );
+  });
+
+  it("says the approval to assistive technology, not only in a toast", async () => {
+    stepSpy.mockResolvedValue({ message: "Step taken.", item: {} });
+    const { dialog } = await openDialog([inReview("en"), inReview("es")]);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /^Approve English/ })
+    );
+    await waitFor(() =>
+      expect(announced()).toContain(
+        "Approved English and Spanish, each for the version you saw."
+      )
+    );
+  });
+
+  it("says a refused approval to assistive technology once, through its alert", async () => {
+    stepSpy.mockRejectedValue(new Error("Approvals are closed today."));
+    const { dialog } = await openDialog([inReview("en"), inReview("es")]);
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /^Approve English/ })
+    );
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(
+        "Approvals are closed today."
+      )
+    );
+    expect(
+      announced().some(text => text.includes("Approvals are closed today."))
+    ).toBe(false);
+  });
 });
+
+/** What every polite status region on the page says now. */
+function announced(): string[] {
+  return Array.from(
+    document.querySelectorAll('[role="status"][aria-live="polite"]')
+  ).map(region => region.textContent?.trim() ?? "");
+}

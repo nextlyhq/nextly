@@ -10,13 +10,15 @@
  */
 
 import type { JSX } from "react";
-import { useId } from "react";
+import { useEffect, useId, useRef } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
 import { Button, Label, Textarea, toast } from "@admin/components/ui";
 import { useTakeStep } from "@admin/hooks/queries/useReviewState";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
+
+import { announceReview, stepOutcomeWords } from "../review/step-announcement";
 
 import type { ReadyProblem } from "./ready-to-publish";
 
@@ -75,16 +77,24 @@ export function ReadyToPublish({
                           },
                         ],
                       },
+                      // Said to assistive technology as well as in a toast,
+                      // in the words a step taken anywhere else is said in.
                       {
-                        onSuccess: () =>
-                          toast.success(`${fix.step.label}: done.`),
-                        onError: reason =>
-                          toast.error(
-                            apiErrorMessage(
-                              reason,
-                              `${fix.step.label} didn't go through.`
-                            )
-                          ),
+                        onSuccess: () => {
+                          const words = stepOutcomeWords(fix.step, {
+                            ok: true,
+                          });
+                          if (words !== null) announceReview(words);
+                          toast.success(`${fix.step.label}: done.`);
+                        },
+                        onError: reason => {
+                          const message = apiErrorMessage(
+                            reason,
+                            `${fix.step.label} didn't go through.`
+                          );
+                          announceReview(message);
+                          toast.error(message);
+                        },
                       }
                     );
                   }}
@@ -114,6 +124,12 @@ export function WithoutReviewReason({
   disabled: boolean;
 }): JSX.Element {
   const fieldId = useId();
+  // Asked for in place of the button that asked for it, which is gone: focus
+  // moves to the reason, so the keyboard is where the next thing to do is.
+  const field = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    field.current?.focus();
+  }, []);
   return (
     <div className="space-y-2">
       <Label htmlFor={fieldId}>Reason</Label>
@@ -122,6 +138,7 @@ export function WithoutReviewReason({
         Say why; the reason is kept with the publish.
       </p>
       <Textarea
+        ref={field}
         id={fieldId}
         value={value}
         maxLength={WITHOUT_REVIEW_REASON_MAX}

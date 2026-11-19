@@ -9,6 +9,7 @@
  * one that reports a refused publish without review nowhere near the part it names.
  */
 import userEvent from "@testing-library/user-event";
+import { useState, type ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, waitFor, within } from "@admin/__tests__/utils";
@@ -375,4 +376,77 @@ describe("Publish without review", () => {
       )
     );
   });
+
+  it("says a fix taken from Ready to publish? to assistive technology", async () => {
+    const user = userEvent.setup();
+    open(review([part({}), APPROVED_SHARED]));
+    await screen.findByText("Goes live for the first time.");
+    const ready = screen.getByRole("region", { name: "Ready to publish?" });
+    await user.click(
+      within(ready).getByRole("button", { name: "Submit for review" })
+    );
+    await waitFor(() =>
+      expect(announced()).toContain("Submit for review: done.")
+    );
+  });
+
+  it("moves focus to the reason it asks for, and Back gives it to Publish without review… again", async () => {
+    const user = userEvent.setup();
+    open(review([IN_REVIEW_ES], true));
+    await screen.findByText("Goes live for the first time.");
+    await user.click(
+      screen.getByRole("button", { name: "Publish without review…" })
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Reason" })).toHaveFocus()
+    );
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Publish without review…" })
+      ).toHaveFocus()
+    );
+  });
+
+  it("gives focus back to what opened it when closed", async () => {
+    const user = userEvent.setup();
+    render(<OpenedFromAControl />);
+    const opener = screen.getByRole("button", {
+      name: "Choose what to publish…",
+    });
+    await user.click(opener);
+    await screen.findByText("Goes live for the first time.");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
 });
+
+/** The dialog opened from state by a control, as the editor's Publish split opens it. */
+function OpenedFromAControl(): ReactElement {
+  const [isOpen, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>
+        Choose what to publish…
+      </button>
+      <PublishPartsDialog
+        open={isOpen}
+        onOpenChange={setOpen}
+        target={{ kind: "collection", slug: "posts", id: "post-1" }}
+        direction="publish"
+        languages={LANGUAGES}
+        labelOf={labelOf}
+        initialChoice={{ locales: ["es"], shared: false }}
+        review={review([IN_REVIEW_ES], true)}
+      />
+    </>
+  );
+}
+
+/** What every polite status region on the page says now. */
+function announced(): string[] {
+  return Array.from(
+    document.querySelectorAll('[role="status"][aria-live="polite"]')
+  ).map(region => region.textContent?.trim() ?? "");
+}

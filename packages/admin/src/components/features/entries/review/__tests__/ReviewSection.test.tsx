@@ -304,7 +304,7 @@ describe("ReviewSection", () => {
     await waitFor(() => expect(announced()).toContain("Approve: done."));
   });
 
-  it("says a refused step to assistive technology, with why", async () => {
+  it("says a refused step to assistive technology once, through its alert in place", async () => {
     stepSpy.mockRejectedValue(new Error("Someone else moved it first."));
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);
@@ -312,9 +312,15 @@ describe("ReviewSection", () => {
     await userEvent.click(
       within(section).getByRole("button", { name: "Approve" })
     );
+    // An alert is read at once, so the polite region does not say it again.
     await waitFor(() =>
-      expect(announced()).toContain("Someone else moved it first.")
+      expect(within(section).getByRole("alert")).toHaveTextContent(
+        "Someone else moved it first."
+      )
     );
+    expect(
+      announced().some(text => text.includes("Someone else moved it first."))
+    ).toBe(false);
   });
 });
 

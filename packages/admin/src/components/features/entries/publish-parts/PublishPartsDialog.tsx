@@ -15,7 +15,7 @@
  */
 
 import type { JSX } from "react";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { AlertTriangle, Loader2 } from "@admin/components/icons";
 import {
@@ -34,6 +34,10 @@ import {
   usePublishPartsDescription,
   type PartsTarget,
 } from "@admin/hooks/queries/usePublishParts";
+import {
+  editorMainAction,
+  useDialogReturnFocus,
+} from "@admin/hooks/useDialogReturnFocus";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { refusedAsChangedSince } from "@admin/lib/document-version";
 import type { ShownCopy } from "@admin/lib/document-version";
@@ -128,6 +132,19 @@ export function PublishPartsDialog({
   // The reason being written to publish without review; null while not asked.
   const [reason, setReason] = useState<string | null>(null);
   const sharedId = useId();
+  // Opened from state (a menu row, or a held Publish), so focus is handed back
+  // by hand when it closes: to what opened it, or, where that is gone (a menu
+  // row is), to the editor's main action.
+  const returnFocus = useDialogReturnFocus(open, editorMainAction);
+  // Back from the reason, focus returns to the button that asked for it,
+  // which the reason step had taken off the page.
+  const offerWithoutReview = useRef<HTMLButtonElement>(null);
+  const [backFromReason, setBackFromReason] = useState(false);
+  useEffect(() => {
+    if (!backFromReason || reason !== null) return;
+    offerWithoutReview.current?.focus();
+    setBackFromReason(false);
+  }, [backFromReason, reason]);
   const description = usePublishPartsDescription({
     target,
     direction,
@@ -209,7 +226,10 @@ export function PublishPartsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-publish-parts-dialog="">
+      <DialogContent
+        data-publish-parts-dialog=""
+        onCloseAutoFocus={returnFocus}
+      >
         <DialogHeader>
           <DialogTitle>{TITLE[direction]}</DialogTitle>
           <DialogDescription>
@@ -306,7 +326,10 @@ export function PublishPartsDialog({
               type="button"
               variant="outline"
               disabled={move.isPending}
-              onClick={() => setReason(null)}
+              onClick={() => {
+                setReason(null);
+                setBackFromReason(true);
+              }}
             >
               Back
             </Button>
@@ -336,6 +359,7 @@ export function PublishPartsDialog({
             </Button>
             {offersWithoutReview ? (
               <Button
+                ref={offerWithoutReview}
                 type="button"
                 variant="outline"
                 disabled={!choosesAnything(choice) || move.isPending}

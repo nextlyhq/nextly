@@ -20,18 +20,25 @@ import { useStepTaker, type StepTaker } from "./useStepTaker";
 /** The id of the one region workflow steps are said through. */
 export const REVIEW_ANNOUNCER_ID = "nextly-review-announcer";
 
-const announce = announcerAt(REVIEW_ANNOUNCER_ID);
+/**
+ * Says `message` through the review's region: for a step taken somewhere other than through
+ * {@link useAnnouncedStepTaker}, such as approving every language at once, or a fix taken from
+ * "Ready to publish?".
+ */
+export const announceReview = announcerAt(REVIEW_ANNOUNCER_ID);
 
 /**
  * What a step's outcome is said as, or null where nothing is to be said: a step taken, in the
- * words its toast uses; a refusal, with its reason; a question dismissed, nothing.
+ * words its toast uses; a refusal no one has been told of, with its reason; a question dismissed,
+ * nothing. A refusal already told (`reported`) is drawn where the step was taken, as an alert
+ * assistive technology reads at once, so saying it here too would say it twice.
  */
 export function stepOutcomeWords(
   step: Pick<ReviewStep, "label">,
   outcome: DocumentActionOutcome
 ): string | null {
   if (outcome.ok) return `${step.label}: done.`;
-  if (outcome.reason === "cancelled") return null;
+  if (outcome.reason === "cancelled" || outcome.reported === true) return null;
   return outcome.message;
 }
 
@@ -48,7 +55,7 @@ export function useAnnouncedStepTaker(
     take: async (step: ReviewStep, parts: readonly PartReview[]) => {
       const outcome = await taker.take(step, parts);
       const words = stepOutcomeWords(step, outcome);
-      if (words !== null) announce(words);
+      if (words !== null) announceReview(words);
       return outcome;
     },
   };
