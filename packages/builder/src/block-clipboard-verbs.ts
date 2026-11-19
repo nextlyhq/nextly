@@ -23,10 +23,10 @@ import {
 } from "./block-clipboard";
 import { readClipboard, writeToClipboard } from "./block-clipboard-transport";
 import type { EditorState } from "./editor-state";
-import { lockSentence, UNDO_KEYS_SPOKEN } from "./keyboard-announcements";
 import { registrySlotSource } from "./panels/add/inserter";
 import { slotsShowingEmpty } from "./panels/add/inserter-types";
 import { isRefusal, selectionDeletion, subjectOf } from "./selection-ops";
+import { lockSentence, UNDO_KEYS_SPOKEN } from "./shell/keyboard-announcements";
 
 /**
  * Where copied text goes: the system clipboard, or a clipboard event being
@@ -156,7 +156,11 @@ export function useBlockClipboardVerbs({
         // the meantime. The removal is by id, so it would take those edits
         // too; the blocks are removed only while they still are what was
         // copied.
-        const now = copyOfSelection(latest.current.document, ids, copied.origin);
+        const now = copyOfSelection(
+          latest.current.document,
+          ids,
+          copied.origin
+        );
         if (now === null || serializeCopiedBlocks(now) !== text) {
           notify(CHANGED_WHILE_CUTTING);
           return;

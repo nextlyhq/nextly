@@ -4,7 +4,9 @@ import { getDialectTables } from "../database/index";
 import { resolveRelations } from "../database/resolve-relations";
 import { container } from "../di/container";
 import type { NextlyServiceConfig } from "../di/register";
+import { linkingPolicyFromAuthConfig } from "../domains/auth/linking-policy";
 import { AuthService } from "../domains/auth/services/auth-service";
+import { IdentityService } from "../domains/auth/services/identity-service";
 import { PermissionCheckerService } from "../domains/auth/services/permission-checker-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import { RoleInheritanceService } from "../domains/auth/services/role-inheritance-service";
@@ -150,6 +152,7 @@ export { MediaFolderService } from "./media-folder";
 export class ServiceContainer {
   private _users?: UsersService;
   private _auth?: AuthService;
+  private _identities?: IdentityService;
   private _collections?: CollectionsHandler;
 
   private _roles?: RoleService;
@@ -249,6 +252,30 @@ export class ServiceContainer {
       this._auth = new AuthService(this.adapter, logger, emailService);
     }
     return this._auth;
+  }
+
+  /**
+   * Get Identity service instance (lazy-loaded)
+   * Handles core's own external identities: the listing and the unlink of
+   * what one account holds.
+   */
+  get identities(): IdentityService {
+    if (!this._identities) {
+      // The registered instance when services have booted, so the dispatcher
+      // and the Direct API hold the one the app built. A bare container
+      // (CLI, test) makes its own, with the linking policy a configuration
+      // naming no provider keys resolves to, as the registration does.
+      if (container.has("identityService")) {
+        this._identities = container.get<IdentityService>("identityService");
+        return this._identities;
+      }
+      this._identities = new IdentityService(this.adapter, this.getLogger(), {
+        linkingPolicy: linkingPolicyFromAuthConfig(undefined),
+        roles: this.roles,
+        users: this.users,
+      });
+    }
+    return this._identities;
   }
 
   /**

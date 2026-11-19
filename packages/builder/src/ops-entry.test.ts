@@ -76,8 +76,8 @@ describe("the ops module stays server-safe", () => {
     const specifiers = [...importedSpecifiers(read("src/ops.ts"), "ops.ts")];
 
     expect([...new Set(specifiers)].sort()).toEqual([
-      "./binding-ops",
-      "./binding-services",
+      "./bindings/binding-ops",
+      "./bindings/binding-services",
       "./composition-actions",
       "./conditions/condition-ops",
       "./make-component-setting",
@@ -138,7 +138,10 @@ describe("the ops module stays server-safe", () => {
   });
 
   it("reaches through its binding and condition ops only the engine", () => {
-    for (const module of ["binding-ops.ts", "conditions/condition-ops.ts"]) {
+    for (const module of [
+      "bindings/binding-ops.ts",
+      "conditions/condition-ops.ts",
+    ]) {
       const loaded = moduleSpecifierRefs(read(`src/${module}`), module)
         .filter(ref => !ref.typeOnly)
         .map(ref => ref.specifier);
@@ -148,8 +151,8 @@ describe("the ops module stays server-safe", () => {
 
   it("names its binding services for their types alone", () => {
     const refs = moduleSpecifierRefs(
-      read("src/binding-services.ts"),
-      "binding-services.ts"
+      read("src/bindings/binding-services.ts"),
+      "bindings/binding-services.ts"
     );
     expect(refs.length).toBeGreaterThan(0);
     expect(refs.filter(ref => !ref.typeOnly)).toEqual([]);

@@ -39,9 +39,9 @@
 
 import * as React from "react";
 
-import { BlockActionsContext } from "../block-actions-context";
 import { isElement, isHTMLElement } from "../dom-kind";
 import type { Rect } from "../geometry";
+import { BlockActionsContext } from "../shell/block-actions-context";
 import { TURN_INTO_TARGETS, type TurnIntoOffer } from "../turn-into-verb";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";

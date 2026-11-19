@@ -55,6 +55,7 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
+import { ensureI18nArchive } from "../../../i18n/migration/ensure-archive";
 import type { SingleEntryService } from "../../../singles/services/single-entry-service";
 import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
@@ -68,6 +69,102 @@ vi.mock("../../../../cli/utils/config-loader", async importOriginal => ({
   >()),
   loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
 }));
+
+/**
+ * Two switches over the removal of a deleted entity's leftovers, both off
+ * unless a case arms them: `earlier` runs a delete as a release before the
+ * removal existed did, removing none; `stop` fails the translation rows'
+ * removal once, after the field-group values are removed in the same
+ * transaction, as a run stopped there would.
+ */
+const leftovers = vi.hoisted(() => ({
+  earlier: false,
+  stop: false,
+  labelling: false,
+  /** A collection whose registry row the next registry write leaves unwritten, as a row that failed. */
+  unwritten: undefined as string | undefined,
+}));
+// `unwritten` writes every registry row the newest applied snapshot records but that collection's,
+// once: the rest of the write, the removal of dropped entities' rows included, is as it was.
+vi.mock("../registry-writer", async importOriginal => {
+  const actual = await importOriginal<typeof import("../registry-writer")>();
+  return {
+    ...actual,
+    writeRegistryFromSource: (
+      ...args: Parameters<typeof actual.writeRegistryFromSource>
+    ) => {
+      const [source, ...rest] = args;
+      const skipped = leftovers.unwritten;
+      if (skipped === undefined) return actual.writeRegistryFromSource(...args);
+      leftovers.unwritten = undefined;
+      const collections = Object.fromEntries(
+        Object.entries(source.entities.collections).filter(
+          ([slug]) => slug !== skipped
+        )
+      );
+      return actual.writeRegistryFromSource(
+        { ...source, entities: { ...source.entities, collections } },
+        ...rest
+      );
+    },
+  };
+});
+// `labelling` fails the older archived translations' labelling once, as a database error would.
+vi.mock(
+  "../../../i18n/migration/label-legacy-archive-rows",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../i18n/migration/label-legacy-archive-rows")
+      >();
+    return {
+      ...actual,
+      labelLegacyArchiveRows: (
+        ...args: Parameters<typeof actual.labelLegacyArchiveRows>
+      ) => {
+        if (leftovers.labelling) {
+          leftovers.labelling = false;
+          return Promise.reject(new Error("the labelling failed"));
+        }
+        return actual.labelLegacyArchiveRows(...args);
+      },
+    };
+  }
+);
+vi.mock("../dropped-entity-leftovers", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../dropped-entity-leftovers")>();
+  return {
+    ...actual,
+    removeDroppedEntityLeftovers: (
+      ...args: Parameters<typeof actual.removeDroppedEntityLeftovers>
+    ) =>
+      leftovers.earlier
+        ? Promise.resolve({ removed: [], left: [] })
+        : actual.removeDroppedEntityLeftovers(...args),
+  };
+});
+vi.mock(
+  "../../../i18n/migration/entity-translation-rows",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../i18n/migration/entity-translation-rows")
+      >();
+    return {
+      ...actual,
+      removeEntityTranslationRows: (
+        ...args: Parameters<typeof actual.removeEntityTranslationRows>
+      ) => {
+        if (leftovers.stop) {
+          leftovers.stop = false;
+          return Promise.reject(new Error("stopped in the translation rows"));
+        }
+        return actual.removeEntityTranslationRows(...args);
+      },
+    };
+  }
+);
 
 const MIGRATIONS = "./migrations";
 const DEFINITION = "./schema/builder.json";
@@ -201,6 +298,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  leftovers.earlier = false;
+  leftovers.stop = false;
+  leftovers.labelling = false;
+  leftovers.unwritten = undefined;
   setNonInteractive(false);
   await shutdownServices().catch(() => {});
   for (const close of closers.splice(0)) await close();
@@ -455,13 +556,13 @@ describe.each(getConfiguredTestDialects())(
       expect(before.translations).toBe(2);
       expect(deleted.code, deleted.said).toBeUndefined();
 
-      // The file drops the translations table first; the listing reads it beside its table.
-      // `nextly migrate` lists a file's drops without counting their rows.
+      // The file drops the translations table first; the listing reads it beside its table,
+      // each of the entity's tables with its rows and the translations table as its table's.
       const lines = deleted.said.split("\n").map(line => line.trim());
-      const at = lines.indexOf(`- table ${notes.table}`);
+      const at = lines.indexOf(`- table ${notes.table} (1 row)`);
       expect(at, deleted.said).toBeGreaterThanOrEqual(0);
       expect(lines[at + 1], deleted.said).toBe(
-        `- table ${notes.table}_locales`
+        `- table ${notes.table}_locales (2 rows), belonging to ${notes.table}`
       );
     }, 180_000);
 
@@ -550,6 +651,474 @@ describe.skipIf(!getConfiguredTestDialects().includes("sqlite"))(
         table: false,
         translationsTable: false,
         translations: 0,
+      });
+    }, 180_000);
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "what a deleted translated collection left, on a deployed database (%s)",
+  dialect => {
+    const KEPT = "dpl_kept";
+    const META_TABLE = resolveComponentTableName(META);
+    const notes = KINDS[0]!;
+
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+    /** What `adapter` holds of NOTES in the tables every entity shares, and KEPT's field-group values. */
+    async function sharedLeftOf(adapter: DrizzleAdapter) {
+      const count = async (sql: string) =>
+        Number(
+          (await adapter.executeQuery<{ n: unknown }>(sql))[0]?.n ?? Number.NaN
+        );
+      const valuesOf = (table: string) =>
+        count(
+          `SELECT COUNT(*) AS n FROM ${q(META_TABLE)} WHERE ${q("_parent_table")} = '${table}'`
+        );
+      return {
+        registryRow: await count(
+          `SELECT COUNT(*) AS n FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${NOTES}'`
+        ),
+        values: await valuesOf(notes.table),
+        archiveRows: (await adapter.tableExists("nextly_i18n_archive"))
+          ? await count(
+              `SELECT COUNT(*) AS n FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${NOTES}'`
+            )
+          : 0,
+        keptValues: await valuesOf(`dc_${KEPT}`),
+      };
+    }
+
+    /**
+     * NOTES and KEPT, both placing the META field group, made in the Builder
+     * and applied to the deployed database, each with an entry there, NOTES's
+     * translated and with an archived translation.
+     */
+    async function deployNotes(
+      /** Archive the translation as a release before the archive recorded kinds did. */
+      options: { legacyArchive?: boolean } = {}
+    ) {
+      const own = await openDatabase(dialect, "builder");
+      const deployed = await openDatabase(dialect, "deployed");
+
+      reach(dialect, own.url);
+      await start(own.adapter);
+      await builder(async () => {
+        await notes.create();
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          {
+            name: KEPT,
+            label: KEPT,
+            fields: [fieldGroup({ name: "meta", component: META })],
+          }
+        );
+      });
+
+      reach(dialect, deployed.url);
+      await start(deployed.adapter);
+      const created = await migrate();
+      expect(created.code, created.said).toBeUndefined();
+      const site = await start(deployed.adapter);
+      await notes.write?.(site);
+      await site.nextly.create({
+        collection: KEPT as never,
+        data: { meta: { note: "kept" } } as never,
+      });
+      await ensureI18nArchive(deployed.adapter, dialect);
+      await deployed.adapter.insert("nextly_i18n_archive", {
+        collection: NOTES,
+        entityKind: options.legacyArchive === true ? "unknown" : "collection",
+        entryId: "an-entry",
+        locale: "es",
+        field: "body",
+        value: "Hola",
+        // A row without a kind is given an owner only if it was archived well after that owner
+        // was made (up to 42 hours on MySQL, for time zones): two days on, as a translation is
+        // archived when its field later leaves translation.
+        archivedAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+      });
+      return { own, deployed };
+    }
+
+    /** NOTES and KEPT deployed (`deployNotes`), then NOTES deleted in the Builder and the delete applied by `nextly migrate`. */
+    async function deleteNotesOnTheDeployedDatabase(
+      /** Run just before the delete is applied, on the deployed database: a switch armed for that run alone. */
+      arm: (deployed: DrizzleAdapter) => void | Promise<void> = () => {},
+      /** Archive the translation as a release before the archive recorded kinds did. */
+      options: { legacyArchive?: boolean } = {}
+    ) {
+      const { own, deployed } = await deployNotes(options);
+      const before = await sharedLeftOf(deployed.adapter);
+
+      reach(dialect, own.url);
+      await start(own.adapter);
+      await builder(notes.remove);
+
+      reach(dialect, deployed.url);
+      await start(deployed.adapter);
+      await arm(deployed.adapter);
+      const deleted = await migrate();
+      const after = await sharedLeftOf(deployed.adapter);
+      return { deployed, before, deleted, after };
+    }
+
+    /** The run's line naming what it removed of NOTES. */
+    const removedLine = new RegExp(
+      `Removed what the deleted collection "${NOTES}" left: 1 field group value, [1-9]\\d* translation rows?\\.`
+    );
+
+    it("removes its field-group values and translation rows once it is gone, naming it, and leaves another's", async () => {
+      const { before, deleted, after } =
+        await deleteNotesOnTheDeployedDatabase();
+      // Positive control: the deployed database held each of them.
+      expect(before).toMatchObject({
+        registryRow: 1,
+        values: 1,
+        archiveRows: 1,
+      });
+      expect(before.keptValues).toBe(1);
+
+      expect(deleted.code, deleted.said).toBeUndefined();
+      expect(after, deleted.said).toEqual({
+        registryRow: 0,
+        values: 0,
+        archiveRows: 0,
+        keptValues: 1,
+      });
+      expect(deleted.said).toMatch(removedLine);
+    }, 180_000);
+
+    it("removes what an earlier delete left on a later run with nothing to apply", async () => {
+      // The delete applied as a release before the removal existed applied it.
+      const { deployed, deleted, after } =
+        await deleteNotesOnTheDeployedDatabase(() => {
+          leftovers.earlier = true;
+        });
+      leftovers.earlier = false;
+      expect(deleted.code, deleted.said).toBeUndefined();
+      // Positive control: the earlier delete removed the row and left the rest.
+      expect(after).toMatchObject({
+        registryRow: 0,
+        values: 1,
+        archiveRows: 1,
+      });
+
+      const later = await migrate();
+      const cleaned = await sharedLeftOf(deployed.adapter);
+
+      expect(later.code, later.said).toBeUndefined();
+      expect(cleaned, later.said).toEqual({
+        registryRow: 0,
+        values: 0,
+        archiveRows: 0,
+        keptValues: 1,
+      });
+      expect(later.said).toMatch(removedLine);
+    }, 180_000);
+
+    it("leaves a deleted collection's rows while a table stands under its name, and removes them once it is gone", async () => {
+      const { deployed, after } = await deleteNotesOnTheDeployedDatabase(() => {
+        leftovers.earlier = true;
+      });
+      leftovers.earlier = false;
+      // Positive control: the earlier delete left them.
+      expect(after).toMatchObject({
+        registryRow: 0,
+        values: 1,
+        archiveRows: 1,
+      });
+      // A table under the deleted collection's name: its rows may be that table's.
+      await deployed.adapter.executeQuery(
+        `CREATE TABLE ${q(notes.table)} (${q("id")} VARCHAR(36))`
+      );
+
+      const standing = await migrate();
+      expect(standing.code, standing.said).toBeUndefined();
+      expect(await sharedLeftOf(deployed.adapter), standing.said).toEqual(
+        after
+      );
+      expect(standing.said).not.toMatch(removedLine);
+
+      await deployed.adapter.executeQuery(`DROP TABLE ${q(notes.table)}`);
+      const gone = await migrate();
+      expect(await sharedLeftOf(deployed.adapter), gone.said).toEqual({
+        registryRow: 0,
+        values: 0,
+        archiveRows: 0,
+        keptValues: 1,
+      });
+      expect(gone.said).toMatch(removedLine);
+    }, 180_000);
+
+    // Not on SQLite: there a migration file writes a registry row's `created_at` in milliseconds
+    // (`metadata-sql.ts`) into a column read as seconds, so the row reads as made far in the
+    // future and no older archived translation is ever given to it. That is the registry writer's
+    // to put right; the labelling here is the same on every dialect.
+    it.skipIf(dialect === "sqlite")(
+      "removes an archived translation from before the archive recorded whose it is",
+      async () => {
+        const { before, deleted, after } =
+          await deleteNotesOnTheDeployedDatabase(() => {}, {
+            legacyArchive: true,
+          });
+        // Positive control: the row is there, recorded under no kind.
+        expect(before.archiveRows).toBe(1);
+        expect(deleted.code, deleted.said).toBeUndefined();
+        expect(after, deleted.said).toEqual({
+          registryRow: 0,
+          values: 0,
+          archiveRows: 0,
+          keptValues: 1,
+        });
+      },
+      180_000
+    );
+
+    /** The kind NOTES's archived translation is recorded under. */
+    async function archiveKindOfNotes(adapter: DrizzleAdapter) {
+      const [row] = await adapter.executeQuery<{ k: unknown }>(
+        `SELECT ${q("entity_kind")} AS k FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${NOTES}'`
+      );
+      return row?.k;
+    }
+
+    // SQLite's registries hold some creation times in milliseconds where the labelling reads
+    // seconds, so every holder would read as made in the future and every legacy row be settled
+    // as unresolved for good: the run leaves them unlabelled until those times read right.
+    it.runIf(dialect === "sqlite")(
+      "leaves a live collection's archived translation from before the archive recorded kinds unlabelled",
+      async () => {
+        const { deployed } = await deployNotes({ legacyArchive: true });
+        // Positive control: the row is recorded under no kind.
+        expect(await archiveKindOfNotes(deployed.adapter)).toBe("unknown");
+
+        const run = await migrate();
+
+        expect(run.code, run.said).toBeUndefined();
+        expect(await archiveKindOfNotes(deployed.adapter)).toBe("unknown");
+      },
+      180_000
+    );
+
+    // A live collection whose registry row is missing has it written back by the run's registry
+    // write. Labelled before that write, its archived translation would find no holder and be
+    // settled as unresolved for good: it waits, and the next run, with the holder back, labels it.
+    it.skipIf(dialect === "sqlite")(
+      "labels a live collection's older archived translation on the run after its missing registry row is written back",
+      async () => {
+        const { deployed } = await deployNotes({ legacyArchive: true });
+        await deployed.adapter.executeQuery(
+          `DELETE FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${NOTES}'`
+        );
+        const registered = async () =>
+          (await sharedLeftOf(deployed.adapter)).registryRow;
+        // Positive controls: the holder is gone, and the row is recorded under no kind.
+        expect(await registered()).toBe(0);
+        expect(await archiveKindOfNotes(deployed.adapter)).toBe("unknown");
+
+        const first = await migrate();
+
+        expect(first.code, first.said).toBeUndefined();
+        expect(await registered(), first.said).toBe(1);
+        expect(await archiveKindOfNotes(deployed.adapter)).toBe("unknown");
+
+        const second = await migrate();
+
+        expect(second.code, second.said).toBeUndefined();
+        expect(await archiveKindOfNotes(deployed.adapter)).toBe("collection");
+      },
+      180_000
+    );
+
+    it("keeps a deleted collection's rows while a registry row names its table, and removes them once none does", async () => {
+      const { deployed, after } = await deleteNotesOnTheDeployedDatabase(() => {
+        leftovers.earlier = true;
+      });
+      leftovers.earlier = false;
+      expect(after).toMatchObject({
+        registryRow: 0,
+        values: 1,
+        archiveRows: 1,
+      });
+      // Another collection's registry row names the deleted collection's table: rows parented to it may be its.
+      const point = (table: string) =>
+        deployed.adapter.executeQuery(
+          `UPDATE ${q("dynamic_collections")} SET ${q("table_name")} = '${table}' WHERE ${q("slug")} = '${KEPT}'`
+        );
+      await point(notes.table);
+
+      // A run that adds only missing registry rows, as beside a live sync, leaves that row as it is.
+      vi.stubEnv("NODE_ENV", "development");
+      const claimed = await migrate();
+      vi.stubEnv("NODE_ENV", "test");
+      expect(claimed.code, claimed.said).toBeUndefined();
+      expect(await sharedLeftOf(deployed.adapter), claimed.said).toEqual(after);
+
+      await point(`dc_${KEPT}`);
+      const free = await migrate();
+      expect(await sharedLeftOf(deployed.adapter), free.said).toEqual({
+        registryRow: 0,
+        values: 0,
+        archiveRows: 0,
+        keptValues: 1,
+      });
+    }, 180_000);
+
+    it("names a deleted collection whose only leftover is its translation transition record", async () => {
+      const { deployed } = await deleteNotesOnTheDeployedDatabase(() => {
+        leftovers.earlier = true;
+      });
+      leftovers.earlier = false;
+      // Only its transition record left.
+      await deployed.adapter.executeQuery(
+        `DELETE FROM ${q(META_TABLE)} WHERE ${q("_parent_table")} = '${notes.table}'`
+      );
+      await deployed.adapter.executeQuery(
+        `DELETE FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${NOTES}'`
+      );
+      if (await deployed.adapter.tableExists("nextly_translation_provenance")) {
+        await deployed.adapter.executeQuery(
+          `DELETE FROM ${q("nextly_translation_provenance")} WHERE ${q("scope_slug")} = '${NOTES}'`
+        );
+      }
+      const key = `i18n.transition.collection.${NOTES}`;
+      await deployed.adapter.executeQuery(
+        `DELETE FROM ${q("nextly_meta")} WHERE ${q("key")} = '${key}'`
+      );
+      await deployed.adapter.insert("nextly_meta", {
+        key,
+        value: JSON.stringify({ version: 1 }),
+        updatedAt: new Date(),
+      });
+
+      const run = await migrate();
+      expect(run.code, run.said).toBeUndefined();
+      expect(run.said).toContain(
+        `Removed what the deleted collection "${NOTES}" left: 0 field group values, 1 translation row.`
+      );
+      const [left] = await deployed.adapter.executeQuery<{ n: unknown }>(
+        `SELECT COUNT(*) AS n FROM ${q("nextly_meta")} WHERE ${q("key")} = '${key}'`
+      );
+      expect(Number(left?.n)).toBe(0);
+    }, 180_000);
+
+    // The labelling does not run on SQLite (above), so its failure is judged on PostgreSQL and
+    // MySQL.
+    it.skipIf(dialect === "sqlite")(
+      "stops the metadata pass before the registry write when the labelling fails, keeping the deleted collection registered, and the next run finishes",
+      async () => {
+        const { deployed, deleted, after } =
+          await deleteNotesOnTheDeployedDatabase(() => {
+            leftovers.labelling = true;
+          });
+        expect(leftovers.labelling, "the labelling was reached").toBe(false);
+        // The metadata pass stops and says so, and the run goes no further with it.
+        expect(deleted.said).toContain(
+          "Migration metadata was not recorded: the labelling failed"
+        );
+        // Nothing of the registry changed: the row that names the collection is there for the next
+        // run's labelling, and its rows with it.
+        expect(after).toMatchObject({
+          registryRow: 1,
+          values: 1,
+          archiveRows: 1,
+        });
+
+        const next = await migrate();
+        expect(next.code, next.said).toBeUndefined();
+        expect(await sharedLeftOf(deployed.adapter), next.said).toEqual({
+          registryRow: 0,
+          values: 0,
+          archiveRows: 0,
+          keptValues: 1,
+        });
+      },
+      180_000
+    );
+
+    // The removal of what a deleted entity left labels nothing: its registry row is gone, and the
+    // archive's other rows wait for a labelling that can place them. Here another collection's
+    // registry row is missing and its write fails, so a labelling run by the removal would settle
+    // that collection's older archived translation as unresolved for good.
+    it("leaves another collection's older archived translation unlabelled when it removes what a deleted one left", async () => {
+      const { deployed, deleted } = await deleteNotesOnTheDeployedDatabase(
+        async adapter => {
+          await adapter.insert("nextly_i18n_archive", {
+            collection: KEPT,
+            entityKind: "unknown",
+            entryId: "a-kept-entry",
+            locale: "es",
+            field: "title",
+            value: "Guardado",
+            archivedAt: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+          });
+          await adapter.executeQuery(
+            `DELETE FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${KEPT}'`
+          );
+          leftovers.unwritten = KEPT;
+        }
+      );
+      // Positive controls: the deleted collection's leftovers were removed, and the other
+      // collection's registry row was not written back.
+      expect(deleted.code, deleted.said).toBeUndefined();
+      expect(deleted.said).toMatch(removedLine);
+      const [held] = await deployed.adapter.executeQuery<{ n: unknown }>(
+        `SELECT COUNT(*) AS n FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${KEPT}'`
+      );
+      expect(Number(held?.n)).toBe(0);
+
+      const [kept] = await deployed.adapter.executeQuery<{ k: unknown }>(
+        `SELECT ${q("entity_kind")} AS k FROM ${q("nextly_i18n_archive")} WHERE ${q("collection")} = '${KEPT}'`
+      );
+      expect(kept?.k).toBe("unknown");
+    }, 180_000);
+
+    // A run with nothing to apply that could not remove what a deleted collection left says so,
+    // and does not report the database up to date: the next run owes the removal.
+    it("does not report a run with nothing to apply up to date when what a deleted collection left could not be removed", async () => {
+      await deleteNotesOnTheDeployedDatabase(() => {
+        leftovers.earlier = true;
+      });
+      leftovers.earlier = false;
+      leftovers.stop = true;
+
+      const later = await migrate();
+
+      expect(leftovers.stop, "the stop was reached").toBe(false);
+      expect(later.code, later.said).toBeUndefined();
+      expect(later.said).toContain(
+        `Could not remove what the deleted collection "${NOTES}" left`
+      );
+      expect(later.said).not.toContain("Database is up to date");
+      expect(later.said).toContain("No migration files to apply.");
+    }, 180_000);
+
+    it("removes none of its rows in a run stopped part-way through them, and all of them in the next", async () => {
+      const { deployed, before, deleted, after } =
+        await deleteNotesOnTheDeployedDatabase(() => {
+          leftovers.stop = true;
+        });
+      expect(leftovers.stop, "the stop was reached").toBe(false);
+      expect(deleted.code, deleted.said).toBeUndefined();
+      // The field-group values went first in the same transaction, and came back with it.
+      expect(after, deleted.said).toEqual({ ...before, registryRow: 0 });
+      expect(deleted.said).toContain(
+        `Could not remove what the deleted collection "${NOTES}" left`
+      );
+
+      const next = await migrate();
+      const cleaned = await sharedLeftOf(deployed.adapter);
+
+      expect(next.code, next.said).toBeUndefined();
+      expect(cleaned, next.said).toEqual({
+        registryRow: 0,
+        values: 0,
+        archiveRows: 0,
+        keptValues: 1,
       });
     }, 180_000);
   }

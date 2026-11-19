@@ -17,7 +17,7 @@ import { ShortcutProvider, useShortcuts } from "@nextlyhq/ui";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { MOVE_KEYS } from "./keyboard-actions";
+import { MOVE_KEYS } from "./shell/keyboard-actions";
 import {
   PREVIEWED_ENTRY_KEYS,
   PreviewedEntryProvider,

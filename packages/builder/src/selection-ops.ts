@@ -48,7 +48,7 @@ import {
 
 import { blockDeletion } from "./delete-block";
 import { blockDuplication } from "./duplicate-block";
-import { lockOp } from "./inspector";
+import { lockOp } from "./inspector/inspector";
 import { keyboardMovePosition } from "./keyboard-move";
 import { lockedBlockSentence } from "./lock-refusal";
 import { lockBlockingDelete, lockBlockingMove } from "./locking";

@@ -24,7 +24,6 @@ import * as React from "react";
 
 import { BlockIconMark } from "../block-icon";
 import type { EditorState } from "../editor-state";
-import { useBlockActionsContext } from "../keyboard-actions";
 import {
   InsertAnnouncement,
   placementWords,
@@ -47,6 +46,7 @@ import {
   type BuilderCommand,
   type CommandGroupOptions,
 } from "./command-palette";
+import { useBlockActionsContext } from "./keyboard-actions";
 
 /** The groups a search shows, in the order an author reads them. */
 const ADD_GROUP = "Add";

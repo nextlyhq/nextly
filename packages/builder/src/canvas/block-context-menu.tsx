@@ -123,9 +123,12 @@ import * as React from "react";
 
 import { isElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
-import { useBlockActionsContext, type BlockActions } from "../keyboard-actions";
 import { useSelectionVerbs } from "../selection-actions";
 import { blockActionRunners } from "../shell/builder-commands";
+import {
+  useBlockActionsContext,
+  type BlockActions,
+} from "../shell/keyboard-actions";
 import { isTurnIntoAction } from "../turn-into-verb";
 
 import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";

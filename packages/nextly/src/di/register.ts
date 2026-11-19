@@ -60,6 +60,7 @@ import { resealPrincipalDigestKeyAtBoot } from "../domains/audit/erase-principal
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
+import type { IdentityService } from "../domains/auth/services/identity-service";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { publishCollectionDbOptions } from "../domains/collections/services/collection-id";
@@ -676,6 +677,8 @@ export interface ServiceMap {
   /** Each admin user's notices, recorded by other areas through `record`. */
   noticesService: NoticesService;
   apiKeyService: ApiKeyService;
+  /** Core's own external identities, listed and unlinked for one account. */
+  identityService: IdentityService;
   /** Webhook endpoint management, resolved by the webhooks REST handlers. */
   webhookEndpointService: WebhookEndpointService;
   /** Read-only webhook delivery log, resolved by the webhooks REST handlers. */
