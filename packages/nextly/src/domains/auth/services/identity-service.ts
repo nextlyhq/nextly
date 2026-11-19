@@ -686,6 +686,12 @@ export class IdentityService extends BaseService {
    * resolves to the winner. Only the one restart: a database that refuses
    * twice is answering about more than two writers, and that answer is the
    * caller's to see.
+   *
+   * No restart at all when the sign-in runs inside a transaction its caller
+   * opened: the creation joined that transaction rather than owning one, so
+   * the verdict ended the caller's whole transaction — a restart would run
+   * as part of a transaction the database already rolled back. The verdict
+   * is the caller's to answer, by restarting what it opened.
    */
   private async provisionWithOneRestart(
     binding: PluginIdentityBinding,
@@ -695,10 +701,13 @@ export class IdentityService extends BaseService {
       { readonly mayProvision: true }
     >
   ): Promise<string> {
+    const joinsCallersTransaction = this.adapter.inTransaction();
     try {
       return await this.provisionFor(binding, identity, provisioning);
     } catch (error) {
-      if (!creationLostToADatabaseRace(error)) throw error;
+      if (joinsCallersTransaction || !creationLostToADatabaseRace(error)) {
+        throw error;
+      }
       return await this.provisionFor(binding, identity, provisioning);
     }
   }
@@ -842,7 +851,6 @@ export class IdentityService extends BaseService {
         providerKey: identity.providerKey,
         issuer: identity.issuer,
         subject: identity.subject,
-        keyDigest: identity.keyDigest,
         address: identity.address,
       },
     });

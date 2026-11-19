@@ -695,6 +695,17 @@ describe.each(getConfiguredTestDialects())(
           "new-person"
         ),
       });
+      // The person's next sign-in finds that row by the lookup's own digest
+      // and resolves the same account, creating nothing.
+      const again = await serviceOn(
+        handle,
+        provisioningPolicy(["editor"])
+      ).resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "new-person" })
+      );
+      expect(again.userId).toBe(resolved.userId);
+      expect(await identityRows(handle)).toHaveLength(1);
     });
 
     it("refuses each provisioning refusal, writing nothing", async () => {

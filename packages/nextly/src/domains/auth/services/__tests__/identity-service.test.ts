@@ -30,6 +30,7 @@ import {
   type TestDb,
 } from "../../../../__tests__/fixtures/db";
 import { loadDialectTables } from "../../../../database/dialect-tables";
+import { DbError } from "../../../../database/errors";
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import { externalIdentityKeyDigest } from "../../../../schemas/external-identities";
@@ -1255,6 +1256,56 @@ describe("the provisioning branch", () => {
     expect(["racer-one@example.com", "racer-two@example.com"]).toContain(
       (stored as { address?: unknown } | undefined)?.address
     );
+  });
+
+  it("restarts a creation the database's restart verdict refused, but not one joined to the caller's transaction", async () => {
+    await plantRole("editor");
+    const adapter = countedAdapter();
+    const verdict = () =>
+      new DbError({
+        message: "Deadlock found when trying to get lock",
+        kind: "deadlock",
+        dialect: "mysql",
+        code: "ER_LOCK_DEADLOCK",
+      });
+    let attempts = 0;
+    const service = new IdentityService(adapter, testLogger, {
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+      roles: new RoleQueryService(adapter, testLogger),
+      users: {
+        // The first attempt meets the verdict; any restart succeeds.
+        createExternalUser: async () => {
+          attempts += 1;
+          if (attempts === 1) throw verdict();
+          return { id: "restarted" };
+        },
+      },
+      sessionOf: sessionReading(null),
+    });
+
+    // Owning its transaction, the creation is restarted once.
+    const owned = await service.resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "owned" })
+    );
+    expect(owned.userId).toBe("restarted");
+    expect(attempts).toBe(2);
+
+    // Joined to a transaction the caller opened, the verdict ended the
+    // caller's transaction too: no restart, the verdict is the caller's.
+    attempts = 0;
+    await expect(
+      adapter.transaction(() =>
+        service.resolveSignInIdentity(
+          pluginIdentityBinding(ACME),
+          handOff({ subject: "joined" })
+        )
+      )
+    ).rejects.toMatchObject({ kind: "deadlock" });
+    expect(attempts).toBe(1);
   });
 });
 
