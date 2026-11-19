@@ -395,6 +395,16 @@ describeEachDialect(
       expect(log, "the server log").toContain(
         `The registry row of '${SLUG}' was not written after its rename, so its version did not move on`
       );
+      // The running shape follows the table, so a read in this process finds the renamed field.
+      const singles: SingleEntryService = t.getService("singleEntryService");
+      const read = await singles.get(SLUG, {
+        locale: "es",
+        overrideAccess: true,
+      });
+      expect(
+        (read.data as Record<string, unknown> | undefined)?.title2,
+        `the read after the failure: ${JSON.stringify(read)}`
+      ).toBe("Hola");
     });
 
     it("answers that a translated Collection was saved only in part when its translations step fails", async () => {
