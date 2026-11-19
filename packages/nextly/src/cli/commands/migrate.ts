@@ -3190,6 +3190,11 @@ export async function migrateCore(
         warn: m => deps.logger.warn(m),
         info: m => deps.logger.info(m),
       },
+      // The run's own bounds, its flags among them, for a busy SQLite database met while the
+      // lock is taken.
+      ...(deps.busyTable === undefined
+        ? {}
+        : { busyBounds: deps.busyTable.bounds }),
     }
   );
 

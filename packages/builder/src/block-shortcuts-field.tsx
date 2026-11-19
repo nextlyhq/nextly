@@ -14,8 +14,6 @@ import {
 import { Switch } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { SettingSlot } from "./settings-filter";
-
 import {
   BUTTON_BLOCK,
   FULL_SCREEN,
@@ -47,6 +45,7 @@ import { CssHint } from "./css-hint";
 import type { EditorState } from "./editor-state";
 import type { BuilderOp } from "./op-vocabulary";
 import { SegmentChoices } from "./segment-choices";
+import { SettingSlot } from "./settings-filter";
 
 /** The ids the settings search knows each shortcut by. */
 export const SHORTCUT_IDS = {

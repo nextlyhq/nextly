@@ -16,10 +16,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
-import { SettingSlot } from "./settings-filter";
-
 import { BindableField } from "./binding-controls";
-import { ListMarkerNote } from "./list-marker-note";
 import {
   PropExposeControl,
   type ComponentFieldsBinding,
@@ -36,11 +33,13 @@ import {
   type BlockInspection,
   type EditableProp,
 } from "./inspector";
+import { ListMarkerNote } from "./list-marker-note";
 import {
   propGroupsOf,
   type BindableOptions,
   type BindableWrapper,
 } from "./prop-groups";
+import { SettingSlot } from "./settings-filter";
 import { TOC_NOTE_PROP, TocLeftOutNote } from "./toc-left-out-note";
 import {
   useVisitorUnreadable,

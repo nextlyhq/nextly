@@ -459,7 +459,19 @@ describe("an entity's field-group values where the walk cannot read a table", ()
       listTables: vi.fn().mockResolvedValue(["comp_seo"]),
       tableExists: vi.fn().mockResolvedValue(false),
       delete: vi.fn(),
-      getDrizzle: vi.fn(),
+      // The catalog lists `comp_seo` with a `_parent_table` column, so it holds instances.
+      getDrizzle: vi.fn(() => ({
+        all: () =>
+          ["id", "_parent_id", "_parent_table"].map((name, cid) => ({
+            tbl: "comp_seo",
+            cid,
+            name,
+            type: "TEXT",
+            notnull: 0,
+            dflt_value: null,
+            pk: 0,
+          })),
+      })),
       executeQuery: vi.fn().mockResolvedValue([{ n: 2 }]),
       select: vi.fn(async (table: string) => {
         if (table === "comp_seo") {

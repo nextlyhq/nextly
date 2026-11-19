@@ -1685,7 +1685,12 @@ export async function runMigrateDown(
       },
       fileExists: () => Promise.resolve(true),
       readDownSql,
-      withLock: withMigrateLock,
+      // The lock with the command's own bounds, for a busy SQLite database met while it is taken.
+      withLock: (lockAdapter, lockDialect, work, lockOptions) =>
+        withMigrateLock(lockAdapter, lockDialect, work, {
+          ...lockOptions,
+          busyBounds: bounds,
+        }),
       ...(plugin === undefined
         ? {
             checkAppHistory: ({ recordChecksums }) =>
