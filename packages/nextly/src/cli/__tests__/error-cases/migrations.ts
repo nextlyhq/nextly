@@ -17,6 +17,10 @@ import {
 } from "../../../domains/schema/migrate/core-reconcile";
 import { coreDeletionOf } from "../../../domains/schema/migrate/core-retired-columns";
 import { migrationDriftError } from "../../../domains/schema/migrate/drift-error";
+import {
+  fieldGroupHistoryBehindStorageError,
+  fieldGroupStorageNotMigratedError,
+} from "../../../domains/schema/migrate/field-group-history";
 import { ownWriteLockError } from "../../../domains/schema/migrate/migration-transaction";
 import {
   assertNotPartiallyApplied,
@@ -533,6 +537,13 @@ export const MIGRATION_CASES = {
     ]),
   SETTINGS_CHANGE_WITHOUT_MIGRATION: () =>
     settingsChangeWithoutMigration(1, ["~ posts: labels.singular"]),
+  // The refusals `nextly migrate` makes of the field-group transition, built as it throws them.
+  FIELD_GROUP_STORAGE_NOT_MIGRATED: () =>
+    fieldGroupStorageNotMigratedError(
+      "20261119_120000_000_field_group_current_names.sql"
+    ),
+  FIELD_GROUP_HISTORY_BEHIND_STORAGE: () =>
+    fieldGroupHistoryBehindStorageError(),
   DATABASE_BEHIND_MIGRATIONS: () =>
     databaseBehindMigrations(2, [
       "- table dc_posts (created by 20261116_120000_000_create_posts)",

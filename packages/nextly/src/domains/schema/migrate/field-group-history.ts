@@ -68,7 +68,14 @@ export async function refuseFieldGroupTransitionOnLegacy(
   filename: string
 ): Promise<void> {
   if ((await databaseFieldGroupNaming(adapter)) === "current") return;
-  throw new NextlyError({
+  throw fieldGroupStorageNotMigratedError(filename);
+}
+
+/** The refusal of the transition file on a database whose field groups have not moved. */
+export function fieldGroupStorageNotMigratedError(
+  filename: string
+): NextlyError {
+  return new NextlyError({
     code: "VALIDATION_ERROR",
     publicMessage:
       `${filename} moves the migration history to the current field-group names (dynamic_field_groups, fg_<slug>), and this database's field groups are still on the legacy ones (dynamic_components, comp_<slug>). ` +
@@ -99,7 +106,12 @@ export async function refuseMovedStorageBehindLegacyHistory(args: {
   if (latest !== null && snapshotFieldGroupNaming(latest.data) === "current") {
     return;
   }
-  throw new NextlyError({
+  throw fieldGroupHistoryBehindStorageError();
+}
+
+/** The refusal of a database whose field groups moved ahead of a legacy history. */
+export function fieldGroupHistoryBehindStorageError(): NextlyError {
+  return new NextlyError({
     code: "VALIDATION_ERROR",
     publicMessage:
       "This database's field groups were moved to the current names (dynamic_field_groups, fg_<slug>), and the project's migration history is still on the legacy ones (dynamic_components, comp_<slug>). " +

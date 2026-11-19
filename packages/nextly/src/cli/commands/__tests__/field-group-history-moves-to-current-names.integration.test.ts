@@ -174,6 +174,16 @@ async function run(
   const exit = vi.spyOn(process, "exit").mockImplementation(code => {
     throw new Error(`exit ${String(code)}`);
   });
+  // A refusal is printed in the error shape, on standard error rather than through the logger.
+  const printed = vi
+    .spyOn(process.stderr, "write")
+    .mockImplementation(chunk => {
+      said.push(String(chunk));
+      return true;
+    });
+  const logged = vi.spyOn(console, "error").mockImplementation((...parts) => {
+    said.push(parts.map(String).join(" "));
+  });
   try {
     await fn(context);
     return { exit: undefined, said: said.join("\n") };
@@ -183,12 +193,17 @@ async function run(
     return { exit: -1, said: [...said, String(error)].join("\n") };
   } finally {
     exit.mockRestore();
+    printed.mockRestore();
+    logged.mockRestore();
     forgetFieldGroupStorageNames();
   }
 }
 
 /** `migrate:create`, non-interactively, with the given options. */
-function create(name: string | undefined, options: Record<string, unknown> = {}) {
+function create(
+  name: string | undefined,
+  options: Record<string, unknown> = {}
+) {
   setNonInteractive(true);
   return run(context =>
     runMigrateCreate(
@@ -225,10 +240,17 @@ function written(name: string): { sql: string; snapshot: string } {
   };
 }
 
-/** `nextly migrate:field-groups --apply --backup-confirmed`, on the database at `url`. */
-async function migrateStorage(dialect: TestDialect, url: string): Promise<void> {
+/**
+ * `nextly migrate:field-groups --apply --backup-confirmed`, on the database at `url`, through a
+ * started app's adapter, whose schema registry holds every table the migration rewrites.
+ */
+async function migrateStorage(
+  dialect: TestDialect,
+  url: string
+): Promise<void> {
+  const app = await start(dialect, url, FIRST);
   const outcome = await runFieldGroupMigration({
-    adapter: await connect(dialect, url),
+    adapter: app.adapter as never,
     logger: SILENT as never,
     direction: "up",
     dryRun: false,
@@ -236,6 +258,7 @@ async function migrateStorage(dialect: TestDialect, url: string): Promise<void> 
     backupConfirmed: true,
   });
   forgetFieldGroupStorageNames();
+  await shutdownServices().catch(() => {});
   expect(outcome).toMatchObject({ ran: true });
 }
 
@@ -287,9 +310,14 @@ describe.each(getConfiguredTestDialects())(
       ) as {
         version: number;
         fieldGroupStorage?: string;
-        snapshot: { tables: Array<{ name: string; columns: { name: string }[] }> };
+        snapshot: {
+          tables: Array<{ name: string; columns: { name: string }[] }>;
+        };
       };
-      expect(snapshot).toMatchObject({ version: 2, fieldGroupStorage: "current" });
+      expect(snapshot).toMatchObject({
+        version: 2,
+        fieldGroupStorage: "current",
+      });
       const card = snapshot.snapshot.tables.find(t => t.name === "fg_fh_card");
       expect(card?.columns.map(c => c.name)).toContain("_field_group_type");
       expect(snapshot.snapshot.tables.map(t => t.name)).not.toContain(
