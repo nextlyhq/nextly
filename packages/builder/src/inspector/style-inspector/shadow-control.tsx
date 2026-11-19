@@ -47,9 +47,12 @@ import {
   writeShadow,
   type ShadowColour,
   type ShadowLayer,
-} from "../../shadow-css";
-import { variableFor } from "../../style-colour";
-import { styleControlsFor, type StyleControl } from "../../style-controls";
+} from "../../styles/shadow-css";
+import { variableFor } from "../../styles/style-colour";
+import {
+  styleControlsFor,
+  type StyleControl,
+} from "../../styles/style-controls";
 import { CssHint, CssNamesLine } from "../css-hint";
 
 import { ColourField } from "./style-colour-field";

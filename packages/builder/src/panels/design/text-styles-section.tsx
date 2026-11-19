@@ -35,18 +35,18 @@ import {
 import { Lock } from "lucide-react";
 import * as React from "react";
 
-import type { EditClasses } from "../../block-style-actions";
 import { EDITOR_WORDS } from "../../editor-words";
 import {
   useQueuedStyles,
   type SharedStylesHost,
 } from "../../inspector/style-inspector/style-target";
+import type { EditClasses } from "../../styles/block-style-actions";
 import {
   heldByThisPage,
   sharedStyleRows,
   USED_ON_THIS_PAGE_REMOVAL,
   type SharedStyleRow,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 
 import { BlockStyleNameField, RowMenuFrame } from "./block-style-row-menu";
 import { removeSharedStylesThrough } from "./shared-style-details";

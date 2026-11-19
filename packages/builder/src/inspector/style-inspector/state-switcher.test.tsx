@@ -18,7 +18,7 @@ import * as React from "react";
 import { BASE_BREAKPOINT, type NodeStyles } from "@nextlyhq/blocks-engine";
 
 import { StateSwitcher } from "./state-switcher";
-import { stateHasOwnValues } from "../../style-values";
+import { stateHasOwnValues } from "../../styles/style-values";
 
 afterEach(cleanup);
 

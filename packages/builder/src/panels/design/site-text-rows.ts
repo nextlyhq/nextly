@@ -31,9 +31,9 @@ import {
   textStylesOf,
 } from "@nextlyhq/blocks-engine";
 
-import { fluidRange, lengthInPx } from "../../fluid-size";
 import { declarationsText } from "../../inspector/code-hints";
-import { sharedStyleName } from "../../shared-style-library";
+import { fluidRange, lengthInPx } from "../../styles/fluid-size";
+import { sharedStyleName } from "../../styles/shared-style-library";
 
 import { variableGroups } from "./tokens-studio";
 

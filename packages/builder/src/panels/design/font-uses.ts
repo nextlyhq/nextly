@@ -21,7 +21,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { FONT_ROLE_WORDS } from "../../editor-words";
-import { listedWords } from "../../shared-style-library";
+import { listedWords } from "../../styles/shared-style-library";
 
 import {
   firstFamily,

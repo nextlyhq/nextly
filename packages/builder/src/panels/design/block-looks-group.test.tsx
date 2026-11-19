@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { blockLookGroups } from "./block-look-rows";
 import { BlockLooksGroup } from "./block-looks-group";
-import type { BlockStyleActions } from "../../block-style-actions";
+import type { BlockStyleActions } from "../../styles/block-style-actions";
 import { labelNotInName } from "../../label-in-name.fixture";
 
 afterEach(cleanup);

@@ -9,11 +9,11 @@
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
 import { nodeElement } from "../../canvas/canvas-addressing";
+import { isIFrame } from "../../canvas/dom-kind";
 import {
   boxInFrameViewport,
   framePointInHost,
 } from "../../canvas/geometry-dom";
-import { isIFrame } from "../../dom-kind";
 
 import { NOWHERE, type Measurable } from "./insert-panel-summon";
 

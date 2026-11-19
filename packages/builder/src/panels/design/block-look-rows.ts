@@ -21,12 +21,12 @@ import {
   type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
-import { usableSiteClasses } from "../../class-library";
+import { usableSiteClasses } from "../../styles/class-library";
 import {
   sharedStyleName,
   sharedStyleRows,
   type SharedStyleRow,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 
 /**
  * Which look is meant: its id and its block type together. Two block types'

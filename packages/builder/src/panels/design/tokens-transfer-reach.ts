@@ -27,7 +27,7 @@ import {
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 
-import { sharedStyleName } from "../../shared-style-library";
+import { sharedStyleName } from "../../styles/shared-style-library";
 
 import type { ImportExtras } from "./tokens-transfer-extras";
 

@@ -56,6 +56,14 @@ import {
 } from "@nextlyhq/blocks-engine";
 import { useCallback, useMemo, useRef, useState } from "react";
 
+import { useFirstAdd, type FirstAdd } from "./canvas/first-add";
+import {
+  EMPTY_SELECTION,
+  applySelection,
+  pruneSelection,
+  type BlockSelection,
+  type SelectionMode,
+} from "./canvas/selection";
 import {
   useEditorAsks,
   type AskedSetting,
@@ -68,7 +76,6 @@ import {
   type HistoryEntry,
   type HistoryStep,
 } from "./editor-history";
-import { useFirstAdd, type FirstAdd } from "./first-add";
 import { keptLockAnswers } from "./kept-lock-answers";
 import {
   layersLockRefusalFor,
@@ -84,13 +91,6 @@ import {
   compositionRefusal,
   type CompositionRefusal,
 } from "./panels/add/inserter";
-import {
-  EMPTY_SELECTION,
-  applySelection,
-  pruneSelection,
-  type BlockSelection,
-  type SelectionMode,
-} from "./selection";
 
 // The history's bound, exported here since this is where it was always read.
 export { MAX_HISTORY } from "./editor-history";

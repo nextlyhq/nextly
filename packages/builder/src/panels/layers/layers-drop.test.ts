@@ -20,7 +20,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { placementSources } from "../../canvas/drop-targets";
-import { holdsBlocks } from "../../keyboard-move";
+import { holdsBlocks } from "../../canvas/keyboard-move";
 import {
   LAYERS_DEPTH_PX,
   layersDrop,

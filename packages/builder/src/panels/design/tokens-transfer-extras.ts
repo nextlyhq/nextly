@@ -31,9 +31,9 @@ import {
   type TokenRemap,
 } from "@nextlyhq/blocks-engine";
 
-import type { ClassListEdit } from "../../block-style-actions";
-import { nextOrderIndex } from "../../block-style-plans";
-import { sharedStyleName } from "../../shared-style-library";
+import type { ClassListEdit } from "../../styles/block-style-actions";
+import { nextOrderIndex } from "../../styles/block-style-plans";
+import { sharedStyleName } from "../../styles/shared-style-library";
 
 import { readStack } from "./font-library";
 

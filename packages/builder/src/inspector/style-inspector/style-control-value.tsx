@@ -28,9 +28,9 @@ import {
   focusAfterUnlink,
   VariableChip,
 } from "../../panels/design/variable-choice";
-import { BASELINE_WITHHELD_HINT } from "../../style-baseline";
-import { colourShowable } from "../../style-colour";
-import type { StyleControl } from "../../style-controls";
+import { BASELINE_WITHHELD_HINT } from "../../styles/style-baseline";
+import { colourShowable } from "../../styles/style-colour";
+import type { StyleControl } from "../../styles/style-controls";
 
 import { ColourField } from "./style-colour-field";
 import type { CommitOutcome } from "./style-field-surroundings";
