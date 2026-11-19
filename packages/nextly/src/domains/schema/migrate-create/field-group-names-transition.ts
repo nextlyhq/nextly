@@ -14,11 +14,9 @@
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { retargetName } from "../../field-groups/migration/manifest";
 import { MIGRATION_TARGET } from "../../field-groups/migration/target";
-import {
-  underNaming,
-  type FieldGroupNaming,
-} from "../../field-groups/services/field-group-storage-names";
+import type { FieldGroupNaming } from "../../field-groups/services/field-group-storage-names";
 import type {
   ContributedElements,
   NextlySchemaSnapshot,
@@ -146,15 +144,18 @@ export function refuseChangesToTransition(pending: {
 }
 
 /**
- * Each field-group table's current name, by its legacy one: the slug's name under the current
- * names (`fg_<slug>` for `comp_<slug>`), and a table under a name of its own kept as it is, as
- * `nextly migrate:field-groups` renames them.
+ * Each field-group table's current name, by its legacy one, as `nextly migrate:field-groups`
+ * renames them (`retargetName`): the table its slug derives moves to `fg_<slug>`, and a table
+ * under a name its author chose, `comp_` prefix or not, keeps it.
  */
 export function currentNamesOf(
-  legacyTables: Iterable<string>
+  groups: Iterable<{ slug: string; tableName: string }>
 ): ReadonlyMap<string, string> {
   return new Map(
-    [...legacyTables].map(table => [table, underNaming("current", table)])
+    [...groups].map(group => [
+      group.tableName,
+      retargetName(group) ?? group.tableName,
+    ])
   );
 }
 

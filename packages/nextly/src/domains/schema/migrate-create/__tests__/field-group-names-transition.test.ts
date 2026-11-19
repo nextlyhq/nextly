@@ -91,7 +91,7 @@ describe("the transition to the current names", () => {
           },
         ],
       },
-      currentNamesOf(["comp_card"])
+      currentNamesOf([{ slug: "card", tableName: "comp_card" }])
     );
 
     expect(moved.tables.map(t => t.name)).toEqual(["fg_card", "dc_posts"]);
@@ -131,7 +131,7 @@ describe("the transition to the current names", () => {
           },
         ],
       },
-      currentNamesOf(["comp_card"])
+      currentNamesOf([{ slug: "card", tableName: "comp_card" }])
     );
 
     const [card] = moved.tables;
@@ -162,7 +162,7 @@ describe("the transition to the current names", () => {
           },
         ],
       },
-      currentNamesOf(["comp_card"])
+      currentNamesOf([{ slug: "card", tableName: "comp_card" }])
     );
 
     expect(moved.tables[1]?.foreignKeys?.[0]).toMatchObject({
@@ -170,6 +170,22 @@ describe("the transition to the current names", () => {
       referencesTable: "fg_card",
       referencesColumns: ["_field_group_type"],
     });
+  });
+
+  // The storage migration renames only the table a slug derives; a `comp_` name its author chose
+  // stays, so the transition must not record it under `fg_`.
+  it("keeps an author-chosen table name that starts with comp_", () => {
+    expect(
+      currentNamesOf([
+        { slug: "hero", tableName: "comp_archive" },
+        { slug: "card", tableName: "comp_card" },
+      ])
+    ).toEqual(
+      new Map([
+        ["comp_archive", "comp_archive"],
+        ["comp_card", "fg_card"],
+      ])
+    );
   });
 
   it("keeps a field-group table under a name of its own, and moves its type column", () => {
@@ -184,7 +200,7 @@ describe("the transition to the current names", () => {
           },
         ],
       },
-      currentNamesOf(["my_seo_block"])
+      currentNamesOf([{ slug: "seo", tableName: "my_seo_block" }])
     );
     expect(moved.tables[0]?.name).toBe("my_seo_block");
     expect(moved.tables[0]?.columns.map(c => c.name)).toEqual([
@@ -202,7 +218,7 @@ describe("the transition to the current names", () => {
     expect(
       contributionsUnderCurrentNames(
         { comp_card: elements, dc_posts: elements },
-        currentNamesOf(["comp_card"])
+        currentNamesOf([{ slug: "card", tableName: "comp_card" }])
       )
     ).toEqual({ fg_card: elements, dc_posts: elements });
   });

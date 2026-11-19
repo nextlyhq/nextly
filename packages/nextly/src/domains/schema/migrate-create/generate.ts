@@ -1905,7 +1905,7 @@ async function transitionSnapshot(
   args: GenerateArgs,
   record: Omit<MigrationPair, "sqlContent">
 ): Promise<GenerateResult> {
-  const groupTables = currentNamesOf(args.components.map(c => c.tableName));
+  const groupTables = currentNamesOf(args.components);
   return writeUnchangedMigration(args, {
     ...record,
     written: snapshotUnderCurrentNames(record.written, groupTables),
