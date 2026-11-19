@@ -105,6 +105,20 @@ describe("ReviewSection", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("has its announcement region in the page, empty, before any step is taken", async () => {
+    // A region left by an earlier case would make this pass on its own.
+    document.getElementById("nextly-review-announcer")?.remove();
+    fetchSpy.mockResolvedValue(answer(part()));
+
+    render(<ReviewSection document={post} />);
+    await screen.findByRole("region", { name: "Review" });
+
+    const region = document.getElementById("nextly-review-announcer");
+    expect(region).not.toBeNull();
+    expect(region?.getAttribute("aria-live")).toBe("polite");
+    expect(region?.textContent).toBe("");
+  });
+
   it("says the stage, who it waits for, and the last move", async () => {
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);

@@ -9,7 +9,9 @@
  * @module components/features/entries/review/step-announcement
  */
 
-import { announcerAt } from "@admin/lib/announce";
+import { useEffect } from "react";
+
+import { announcerAt, mountAnnouncerRegion } from "@admin/lib/announce";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
 import type { PartReview, ReviewStep } from "@admin/types/workflows";
 
@@ -50,6 +52,11 @@ export function useAnnouncedStepTaker(
   document: ReleaseDocumentRef | undefined
 ): StepTaker {
   const taker = useStepTaker(document);
+  // The review's region is in the page from the moment a screen that can take a step mounts, so
+  // the first step taken is heard: a region made and filled at once can stay silent.
+  useEffect(() => {
+    mountAnnouncerRegion(REVIEW_ANNOUNCER_ID);
+  }, []);
   return {
     ...taker,
     take: async (step: ReviewStep, parts: readonly PartReview[]) => {
