@@ -51,6 +51,16 @@ const SHARED = [
   "packages/nextly/src/init/nextly-instance.ts",
 ];
 
+/**
+ * Left out of the scan on purpose, so a later edit cannot fold them in by accident: the plugin
+ * workflow service (`ctx.services.workflows` and its plugin-sdk types) stays @experimental while
+ * that work is paused, and a decision on it is pending.
+ */
+const EXCLUDED = [
+  "packages/nextly/src/plugins/plugin-workflows.ts",
+  "packages/plugin-sdk/src/index.ts",
+];
+
 /** What makes a shared file's tag a workflow's: its comment, or the line under it, says so. */
 const ABOUT_WORKFLOWS = /workflow|without review|review state/i;
 
@@ -99,6 +109,13 @@ describe("workflows' public surface", () => {
     // The workflows domain alone is dozens of files; a moved directory reads as none.
     expect(workflowOnly.length).toBeGreaterThan(30);
     expect(shared).toHaveLength(SHARED.length);
+  });
+
+  it("leaves the paused plugin workflow service out of the scan", () => {
+    const scanned = [...workflowOnly, ...shared].map(file =>
+      relative(REPO, file)
+    );
+    for (const path of EXCLUDED) expect(scanned).not.toContain(path);
   });
 
   it.fails("carries no @experimental tag", () => {
