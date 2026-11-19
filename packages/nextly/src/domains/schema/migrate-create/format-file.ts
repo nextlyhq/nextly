@@ -327,13 +327,21 @@ export function formatBlankFile(
   name: string,
   dialect: SupportedDialect,
   now: Date = new Date(),
-  options: { transaction?: boolean } = {}
+  options: {
+    transaction?: boolean;
+    /**
+     * Where the file stands in the project's line, as the header lines a
+     * reader of the history takes it from (`blankLineHeader`): a blank
+     * migration has no snapshot to say so. Omitted, it states none.
+     */
+    line?: string;
+  } = {}
 ): string {
   const outside = options.transaction === false;
   return `${outside ? `${NO_TRANSACTION_MARKER}\n` : ""}-- Migration: ${name}
 -- Generated at: ${now.toISOString()}
 -- Dialect: ${getDialectDisplayName(dialect)}
---
+${options.line ?? ""}--
 -- This is a blank migration file for custom SQL.
 -- Add your migration SQL below.
 --

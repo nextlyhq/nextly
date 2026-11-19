@@ -26,8 +26,8 @@
  */
 
 import type { ToolbarAction, ToolbarActionId } from "../canvas/toolbar-actions";
+import { TURN_INTO_TARGETS } from "../canvas/turn-into-verb";
 import { CONVERSION_WORDS } from "../editor-words";
-import { TURN_INTO_TARGETS } from "../turn-into-verb";
 
 import type { BuilderCommand } from "./command-palette";
 

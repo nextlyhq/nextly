@@ -1,13 +1,13 @@
 /**
  * The data-loss consent for what a core upgrade deletes, as `nextly migrate`
- * and `nextly upgrade --reconcile-core` both judge it.
+ * judges it.
  *
  * Asked twice, as a run's files are: before the command's lock, where a person
  * at a terminal is shown each deletion under the heading "Nextly's own tables
  * (core upgrade)" and asked once; and under the lock, against the core tables
  * as they stand then, accepting without asking only what was agreed before or
- * what the consent covers. Not a step of `nextly upgrade`: it is imported by
- * name, never listed in `UPGRADE_STEPS`.
+ * what the consent covers. Not one of the data steps: it is imported by
+ * name, never listed in `MIGRATE_DATA_STEPS`.
  *
  * @module cli/commands/upgrade-steps/core-upgrade-consent
  */

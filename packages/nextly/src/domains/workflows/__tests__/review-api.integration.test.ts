@@ -37,11 +37,14 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { apiKeyScope } from "../../../auth/authenticated-scope";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
+import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
 import { permissionSlug } from "../../../schemas/_zod/rbac";
 import {
   getConfiguredTestDialects,
@@ -50,7 +53,9 @@ import {
 import { defineCollection, text } from "../../../config";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
+import { listRoleSlugsForUserOrRefuse } from "../../../services/lib/permissions";
 import type { ApiKeyService } from "../../auth/services/api-key-service";
+import { storedSchemaSeq } from "../../schema/stored-schema-seq";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
 import { REVIEW_API_ERROR_CODES } from "../review-api";
@@ -60,6 +65,7 @@ import {
   bootSteps,
   entry,
   partOf,
+  giveRole,
   person,
   role,
   seedState,
@@ -102,6 +108,19 @@ const briefs = defineCollection({
   fields: [text({ name: "title" })],
 });
 
+/** Under the editorial workflow, with a read rule that shows its readers the public rows only. */
+const CIRCULARS = "circulars";
+const circulars = defineCollection({
+  slug: CIRCULARS,
+  status: true,
+  versions: { drafts: true },
+  workflow: editorial,
+  access: {
+    read: () => ({ team: { equals: "public" } }) as unknown as boolean,
+  },
+  fields: [text({ name: "title" }), text({ name: "team" })],
+});
+
 /** No workflow attached. */
 const PLAIN = "plain";
 const plain = defineCollection({
@@ -137,7 +156,15 @@ interface Refusal {
  */
 type Who =
   | { kind: "person"; id: string }
-  | { kind: "key"; owner: string; grants: readonly Grant[] };
+  | {
+      kind: "key";
+      owner: string;
+      grants: readonly Grant[];
+      /** A key scoped to this one role of its owner's, by id; absent, a full-access key. */
+      role?: string;
+      /** That role's slug, which a scope names it by. */
+      roleSlug?: string;
+    };
 
 /** One door: each operation, made for `who`, answering or throwing a {@link Refusal}. */
 interface Door {
@@ -173,11 +200,14 @@ async function headersFor(who: Who): Promise<Record<string, string>> {
     );
     return { cookie: `nextly_session=${token}` };
   }
-  // A full-access key, which holds what its owner holds: the grants named are the owner's.
+  // A full-access key, which holds what its owner holds: the grants named are the owner's. Or,
+  // given a role, a key scoped to that one role, which holds what the role holds.
   const keys = app().getService("apiKeyService") as unknown as ApiKeyService;
   const { key } = await keys.createApiKey(who.owner, {
     name: `key of ${who.owner}`,
-    tokenType: "full-access",
+    ...(who.role === undefined
+      ? { tokenType: "full-access" as const }
+      : { tokenType: "role-based" as const, roleId: who.role }),
     expiresIn: "unlimited",
   });
   return { authorization: `Bearer ${key}` };
@@ -283,7 +313,12 @@ async function direct<T>(
               slug: permissionSlug(action, resource),
               action,
               resource,
-            }))
+            })),
+            // A scope names its roles by slug, as authentication resolves a key: a key scoped to
+            // a role names that role, a full-access key its owner's roles.
+            who.role === undefined
+              ? await listRoleSlugsForUserOrRefuse(who.owner)
+              : [who.roleSlug ?? who.role]
           ),
           apiKeyId: "key-1",
         };
@@ -1084,11 +1119,16 @@ describe.each(getConfiguredTestDialects())(
             assignee: { kind: "user", id: "alice" },
           });
         }
-        // Assigned to someone else: not Alice's.
+        // Assigned to someone else who may take the step: not Alice's. (Work assigned to someone
+        // who may not would wait for everyone who may, Alice included.)
+        await person(app(), "wes", [
+          ["read", PAGES],
+          ["update", PAGES],
+        ]);
         const other = await entry(app(), PAGES);
         await seedState(app(), partOf(PAGES, other, null), "writing", {
           definitionHash: HASH,
-          assignee: { kind: "user", id: "bob" },
+          assignee: { kind: "user", id: "wes" },
         });
 
         const first = await door.waiting(ALICE, { page: 1, limit: 1 });
@@ -1237,6 +1277,563 @@ describe.each(getConfiguredTestDialects())(
           expect.arrayContaining([
             expect.objectContaining({ name: "holds-bob" }),
           ])
+        );
+      });
+
+      it("names the holders of the step when the assignee no longer holds it", async () => {
+        // Work assigned to someone who has since lost the step waits for everyone who may take it,
+        // never for the assignee alone: they can no longer move it.
+        current = await bootSteps(dialect);
+        await people();
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "alice" },
+        });
+
+        const waiting = (await onlyPart(door, id)).waitingFor as Doc;
+
+        expect(waiting.kind).toBe("roles");
+        expect(waiting.roles).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ name: "holds-bob" }),
+          ])
+        );
+      });
+
+      it("lists work whose assignee no longer holds the step for everyone who does", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        // A reviewer who may sign off and read the pages.
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const SAM: Who = { kind: "person", id: "sam" };
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "alice" },
+        });
+
+        const forSam = await door.waiting(SAM, { page: 1, limit: 10 });
+        expect(
+          forSam.items.map(item => (item.document as Doc).entryId)
+        ).toEqual([id]);
+        expect(forSam.meta).toMatchObject({ total: 1 });
+      });
+
+      it("lists unassigned work for every holder, or for the stage's default reviewer alone", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const open = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, open, null), "legal", {
+          definitionHash: HASH,
+        });
+        const ids = async (who: Who) =>
+          (await door.waiting(who, { page: 1, limit: 10 })).items
+            .map(item => (item.document as Doc).entryId)
+            .sort();
+        // No one is set for Legal check: it waits for everyone who may sign off.
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const SAM: Who = { kind: "person", id: "sam" };
+        expect(await ids(SAM)).toEqual([open]);
+
+        // Once Rita is its default reviewer, it waits for her alone.
+        await person(app(), "rita", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        await defaultReviewer("legal", "rita");
+        expect(await ids({ kind: "person", id: "rita" })).toEqual([open]);
+        expect(await ids(SAM)).toEqual([]);
+      });
+
+      it("lists nothing for an API key in a stage whose next step it may never take", async () => {
+        // Legal check's next step is an approval, which a key never takes, whatever it holds: the
+        // list shows a caller only work it could move, as the read marks each step it may take.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "kim", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+        });
+        const key: Who = {
+          kind: "key",
+          owner: "kim",
+          grants: [
+            ["read", PAGES],
+            ["sign-off", PAGES],
+          ],
+        };
+
+        const waiting = await door.waiting(key, { page: 1, limit: 10 });
+        expect(waiting.items).toEqual([]);
+        expect(waiting.meta).toMatchObject({ total: 0 });
+        // Its owner, a person, may approve: the same part waits for them.
+        const forKim = await door.waiting(
+          { kind: "person", id: "kim" },
+          { page: 1, limit: 10 }
+        );
+        expect(
+          forKim.items.map(item => (item.document as Doc).entryId)
+        ).toEqual([id]);
+      });
+
+      it("counts only the work its caller may read", async () => {
+        // A row a read rule hides is neither listed nor counted: a count that took it in would tell
+        // the caller it exists.
+        current = await bootSteps(dialect, undefined, {
+          collections: [circulars],
+        });
+        await person(app(), "bea", [
+          ["read", CIRCULARS],
+          ["sign-off", CIRCULARS],
+        ]);
+        const created = async (team: string) =>
+          (
+            (await app().nextly.create({
+              collection: CIRCULARS,
+              data: { title: team, team },
+            })) as unknown as { item: { id: string } }
+          ).item.id;
+        const open = await created("public");
+        const hidden = await created("private");
+        for (const id of [open, hidden]) {
+          await seedState(app(), partOf(CIRCULARS, id, null), "legal", {
+            definitionHash: HASH,
+          });
+        }
+
+        const waiting = await door.waiting(
+          { kind: "person", id: "bea" },
+          { page: 1, limit: 10 }
+        );
+        expect(
+          waiting.items.map(item => (item.document as Doc).entryId)
+        ).toEqual([open]);
+        expect(waiting.meta).toMatchObject({ total: 1 });
+      });
+
+      it("lists nothing for the person who brought a part into a stage whose step refuses that", async () => {
+        // Clear refuses self-approval: the one who brought the part into Legal check may not take
+        // it, so it does not wait for them, though it waits for every other holder.
+        current = await bootSteps(dialect);
+        await people();
+        for (const id of ["rita", "sam"]) {
+          await person(app(), id, [
+            ["read", PAGES],
+            ["sign-off", PAGES],
+          ]);
+        }
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+          enteredBy: "rita",
+        });
+        const ids = async (who: Who) =>
+          (await door.waiting(who, { page: 1, limit: 10 })).items.map(
+            item => (item.document as Doc).entryId
+          );
+
+        expect(await ids({ kind: "person", id: "rita" })).toEqual([]);
+        expect(await ids({ kind: "person", id: "sam" })).toEqual([id]);
+      });
+
+      it("pages only the work its caller may read", async () => {
+        // A hidden row never takes a page slot: two visible parts and one hidden, two to a page,
+        // fill one page, and there is no second.
+        current = await bootSteps(dialect, undefined, {
+          collections: [circulars],
+        });
+        await person(app(), "bea", [
+          ["read", CIRCULARS],
+          ["sign-off", CIRCULARS],
+        ]);
+        const created = async (team: string) =>
+          (
+            (await app().nextly.create({
+              collection: CIRCULARS,
+              data: { title: team, team },
+            })) as unknown as { item: { id: string } }
+          ).item.id;
+        const first = await created("public");
+        const hidden = await created("private");
+        const second = await created("public");
+        for (const id of [first, hidden, second]) {
+          await seedState(app(), partOf(CIRCULARS, id, null), "legal", {
+            definitionHash: HASH,
+          });
+        }
+
+        const page = await door.waiting(
+          { kind: "person", id: "bea" },
+          { page: 1, limit: 2 }
+        );
+        expect(
+          page.items.map(item => (item.document as Doc).entryId).sort()
+        ).toEqual([first, second].sort());
+        expect(page.meta).toMatchObject({ total: 2, hasNext: false });
+      });
+
+      it("lists work its assignee brought into a stage whose step refuses that for every other holder", async () => {
+        // Rita holds Clear, but brought this part into Legal check, and Clear refuses self-approval:
+        // she cannot move it, so it waits for everyone who may, as though she had lost the step.
+        current = await bootSteps(dialect);
+        await people();
+        for (const id of ["rita", "sam"]) {
+          await person(app(), id, [
+            ["read", PAGES],
+            ["sign-off", PAGES],
+          ]);
+        }
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "rita" },
+          enteredBy: "rita",
+        });
+        const ids = async (who: Who) =>
+          (await door.waiting(who, { page: 1, limit: 10 })).items.map(
+            item => (item.document as Doc).entryId
+          );
+
+        expect(await ids({ kind: "person", id: "sam" })).toEqual([id]);
+        expect(await ids({ kind: "person", id: "rita" })).toEqual([]);
+        // The read names the same: everyone who may, not Rita.
+        const waiting = (await onlyPart(door, id)).waitingFor as Doc;
+        expect(waiting.kind).toBe("roles");
+      });
+
+      it("pages past work its caller may not move without a short page", async () => {
+        // Three parts Sam brought into Legal check come first, and Clear refuses him those. They take
+        // no place on a page: the two he may move fill page one, and there is no page two.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const earlier = new Date("2026-11-01T10:00:00.000Z");
+        for (let n = 0; n < 3; n += 1) {
+          await seedState(
+            app(),
+            partOf(PAGES, await entry(app(), PAGES), null),
+            "legal",
+            { definitionHash: HASH, enteredBy: "sam", enteredAt: earlier }
+          );
+        }
+        const movable: string[] = [];
+        for (let n = 0; n < 2; n += 1) {
+          const id = await entry(app(), PAGES);
+          movable.push(id);
+          await seedState(app(), partOf(PAGES, id, null), "legal", {
+            definitionHash: HASH,
+          });
+        }
+
+        const page = await door.waiting(
+          { kind: "person", id: "sam" },
+          { page: 1, limit: 2 }
+        );
+        expect(
+          page.items.map(item => (item.document as Doc).entryId).sort()
+        ).toEqual([...movable].sort());
+        expect(page.meta).toMatchObject({ total: 2, hasNext: false });
+        expect(page.meta.totalCapped).toBeUndefined();
+      });
+
+      it("reads review states only a bounded number at a time", async () => {
+        // Work assigned to someone who lost the step, to one who brought it in, and to no one: every
+        // read of review states the list makes carries a LIMIT, however many rows a stage holds.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        await seedState(
+          app(),
+          partOf(PAGES, await entry(app(), PAGES), null),
+          "legal",
+          { definitionHash: HASH, assignee: { kind: "user", id: "alice" } }
+        );
+        await seedState(
+          app(),
+          partOf(PAGES, await entry(app(), PAGES), null),
+          "legal",
+          { definitionHash: HASH }
+        );
+        const SAM: Who = { kind: "person", id: "sam" };
+
+        const reads = (
+          await statementsOf(dialect, () =>
+            door.waiting(SAM, { page: 1, limit: 10 })
+          )
+        ).filter(
+          statement =>
+            /^\s*select/i.test(statement) &&
+            statement.includes("nextly_review_states")
+        );
+        expect(reads.length).toBeGreaterThan(0);
+        for (const statement of reads) expect(statement).toMatch(/\blimit\b/i);
+      });
+
+      it("asks whether its caller may read the documents in batches, never part by part", async () => {
+        // Each part's document is read checked: asked one by one, a long queue is a round trip per
+        // part. Asked per collection and language, 15 parts cost what 3 do.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const seed = async (count: number) => {
+          for (let n = 0; n < count; n += 1) {
+            await seedState(
+              app(),
+              partOf(PAGES, await entry(app(), PAGES), null),
+              "legal",
+              { definitionHash: HASH }
+            );
+          }
+        };
+        const SAM: Who = { kind: "person", id: "sam" };
+        const statements = async () => {
+          // The stored schema count is read again once SCHEMA_VERSION_READ_INTERVAL_MS has passed,
+          // so a slower call could count that read too. Its clock is frozen and the count read once
+          // on it, so neither call below reads it again.
+          vi.useFakeTimers({ toFake: ["performance"] });
+          try {
+            await storedSchemaSeq(app().adapter, { fresh: true });
+            // Once to warm what a first call caches, then counted.
+            await door.waiting(SAM, { page: 1, limit: 50 });
+            return await statementsOf(dialect, () =>
+              door.waiting(SAM, { page: 1, limit: 50 })
+            );
+          } finally {
+            vi.useRealTimers();
+          }
+        };
+
+        await seed(3);
+        const few = await statements();
+        await seed(12);
+        const many = await statements();
+        expect(
+          (await door.waiting(SAM, { page: 1, limit: 50 })).meta
+        ).toMatchObject({ total: 15 });
+        // Both lists in the message, so a failure names the statement that differs.
+        expect(
+          many.length,
+          `3 parts:\n${few.join("\n")}\n\n15 parts:\n${many.join("\n")}`
+        ).toBe(few.length);
+      });
+
+      it("reads exactly as many parts as it may whole, and cuts nothing it read in full", async () => {
+        // Exactly 1,000 parts are Sam's own: that read is whole, not cut short, so the work after it
+        // in the rest of the stage (an orphan, entered later) is still his, and the total is exact.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        for (let n = 0; n < 1000; n += 1) {
+          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
+            definitionHash: HASH,
+            assignee: { kind: "user", id: "sam" },
+          });
+        }
+        const orphan = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, orphan, null), "legal", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "alice" },
+          enteredAt: new Date("2026-11-03T10:00:00.000Z"),
+        });
+
+        const page = await door.waiting(
+          { kind: "person", id: "sam" },
+          { page: 1, limit: 10 }
+        );
+        expect(page.items.map(item => (item.document as Doc).entryId)).toEqual([
+          orphan,
+        ]);
+        expect(page.meta).toMatchObject({ total: 1 });
+        expect(page.meta.totalCapped).toBeUndefined();
+      });
+
+      it("marks the total a floor when it stops before reading everything", async () => {
+        // 6 parts Sam may move come first, then 1,000 no one may read. Page 1 needs 6 (its 5 and one
+        // more, to know there is a next), which the first window holds, so it stops there: the
+        // total it found is a floor, and there is a next page. Page 2 reads to the end: exact.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const earlier = new Date("2026-11-01T10:00:00.000Z");
+        for (let n = 0; n < 6; n += 1) {
+          await seedState(
+            app(),
+            partOf(PAGES, await entry(app(), PAGES), null),
+            "legal",
+            { definitionHash: HASH, enteredAt: earlier }
+          );
+        }
+        for (let n = 0; n < 1000; n += 1) {
+          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
+            definitionHash: HASH,
+          });
+        }
+        const SAM: Who = { kind: "person", id: "sam" };
+
+        const first = await door.waiting(SAM, { page: 1, limit: 5 });
+        expect(first.items).toHaveLength(5);
+        expect(first.meta).toMatchObject({
+          total: 6,
+          totalCapped: true,
+          hasNext: true,
+        });
+        const second = await door.waiting(SAM, { page: 2, limit: 5 });
+        expect(second.items).toHaveLength(1);
+        expect(second.meta).toMatchObject({ total: 6, hasNext: false });
+        expect(second.meta.totalCapped).toBeUndefined();
+      });
+
+      it("reaches every page of work past what one request reads", async () => {
+        // 1,005 parts no one may read come first, then 10 Sam may: more hidden parts than one window
+        // holds. The list reads on, a window at a time, until it has the page and one more, so both
+        // pages of 5 are reachable and the first says there is a next.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        for (let n = 0; n < 1005; n += 1) {
+          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
+            definitionHash: HASH,
+          });
+        }
+        const later = new Date("2026-11-03T10:00:00.000Z");
+        const readable: string[] = [];
+        for (let n = 0; n < 10; n += 1) {
+          const id = await entry(app(), PAGES);
+          readable.push(id);
+          await seedState(app(), partOf(PAGES, id, null), "legal", {
+            definitionHash: HASH,
+            enteredAt: later,
+          });
+        }
+        const SAM: Who = { kind: "person", id: "sam" };
+
+        const first = await door.waiting(SAM, { page: 1, limit: 5 });
+        const second = await door.waiting(SAM, { page: 2, limit: 5 });
+        expect(first.items).toHaveLength(5);
+        expect(first.meta).toMatchObject({ hasNext: true });
+        expect(second.items).toHaveLength(5);
+        expect(second.meta).toMatchObject({ total: 10, hasNext: false });
+        expect(
+          [...first.items, ...second.items]
+            .map(item => (item.document as Doc).entryId)
+            .sort()
+        ).toEqual([...readable].sort());
+      });
+
+      it("lists for a key scoped to one role only that role's work", async () => {
+        // A key scoped to one of its owner's roles acts as that role alone: work assigned to the
+        // owner's other role, or to the owner, is not its to see.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "olga", []);
+        const deskA = await role(app(), "desk-a", [
+          ["read", PAGES],
+          ["update", PAGES],
+        ]);
+        const deskB = await role(app(), "desk-b", [
+          ["read", PAGES],
+          ["update", PAGES],
+        ]);
+        await giveRole(app(), "olga", deskA);
+        await giveRole(app(), "olga", deskB);
+        const toA = await entry(app(), PAGES);
+        const toB = await entry(app(), PAGES);
+        const toOlga = await entry(app(), PAGES);
+        for (const [id, assignee] of [
+          [toA, { kind: "role", id: deskA }],
+          [toB, { kind: "role", id: deskB }],
+          [toOlga, { kind: "user", id: "olga" }],
+        ] as const) {
+          await seedState(app(), partOf(PAGES, id, null), "writing", {
+            definitionHash: HASH,
+            assignee,
+          });
+        }
+        const key: Who = {
+          kind: "key",
+          owner: "olga",
+          role: deskA,
+          roleSlug: "desk-a",
+          grants: [
+            ["read", PAGES],
+            ["update", PAGES],
+          ],
+        };
+
+        const waiting = await door.waiting(key, { page: 1, limit: 10 });
+        expect(
+          waiting.items.map(item => (item.document as Doc).entryId)
+        ).toEqual([toA]);
+        expect(waiting.meta).toMatchObject({ total: 1 });
+      });
+
+      it("lists for a key its owner's roles' work, never the owner's own", async () => {
+        // A key, even a full-access one, stands for its roles and never for its owner in person:
+        // work assigned to the owner by name waits for the owner, signed in, not for their key.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "olga", []);
+        const desk = await role(app(), "desk-o", [
+          ["read", PAGES],
+          ["update", PAGES],
+        ]);
+        await giveRole(app(), "olga", desk);
+        const toDesk = await entry(app(), PAGES);
+        const toOlga = await entry(app(), PAGES);
+        for (const [id, assignee] of [
+          [toDesk, { kind: "role", id: desk }],
+          [toOlga, { kind: "user", id: "olga" }],
+        ] as const) {
+          await seedState(app(), partOf(PAGES, id, null), "writing", {
+            definitionHash: HASH,
+            assignee,
+          });
+        }
+        const ids = async (who: Who) =>
+          (await door.waiting(who, { page: 1, limit: 10 })).items
+            .map(item => (item.document as Doc).entryId)
+            .sort();
+        const key: Who = {
+          kind: "key",
+          owner: "olga",
+          grants: [
+            ["read", PAGES],
+            ["update", PAGES],
+          ],
+        };
+
+        expect(await ids(key)).toEqual([toDesk]);
+        expect(await ids({ kind: "person", id: "olga" })).toEqual(
+          [toDesk, toOlga].sort()
         );
       });
 

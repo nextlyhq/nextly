@@ -6,12 +6,18 @@
  * away by Skip until the list is selected again.
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "../editor-state";
-import type { FirstAdd } from "../first-add";
+import type { FirstAdd } from "./first-add";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { FirstAddChoosers } from "./first-add-choosers";
@@ -28,10 +34,7 @@ function documentWith(props: Record<string, unknown>): BlockDocument {
   };
 }
 
-function editorOf(
-  document: BlockDocument,
-  firstAdd?: FirstAdd
-): EditorState {
+function editorOf(document: BlockDocument, firstAdd?: FirstAdd): EditorState {
   return {
     document,
     selectedId: "list",
@@ -112,7 +115,11 @@ describe("one picker per list", () => {
         Promise.resolve([{ slug: "posts", label: "Posts", fields: [] }]),
     };
     const selecting = (id: string) =>
-      ({ ...editorOf(two), selectedId: id, selection: { ids: [id], primary: id } }) as EditorState;
+      ({
+        ...editorOf(two),
+        selectedId: id,
+        selection: { ids: [id], primary: id },
+      }) as EditorState;
     const host = (editor: EditorState) => (
       <div className={CANVAS_ROOT_CLASS}>
         <div data-nx-node="a" />
@@ -126,7 +133,9 @@ describe("one picker per list", () => {
       await Promise.resolve();
     });
     fireEvent.click(screen.getByText("Posts"));
-    expect(screen.queryByText("Posts · choose a starting layout")).not.toBeNull();
+    expect(
+      screen.queryByText("Posts · choose a starting layout")
+    ).not.toBeNull();
     rerender(host(selecting("b")));
     await act(async () => {
       await Promise.resolve();

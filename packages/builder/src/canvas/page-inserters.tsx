@@ -62,13 +62,13 @@ import { Plus } from "lucide-react";
 import * as React from "react";
 
 import { ChromeTooltip } from "../chrome-tooltip";
-import { isElement } from "../dom-kind";
 import type { Point } from "../geometry";
 import { blockNameOf, type ComponentTitleOf } from "../panels/layers/layers";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
+import { isElement } from "./dom-kind";
 import {
   boxInFrameViewport,
   canvasContentPoint,

@@ -51,7 +51,11 @@ import {
   type HolderAnswer,
 } from "./holders";
 import { BUILT_IN_ACTIONS, WORKFLOW_PERMISSION_GROUP } from "./permissions";
-import { registeredWorkflows, type RegisteredWorkflow } from "./registry";
+import {
+  registeredWorkflows,
+  workflowAttachedTo,
+  type RegisteredWorkflow,
+} from "./registry";
 import type { ReviewAssignee, ReviewStatesDb } from "./review-state-repository";
 import { readStagePresentation } from "./stage-presentation";
 import { primaryAction, stepAction } from "./steps";
@@ -282,6 +286,30 @@ const attachedTo = (registered: RegisteredWorkflow): string[] => [
 ];
 
 /**
+ * A workflow's stages as the code defines them: what every reader of a collection or Single using
+ * it is told, and what its summary adds to.
+ */
+function definedStages(workflow: Workflow) {
+  return workflow.stages.map(stage => ({
+    name: stage.name,
+    label: stage.label,
+    allowsPublish: stage.allowsPublish,
+  }));
+}
+
+/** A workflow's steps as the code defines them, likewise. */
+function definedSteps(workflow: Workflow) {
+  return workflow.steps.map(step => ({
+    name: step.name,
+    label: step.label,
+    kind: step.kind,
+    from: [...step.from],
+    to: step.to,
+    primary: step.primary,
+  }));
+}
+
+/**
  * A configuration file's path relative to the project root (the working directory), or null
  * where there is none or it lies outside the root: a reader is told where in the project to look,
  * never the server's own layout.
@@ -353,22 +381,15 @@ export async function listWorkflowSummaries(
       slug: workflow.slug,
       label: workflow.label,
       configPath: projectPath(registered.configPath),
-      stages: workflow.stages.map(stage => ({
-        name: stage.name,
-        label: stage.label,
-        allowsPublish: stage.allowsPublish,
+      stages: definedStages(workflow).map(stage => ({
+        ...stage,
         primaryStep: primaryStep(workflow, stage.name)?.name ?? null,
         review: isReviewStage(workflow, stage.name),
         shownLabel: shown(stage.name).label,
         colour: shown(stage.name).colour,
       })),
-      steps: workflow.steps.map(step => ({
-        name: step.name,
-        label: step.label,
-        kind: step.kind,
-        from: [...step.from],
-        to: step.to,
-        primary: step.primary,
+      steps: workflow.steps.map((step, index) => ({
+        ...definedSteps(workflow)[index],
         grantable: grantable.has(step.name),
         permission: stepAction(workflow, step),
         commentRequired: step.commentRequired,
@@ -384,6 +405,44 @@ export async function listWorkflowSummaries(
     });
   }
   return summaries;
+}
+
+/**
+ * A workflow as a reader of one collection or Single is told it: its name, stages and steps as
+ * the code defines them. Not its settings (who holds a step, default reviewers, label overrides,
+ * emails) and not the other collections and Singles it is attached to, which a reader of this one
+ * may not be allowed to know of.
+ *
+ * @experimental
+ */
+export interface WorkflowDefinition {
+  slug: string;
+  label: string;
+  stages: ReturnType<typeof definedStages>;
+  steps: ReturnType<typeof definedSteps>;
+}
+
+/**
+ * The definition of the workflow attached to the collection or Single `slug`, or null where none
+ * is: the stages and steps its summary is built on (`definedStages`, `definedSteps`), so the two
+ * tell one definition alike. Whether the caller may read the collection or Single is the caller's
+ * door to ask first.
+ *
+ * @experimental
+ */
+export function workflowDefinitionOf(
+  kind: "collection" | "single",
+  slug: string
+): WorkflowDefinition | null {
+  const registered = workflowAttachedTo(kind, slug);
+  if (!registered) return null;
+  const { workflow } = registered;
+  return {
+    slug: workflow.slug,
+    label: workflow.label,
+    stages: definedStages(workflow),
+    steps: definedSteps(workflow),
+  };
 }
 
 /** The registered workflow `slug`, or not found. */

@@ -81,7 +81,7 @@ import {
 } from "./editor-panels";
 import { insertCountsStoreFor } from "./editor-preference-stores";
 import { EditorSearch } from "./editor-search";
-import { editorSettings, usePageFacts } from "./editor-settings";
+import { useEditorSettings, usePageFacts } from "./editor-settings";
 import { useEditorTopBar } from "./editor-top-bar";
 import type { CardVerbs, EditorView } from "./editor-view";
 import { EditorHiddenColours } from "./hidden-colours";
@@ -780,6 +780,16 @@ function EditorBody<TFieldValues extends FieldValues>({
     openAsForm: shellExit(componentView, openAsForm),
   });
 
+  // One function while what Page settings shows is the same, so a selection
+  // draws none of it again.
+  const renderSettings = useEditorSettings(view, page, settingsPlace, {
+    kind: mount.initialDocument.kind,
+    fieldName: name,
+    control: control as unknown as Control<FieldValues>,
+    // At the bottom of Page settings, as in the ⋯ menu.
+    openAsForm: shellExit(componentView, openAsForm),
+  });
+
   return (
     // Fills the view's area, under the admin's lock and recovery notices for
     // this document, rather than covering the window over them. A component's
@@ -831,13 +841,7 @@ function EditorBody<TFieldValues extends FieldValues>({
             // settings are the inspector's with nothing selected.
             {...(set === undefined
               ? {
-                  renderSettings: editorSettings(view, page, settingsPlace, {
-                    kind: mount.initialDocument.kind,
-                    fieldName: name,
-                    control: control as unknown as Control<FieldValues>,
-                    // At the bottom of Page settings, as in the ⋯ menu.
-                    openAsForm: shellExit(componentView, openAsForm),
-                  }),
+                  renderSettings,
                 }
               : {})}
             // The shell owns the region; this fills it. Rendered unconditionally
