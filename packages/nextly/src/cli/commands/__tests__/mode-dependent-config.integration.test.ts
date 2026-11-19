@@ -11,7 +11,7 @@
  * shows the commands ran at all.
  *
  * And `migrate:status --json` keeps its standard output one JSON document,
- * the mode line going to standard error.
+ * the database line going to standard error.
  *
  * Each command is the CLI's own entry point run in a process of its own, as a
  * shell runs it: the mode has to be chosen before the configuration is
@@ -140,7 +140,7 @@ describe.each(getConfiguredTestDialects())(
     );
 
     it(
-      "keeps migrate:status --json one JSON document, with the mode line on stderr",
+      "keeps migrate:status --json one JSON document, with the database line on stderr",
       async () => {
         const run = await nextly([
           "migrate:status",
@@ -150,9 +150,11 @@ describe.each(getConfiguredTestDialects())(
         ]);
         expect(run.status, run.stderr).toBe(0);
         expect(() => JSON.parse(run.stdout)).not.toThrow();
-        expect(run.stdout).not.toContain("Mode:");
-        expect(run.stderr).toContain(
-          "Mode: production (DATABASE_URL from the process environment)\n"
+        expect(run.stdout).not.toContain("Database:");
+        // The database, then the mode and where its URL came from; the
+        // target itself is each dialect's, asserted in its own suite.
+        expect(run.stderr).toMatch(
+          /^Database: \S.* \(production; DATABASE_URL from the process environment\)$/m
         );
       },
       NEXTLY_RUN_TIMEOUT

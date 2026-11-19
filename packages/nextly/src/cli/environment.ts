@@ -26,6 +26,8 @@ import { relative, resolve } from "node:path";
 import type * as NextEnv from "@next/env";
 import type { Command } from "commander";
 
+import { databaseTarget } from "./database-target";
+
 /** The modes a run can be in, as Next.js names them. */
 export const CLI_MODES = ["development", "production", "test"] as const;
 
@@ -153,13 +155,21 @@ export function environmentFolder(): string | undefined {
 }
 
 /**
- * The line naming the run's mode and where its database URL came from, as
- * `Mode: production (DATABASE_URL from .env.production)`; `undefined` when no
- * environment was loaded, as in a test that calls a command directly.
+ * The line naming the database a run is about to use, its mode and where its
+ * URL came from, as `Database: PostgreSQL db.internal:5432/shop (production;
+ * DATABASE_URL from .env.production)`; `undefined` when no environment was
+ * loaded, as in a test that calls a command directly. Of the URL it says the
+ * target alone (`databaseTarget`): never a user name, a password or a query
+ * parameter.
  */
 export function modeLine(): string | undefined {
   if (!current) return undefined;
-  return `Mode: ${current.mode} (DATABASE_URL ${sourceOf(current, "DATABASE_URL")})`;
+  const target = databaseTarget({
+    url: process.env.DATABASE_URL,
+    dialect: process.env.DB_DIALECT,
+    folder: current.folder,
+  });
+  return `Database: ${target} (${current.mode}; DATABASE_URL ${sourceOf(current, "DATABASE_URL")})`;
 }
 
 /**

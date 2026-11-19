@@ -82,6 +82,6 @@ describe("the database a command names", () => {
     expect(target("redis://appuser:s3cr3t@cache/0")).toBe(
       "(database not recognised)"
     );
-    expect(target(undefined)).toBe("(DATABASE_URL not set)");
+    expect(target(undefined)).toBe("none");
   });
 });

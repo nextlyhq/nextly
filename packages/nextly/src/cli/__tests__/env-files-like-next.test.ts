@@ -12,7 +12,7 @@
  * read nothing.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -50,6 +50,19 @@ function project(files: Record<string, string>): string {
     writeFileSync(join(folder, name), `DATABASE_URL=${url}\n`);
   }
   return folder;
+}
+
+/**
+ * The line a run prints before it uses a database: the SQLite file `file` of
+ * `folder`, resolved, with the mode and where the URL came from.
+ */
+function databaseLine(
+  folder: string,
+  file: string,
+  mode: string,
+  source: string
+): string {
+  return `Database: SQLite ${join(realpathSync(folder), file)} (${mode}; DATABASE_URL ${source})`;
 }
 
 /**
@@ -156,7 +169,12 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     expect(cli.databaseUrl).toBe(nextReads(folder, "development"));
     expect(cli.databaseUrl).toBe("file:./from-env-local.db");
     expect(cli.printed).toEqual([
-      "Mode: development (DATABASE_URL from .env.local)",
+      databaseLine(
+        folder,
+        "from-env-local.db",
+        "development",
+        "from .env.local"
+      ),
     ]);
   });
 
@@ -177,7 +195,12 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     );
     expect(cli.databaseUrl).toBe("file:./from-process.db");
     expect(cli.printed).toEqual([
-      "Mode: development (DATABASE_URL from the process environment)",
+      databaseLine(
+        folder,
+        "from-process.db",
+        "development",
+        "from the process environment"
+      ),
     ]);
   });
 
@@ -196,7 +219,7 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
       expect(cli.databaseUrl).toBe(`file:./${mode}.db`);
       expect(cli.nodeEnv).toBe(mode);
       expect(cli.printed).toEqual([
-        `Mode: ${mode} (DATABASE_URL from .env.${mode})`,
+        databaseLine(folder, `${mode}.db`, mode, `from .env.${mode}`),
       ]);
     }
   );
@@ -214,7 +237,12 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     // sees the chosen mode, not the one the shell set.
     expect(cli.nodeEnv).toBe("production");
     expect(cli.printed).toEqual([
-      "Mode: production (DATABASE_URL from .env.production)",
+      databaseLine(
+        folder,
+        "production.db",
+        "production",
+        "from .env.production"
+      ),
     ]);
   });
 
@@ -224,27 +252,36 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
     const folder = project(perMode);
     expect(
       cliReads(folder, ["--mode=test", "probe"], childEnv("production")).printed
-    ).toEqual(["Mode: test (DATABASE_URL from .env.test)"]);
+    ).toEqual([databaseLine(folder, "test.db", "test", "from .env.test")]);
     expect(
       cliReads(
         folder,
         ["probe", "--mode", "production", "--mode=test"],
         childEnv(undefined)
       ).printed
-    ).toEqual(["Mode: test (DATABASE_URL from .env.test)"]);
+    ).toEqual([databaseLine(folder, "test.db", "test", "from .env.test")]);
     expect(
       cliReads(
         folder,
         ["probe", "--", "--mode", "production"],
         childEnv(undefined)
       ).printed
-    ).toEqual(["Mode: development (DATABASE_URL from .env.development)"]);
+    ).toEqual([
+      databaseLine(
+        folder,
+        "development.db",
+        "development",
+        "from .env.development"
+      ),
+    ]);
   });
 
   it("names a database URL no file and no variable sets", () => {
     const cli = cliReads(project({}), ["probe"], childEnv(undefined));
     expect(cli.databaseUrl).toBeUndefined();
-    expect(cli.printed).toEqual(["Mode: development (DATABASE_URL not set)"]);
+    expect(cli.printed).toEqual([
+      "Database: none (development; DATABASE_URL not set)",
+    ]);
   });
 
   // `nextly plugins install`, a step of the build script, connects without
@@ -266,7 +303,7 @@ describe("the environment files the CLI reads, as Next.js reads them", () => {
       { cwd: project({}), env: childEnv(undefined), encoding: "utf8" }
     );
     expect(JSON.parse(out)).toEqual([
-      "Mode: production (DATABASE_URL not set)",
+      "Database: none (production; DATABASE_URL not set)",
     ]);
   });
 });
@@ -325,21 +362,21 @@ describe("the --mode option and the mode line, through the program", () => {
     const { program, stderr } = await run(["probe", "--mode", "production"]);
     expect(program.opts().mode).toBe("production");
     expect(stderr.join("")).toBe(
-      "Mode: production (DATABASE_URL from the process environment)\n"
+      `${databaseLine(process.cwd(), "probe.db", "production", "from the process environment")}\n`
     );
   });
 
   it("prints the mode line on stderr, leaving stdout to the command", async () => {
     const { stdout, stderr } = await run(["probe"]);
     expect(stderr.join("")).toBe(
-      "Mode: test (DATABASE_URL from the process environment)\n"
+      `${databaseLine(process.cwd(), "probe.db", "test", "from the process environment")}\n`
     );
-    expect(stdout.join("")).not.toContain("Mode:");
+    expect(stdout.join("")).not.toContain("Database:");
   });
 
   it("prints no mode line under --quiet", async () => {
     const { stdout, stderr } = await run(["--quiet", "probe"]);
-    expect(`${stdout.join("")}${stderr.join("")}`).not.toContain("Mode:");
+    expect(`${stdout.join("")}${stderr.join("")}`).not.toContain("Database:");
   });
 
   it("refuses a mode outside the three, naming them", async () => {

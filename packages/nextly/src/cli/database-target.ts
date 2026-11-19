@@ -106,7 +106,7 @@ export function databaseTarget(args: {
   folder: string;
 }): string {
   const { url } = args;
-  if (url === undefined || url === "") return "(DATABASE_URL not set)";
+  if (url === undefined || url === "") return "none";
   const dialect = dialectOf(url, args.dialect);
   if (dialect === undefined) return "(database not recognised)";
   if (dialect === "sqlite") {
