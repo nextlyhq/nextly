@@ -113,8 +113,14 @@ function addressAccepted(
   );
 }
 
-function validateNextlyConfig(config: NextlyConfig): void {
-  const collections = config.collections ?? [];
+/**
+ * The collections' and Singles' slugs, each refused where it repeats one before it. A slug that
+ * is missing or not a string is left to the entity's own rules, which report it with the rest.
+ */
+function distinctEntitySlugs(
+  collections: NonNullable<NextlyConfig["collections"]>,
+  singles: NonNullable<NextlyConfig["singles"]>
+): Set<string> {
   const slugs = new Set<string>();
 
   for (const collection of collections) {
@@ -130,8 +136,6 @@ function validateNextlyConfig(config: NextlyConfig): void {
 
     slugs.add(slug);
   }
-
-  const singles = config.singles ?? [];
 
   for (const single of singles) {
     const slug = slugKey(single);
@@ -156,23 +160,20 @@ function validateNextlyConfig(config: NextlyConfig): void {
     slugs.add(slug);
   }
 
-  // Each Single is one page at one address, so two at the same address are
-  // refused here, naming both, as the boot refuses them once plugins join.
-  // Only the addresses each entity's own rule accepts: one it refuses is that entity's problem,
-  // reported with every other one where the configuration is loaded or started, rather than
-  // stopping the load before them. Two Singles at one address are still refused here.
-  assertConfiguredPublicAddresses({
-    collections: (config.collections ?? []).filter(type =>
-      addressAccepted(type, "collection")
-    ),
-    singles: (config.singles ?? []).filter(type =>
-      addressAccepted(type, "single")
-    ),
-  });
+  return slugs;
+}
 
-  assertNoLegacyFieldGroupKey(config, "defineConfig");
-
-  const components = config.fieldGroups ?? [];
+/**
+ * Each field group's slug, refused where it repeats a collection's, a Single's or another field
+ * group's (`slugs` holds the first two, and gains each group's), and its table, refused where two
+ * distinct slugs derive the same one.
+ */
+function assertDistinctFieldGroups(
+  components: NonNullable<NextlyConfig["fieldGroups"]>,
+  slugs: Set<string>,
+  collections: NonNullable<NextlyConfig["collections"]>,
+  singles: NonNullable<NextlyConfig["singles"]>
+): void {
   const componentTables = new Map<string, string>();
 
   for (const comp of components) {
@@ -230,6 +231,29 @@ function validateNextlyConfig(config: NextlyConfig): void {
     }
     componentTables.set(tableName, comp.slug);
   }
+}
+
+function validateNextlyConfig(config: NextlyConfig): void {
+  const collections = config.collections ?? [];
+  const singles = config.singles ?? [];
+  const slugs = distinctEntitySlugs(collections, singles);
+
+  // Each Single is one page at one address, so two at the same address are
+  // refused here, naming both, as the boot refuses them once plugins join.
+  // Only the addresses each entity's own rule accepts: one it refuses is that entity's problem,
+  // reported with every other one where the configuration is loaded or started, rather than
+  // stopping the load before them. Two Singles at one address are still refused here.
+  assertConfiguredPublicAddresses({
+    collections: collections.filter(type =>
+      addressAccepted(type, "collection")
+    ),
+    singles: singles.filter(type => addressAccepted(type, "single")),
+  });
+
+  assertNoLegacyFieldGroupKey(config, "defineConfig");
+
+  const components = config.fieldGroups ?? [];
+  assertDistinctFieldGroups(components, slugs, collections, singles);
 
   if (components.length > 0) {
     assertNoFieldGroupCycleInCode(components);

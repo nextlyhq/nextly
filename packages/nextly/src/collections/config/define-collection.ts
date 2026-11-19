@@ -37,7 +37,6 @@ import type { CollectionAccessControl } from "../../domains/auth/services/access
 import type { CollectionDbOptions } from "../../domains/collections/services/collection-db-options";
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
 import { ownAddressOf } from "../../domains/public-addresses/public-address-template";
-import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";
 import type { Workflow } from "../../domains/workflows/types";
 import type { RevalidateConfig } from "../../revalidation/types";
@@ -48,7 +47,11 @@ import type { CollectionFilterRuleInput } from "../../shared/types/rule-filter";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
 import type { TextFieldConfig } from "../fields/types/text";
 
-import { asDeclaredFields, toTitleCase } from "./declared-config";
+import {
+  asDeclaredFields,
+  toTitleCase,
+  systemFieldsBeside,
+} from "./declared-config";
 // Import validation conditionally - only in server environments
 // This prevents client-side bundlers from including the validation code
 import { validateCollectionConfig } from "./validate-config";
@@ -1326,37 +1329,7 @@ export function defineCollection<
     // matching the Schema Builder behavior. If the user already defined
     // fields with these names, their definitions take priority.
 
-    // Keyed by the COLUMN each field becomes, not by its declared name. A field named `Title` owns
-    // the `title` column, so injecting the system one beside it declares that column twice and the
-    // table cannot be created — the injection has to ask the same question the generators do.
-    const userFieldColumns = columnsDeclaredBy(config.fields);
-
-    const systemFields: FieldConfig[] = [];
-
-    if (!userFieldColumns.has("title")) {
-      systemFields.push({
-        type: "text",
-        name: "title",
-        label: "Title",
-        required: true,
-        // i18n: auto-injected system title is SHARED by default (spec §9a — localizing
-        // title/slug is a deliberate opt-in via a user-defined localized field, not a
-        // side effect of text fields localizing by default).
-        localized: false,
-      });
-    }
-
-    if (!userFieldColumns.has("slug")) {
-      systemFields.push({
-        type: "text",
-        name: "slug",
-        label: "Slug",
-        required: true,
-        unique: true,
-        // i18n: auto-injected system slug is SHARED by default (see title above).
-        localized: false,
-      });
-    }
+    const systemFields = systemFieldsBeside(config.fields);
 
     // Prepend system fields so they appear first in the form
     const fieldsWithSystem = withOwnAddressRule(

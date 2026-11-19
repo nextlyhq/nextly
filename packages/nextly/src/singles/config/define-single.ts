@@ -41,14 +41,11 @@
 
 import {
   asDeclaredFields,
+  systemFieldsBeside,
   toTitleCase,
 } from "../../collections/config/declared-config";
-import type {
-  AuthorableFieldConfig,
-  FieldConfig,
-} from "../../collections/fields/types";
+import type { AuthorableFieldConfig } from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
-import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import { markDeclaredByDefine } from "../../shared/lib/config-problems";
 
 import type {
@@ -213,39 +210,7 @@ export function defineSingle(config: SingleConfigInput): SingleConfig {
     // (createDefaultDocument always writes them). If the user already defined
     // fields with these names, their definitions take priority.
 
-    // Keyed by the COLUMN each field becomes, not by its declared name. A field named `Title` owns
-    // the `title` column, so injecting the system one beside it declares that column twice and the
-    // table cannot be created — the injection has to ask the same question the generators do.
-    const userFieldColumns = columnsDeclaredBy(config.fields);
-
-    const systemFields: FieldConfig[] = [];
-
-    if (!userFieldColumns.has("title")) {
-      systemFields.push({
-        type: "text",
-        name: "title",
-        label: "Title",
-        required: true,
-        // i18n: the auto-injected system title is SHARED by default, matching
-        // collections (define-collection.ts). Localizing title/slug is a deliberate
-        // opt-in via a user-defined localized field, not a side effect of text fields
-        // localizing by default — otherwise a localized single would relocate its
-        // identity columns into the companion `_locales` table.
-        localized: false,
-      });
-    }
-
-    if (!userFieldColumns.has("slug")) {
-      systemFields.push({
-        type: "text",
-        name: "slug",
-        label: "Slug",
-        required: true,
-        unique: true,
-        // i18n: auto-injected system slug is SHARED by default (see title above).
-        localized: false,
-      });
-    }
+    const systemFields = systemFieldsBeside(config.fields);
 
     const fieldsWithSystem = [
       ...systemFields,
