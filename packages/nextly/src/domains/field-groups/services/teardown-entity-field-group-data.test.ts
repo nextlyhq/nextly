@@ -19,6 +19,7 @@ import {
 
 import {
   countEntityComponentRows,
+  countEntityComponentTree,
   teardownEntityComponentData,
 } from "./teardown-entity-field-group-data";
 
@@ -668,5 +669,125 @@ describe("teardownEntityComponentData follows a deep chain", () => {
       // Each level reads every table: the entity's, then each of the six chain levels.
       expect(reads.get(`comp_${slug}`)).toBe(chain.length + 1);
     }
+  });
+});
+
+describe("countEntityComponentTree", () => {
+  it("counts, per table, every row the teardown removes, nested levels and translations included", async () => {
+    // Three nested levels under the entity, one instance each, beside a table holding nothing of
+    // the entity's; the middle level is translated, with three rows for its instance.
+    const chain = ["l1", "l2", "l3"];
+    const parentOf = new Map(
+      chain.map((slug, i) => [
+        `comp_${slug}`,
+        i === 0 ? "dc_posts" : `comp_${chain[i - 1]}`,
+      ])
+    );
+    const translated = "comp_l2_locales";
+    type Condition = { column: string; op?: string; value?: unknown };
+    const isProbe = (conditions: Condition[]) =>
+      conditions.some(c => c.column === "id" && c.op === "IS NULL");
+    const childRowsOf = (table: string, conditions: Condition[]) => {
+      const parent = conditions.find(c => c.column === "_parent_table")?.value;
+      return parentOf.get(table) === parent ? [{ id: `${table}-1` }] : [];
+    };
+    const fake = () => {
+      const removed = new Map<string, number>();
+      const adapter = {
+        dialect: "postgresql" as const,
+        listTables: vi
+          .fn()
+          .mockResolvedValue([
+            ...chain.map(slug => `comp_${slug}`),
+            "comp_other",
+            "dynamic_components",
+          ]),
+        tableExists: vi.fn(async (table: string) => table === translated),
+        delete: vi.fn(async (table: string, where: { and?: Condition[] }) => {
+          const n =
+            table === translated
+              ? 3
+              : childRowsOf(table, where.and ?? []).length;
+          removed.set(table, (removed.get(table) ?? 0) + n);
+          return n;
+        }),
+        // Raw SQL is not how a count is read: a count through it reads nothing.
+        executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+        // The translations of the instances it reads, through Drizzle: three for the middle level's.
+        getDrizzle: () => ({
+          execute: async () => ({ rows: [{ n: 3 }] }),
+        }),
+        select: vi.fn(
+          async (
+            table: string,
+            options?: { where?: { and?: Condition[] } }
+          ) => {
+            if (table === "dynamic_components") return [];
+            const conditions = options?.where?.and ?? [];
+            return isProbe(conditions) ? [] : childRowsOf(table, conditions);
+          }
+        ),
+      };
+      return { adapter, removed };
+    };
+
+    const counting = fake();
+    const counted = await countEntityComponentTree({
+      adapter: counting.adapter as never,
+      parentTable: "dc_posts",
+    });
+    // Counting removes nothing.
+    expect(counting.adapter.delete).not.toHaveBeenCalled();
+
+    const tearing = fake();
+    await teardownEntityComponentData({
+      adapter: tearing.adapter as never,
+      parentTable: "dc_posts",
+    });
+    expect(new Map(counted.map(({ table, rows }) => [table, rows]))).toEqual(
+      tearing.removed
+    );
+    expect(tearing.removed).toEqual(
+      new Map([
+        ["comp_l1", 1],
+        ["comp_l2", 1],
+        [translated, 3],
+        ["comp_l3", 1],
+      ])
+    );
+  });
+});
+
+describe("the walk over rows that point back at themselves", () => {
+  it("follows each instance once, so a cycle of rows ends", async () => {
+    // `comp_x`'s instance is its own parent's child: reading under it finds it again.
+    type Condition = { column: string; op?: string; value?: unknown };
+    const reads: string[] = [];
+    const adapter = {
+      dialect: "postgresql" as const,
+      listTables: vi.fn().mockResolvedValue(["comp_x"]),
+      tableExists: vi.fn().mockResolvedValue(false),
+      delete: vi.fn(),
+      executeQuery: vi.fn().mockResolvedValue([{ n: 0 }]),
+      getDrizzle: vi.fn(),
+      select: vi.fn(
+        async (table: string, options?: { where?: { and?: Condition[] } }) => {
+          const conditions = options?.where?.and ?? [];
+          if (table !== "comp_x" || conditions.some(c => c.op === "IS NULL")) {
+            return [];
+          }
+          const parent = conditions.find(c => c.column === "_parent_table");
+          reads.push(String(parent?.value));
+          return [{ id: "x1" }];
+        }
+      ),
+    };
+    const counted = await countEntityComponentTree({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+    // Read under the entity, then once under `x1`, where it is found again and not followed.
+    expect(reads).toEqual(["dc_posts", "comp_x"]);
+    expect(counted).toEqual([{ table: "comp_x", rows: 2 }]);
   });
 });

@@ -110,6 +110,10 @@ import {
   runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
+  retiredByRun,
+  withEntityCoverage,
+} from "../../domains/schema/migrate/entity-shared-rows";
+import {
   readDeletionFacts,
   runDeletions,
   runStatements,
@@ -1513,6 +1517,7 @@ export async function previewMigrate(args: {
     [...moduleRuns, ...pendingFiles.map(file => fileUnit(file, dialect))],
     db,
     dialect,
+    { adapter, migrationsDir: args.migrationsDir },
     // The run this previews reconciles Nextly's own tables first.
     true
   );
@@ -3618,6 +3623,7 @@ async function judgeFileDeletions(
     units,
     deps.db,
     deps.dialect,
+    { adapter: deps.adapter, migrationsDir: deps.migrationsDir },
     // This run reconciles Nextly's own tables first (Phase 1), before a module or a file.
     true
   )) {
@@ -3784,9 +3790,13 @@ export async function pendingPluginDeletions(
   // already there is refused before it starts (`refuseRenamesOntoTakenTargets`).
   await refuseRenamesOntoTakenTargets(units, deps.db, deps.dialect);
   // An install runs the modules alone: nothing makes Nextly's own tables first.
-  return (await pendingRunDeletions(units, deps.db, deps.dialect, false)).map(
-    ({ unit, deletions }) => ({ label: unit.label, text: unit.text, deletions })
-  );
+  return (
+    await pendingRunDeletions(units, deps.db, deps.dialect, undefined, false)
+  ).map(({ unit, deletions }) => ({
+    label: unit.label,
+    text: unit.text,
+    deletions,
+  }));
 }
 
 /**
@@ -3858,11 +3868,20 @@ async function coreTablesTheRunMakes(
  * (`runDeletions`): a unit is judged against the schema as the units before
  * it leave it, so a table an earlier one creates holds only what the run
  * put there. The live facts are read once, for every unit's statements.
+ *
+ * With `entities`, as `nextly migrate` judges its run, each deletion in a
+ * table a collection or Single owns belongs to its main table, and a unit
+ * dropping an entity's main table lists the entity's rows in shared tables,
+ * counted (`withEntityCoverage`): a consent naming the main table covers all
+ * of it. `entities.adapter` finds the field groups' tables; the entity's
+ * rows in shared tables are listed only where the snapshot the run ends at no
+ * longer records it (`retiredByRun`, over `entities.migrationsDir`).
  */
 async function pendingRunDeletions(
   units: readonly RunUnit[],
   db: unknown,
   dialect: SupportedDialect,
+  entities: { adapter?: unknown; migrationsDir: string } | undefined,
   /**
    * Whether the run these units belong to makes Nextly's own tables before any of them runs:
    * `nextly migrate` and a start's migrations do, in their first phase (the core reconcile),
@@ -3880,7 +3899,23 @@ async function pendingRunDeletions(
       ? { madeBeforeTheFiles: await coreTablesTheRunMakes(db, dialect) }
       : {}
   );
-  const perUnit = runDeletions(lists, dialect, facts);
+  const read = runDeletions(lists, dialect, facts);
+  const retires =
+    entities === undefined
+      ? undefined
+      : await retiredByRun(
+          resolve(entities.migrationsDir, "meta"),
+          units.map(unit => unit.label.replace(/\.sql$/, ""))
+        );
+  const perUnit =
+    entities === undefined
+      ? read
+      : await withEntityCoverage(read, {
+          db,
+          dialect,
+          adapter: entities.adapter,
+          ...(retires === undefined ? {} : { retires }),
+        });
   return units.map((unit, at) => ({ unit, deletions: perUnit[at] ?? [] }));
 }
 

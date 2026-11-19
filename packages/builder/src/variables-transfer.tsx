@@ -307,13 +307,18 @@ export function useVariablesTransfer({
       );
     };
     const { onEditClasses: edit, storeTokensNow: storeNow } = latest.current;
-    if (
-      result.classes === undefined ||
-      edit === undefined ||
-      storeNow === undefined
-    ) {
+    if (storeNow === undefined) {
       latest.current.onChange(result.tokens);
       done(result.textStyles ?? 0);
+      return;
+    }
+    if (result.classes === undefined || edit === undefined) {
+      // No text styles to store after them, but the variables still go
+      // through the write that answers what it stored, so a save the site
+      // takes in part is said as that rather than counted as whole.
+      void storeVariables(storeNow, result.tokens, refuse).then(stored => {
+        if (stored) done(result.textStyles ?? 0);
+      });
       return;
     }
     void importInSteps({
@@ -325,8 +330,8 @@ export function useVariablesTransfer({
       writers: { storeNow, edit, onChange: latest.current.onChange },
       refuse,
     }).then(stored => {
-      // "some" and "nothing" were said by the step that stopped.
-      if (stored === "all" || stored === "variables") {
+      // "nothing" was said by the step that stopped.
+      if (stored !== "nothing") {
         done(stored === "all" ? (result.textStyles ?? 0) : 0);
       }
     });
@@ -681,14 +686,37 @@ function ImportPreview({
 }
 
 /**
+ * An import's variables stored through the host's write that answers what
+ * it stored, answering whether ALL were. Anything less is said here: none
+ * as "nothing was imported", and a save the site took in part as `partly`
+ * (some variables are stored, so "nothing" would be untrue) with the reason
+ * the rest was refused.
+ */
+async function storeVariables(
+  storeNow: (tokens: SiteTokenSet) => Promise<boolean | VariablesStored>,
+  tokens: SiteTokenSet,
+  refuse: (headline: string, detail?: readonly string[]) => void,
+  partly = "Only some of the variables were saved."
+): Promise<boolean> {
+  const stored = asStored(await storeNow(tokens).catch(() => false));
+  if (stored.stored === "none") {
+    refuse("The variables weren't saved, so nothing was imported.");
+  }
+  if (stored.stored === "part") {
+    refuse(partly, stored.why === undefined ? [] : [stored.why]);
+  }
+  return stored.stored === "all";
+}
+
+/**
  * An import with text styles, stored in three steps, each a step of the
  * history: the variables (and the site's other design data) first, since
  * the site refuses a text style naming a variable it doesn't hold; then the
  * text styles; then the Site text rows, which may follow them. Undo takes
  * them back in the opposite order, which the site accepts at each step: it
  * refuses to remove a text style while a row still follows it. Answers what
- * was stored: everything, the variables only, some of the variables (the
- * text styles then wait, since they may name one refused), or nothing.
+ * was stored: everything, the variables only, or nothing beyond what
+ * {@link storeVariables} has said.
  */
 async function importInSteps(steps: {
   /** The import's variables, with the site's own Site text kept. */
@@ -702,25 +730,18 @@ async function importInSteps(steps: {
     onChange: (tokens: SiteTokenSet) => void;
   };
   refuse: (headline: string, detail?: readonly string[]) => void;
-}): Promise<"all" | "variables" | "some" | "nothing"> {
+}): Promise<"all" | "variables" | "nothing"> {
   const { writers, refuse } = steps;
-  const stored = asStored(
-    await writers.storeNow(steps.variables).catch(() => false)
+  // The text styles may name a refused variable, so after a save in part
+  // they and the Site text following them wait for the author to fix it and
+  // import again.
+  const stored = await storeVariables(
+    writers.storeNow,
+    steps.variables,
+    refuse,
+    "Only some of the variables were saved, so the text styles and Site text weren't imported."
   );
-  if (stored.stored === "none") {
-    refuse("The variables weren't saved, so nothing was imported.");
-    return "nothing";
-  }
-  if (stored.stored === "part") {
-    // Some variables are stored, so "nothing was imported" would be untrue.
-    // The text styles may name a refused one, so they and the Site text
-    // following them wait for the author to fix it and import again.
-    refuse(
-      "Only some of the variables were saved, so the text styles and Site text weren't imported.",
-      stored.why === undefined ? [] : [stored.why]
-    );
-    return "some";
-  }
+  if (!stored) return "nothing";
   const refusal = await writers
     .edit(steps.classes)
     .catch(() => "The text styles couldn't be saved.");
