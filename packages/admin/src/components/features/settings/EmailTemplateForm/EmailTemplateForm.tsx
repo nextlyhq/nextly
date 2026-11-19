@@ -48,20 +48,6 @@ import {
 } from "./WorkbenchLayout";
 import { WrittenBody, type InsertVariable } from "./written/WrittenBody";
 
-/**
- * The declared variables a list block can repeat over: those declared as a
- * list first, then the rest, since a variable the admin declares has no type
- * yet and may still hold a list.
- */
-function listVariablesOf(variables: TemplateFormValues["variables"]): string[] {
-  const isList = (variable: TemplateFormValues["variables"][number]) =>
-    variable.presentation?.type === "list";
-  return [
-    ...variables.filter(isList),
-    ...variables.filter(variable => !isList(variable)),
-  ].map(variable => variable.name);
-}
-
 // ============================================================
 // EmailTemplateForm — the template workbench
 // ============================================================
@@ -153,7 +139,7 @@ function ContentColumn({
           <WrittenBody
             value={blocks}
             readOnly={!owns || isPending}
-            listVariables={listVariablesOf(variables)}
+            variables={variables}
             insertRef={writtenInsert}
             onChange={next =>
               form.setValue("blocks", next, { shouldDirty: true })

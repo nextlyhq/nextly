@@ -56,6 +56,8 @@ import type {
   WrittenDocument,
 } from "@admin/services/emailTemplateApi";
 
+import type { TemplateFormVariable } from "../schema";
+
 import {
   addBlock,
   duplicateBlock,
@@ -67,6 +69,8 @@ import {
   type BlockKind,
   type BlockPath,
 } from "./block-model";
+import { chipNamer } from "./chip-names";
+import { ChipNamesContext } from "./ChipLabel";
 import { RunEditor } from "./RunEditor";
 import { ChipNode, type Inline } from "./runs";
 
@@ -105,6 +109,20 @@ const SPACER_SIZES: ReadonlyArray<[string, number]> = [
   ["Large", 48],
 ];
 
+/**
+ * The declared variables a list block can repeat over: those declared as a
+ * list first, then the rest, since a variable declared without a type may
+ * still hold one.
+ */
+function listVariablesOf(variables: readonly TemplateFormVariable[]): string[] {
+  const isList = (variable: TemplateFormVariable) =>
+    variable.presentation?.type === "list";
+  return [
+    ...variables.filter(isList),
+    ...variables.filter(variable => !isList(variable)),
+  ].map(variable => variable.name);
+}
+
 /** Plain text and chips only: what a heading, label or alt text stores. */
 function plain<T>(runs: Inline[]): T[] {
   return runs.map(run =>
@@ -124,8 +142,8 @@ interface Edit {
   /** The document as it is now, for an Undo that runs after other edits. */
   current: () => WrittenDocument;
   readOnly: boolean;
-  /** The declared list variables a list block can repeat over. */
-  listVariables: readonly string[];
+  /** The template's declared variables, which name chips and lists. */
+  variables: readonly TemplateFormVariable[];
   /** Told which field's editor was typed in last. */
   focused: (editor: LexicalEditor) => void;
 }
@@ -263,15 +281,20 @@ function BlockFields({
               }
             >
               <option value="">Choose a list</option>
-              {edit.listVariables.map(name => (
+              {listVariablesOf(edit.variables).map(name => (
                 <option key={name} value={name}>
-                  {name}
+                  {chipNamer(edit.variables)(name)}
                 </option>
               ))}
             </select>
           </label>
           <div className="rounded-md border border-dashed border-border bg-muted/40 p-2">
-            <BlockList blocks={block.blocks} list={path[0]} edit={edit} />
+            {/* Inside, `item` is this list's current item. */}
+            <ChipNamesContext.Provider
+              value={chipNamer(edit.variables, block.variable || undefined)}
+            >
+              <BlockList blocks={block.blocks} list={path[0]} edit={edit} />
+            </ChipNamesContext.Provider>
           </div>
         </div>
       );
@@ -510,8 +533,8 @@ export interface WrittenBodyProps {
   value: WrittenDocument;
   onChange: (next: WrittenDocument) => void;
   readOnly?: boolean;
-  /** The declared list variables a list block can repeat over. */
-  listVariables?: readonly string[];
+  /** The template's declared variables, which name chips and lists. */
+  variables?: readonly TemplateFormVariable[];
   /** Set to a way to put a variable where the person was last typing. */
   insertRef?: MutableRefObject<InsertVariable | null>;
 }
@@ -520,7 +543,7 @@ export function WrittenBody({
   value,
   onChange,
   readOnly = false,
-  listVariables = [],
+  variables = [],
   insertRef,
 }: WrittenBodyProps): JSX.Element {
   // The field typed in last, where the Variables rail puts a chip.
@@ -557,7 +580,7 @@ export function WrittenBody({
     },
     current: () => latest.current,
     readOnly,
-    listVariables,
+    variables,
     focused: editor => {
       lastEditor.current = editor;
     },
@@ -568,7 +591,9 @@ export function WrittenBody({
         <span className="font-medium text-foreground">Content</span> · The look
         comes from your brand settings.
       </p>
-      <BlockList blocks={value.blocks} list={undefined} edit={edit} />
+      <ChipNamesContext.Provider value={chipNamer(variables)}>
+        <BlockList blocks={value.blocks} list={undefined} edit={edit} />
+      </ChipNamesContext.Provider>
     </div>
   );
 }

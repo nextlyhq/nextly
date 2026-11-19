@@ -208,7 +208,10 @@ describe("a written email's blocks", () => {
           { type: "spacer" },
           { type: "list", variable: "", blocks: [] }
         )}
-        listVariables={["lines", "name"]}
+        variables={[
+          { name: "name", description: "", required: true },
+          { name: "lines", description: "", required: true },
+        ]}
         onChange={seen}
       />
     );
@@ -243,5 +246,78 @@ describe("a written email's blocks", () => {
       type: "list",
       variable: "lines",
     });
+  });
+
+  it("shows chips by friendly name, and a list's item by the list's own fields", () => {
+    const chip = (variable: string) => ({ type: "chip" as const, variable });
+    render(
+      <WrittenBody
+        value={doc(
+          { type: "heading", text: [chip("customer.firstName")] },
+          {
+            type: "list",
+            variable: "order.lines",
+            blocks: [{ type: "text", text: [chip("item.title")] }],
+          }
+        )}
+        variables={[
+          {
+            name: "customer",
+            description: "",
+            required: true,
+            presentation: {
+              label: "Customer",
+              fields: [{ name: "firstName", label: "First name" }],
+            },
+          },
+          {
+            name: "order",
+            description: "",
+            required: true,
+            presentation: {
+              label: "Order",
+              fields: [
+                {
+                  name: "lines",
+                  label: "Lines",
+                  fields: [{ name: "title", label: "Product" }],
+                },
+              ],
+            },
+          },
+        ]}
+        onChange={vi.fn()}
+      />
+    );
+    const heading = screen.getByRole("textbox", { name: "Heading" });
+    expect(heading.textContent).toContain("Customer › First name");
+    const text = screen.getByRole("textbox", { name: "Text" });
+    expect(text.textContent).toContain("Item › Product");
+    // The path stays on hover, for whoever knows the data by its keys.
+    expect(screen.getByTitle("item.title").textContent).toBe("Item › Product");
+  });
+
+  it("offers declared lists first in a list's picker, by their friendly names", () => {
+    render(
+      <WrittenBody
+        value={doc({ type: "list", variable: "", blocks: [] })}
+        variables={[
+          { name: "resetUrl", description: "", required: true },
+          {
+            name: "lines",
+            description: "",
+            required: true,
+            presentation: { type: "list", label: "Order lines" },
+          },
+        ]}
+        onChange={vi.fn()}
+      />
+    );
+    const options = within(
+      screen.getByRole("combobox", { name: "List variable" })
+    )
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    expect(options).toEqual(["Choose a list", "Order lines", "resetUrl"]);
   });
 });

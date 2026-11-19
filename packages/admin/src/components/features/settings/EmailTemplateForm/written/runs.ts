@@ -27,8 +27,11 @@ import {
   type SerializedLexicalNode,
   type Spread,
 } from "lexical";
+import { createElement, type ReactNode } from "react";
 
 import type { WrittenBlock } from "@admin/services/emailTemplateApi";
+
+import { ChipLabel } from "./ChipLabel";
 
 /** One run of a text block: text with its marks, or a chip. */
 export type Inline = Extract<WrittenBlock, { type: "text" }>["text"][number];
@@ -51,7 +54,7 @@ type SerializedChipNode = Spread<
 >;
 
 /** A variable in the text: one piece, shown by name, that can't be typed into. */
-export class ChipNode extends DecoratorNode<string> {
+export class ChipNode extends DecoratorNode<ReactNode> {
   __variable: string;
   __fallback: string | undefined;
   __marks: Marks;
@@ -98,9 +101,9 @@ export class ChipNode extends DecoratorNode<string> {
   createDOM(): HTMLElement {
     const span = document.createElement("span");
     span.dataset.variable = this.__variable;
-    // Its marks, as the sent email draws them: a chip is not a text node, so
-    // the editor's text theme never reaches it.
-    // A pill, so a variable never reads as typed text.
+    // A pill, so a variable never reads as typed text, with its marks as the
+    // sent email draws them: a chip is not a text node, so the editor's text
+    // theme never reaches it.
     span.className = [
       "mx-0.5 rounded-md border border-border bg-muted px-1.5 py-0.5 text-xs",
       this.__marks.bold ? "font-semibold" : "",
@@ -119,9 +122,9 @@ export class ChipNode extends DecoratorNode<string> {
     return true;
   }
 
-  /** The variable it stands for, as the editor shows it until names are known. */
-  decorate(): string {
-    return this.__variable;
+  /** Its variable's friendly name, from the namer of the block it sits in. */
+  decorate(): ReactNode {
+    return createElement(ChipLabel, { variable: this.__variable });
   }
 }
 
