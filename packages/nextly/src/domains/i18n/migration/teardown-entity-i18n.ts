@@ -93,6 +93,44 @@ export interface TeardownEntityI18nResult {
 }
 
 /**
+ * Drops `tableName`'s translations table (`<tableName>_locales`) where it is
+ * there, and answers whether it was. Guarded so an entity that never had one
+ * is a no-op rather than relying on IF EXISTS semantics that differ across
+ * dialects. `change` names, in a busy-table refusal, what the drop is part of.
+ */
+export async function dropTranslationsTable(
+  adapter: TeardownI18nAdapter,
+  tableName: string,
+  change: string
+): Promise<boolean> {
+  const companionTable = `${tableName}_locales`;
+  if (!(await adapter.tableExists(companionTable))) return false;
+  const quoted = q(companionTable, adapter.dialect);
+  // Postgres needs CASCADE to also remove the FK constraint the companion owns; MySQL and
+  // SQLite reject the keyword. IF EXISTS keeps the statement safe against a concurrent drop.
+  const dropSql =
+    adapter.dialect === "postgresql"
+      ? `DROP TABLE IF EXISTS ${quoted} CASCADE`
+      : `DROP TABLE IF EXISTS ${quoted}`;
+  // Waits for a companion another database session holds in short tries, then stops with
+  // `NEXTLY_TABLE_BUSY` naming it and its holder, rather than holding the delete without bound.
+  await runI18nSchemaStatements(
+    adapter,
+    [dropSql],
+    change,
+    () => `the drop of table ${JSON.stringify(companionTable)}`
+  );
+  // Readiness remembers only that a companion exists, and this is one of the two things that
+  // makes that false. Forgetting it here rather than at the call sites keeps the memory tied to
+  // the statement that invalidates it.
+  const { forgetCompanionReadiness } = await import(
+    "../runtime/companion-readiness"
+  );
+  forgetCompanionReadiness(adapter, companionTable);
+  return true;
+}
+
+/**
  * Drops `<tableName>_locales` and purges the entity's `nextly_i18n_archive` rows and its records
  * of where its translated values came from.
  *
@@ -106,36 +144,11 @@ export async function teardownEntityI18n(
   const { adapter, slug, tableName } = args;
   // Known exactly when the slug is: the identity type offers both or neither.
   const kind = args.slug === null ? undefined : args.kind;
-  const companionTable = `${tableName}_locales`;
-
-  // Guarded so a non-localized entity (no companion was ever created) is a no-op rather
-  // than relying on IF EXISTS semantics that differ across dialects.
-  let companionDropped = false;
-  if (await adapter.tableExists(companionTable)) {
-    const quoted = q(companionTable, adapter.dialect);
-    // Postgres needs CASCADE to also remove the FK constraint the companion owns; MySQL and
-    // SQLite reject the keyword. IF EXISTS keeps the statement safe against a concurrent drop.
-    const dropSql =
-      adapter.dialect === "postgresql"
-        ? `DROP TABLE IF EXISTS ${quoted} CASCADE`
-        : `DROP TABLE IF EXISTS ${quoted}`;
-    // Waits for a companion another database session holds in short tries, then stops with
-    // `NEXTLY_TABLE_BUSY` naming it and its holder, rather than holding the delete without bound.
-    await runI18nSchemaStatements(
-      adapter,
-      [dropSql],
-      "the localization teardown",
-      () => `the drop of table ${JSON.stringify(companionTable)}`
-    );
-    companionDropped = true;
-    // Readiness remembers only that a companion exists, and this is one of the two things that
-    // makes that false. Forgetting it here rather than at the call sites keeps the memory tied to
-    // the statement that invalidates it.
-    const { forgetCompanionReadiness } = await import(
-      "../runtime/companion-readiness"
-    );
-    forgetCompanionReadiness(adapter, companionTable);
-  }
+  const companionDropped = await dropTranslationsTable(
+    adapter,
+    tableName,
+    "the localization teardown"
+  );
 
   // A null slug means the caller could not identify the entity (the catalog sweep), and every row
   // outside the translations table is keyed by kind and slug, so there is no safe row set to

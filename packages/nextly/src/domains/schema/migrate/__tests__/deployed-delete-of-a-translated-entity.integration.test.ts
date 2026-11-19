@@ -21,6 +21,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -886,6 +887,85 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(Number(left?.n)).toBe(0);
     }, 180_000);
+
+    /**
+     * The delete file as a release before deletes dropped the translations
+     * table wrote it: the main table's drop alone, which on PostgreSQL leaves
+     * the translations table standing, its key to the main table dropped by
+     * the CASCADE.
+     */
+    function asAnOlderDeleteFile(): void {
+      const migrations = join(dir, "migrations");
+      const drop = `DROP TABLE IF EXISTS "${notes.table}_locales" CASCADE`;
+      for (const name of readdirSync(migrations)) {
+        if (!name.endsWith(".sql")) continue;
+        const path = join(migrations, name);
+        const text = readFileSync(path, "utf8");
+        if (!text.includes(drop)) continue;
+        // Each statement ends in `;`, with a blank line between them (`formatMigrationFile`).
+        writeFileSync(
+          path,
+          text.split(`${drop};\n\n`).join("").split(`${drop};`).join("")
+        );
+      }
+    }
+
+    /** Whether the deployed database still has NOTES's translations table. */
+    const translationsStand = (adapter: DrizzleAdapter) =>
+      adapter.tableExists(`${notes.table}_locales`);
+
+    it.skipIf(dialect !== "postgresql")(
+      "drops the translations table an older delete left, under the consent, naming it",
+      async () => {
+        const { deployed, deleted } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        expect(deleted.code, deleted.said).toBeUndefined();
+        // Positive control: the older delete left it.
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+
+        const later = await migrate();
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(later.said).toContain(`- table ${notes.table}_locales`);
+        expect(await translationsStand(deployed.adapter)).toBe(false);
+        expect(later.said).toContain(
+          `Removed what the deleted collection "${NOTES}" left: its translations table ${notes.table}_locales`
+        );
+      },
+      180_000
+    );
+
+    it.skipIf(dialect !== "postgresql")(
+      "takes it under a consent naming the deleted collection's table",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+
+        const later = await migrate(notes.table);
+
+        expect(later.code, later.said).toBeUndefined();
+        expect(await translationsStand(deployed.adapter)).toBe(false);
+      },
+      180_000
+    );
+
+    it.skipIf(dialect !== "postgresql")(
+      "refuses the run, keeping it, where no consent covers it",
+      async () => {
+        const { deployed } =
+          await deleteNotesOnTheDeployedDatabase(asAnOlderDeleteFile);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+
+        const later = await migrate("dpl_another");
+
+        expect(later.code, later.said).not.toBeUndefined();
+        expect(later.said).toContain("The consent given does not cover");
+        expect(later.said).toContain(`${notes.table}_locales`);
+        expect(await translationsStand(deployed.adapter)).toBe(true);
+      },
+      180_000
+    );
 
     it("removes none of its rows in a run stopped part-way through them, and all of them in the next", async () => {
       const { deployed, before, deleted, after } =

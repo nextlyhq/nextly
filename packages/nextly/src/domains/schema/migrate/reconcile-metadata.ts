@@ -149,6 +149,11 @@ export interface ReconcileMetadataDeps {
    * alone. A booted app's adapter already resolves them, and gives none.
    */
   prepareLeftoverTables?: () => Promise<void>;
+  /**
+   * The translations tables deleted entities left standing that the run's
+   * consent covered, dropped as their entity's rows go; none otherwise.
+   */
+  dropLeftoverTranslations?: ReadonlySet<string>;
   /** Each plugin-contributed collection's origin (`RegistryWriteDeps.collectionSources`). */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
   /**
@@ -522,6 +527,9 @@ async function leftoversOfDroppedEntities(
       ...(deps.prepareLeftoverTables === undefined
         ? {}
         : { prepareTables: deps.prepareLeftoverTables }),
+      ...(deps.dropLeftoverTranslations === undefined
+        ? {}
+        : { dropTranslations: deps.dropLeftoverTranslations }),
     });
   } catch (error) {
     // A run that lost the schema lock stops; anything else costs only this

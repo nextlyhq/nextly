@@ -111,6 +111,10 @@ import {
   runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
+  leftoverTranslationsTables,
+  type LeftoverTranslations,
+} from "../../domains/schema/migrate/dropped-entity-leftovers";
+import {
   readDeletionFacts,
   runDeletions,
   runStatements,
@@ -178,6 +182,7 @@ import {
   takeRegistryBaseline,
   type RegistryRecord,
 } from "../../domains/schema/migrate/registry-record";
+import { readRegistrySource } from "../../domains/schema/migrate/registry-source";
 import { typeChangedRowsWriter } from "../../domains/schema/migrate/registry-writer";
 import {
   refuseRenamesOntoTakenTargets,
@@ -218,7 +223,10 @@ import {
   mergeContributions,
   narrowToContributions,
 } from "../../domains/schema/migrate-create/app-stream";
-import type { EntitySettingsRecord } from "../../domains/schema/migrate-create/entity-settings";
+import type {
+  EntitySettingsRecord,
+  SettingsEntityKind,
+} from "../../domains/schema/migrate-create/entity-settings";
 import {
   ENTITY_HEADER_GUIDANCE,
   parseEntityHeaders,
@@ -861,6 +869,7 @@ export async function runMigrate(
         // A deleted entity's field-group values are read through the ORM, which this command's
         // resolver of Nextly's own tables cannot address: every field group's table is added to
         // it first, as `prune` adds them (`registerComponentSchemas`).
+        judgeLeftoverTranslations: true,
         prepareLeftoverTables: async () => {
           const drizzleAdapter = adapter as unknown as DrizzleAdapter;
           await registerComponentSchemas({
@@ -1298,6 +1307,13 @@ export interface MigrateCoreDeps {
    * Nextly's own tables alone; a booted app's adapter resolves them already.
    */
   prepareLeftoverTables?: () => Promise<void>;
+  /**
+   * Judge, with the run's other deletions, the translations tables deleted
+   * entities left standing (`leftoverTranslationsTables`), and drop the ones
+   * the consent covers once their entity's rows go. Set by the command; a
+   * development start leaves them, so it never asks about them.
+   */
+  judgeLeftoverTranslations?: boolean;
   /**
    * Seam for tests; defaults to recording and retiring element owner rows
    * against the database.
@@ -2758,6 +2774,9 @@ export async function migrateCore(
   // on them; judged again under the lock, below, against the database as it
   // stands then, accepting only what was agreed here.
   const { agreement: agreedDeletions } = await judgeFileDeletions(deps);
+  // The translations tables deleted entities left that the judgement under the lock covered, for
+  // the metadata pass to drop (`judgeLeftoverTranslations`).
+  let judgedLeftovers: readonly string[] = [];
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
@@ -2810,6 +2829,9 @@ export async function migrateCore(
     ...(deps.prepareLeftoverTables === undefined
       ? {}
       : { prepareLeftoverTables: deps.prepareLeftoverTables }),
+    ...(judgedLeftovers.length === 0
+      ? {}
+      : { dropLeftoverTranslations: new Set(judgedLeftovers) }),
     logger: {
       info: (m: string) => deps.logger.debug(m),
       warn: (m: string) => deps.logger.warn(m),
@@ -3025,10 +3047,11 @@ export async function migrateCore(
       // A file that deletes data runs only with consent covering each
       // deletion, judged from the database this run holds the lock on. The
       // files run only as they were judged here (`assertRunsAsJudged`).
-      const { files: judgedFiles } = await judgeFileDeletions(
+      const { files: judgedFiles, leftovers } = await judgeFileDeletions(
         deps,
         agreedDeletions
       );
+      judgedLeftovers = leftovers;
       // An applied file edited since it ran is refused here too, before the
       // first write; one recorded without a checksum gets its checksum.
       await (deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged)(
@@ -3635,6 +3658,29 @@ async function judgeFileDeletions(
     deps.dialect
   );
   const units = [...modules, ...fileUnits];
+  // The translations tables deleted entities left standing, asked about with the files' deletions
+  // and dropped by the metadata pass once covered: a table drop runs only under the consent.
+  const leftovers =
+    deps.judgeLeftoverTranslations === true
+      ? await leftoverTranslationsOf(deps)
+      : [];
+  if (leftovers.length > 0) {
+    const source = deletionSource(
+      "tables deleted entities left",
+      leftovers.map(left => left.table).join("\n")
+    );
+    for (const left of leftovers) {
+      sources.set(
+        {
+          kind: "table",
+          table: left.table,
+          translates: left.translates,
+          reason: `left by the deleted ${KIND_WORDS[left.kind]} "${left.slug}"`,
+        },
+        source
+      );
+    }
+  }
   for (const { unit, deletions } of await pendingRunDeletions(
     units,
     deps.db,
@@ -3661,7 +3707,34 @@ async function judgeFileDeletions(
   const files = new Map(
     fileUnits.map(unit => [unit.label, textDigest(unit.text)])
   );
-  return { agreement, files };
+  return { agreement, files, leftovers: leftovers.map(left => left.table) };
+}
+
+/** The word a deletion's reason names each kind of entity by. */
+const KIND_WORDS: Record<SettingsEntityKind, string> = {
+  collection: "collection",
+  single: "Single",
+  fieldGroup: "field group",
+};
+
+/**
+ * The translations tables the entities the applied migrations dropped left
+ * standing (`leftoverTranslationsTables`), read from the applied records; none
+ * where they cannot be read.
+ */
+async function leftoverTranslationsOf(
+  deps: MigrateCoreDeps
+): Promise<LeftoverTranslations[]> {
+  const events = new SchemaEventsRepository(deps.db, deps.dialect);
+  const source = await readRegistrySource({
+    migrationsDir: deps.migrationsDir,
+    isApplied: filename => events.isFileApplied(filename),
+  });
+  if (source.kind !== "snapshot") return [];
+  return leftoverTranslationsTables({
+    adapter: deps.adapter as unknown as DrizzleAdapter,
+    chain: source.chain ?? [source.entities],
+  });
 }
 
 /**
