@@ -447,6 +447,13 @@ export async function writeCollectionSave(
      * is not, or the stop cannot be judged, its files are kept as before.
      */
     onSettled?: (report: readonly StoppedChange[]) => Promise<void>;
+    /**
+     * The caller's work that writes ahead of the save's own writes (a field leaving translation's
+     * archive): run once every check the save makes before anything is written has passed (its
+     * history, its plan, its type changes, the translations table's drift), and before the first
+     * write, so a save refused by any of them has written nothing.
+     */
+    beforeWrite?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult> {
   // A drift refusal leaves the save's files withdrawn, so it is told with the Builder's way on.
@@ -1115,6 +1122,8 @@ async function writeSave(
     pushes?: boolean;
     /** The push builds the whole table again, its translations table with it (`buildsWholeTable`). */
     buildsWholeTable?: boolean;
+    /** Run once the checks below have passed, before the first write (`writeCollectionSave`). */
+    beforeWrite?: () => Promise<void>;
   }
 ): Promise<{
   files: SaveFiles;
@@ -1141,6 +1150,8 @@ async function writeSave(
       buildsWholeTable: options.buildsWholeTable === true,
     });
   }
+  // Every check before the first write has passed: what the caller writes ahead of the save.
+  await options.beforeWrite?.();
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
