@@ -1368,6 +1368,20 @@ async function resolveAuthorization(
     return requireListRead(req, LIST_READ_GATES.users);
   }
 
+  // --- A user's external identities: the user-management gates ---
+  // Listed with the user read every other per-user view takes; unlinked
+  // with the user update the role-assignment routes take, for the same
+  // reason they do — an identity is managed from the user's own edit
+  // surface, a user-management workflow, not a deletion of the user.
+  if (service === "identities") {
+    if (method === "listUserIdentities") {
+      return requirePermission(req, "read", "users");
+    }
+    if (method === "unlinkUserIdentity") {
+      return requirePermission(req, "update", "users");
+    }
+  }
+
   // --- Default: {action}-{service} (e.g., read-users, create-users) ---
   const action = getActionFromMethod(httpMethod);
   return requirePermission(req, action, service);

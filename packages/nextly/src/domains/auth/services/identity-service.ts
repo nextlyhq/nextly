@@ -13,6 +13,12 @@
  * nothing more — so the only way any of this becomes a session is the
  * plugin login the resolution feeds (`ctx.auth.completeLogin`).
  *
+ * The same table's read side lives here too: the listing that shows an
+ * account the identities it holds, and the unlink that removes one of its
+ * rows. Both are scoped to the owning account — one account's door never
+ * answers for another's identities — and the unlink touches nothing but the
+ * link row it names.
+ *
  * The provider key a plugin names is stamped with the plugin's own name
  * before it reaches the table or a lookup, the same way its strategy names
  * are (`plugins/plugin-auth-provider`): one plugin can neither read nor
@@ -34,7 +40,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 
 import { readAccessTokenCookie } from "../../../auth/cookies/access-token-cookie";
 import { verifyAccessToken } from "../../../auth/jwt/verify";
@@ -52,6 +58,7 @@ import type { nextlyExternalIdentitiesPg } from "../../../schemas/external-ident
 import type { nextlyExternalIdentitiesSqlite } from "../../../schemas/external-identities/sqlite";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 
 /**
@@ -137,6 +144,26 @@ export interface ExternalUserCreator {
     // The id as the users service types it (`MinimalUser.id`); the one
     // reader, `provisionFor`, normalizes it to the string the table stores.
   }): Promise<{ id: string | number }>;
+}
+
+/**
+ * The linking policy of an app whose own auth configuration names no provider
+ * keys: no key is enabled, so every sign-in hand-off is refused before any
+ * lookup.
+ *
+ * What an instance built with this policy serves safely is everything that
+ * never asks it — the listing and unlinking doors below — and a hand-off door
+ * wired later hands the service a policy that reads a configuration naming
+ * keys, in place of this one.
+ */
+export function noConfiguredKeysLinkingPolicy(): LinkingPolicyPort {
+  return {
+    requireEnabled(providerKey: string): EnabledProviderKey {
+      throw NextlyError.forbidden({
+        logContext: { reason: "provider-key-not-enabled", providerKey },
+      });
+    },
+  };
 }
 
 /** What a listed login plugin hands over about one external identity. */
@@ -475,6 +502,21 @@ export interface AttachedExternalIdentity {
     readonly address: string | null;
     readonly userId: string;
   };
+}
+
+/**
+ * One stored identity as a listing answers it: the row's own facts, plus when
+ * the link was made. The table holds no provider token to leave out — nothing
+ * in a listing is anything but the link's own record.
+ */
+export interface ListedExternalIdentity {
+  readonly id: string;
+  readonly providerKey: string;
+  readonly issuer: string;
+  readonly subject: string;
+  readonly address: string | null;
+  readonly userId: string;
+  readonly createdAt: Date;
 }
 
 /** An explicit link as the plugin hands it over: the identity, and the context it started in. */
@@ -835,6 +877,77 @@ export class IdentityService extends BaseService {
     }
 
     return attachmentOf(row);
+  }
+
+  /**
+   * List one account's external identities: every row the account owns, in
+   * the order the links were made, and nothing else.
+   *
+   * Read through the owner index the table carries for exactly this
+   * question, so a listing is one query however many identities other
+   * accounts hold. No policy is asked — which keys are enabled governs
+   * sign-ins, not what a person or an administrator is shown about the links
+   * that already exist.
+   */
+  async listExternalIdentities(
+    userId: string
+  ): Promise<ListedExternalIdentity[]> {
+    const rows = await this.db
+      .select({
+        id: this.identitiesTable.id,
+        providerKey: this.identitiesTable.providerKey,
+        issuer: this.identitiesTable.issuer,
+        subject: this.identitiesTable.subject,
+        address: this.identitiesTable.address,
+        userId: this.identitiesTable.userId,
+        createdAt: this.identitiesTable.createdAt,
+      })
+      .from(this.identitiesTable)
+      .where(eq(this.identitiesTable.userId, userId))
+      // The link order, with the id as the tiebreak: two links made in one
+      // stored moment keep a stable order however the database returns them.
+      .orderBy(
+        asc(this.identitiesTable.createdAt),
+        asc(this.identitiesTable.id)
+      );
+    return rows;
+  }
+
+  /**
+   * Unlink one external identity: remove the link row, and nothing else.
+   *
+   * The removal is scoped to the owning account — an identity another
+   * account holds is not unlinkable through this door, and answers exactly
+   * as an identity nobody holds does, so a caller learns nothing about
+   * whose row an id names. The scoped delete is itself the whole decision,
+   * so nothing is read first and no session, token or account is touched:
+   * whoever was signed in through the identity stays signed in by the
+   * session they hold, and signs in differently only next time.
+   */
+  async unlinkExternalIdentity(
+    userId: string,
+    identityId: string
+  ): Promise<void> {
+    const removed = affectedRowCount(
+      await this.db
+        .delete(this.identitiesTable)
+        .where(
+          and(
+            eq(this.identitiesTable.id, identityId),
+            eq(this.identitiesTable.userId, userId)
+          )
+        ),
+      this.dialect
+    );
+    if (removed === 0) {
+      // The one refusal, for a row that is absent and a row another account
+      // owns alike: the count cannot tell the two apart, and neither may the
+      // answer.
+      throw NextlyError.notFound({
+        message: "No such identity for this user.",
+        logContext: { reason: "identity-not-held", userId, identityId },
+      });
+    }
   }
 
   /**

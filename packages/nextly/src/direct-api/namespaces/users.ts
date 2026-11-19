@@ -8,6 +8,7 @@
  * @packageDocumentation
  */
 
+import type { ListedExternalIdentity } from "../../domains/auth/services/identity-service";
 import {
   SYSTEM_READ_POLICY,
   SYSTEM_WRITE_POLICY,
@@ -23,7 +24,9 @@ import type {
   FindUserByIDArgs,
   FindUsersArgs,
   ListResult,
+  ListUserIdentitiesArgs,
   MutationResult,
+  UnlinkIdentityArgs,
   UpdateUserArgs,
 } from "../types/index";
 
@@ -31,6 +34,7 @@ import type { NextlyContext } from "./context";
 import {
   checkRead,
   checkedRoleChange,
+  checkWrite,
   createRequestContext,
   isNotFoundError,
   mergeConfig,
@@ -51,6 +55,14 @@ export interface UsersNamespace {
   create(args: CreateUserArgs): Promise<MutationResult<User>>;
   update(args: UpdateUserArgs): Promise<MutationResult<User>>;
   delete(args: DeleteUserArgs): Promise<MutationResult<{ id: string }>>;
+  /** The account's linked sign-in identities, oldest link first. */
+  listIdentities(
+    args: ListUserIdentitiesArgs
+  ): Promise<ListedExternalIdentity[]>;
+  /** Remove one linked identity from the account, and nothing else. */
+  unlinkIdentity(
+    args: UnlinkIdentityArgs
+  ): Promise<MutationResult<{ id: string }>>;
 }
 
 /**
@@ -247,6 +259,55 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
       return {
         message: "User deleted.",
         item: { id: args.id },
+      };
+    },
+
+    async listIdentities(
+      args: ListUserIdentitiesArgs
+    ): Promise<ListedExternalIdentity[]> {
+      if (!args.userId) {
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'userId' is required for users.listIdentities()",
+          statusCode: 400,
+        });
+      }
+
+      // Checked as REST's user read is — the listing is the same per-user
+      // view `findByID` serves — before anything is read.
+      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.users.read);
+      return ctx.identityService.listExternalIdentities(args.userId);
+    },
+
+    async unlinkIdentity(
+      args: UnlinkIdentityArgs
+    ): Promise<MutationResult<{ id: string }>> {
+      if (!args.userId || !args.identityId) {
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage:
+            "'userId' and 'identityId' are required for users.unlinkIdentity()",
+          statusCode: 400,
+        });
+      }
+
+      // Checked as REST's user update is — the unlink is the same
+      // user-management write the role assignments take — before anything
+      // is written.
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.users.update
+      );
+      await ctx.identityService.unlinkExternalIdentity(
+        args.userId,
+        args.identityId
+      );
+      // The unlinked identity's own id, as the delete's `item` carries the
+      // deleted user's: something concrete to chain on.
+      return {
+        message: "Identity unlinked.",
+        item: { id: args.identityId },
       };
     },
   };

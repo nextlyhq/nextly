@@ -6,7 +6,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ServiceContainer } from "../../../services";
-import { dispatchAuth, dispatchRbac } from "../auth-dispatcher";
+import {
+  dispatchAuth,
+  dispatchIdentities,
+  dispatchRbac,
+} from "../auth-dispatcher";
 
 describe("dispatchAuth — actions", () => {
   it("registerUser returns { message, item } body and 201 status", async () => {
@@ -344,5 +348,65 @@ describe("dispatchRbac — actions (respondAction)", () => {
       roleId: "r1",
       permissionCount: 4,
     });
+  });
+});
+
+describe("dispatchIdentities — a user's external identities", () => {
+  it("listUserIdentities returns { identities } and reads the named user's", async () => {
+    const identities = [
+      {
+        id: "i1",
+        providerKey: "acme-auth:google",
+        issuer: "",
+        subject: "subject-one",
+        address: null,
+        userId: "u1",
+        createdAt: new Date("2020-01-01T00:00:00Z"),
+      },
+    ];
+    const listExternalIdentities = vi.fn().mockResolvedValue(identities);
+    const container = {
+      identities: { listExternalIdentities },
+    } as unknown as ServiceContainer;
+
+    const result = await dispatchIdentities(
+      container,
+      "listUserIdentities",
+      { userId: "u1" },
+      undefined
+    );
+
+    const body = await (result as Response).json();
+    // The wire form of the listing: a Response body carries the rows as
+    // JSON wrote them, a Date as its ISO string, so that is the body
+    // asserted — not the in-memory shape the service answered with.
+    expect(body).toEqual({
+      identities: [
+        { ...identities[0], createdAt: identities[0].createdAt.toISOString() },
+      ],
+    });
+    expect(listExternalIdentities).toHaveBeenCalledWith("u1");
+  });
+
+  it("unlinkUserIdentity unlinks through the service with both ids", async () => {
+    const unlinkExternalIdentity = vi.fn().mockResolvedValue(undefined);
+    const container = {
+      identities: { unlinkExternalIdentity },
+    } as unknown as ServiceContainer;
+
+    const result = await dispatchIdentities(
+      container,
+      "unlinkUserIdentity",
+      { userId: "u1", identityId: "i1" },
+      undefined
+    );
+
+    const body = await (result as Response).json();
+    expect(body).toEqual({
+      message: "Identity unlinked.",
+      userId: "u1",
+      identityId: "i1",
+    });
+    expect(unlinkExternalIdentity).toHaveBeenCalledWith("u1", "i1");
   });
 });

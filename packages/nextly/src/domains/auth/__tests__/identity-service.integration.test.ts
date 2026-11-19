@@ -130,7 +130,7 @@ function handOff(
   };
 }
 
-/** One identity row, written straight to the table as the fixture does. */
+/** One identity row, written straight to the table as the fixture does. Its id. */
 async function insertIdentity(
   handle: TestNextly,
   row: {
@@ -139,10 +139,13 @@ async function insertIdentity(
     subject: string;
     userId: string;
     address?: string;
+    /** When the link was made; the fixed moment unless a test says otherwise. */
+    createdAt?: Date;
   }
-): Promise<void> {
+): Promise<string> {
+  const id = randomUUID();
   await handle.adapter.insert("nextly_external_identities", {
-    id: randomUUID(),
+    id,
     providerKey: row.providerKey,
     issuer: row.issuer,
     subject: row.subject,
@@ -155,8 +158,9 @@ async function insertIdentity(
     ),
     ...(row.address !== undefined ? { address: row.address } : {}),
     userId: row.userId,
-    createdAt: new Date("2020-01-01T00:00:00Z"),
+    createdAt: row.createdAt ?? new Date("2020-01-01T00:00:00Z"),
   });
+  return id;
 }
 
 /** Every identity row the table holds, for before-and-after counts. */
@@ -608,6 +612,82 @@ describe.each(getConfiguredTestDialects())(
         handOff({ subject: "first-ever" }),
         { code: "FORBIDDEN", reason: "external-user-on-empty-install" }
       );
+    });
+
+    it("lists and unlinks an account's identities, scoped to that account", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+      const service = serviceOn(handle);
+
+      await handle.adapter.insert("users", {
+        id: "owner",
+        email: "owner@example.com",
+        isActive: true,
+      });
+      await handle.adapter.insert("users", {
+        id: "other",
+        email: "other@example.com",
+        isActive: true,
+      });
+      await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "first-linked",
+        userId: "owner",
+        createdAt: new Date("2020-01-01T00:00:00Z"),
+      });
+      const removed = await insertIdentity(handle, {
+        providerKey: "acme-auth:github",
+        issuer: "",
+        subject: "second-linked",
+        userId: "owner",
+        createdAt: new Date("2021-01-01T00:00:00Z"),
+      });
+      const theirs = await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "someone-elses",
+        userId: "other",
+        createdAt: new Date("2019-01-01T00:00:00Z"),
+      });
+
+      // The listing names the owner's two, in link order, and neither row
+      // of the other account.
+      const listed = await service.listExternalIdentities("owner");
+      expect(listed.map(identity => identity.subject)).toEqual([
+        "first-linked",
+        "second-linked",
+      ]);
+      expect(listed[0]).toMatchObject({
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        userId: "owner",
+      });
+      expect(listed.map(identity => identity.createdAt.getTime())).toEqual([
+        new Date("2020-01-01T00:00:00Z").getTime(),
+        new Date("2021-01-01T00:00:00Z").getTime(),
+      ]);
+
+      // The unlink removes the named row alone, on the real table.
+      await service.unlinkExternalIdentity("owner", removed);
+      expect(
+        (await service.listExternalIdentities("owner")).map(
+          identity => identity.subject
+        )
+      ).toEqual(["first-linked"]);
+
+      // A second unlink of the same identity: a clean not-found, writing
+      // nothing.
+      await expect(
+        service.unlinkExternalIdentity("owner", removed)
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      // An identity the other account holds is refused the same way, and
+      // the other account keeps it.
+      await expect(
+        service.unlinkExternalIdentity("owner", theirs)
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(await service.listExternalIdentities("other")).toHaveLength(1);
     });
   }
 );

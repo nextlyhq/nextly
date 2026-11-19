@@ -297,6 +297,52 @@ function parseUserRoutes(
     };
   }
 
+  return parseUserIdentityRoutes(
+    id,
+    subresource,
+    subId,
+    httpMethod,
+    routeParams
+  );
+}
+
+/**
+ * A user's external identities, nested under the user as the role
+ * assignments are: the listing, and the unlink of one. Null for anything
+ * else, which is the users routes' own answer for a path they do not name.
+ */
+function parseUserIdentityRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (!id || subresource !== "identities") return null;
+
+  if (!subId && httpMethod === "GET") {
+    // GET /api/users/123/identities → list the user's external identities
+    routeParams.userId = id;
+    return {
+      service: "identities",
+      operation: "list",
+      method: "listUserIdentities",
+      routeParams,
+    };
+  }
+
+  if (subId && httpMethod === "DELETE") {
+    // DELETE /api/users/123/identities/456 → unlink one external identity
+    routeParams.userId = id;
+    routeParams.identityId = subId;
+    return {
+      service: "identities",
+      operation: "delete",
+      method: "unlinkUserIdentity",
+      routeParams,
+    };
+  }
+
   return null;
 }
 

@@ -57,6 +57,7 @@ import { isServicesRegistered } from "../di/service-access";
 import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
+import type { IdentityService } from "../domains/auth/services/identity-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
@@ -597,6 +598,11 @@ export class Nextly implements NextlyContext {
   /** @internal */
   public get apiKeyService(): ApiKeyService {
     return container.get<ApiKeyService>("apiKeyService");
+  }
+
+  /** @internal */
+  public get identityService(): IdentityService {
+    return container.get<IdentityService>("identityService");
   }
 
   /**

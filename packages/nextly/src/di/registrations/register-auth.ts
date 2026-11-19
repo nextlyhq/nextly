@@ -17,6 +17,10 @@
 
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import { AuthService } from "../../domains/auth/services/auth-service";
+import {
+  IdentityService,
+  noConfiguredKeysLinkingPolicy,
+} from "../../domains/auth/services/identity-service";
 import { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { EmailService } from "../../services/email/email-service";
@@ -47,6 +51,19 @@ export function registerAuthServices(ctx: RegistrationContext): void {
   container.registerSingleton<ApiKeyService>(
     "apiKeyService",
     () => new ApiKeyService(adapter, logger)
+  );
+
+  // IdentityService — core's own external identities: the listing and the
+  // unlink of what one account holds. The linking policy handed here is the
+  // one a configuration naming no provider keys answers with; the doors this
+  // registration serves never ask it, and a configuration that names keys
+  // swaps its own policy in here.
+  container.registerSingleton<IdentityService>(
+    "identityService",
+    () =>
+      new IdentityService(adapter, logger, {
+        linkingPolicy: noConfiguredKeysLinkingPolicy(),
+      })
   );
 
   // AuthService — user registration, password reset/change, email
