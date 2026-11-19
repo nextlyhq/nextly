@@ -231,12 +231,18 @@ function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
 
   const originalTransaction = adapter.transaction?.bind(adapter);
   if (!originalTransaction) return adapter;
+  // MySQL never poisons a transaction, so it has nothing for the probe to find, and the probe
+  // would break it: MySQL commits a transaction before a statement that changes a table's shape,
+  // and the savepoints go with it, so a callback that dropped a table leaves the probe's release
+  // naming a savepoint that no longer exists. SQLite keeps such statements inside the
+  // transaction, so it is probed as before.
+  const probes = adapter.getCapabilities().dialect !== "mysql";
   const wrapped = async (...args: unknown[]): Promise<unknown> => {
     const [callback, ...rest] = args;
     // Probe on the context the callback itself used, so the question reaches the transaction
     // that may have been poisoned rather than a fresh connection from the pool.
     const instrumented =
-      typeof callback === "function"
+      probes && typeof callback === "function"
         ? async (ctx: AbortProbeContext): Promise<unknown> => {
             const result = await (
               callback as (c: AbortProbeContext) => Promise<unknown>
