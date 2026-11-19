@@ -78,10 +78,20 @@ export async function runBootTimeApplyIfDev(opts?: {
   try {
     // Step 0: settle a Builder save an earlier process left part-way, before anything reads the
     // migration files it wrote: what is settled to pending runs in step 1.
-    await settleLeftSavesAtStart(label);
+    const unsettled = await settleLeftSavesAtStart(label);
 
-    // Step 1: Apply pending SQL migrations first (lock-guarded, safe across workers)
-    const registeredByMigrate = await applyPendingMigrations(label);
+    // Step 1: Apply pending SQL migrations first (lock-guarded, safe across workers). Not while a
+    // save of this host stays unsettled: its files may be among the pending ones, and running them
+    // over a save nothing could judge would change the database its record describes.
+    let registeredByMigrate = 0;
+    if (unsettled) {
+      consoleLogger.warn(
+        `${label} Pending migrations were not applied at this start: a Builder save left part-way is not settled (named above), and its files may be among them. Clear its record by hand as the warning says, then start again.`
+      );
+      markStartIncomplete();
+    } else {
+      registeredByMigrate = await applyPendingMigrations(label);
+    }
 
     // Step 1.5: Register collections from migration metadata
     // NOTE: This runs OUTSIDE the migrate lock. Multiple Next.js dev workers may
@@ -211,13 +221,16 @@ export function checkRelationsBeforePlugins(
  * Settle every Builder save this host's earlier process left part-way (`settleLeftSaves`), under the
  * schema lock, so two development workers starting together do not both settle one. A failure is
  * logged and the start goes on: the records stay, refusing what they refuse, and the next start
- * tries again.
+ * tries again. Answers whether a save stays unsettled (one left as it is, or one whose own settle
+ * failed, or a settle that never had the lock), which keeps the start from running the pending
+ * migrations its files may be among. A settle that fails before it reaches any record (its
+ * database or setup not read) names none: the start goes on as it would, the warning saying why.
  */
-async function settleLeftSavesAtStart(label: string): Promise<void> {
+async function settleLeftSavesAtStart(label: string): Promise<boolean> {
   try {
     const { container } = await import("../di/container");
     const adapter = container.get<DrizzleAdapter | undefined>("adapter");
-    if (!adapter) return;
+    if (!adapter) return false;
     const [
       { settleLeftSaves },
       { settleRegistryReader, settleRegistryWriter },
@@ -242,7 +255,7 @@ async function settleLeftSavesAtStart(label: string): Promise<void> {
       migrationsDir: (await bootMigrateConfig()).migrationsDir,
       database: undefined,
     };
-    await withMigrateLock(
+    const outcome = await withMigrateLock(
       adapter,
       adapter.getCapabilities().dialect,
       () =>
@@ -263,10 +276,14 @@ async function settleLeftSavesAtStart(label: string): Promise<void> {
         releaseOnInterrupt: false,
       }
     );
+    // A settle that never ran (the lock not had) says nothing of what stands: taken as unsettled.
+    if (!outcome.ran) return true;
+    return outcome.value.some(settled => settled.outcome === "left");
   } catch (error) {
     consoleLogger.warn(
       `${label} A Builder save left part-way could not be settled (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start tries again.`
     );
+    return false;
   }
 }
 

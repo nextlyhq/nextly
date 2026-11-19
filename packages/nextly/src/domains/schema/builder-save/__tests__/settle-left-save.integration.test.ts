@@ -22,11 +22,12 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -105,6 +106,65 @@ vi.mock("../../pipeline/locks", async original => {
   };
 });
 
+/**
+ * The folder the development start's migrate step reads, where a case sets it: the step reads the
+ * process's own config, whose folder is not the one these saves write to.
+ */
+const bootFolder = vi.hoisted(() => ({ dir: undefined as string | undefined }));
+
+vi.mock("../../../../cli/utils/config-loader", async original => {
+  const actual =
+    await original<typeof import("../../../../cli/utils/config-loader")>();
+  return {
+    ...actual,
+    loadConfig: (async (...args: Parameters<typeof actual.loadConfig>) => {
+      const loaded = await actual.loadConfig(...args);
+      if (bootFolder.dir === undefined) return loaded;
+      return {
+        ...loaded,
+        config: {
+          ...loaded.config,
+          db: {
+            ...loaded.config.db,
+            migrationsDir: relative(process.cwd(), bootFolder.dir),
+          },
+        },
+      };
+    }) as typeof actual.loadConfig,
+  };
+});
+
+/**
+ * The development start's migrate step, watched where a case asks: its database settings taken as
+ * valid (the test's database is reached through the instance, not the environment), and each run of
+ * `migrateCore` counted before it goes on as it would.
+ */
+const migrateStep = vi.hoisted(() => ({ watch: false, runs: 0 }));
+
+vi.mock("../../../../cli/utils/adapter", async original => {
+  const actual =
+    await original<typeof import("../../../../cli/utils/adapter")>();
+  return {
+    ...actual,
+    validateDatabaseEnv: (() =>
+      migrateStep.watch
+        ? { valid: true, errors: [] }
+        : actual.validateDatabaseEnv()) as typeof actual.validateDatabaseEnv,
+  };
+});
+
+vi.mock("../../../../cli/commands/migrate", async original => {
+  const actual =
+    await original<typeof import("../../../../cli/commands/migrate")>();
+  return {
+    ...actual,
+    migrateCore: (async (...args: Parameters<typeof actual.migrateCore>) => {
+      if (migrateStep.watch) migrateStep.runs += 1;
+      return actual.migrateCore(...args);
+    }) as typeof actual.migrateCore,
+  };
+});
+
 // Each file runs as a unit: stop before one starts, as a process killed between two files would.
 vi.mock("../../busy-table/run-unit", async original => {
   const actual = await original<typeof import("../../busy-table/run-unit")>();
@@ -135,6 +195,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   lockPassesThrough.on = false;
+  bootFolder.dir = undefined;
+  migrateStep.watch = false;
+  migrateStep.runs = 0;
   kill.at = undefined;
   kill.reached = undefined;
   kill.release?.();
@@ -384,6 +447,74 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 300_000);
 
+    // A development start whose settle leaves a record runs no pending migration: the save's file
+    // nothing could tell as its own would otherwise run, changing what the record describes.
+    it("runs no pending migration at a start whose settle leaves a record", async () => {
+      const t = await boot();
+      await createdTranslated();
+      const filesBefore = sqlFiles();
+      await stopSave(
+        t,
+        translatedAdd,
+        point =>
+          point.startsWith(`file:${HISTORY_DIR()}`) && point.endsWith(".sql"),
+        true
+      );
+      const written = sqlFiles().filter(f => !filesBefore.includes(f));
+      expect(written.length).toBeGreaterThan(0);
+      // The start takes the schema lock, which the stopped save, still in this process, holds; and
+      // its migrate step reads the folder the saves write to.
+      lockPassesThrough.on = true;
+      bootFolder.dir = HISTORY_DIR();
+      migrateStep.watch = true;
+
+      await runBootTimeApplyIfDev({ caller: "settle test" });
+
+      expect(migrateStep.runs, "the start's migrate step ran").toBe(0);
+      expect(await recordRow(t), "the record stays").toBeDefined();
+      const repo = new SchemaEventsRepository(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect
+      );
+      for (const file of written) {
+        expect(await repo.isFileApplied(file), file).toBe(false);
+      }
+    }, 300_000);
+
+    // Translation turned off leaves the table untranslated: it stands at that target only with
+    // its translations table gone. Here the save's files are out of the ledger, as a push leaves
+    // them, and the translations table is there again: the tables stand at neither end.
+    it("keeps a record whose translations table stands after translation was turned off", async () => {
+      const t = await boot();
+      await createdTranslated();
+      const filesBefore = sqlFiles();
+      const realDelete = MetaService.prototype.delete;
+      vi.spyOn(MetaService.prototype, "delete").mockImplementation(
+        async function (this: MetaService, key: string) {
+          if (key === RECORD_KEY) await stopHere("clear");
+          return realDelete.call(this, key);
+        }
+      );
+      await stopSave(t, [text("heading")], point => point === "clear", false);
+      vi.mocked(MetaService.prototype.delete).mockRestore();
+      const written = sqlFiles().filter(f => !filesBefore.includes(f));
+      expect(written.length).toBeGreaterThan(0);
+      const quote = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      await t.adapter.executeQuery(
+        `DELETE FROM ${quote("nextly_schema_events")} WHERE ${quote("event_type")} = 'file_apply' AND ${quote("filename")} IN (${written.map(f => `'${f}'`).join(", ")})`
+      );
+      expect(await liveColumns(t, TABLE)).toContain("heading");
+      await t.adapter.executeQuery(
+        `CREATE TABLE ${quote(`${TABLE}_locales`)} (${quote("id")} VARCHAR(36))`
+      );
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["left"]);
+      expect(await recordRow(t), "the record stays").toBeDefined();
+    }, 300_000);
+
     it("leaves a definition edited after the stop as it is, and names it", async () => {
       const t = await boot();
       await created(t);
@@ -483,6 +614,61 @@ describe.each(getConfiguredTestDialects())(
       expect(settled.map(s => s.outcome)).toEqual(["all"]);
       expect(await recordRow(t)).toBeUndefined();
       expect(await registryFieldNames(t)).toEqual(["heading", "beta"]);
+    }, 300_000);
+
+    // A later migration of another entity says nothing of this one's registry row: the settle
+    // brings it up all the same.
+    it("brings the registry row up over a later migration of another entity", async () => {
+      const t = await boot();
+      await created(t);
+      const realDelete = MetaService.prototype.delete;
+      vi.spyOn(MetaService.prototype, "delete").mockImplementation(
+        async function (this: MetaService, key: string) {
+          if (key === RECORD_KEY) await stopHere("clear");
+          return realDelete.call(this, key);
+        }
+      );
+      await stopSave(
+        t,
+        [text("heading"), text("alpha")],
+        point => point === "clear"
+      );
+      vi.mocked(MetaService.prototype.delete).mockRestore();
+      const repo = new SchemaEventsRepository(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect
+      );
+      const other = "29991231_000000_000_other_posts_update.sql";
+      writeFileSync(
+        join(HISTORY_DIR(), other),
+        [
+          "-- Migration: other_posts_update",
+          "-- Collections: other_posts",
+          "-- Entity scope: touched",
+          "",
+          "-- UP",
+          'ALTER TABLE "dc_other_posts" ADD COLUMN "x" TEXT;',
+          "",
+          "-- DOWN",
+          "SELECT 1;",
+          "",
+        ].join("\n")
+      );
+      await recordAlreadyApplied({ filename: other }, repo);
+      // The row as it stood before the save's own write.
+      await writeAppliedFieldsRow(t.adapter, {
+        table: "dynamic_singles",
+        slug: SLUG,
+        fields: [text("heading")] as never,
+        localized: false,
+        schemaVersion: (await versionOf(t)) + 1,
+      });
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["all"]);
+      expect(await recordRow(t)).toBeUndefined();
+      expect(await registryFieldNames(t)).toEqual(["heading", "alpha"]);
     }, 300_000);
 
     // A left record whose table stands at neither end (here, a column added by hand after the
@@ -811,7 +997,40 @@ describe.each(getConfiguredTestDialects())(
       expect(await recordRow(t)).toBeUndefined();
     }, 300_000);
 
-    // On PostgreSQL and SQLite a file runs and is recorded in one transaction, so a file with no
+    /**
+     * The state a save whose files do not run together leaves when stopped between them: its main
+     * file applied and recorded, its translations file not started. On PostgreSQL and SQLite a
+     * save's files run in one transaction, which the stop rolled back whole, so the main file is
+     * run alone here through the normal runner, the translations file set aside meanwhile.
+     */
+    async function firstFileAlone(
+      t: TestNextly,
+      written: readonly string[]
+    ): Promise<void> {
+      const aside = mkdtempSync(join(tmpdir(), "nextly-settle-aside-"));
+      const later = written.filter(f => f.includes("localization"));
+      expect(later.length, "the translations file").toBeGreaterThan(0);
+      for (const file of later) {
+        renameSync(join(HISTORY_DIR(), file), join(aside, file));
+      }
+      try {
+        await clearStoppedHolds(t);
+        await runFileMigrations({
+          adapter: t.adapter as never,
+          db: t.adapter.getDrizzle(),
+          dialect: t.adapter.dialect,
+          migrationsDir: HISTORY_DIR(),
+          logger: createLogger({ quiet: true }),
+        });
+      } finally {
+        for (const file of later) {
+          renameSync(join(aside, file), join(HISTORY_DIR(), file));
+        }
+        rmSync(aside, { recursive: true, force: true });
+      }
+    }
+
+    // A file runs and is recorded in one transaction on PostgreSQL and SQLite, so a file with no
     // ledger row never ran. MySQL records a file's attempt before its statements, outside any
     // transaction: there a stop between two files leaves an attempt that cannot be told from one
     // stopped inside its statements, which the case below keeps for the stopped-save step.
@@ -829,6 +1048,7 @@ describe.each(getConfiguredTestDialects())(
         );
         const written = sqlFiles().filter(f => !filesBefore.includes(f));
         expect(written.some(f => f.includes("localization"))).toBe(true);
+        await firstFileAlone(t, written);
 
         const settled = await settle(t);
 
@@ -892,6 +1112,10 @@ describe.each(getConfiguredTestDialects())(
           [text("heading", { localized: true })],
           point => point.startsWith("unit:") && point.includes("localization"),
           true
+        );
+        await firstFileAlone(
+          t,
+          sqlFiles().filter(f => f.includes(SLUG))
         );
 
         const refused = await settleBeforeBuilderSave(

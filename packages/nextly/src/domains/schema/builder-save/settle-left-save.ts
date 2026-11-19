@@ -150,9 +150,18 @@ export async function settleLeftSaves(
     try {
       settled.push(await settleLeftSave(deps, row.record));
     } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
       deps.logger.warn(
-        `A Builder save of the ${described(row.record)} was left part-way, and settling it failed (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start tries again.`
+        `A Builder save of the ${described(row.record)} was left part-way, and settling it failed (${why}). Its record stays, and the next development start tries again.`
       );
+      // Answered as left, so a caller holds back what it holds back for a record that stays.
+      settled.push({
+        id: row.record.id,
+        kind: row.record.kind,
+        slug: row.record.slug,
+        outcome: "left",
+        notes: [`settling it failed: ${why}`],
+      });
     }
   }
   const stale = await removeStaleMarkers({
@@ -378,7 +387,7 @@ async function settleAll(
   }
   // A file applied after the save's last one: the schema has moved past this save (another
   // host's save, say), so its registry row is not written again over what came after.
-  if (await movedPast(repo, files)) {
+  if (await movedPast(deps, repo, record, files)) {
     await clearSettledSave(deps.adapter, deps.projectRoot, record);
     deps.logger.info(
       `A Builder save of the ${described(record)} applied whole before it stopped, and later migrations have applied since: its record is cleared, and its registry row left as they left it.`
@@ -483,20 +492,42 @@ function decide(facts: {
   return "left";
 }
 
-/** Whether the ledger records a file applied that is named after every one of `files`. */
+/**
+ * Whether the ledger records a file applied, named after every one of `files`, that concerns the
+ * record's entity: its header names it, it changes the entity's tables, or it writes the entity's
+ * registry row (a settings change, whose header names the entity only on its settings line, holds
+ * the slug as a value). A later file of another entity says nothing of this one's row. One no
+ * longer on disk cannot be read, and is taken as concerning it: the row is then left as it is.
+ */
 async function movedPast(
+  deps: SettleDeps,
   repo: SchemaEventsRepository,
+  record: LeftSave,
   files: readonly string[]
 ): Promise<boolean> {
   const last = [...files].sort().at(-1);
   if (last === undefined) return false;
-  return (await repo.listFileApplies()).some(
-    row =>
-      row.status === "applied" &&
-      typeof row.filename === "string" &&
-      row.filename > last &&
-      !files.includes(row.filename)
-  );
+  const later = (await repo.listFileApplies())
+    .filter(row => row.status === "applied")
+    .map(row => row.filename)
+    .filter(
+      (name): name is string =>
+        typeof name === "string" && name > last && !files.includes(name)
+    );
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const tables = entityTables(record);
+  for (const name of later) {
+    const content = await readIfPresent(join(deps.migrationsDir, name));
+    if (
+      content === undefined ||
+      namesEntity(content, record) ||
+      touches(content, tables, dialect) ||
+      content.includes(`'${record.slug}'`)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Which of `files` the ledger records applied, and which have an attempt still unresolved. */
@@ -547,11 +578,12 @@ async function whereTablesStand(
           deps.adapter.getCapabilities().dialect,
           tables
         );
-  // A translated table stands where a snapshot says only with its translations table: a save whose
-  // main statements committed and whose translations table did not follow is at neither end.
+  // A table stands where a snapshot says only with its translations table as the snapshot has it:
+  // there with the translated columns it records, or absent from an untranslated table. A save
+  // whose main statements committed and whose translations table did not follow (not made, or not
+  // dropped as translation was turned off) is at neither end.
   const companionsAt = async (snapshot: NextlySchemaSnapshot) => {
     for (const table of only(snapshot, tables).tables) {
-      if (table.localized !== true) continue;
       if ((await companionDriftItems(deps, table.name, table)).length > 0) {
         return false;
       }
