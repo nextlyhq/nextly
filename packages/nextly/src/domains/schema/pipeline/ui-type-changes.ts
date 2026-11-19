@@ -76,9 +76,7 @@ function savedEntities(
     })),
   ];
   const changes = (entity: SavedEntity["entity"]) =>
-    owner === "builder"
-      ? entity.locked !== true
-      : entity.builderOwned !== true;
+    owner === "builder" ? entity.locked !== true : entity.builderOwned !== true;
   return all.flatMap(({ kind, entity }) =>
     entity.recordedFields === undefined || !changes(entity)
       ? []
@@ -159,7 +157,8 @@ export async function refuseConfiguredTypeChanges(
       next: saved.next,
       dialect,
       builtBy: input.builtBy,
-    }).filter(change => keepsColumn(change, dialect, input.builtBy));
+      ...(input.componentRow === true ? { componentRow: true } : {}),
+    }).filter(change => keepsColumn(change, dialect, input));
     if (sameColumn.length === 0) continue;
     await refuseFieldTypeChanges(db, dialect, {
       ...input,
@@ -169,14 +168,17 @@ export async function refuseConfiguredTypeChanges(
   }
 }
 
-/** Whether a type change keeps its column: the same name and the same type on the database. */
+/**
+ * Whether a type change keeps its column: the same name and the same type on the database, each
+ * read where the entity keeps its fields (`at`: a field group's on its own rows).
+ */
 function keepsColumn(
   change: FieldTypeChange,
   dialect: SupportedDialect,
-  builtBy: EntityTypeChangeInput["builtBy"]
+  at: ColumnAt
 ): boolean {
-  const from = getColumnDescriptor(change.from, dialect, builtBy);
-  const to = getColumnDescriptor(change.to, dialect, builtBy);
+  const from = columnDescriptorAt(change.from, dialect, at);
+  const to = columnDescriptorAt(change.to, dialect, at);
   return (
     from !== null &&
     to !== null &&
