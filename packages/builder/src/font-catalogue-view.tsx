@@ -518,10 +518,16 @@ function CatalogueRow({
             ref={setElement}
             type="button"
             className="nx-vars__row nx-fonts-catalogue__row"
-            aria-label={`${family.family}, ${meta}${site === undefined ? "" : ", added"}`}
             data-catalogue-family={family.id}
           >
-            <span className="nx-fonts-catalogue__text">
+            {/* The row's name, in one element: the family, what the meta
+                line says, and whether the site has it. Text rather than an
+                aria-label, which must hold every drawn word, the preview
+                sentence included; what is drawn is for the eye. */}
+            <span className="nx-sr-only">
+              {`${family.family}, ${meta}${site === undefined ? "" : ", added"}`}
+            </span>
+            <span className="nx-fonts-catalogue__text" aria-hidden="true">
               {/* The name whole on hover: cut when long, or drawn over by
                   the preview text. */}
               <span
@@ -534,7 +540,12 @@ function CatalogueRow({
               <span className="nx-fonts-catalogue__meta">{meta}</span>
             </span>
             {site === undefined ? null : (
-              <span className="nx-vars__chip nx-fonts__added">Added</span>
+              <span
+                className="nx-vars__chip nx-fonts__added"
+                aria-hidden="true"
+              >
+                Added
+              </span>
             )}
           </button>
         </PopoverTrigger>
