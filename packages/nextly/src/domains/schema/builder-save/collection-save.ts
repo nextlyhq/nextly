@@ -606,10 +606,11 @@ async function settleStoppedSave(
     }
     const settled = settledSaveOf(save, judged.applied, judged.report);
     const plan = await planSave(deps, settled);
-    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
     const files = await writeFiles(deps, settled, plan, names =>
       replacement.push(...names)
     );
+    // The definition once the replacement and its snapshot are in place, as every save writes it.
+    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
     // Compared with the live table before it is recorded, as a pushed save's files are.
     const units = await verifiedUnits(deps, files, plan.table);
     // The replacement recorded applied, the ledger's attempt at the stopped file cleared and the
