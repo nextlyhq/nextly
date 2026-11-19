@@ -509,6 +509,48 @@ describe.each(getConfiguredTestDialects())(
       expect(visible).not.toContain(kept);
     });
 
+    it("shows a reader none of a due release joined to a held publish through a document outside the read", async () => {
+      // The first release holds the page read here and the Banner; the second holds the Banner and
+      // an unapproved post. The read decides the page alone, yet the run plans both releases as
+      // one component through the Banner and refuses all of it over the post.
+      const t = await boot(dialect);
+      const page = await doc(t, "pages");
+      await approve(t, "pages", page);
+      const banner = await saveBanner(t, "Approved");
+      await approveBanner(t, banner);
+      const bannerGoesLive = {
+        scopeKind: "single",
+        scopeSlug: "banner",
+        entryId: banner,
+        action: "publish",
+      } as const;
+      await arrange(t, [publishPage(page), bannerGoesLive], PAST);
+      // Due and approved, the first release alone: the read shows the page.
+      expect(await visiblePages(t)).toContain(page);
+
+      const post = await doc(t, "posts");
+      const joined = await arrange(
+        t,
+        [
+          bannerGoesLive,
+          {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: post,
+            action: "publish",
+          },
+        ],
+        PAST
+      );
+      expect(await hardCodes(t, joined.releaseId)).toContain("NOT_APPROVED");
+
+      expect(await visiblePages(t)).not.toContain(page);
+      // The run agrees: it writes none of the component.
+      const pass = await runDuePass(t);
+      expect(pass).toMatchObject({ applied: 0, published: 0 });
+      expect(await storedPageStatus(t, page)).toBe("draft");
+    });
+
     it("leaves a due release a pass began scheduled when a step withdraws a later member's approval", async () => {
       // Stopped, the page the cut-off pass wrote would stay live and the other never follow.
       const t = await boot(dialect);

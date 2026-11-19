@@ -170,6 +170,36 @@ describe("createReleaseVisibility with a hold on going live", () => {
     });
   });
 
+  it("projects nothing of the documents it decides when their component reaches past its bound, rather than reading the whole backlog", async () => {
+    // An endless chain: release n publishes e{n} and e{n+1}, so each document leads to one more
+    // release. Nothing in it is held, yet a read that walked it to the end would never finish,
+    // and one that stopped short and planned what it had would be guessing.
+    const indexOf = (id: string) => Number(id.slice(1));
+    const scheduledMembersFor = vi.fn(
+      async (target: { documents?: readonly { entryId: string }[] }) =>
+        (target.documents ?? []).map(document => ({
+          release: release(`r${indexOf(document.entryId)}`),
+          members: [],
+        }))
+    );
+    const visibility = createReleaseVisibility({
+      cache: { mayHaveDue: async () => true },
+      repository: {
+        findDueDecisions: async () => ({ reveal: ["e1"], hide: [] }),
+        scheduledMembersFor,
+        listMembersOf: async (ids: string[]) =>
+          ids.flatMap(id => [
+            member(id, `e${indexOf(id)}`, "publish"),
+            member(id, `e${indexOf(id) + 1}`, "publish"),
+          ]),
+      },
+      hold: () => ({ held: async () => new Set<string>() }),
+    });
+
+    expect(await visibility.decisions(QUERY)).toEqual(NO_DECISIONS);
+    expect(scheduledMembersFor.mock.calls.length).toBeLessThan(100);
+  });
+
   it("never asks while nothing would be revealed, so a takedown is never held", async () => {
     const held = vi.fn(async () => new Set(["e3"]));
     const visibility = createReleaseVisibility({

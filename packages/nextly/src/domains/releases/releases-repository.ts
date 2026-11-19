@@ -2509,7 +2509,8 @@ export class ReleasesRepository {
   }
 
   /**
-   * Members of many releases in ONE query.
+   * Members of many releases in one query per run of
+   * {@link IDS_PER_LOOKUP} release ids, not one per release.
    *
    * The materialisation pass loads every due release's members before it writes
    * anything, and asking per release put N serial round trips in front of the
@@ -2541,12 +2542,19 @@ export class ReleasesRepository {
   }
 
   async listMembersOf(releaseIds: string[]): Promise<DrainMemberRow[]> {
-    if (releaseIds.length === 0) return [];
-    // The drain's read, and the one read that carries the applied mark.
-    return this.db.select<DrainMemberRow>(MEMBERS, {
-      columns: [...MEMBER_COLUMNS, "appliedRevision"],
-      where: membersOf(releaseIds),
-    });
+    // The drain's read, and the one read that carries the applied mark. In
+    // runs of release ids ({@link IDS_PER_LOOKUP}), so a backlog of more due
+    // releases than one statement may bind is still read; none when no ids.
+    const members: DrainMemberRow[] = [];
+    for (const ids of idBatches(releaseIds)) {
+      members.push(
+        ...(await this.db.select<DrainMemberRow>(MEMBERS, {
+          columns: [...MEMBER_COLUMNS, "appliedRevision"],
+          where: membersOf(ids),
+        }))
+      );
+    }
+    return members;
   }
 
   /**

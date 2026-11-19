@@ -18,10 +18,18 @@
  */
 import type { GoingLiveDocument } from "./going-live-hold";
 import type {
+  DueRelease,
   MaterialisationAction,
   planReleaseMaterialisation,
 } from "./plan-release-materialisation";
-import { memberAppliedFor, type DrainMemberRow } from "./releases-repository";
+import { isDueAt } from "./release-due";
+import type { ReleaseRecheckDocument } from "./release-recheck";
+import {
+  IDS_PER_LOOKUP,
+  memberAppliedFor,
+  type DrainMemberRow,
+  type ReleasesRepository,
+} from "./releases-repository";
 
 /** Asks which of the documents going live are held back, by their ids. */
 export type AskHeld = (
@@ -130,4 +138,89 @@ export function begunReleases(
     }
   }
   return begun;
+}
+
+/**
+ * The most rounds a walk of shared documents takes ({@link dueComponentsHolding}): each round is
+ * one step along a chain of releases, each sharing a document with the one before.
+ */
+export const COMPONENT_WALK_ROUNDS = 16;
+
+/** The most due releases a walk of shared documents gathers before it gives up. */
+export const COMPONENT_WALK_RELEASES = IDS_PER_LOOKUP;
+
+/** The reads a walk of shared documents makes, satisfied by `ReleasesRepository`. */
+export type ComponentReads = Pick<
+  ReleasesRepository,
+  "scheduledMembersFor" | "listMembersOf"
+>;
+
+/** Due releases closed under shared documents, with every member of each, ready to plan. */
+export interface DueComponents {
+  releases: DueRelease[];
+  members: DrainMemberRow[];
+}
+
+/**
+ * Every due release of the components holding any of these documents, with all their members:
+ * what the run would plan of them, read without reading the whole due backlog.
+ *
+ * Walked outward from the documents: the due releases holding them, then every document those
+ * releases hold, then the due releases holding those, until a round finds no document not
+ * already followed. What it gathers is closed under shared documents, so planning it gives each
+ * of its components exactly as planning every due release would; a document shared only in
+ * another language joins two releases the planner keeps apart, which plans a little more and
+ * never less.
+ *
+ * Bounded, since a component can chain through any number of releases: past
+ * {@link COMPONENT_WALK_ROUNDS} rounds or {@link COMPONENT_WALK_RELEASES} releases the answer is
+ * null, and the caller decides what an unknown component means for it. Each round reads its
+ * documents and releases in runs of at most {@link IDS_PER_LOOKUP}.
+ */
+export async function dueComponentsHolding(
+  reads: ComponentReads,
+  documents: readonly ReleaseRecheckDocument[],
+  now: Date
+): Promise<DueComponents | null> {
+  const keyOf = (document: ReleaseRecheckDocument) =>
+    JSON.stringify([document.scopeKind, document.scopeSlug, document.entryId]);
+  const followed = new Set<string>();
+  let frontier: ReleaseRecheckDocument[] = [];
+  const follow = (document: ReleaseRecheckDocument) => {
+    if (followed.has(keyOf(document))) return;
+    followed.add(keyOf(document));
+    frontier.push({
+      scopeKind: document.scopeKind,
+      scopeSlug: document.scopeSlug,
+      entryId: document.entryId,
+    });
+  };
+  documents.forEach(follow);
+  const releases = new Map<string, DueRelease>();
+  const members: DrainMemberRow[] = [];
+  for (let round = 0; frontier.length > 0; round += 1) {
+    if (round === COMPONENT_WALK_ROUNDS) return null;
+    const found = (
+      await reads.scheduledMembersFor({ documents: frontier })
+    ).flatMap(({ release }) =>
+      release.scheduledAt !== null &&
+      isDueAt(release.scheduledAt, now) &&
+      !releases.has(release.id)
+        ? [
+            {
+              id: release.id,
+              scheduledAt: release.scheduledAt,
+              revision: release.revision,
+            },
+          ]
+        : []
+    );
+    if (releases.size + found.length > COMPONENT_WALK_RELEASES) return null;
+    for (const release of found) releases.set(release.id, release);
+    const added = await reads.listMembersOf(found.map(release => release.id));
+    members.push(...added);
+    frontier = [];
+    added.forEach(follow);
+  }
+  return { releases: [...releases.values()], members };
 }
