@@ -14,6 +14,7 @@ import {
   $createLineBreakNode,
   $createParagraphNode,
   $createTextNode,
+  $getNodeByKey,
   $getRoot,
   $isElementNode,
   $isLineBreakNode,
@@ -21,6 +22,7 @@ import {
   DecoratorNode,
   ElementNode,
   type Klass,
+  type LexicalEditor,
   type LexicalNode,
   type NodeKey,
   type SerializedElementNode,
@@ -122,9 +124,25 @@ export class ChipNode extends DecoratorNode<ReactNode> {
     return true;
   }
 
-  /** Its variable's friendly name, from the namer of the block it sits in. */
-  decorate(): ReactNode {
-    return createElement(ChipLabel, { variable: this.__variable });
+  /** Set the text it shows when its variable has no value, or none. */
+  setFallback(fallback: string | undefined): void {
+    this.getWritable().__fallback = fallback;
+  }
+
+  /** Its friendly name and mark, and its fallback dialog. */
+  decorate(editor: LexicalEditor): ReactNode {
+    // By key, not by this node: the editor clones nodes as it edits, and the
+    // live one is the one the dialog's change must reach.
+    const key = this.__key;
+    return createElement(ChipLabel, {
+      variable: this.__variable,
+      fallback: this.__fallback,
+      onFallback: fallback =>
+        editor.update(() => {
+          const node = $getNodeByKey(key);
+          if (node instanceof ChipNode) node.setFallback(fallback);
+        }),
+    });
   }
 }
 

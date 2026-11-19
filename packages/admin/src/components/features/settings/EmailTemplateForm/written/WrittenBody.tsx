@@ -70,7 +70,8 @@ import {
   type BlockPath,
 } from "./block-model";
 import { chipNamer } from "./chip-names";
-import { ChipNamesContext } from "./ChipLabel";
+import { chipShowsBlank } from "./chip-values";
+import { ChipViewContext, type ChipView } from "./ChipLabel";
 import { RunEditor } from "./RunEditor";
 import { ChipNode, type Inline } from "./runs";
 
@@ -123,6 +124,17 @@ function listVariablesOf(variables: readonly TemplateFormVariable[]): string[] {
   ].map(variable => variable.name);
 }
 
+/**
+ * How chips read in the email, or inside the list at `list`: by friendly
+ * name, and marked when the test data leaves them blank.
+ */
+function chipView(edit: Edit, list?: string): ChipView {
+  return {
+    name: chipNamer(edit.variables, list),
+    blank: chip => chipShowsBlank(chip, edit.sampleData, list),
+  };
+}
+
 /** Plain text and chips only: what a heading, label or alt text stores. */
 function plain<T>(runs: Inline[]): T[] {
   return runs.map(run =>
@@ -144,6 +156,8 @@ interface Edit {
   readOnly: boolean;
   /** The template's declared variables, which name chips and lists. */
   variables: readonly TemplateFormVariable[];
+  /** The workbench's test data, which says which chips show blank. */
+  sampleData: Record<string, unknown>;
   /** Told which field's editor was typed in last. */
   focused: (editor: LexicalEditor) => void;
 }
@@ -290,11 +304,11 @@ function BlockFields({
           </label>
           <div className="rounded-md border border-dashed border-border bg-muted/40 p-2">
             {/* Inside, `item` is this list's current item. */}
-            <ChipNamesContext.Provider
-              value={chipNamer(edit.variables, block.variable || undefined)}
+            <ChipViewContext.Provider
+              value={chipView(edit, block.variable || undefined)}
             >
               <BlockList blocks={block.blocks} list={path[0]} edit={edit} />
-            </ChipNamesContext.Provider>
+            </ChipViewContext.Provider>
           </div>
         </div>
       );
@@ -535,6 +549,8 @@ export interface WrittenBodyProps {
   readOnly?: boolean;
   /** The template's declared variables, which name chips and lists. */
   variables?: readonly TemplateFormVariable[];
+  /** The workbench's test data, which says which chips show blank. */
+  sampleData?: Record<string, unknown>;
   /** Set to a way to put a variable where the person was last typing. */
   insertRef?: MutableRefObject<InsertVariable | null>;
 }
@@ -544,6 +560,7 @@ export function WrittenBody({
   onChange,
   readOnly = false,
   variables = [],
+  sampleData = {},
   insertRef,
 }: WrittenBodyProps): JSX.Element {
   // The field typed in last, where the Variables rail puts a chip.
@@ -581,6 +598,7 @@ export function WrittenBody({
     current: () => latest.current,
     readOnly,
     variables,
+    sampleData,
     focused: editor => {
       lastEditor.current = editor;
     },
@@ -591,9 +609,9 @@ export function WrittenBody({
         <span className="font-medium text-foreground">Content</span> · The look
         comes from your brand settings.
       </p>
-      <ChipNamesContext.Provider value={chipNamer(variables)}>
+      <ChipViewContext.Provider value={chipView(edit)}>
         <BlockList blocks={value.blocks} list={undefined} edit={edit} />
-      </ChipNamesContext.Provider>
+      </ChipViewContext.Provider>
     </div>
   );
 }

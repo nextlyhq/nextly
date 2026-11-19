@@ -140,6 +140,7 @@ function ContentColumn({
             value={blocks}
             readOnly={!owns || isPending}
             variables={variables}
+            sampleData={editor.completion.sample}
             insertRef={writtenInsert}
             onChange={next =>
               form.setValue("blocks", next, { shouldDirty: true })

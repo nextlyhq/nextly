@@ -297,6 +297,99 @@ describe("a written email's blocks", () => {
     expect(screen.getByTitle("item.title").textContent).toBe("Item › Product");
   });
 
+  it("marks a chip that shows nothing, and its fallback dialog stores the fallback", async () => {
+    const user = userEvent.setup();
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    function Body() {
+      const [value, setValue] = useState(
+        doc({
+          type: "heading",
+          text: [
+            { type: "chip", variable: "customer.firstName" },
+            { type: "chip", variable: "customer.lastName" },
+          ],
+        })
+      );
+      return (
+        <WrittenBody
+          value={value}
+          variables={[
+            {
+              name: "customer",
+              description: "",
+              required: true,
+              presentation: {
+                label: "Customer",
+                fields: [
+                  { name: "firstName", label: "First name" },
+                  { name: "lastName", label: "Last name" },
+                ],
+              },
+            },
+          ]}
+          sampleData={{ customer: { firstName: "Ada" } }}
+          onChange={next => {
+            seen(next);
+            setValue(next);
+          }}
+        />
+      );
+    }
+    render(<Body />);
+
+    // A test value: shown plainly. None and no fallback: marked.
+    expect(
+      screen.getByRole("button", { name: "Customer › First name" })
+    ).toBeDefined();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Customer › Last name, shows nothing",
+      })
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("status").textContent).toContain(
+      "No test value and no fallback"
+    );
+
+    await user.type(within(dialog).getByLabelText("Fallback"), "there");
+    expect(within(dialog).queryByRole("status")).toBeNull();
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save fallback" })
+    );
+
+    const last = seen.mock.calls[seen.mock.calls.length - 1]?.[0];
+    expect(last?.blocks[0]).toEqual({
+      type: "heading",
+      text: [
+        { type: "chip", variable: "customer.firstName" },
+        { type: "chip", variable: "customer.lastName", fallback: "there" },
+      ],
+    });
+    expect(
+      screen.getByRole("button", { name: "Customer › Last name" })
+    ).toBeDefined();
+  });
+
+  it("opens no fallback dialog while the email is read-only", () => {
+    render(
+      <WrittenBody
+        value={doc({
+          type: "heading",
+          text: [{ type: "chip", variable: "name" }],
+        })}
+        readOnly
+        onChange={vi.fn()}
+      />
+    );
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "name, shows nothing",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+  });
+
   it("offers declared lists first in a list's picker, by their friendly names", () => {
     render(
       <WrittenBody
