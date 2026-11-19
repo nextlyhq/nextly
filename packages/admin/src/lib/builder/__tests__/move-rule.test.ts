@@ -556,6 +556,21 @@ describe("names that clash where a field arrives", () => {
       expect(verdict("a".repeat(63)).allowed).toBe(true);
     });
 
+    // A field-group field keeps its values in the group's own table, so no column carries its name
+    // and the column's length does not reach it.
+    it("lets a long name arrive on a field that makes no column", () => {
+      const long = "a".repeat(64);
+      const fields = [
+        plain("f-group", "details", {
+          type: "group",
+          fields: [
+            plain("f-moved", long, { type: "component", component: "seo" }),
+          ],
+        }),
+      ];
+      expect(judgeMove(fields, "f-moved", {}, ctx).allowed).toBe(true);
+    });
+
     it("refuses a camelCase name, which the Builder never gives a field it places", () => {
       expect(refusal(verdict("metaTitle")).reason).toBe("name-invalid");
     });

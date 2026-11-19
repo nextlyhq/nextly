@@ -5,6 +5,8 @@
 //
 // @module domains/schema/value-conversion/value-readings
 
+import type { SupportedDialect } from "../services/field-column-descriptor";
+
 import type { SqliteAffinity } from "./column-type";
 import type { SqliteStorage } from "./types";
 
@@ -322,4 +324,137 @@ export function sqliteStores(
   affinity: SqliteAffinity
 ): SqliteValue {
   return STORED_AS[affinity](value);
+}
+
+/**
+ * The most MySQL's `text` column holds: 65,535 bytes of a value in the column's character set
+ * (UTF-8 where none is named), not 65,535 characters. PostgreSQL's and SQLite's `text` hold any
+ * length.
+ */
+export const MYSQL_TEXT_BYTES = 65_535;
+
+/** How many UTF-8 bytes a value has, as MySQL counts a `text` column's length in UTF-8. */
+export function byteLength(text: string): number {
+  return byteLengthIn(text, undefined);
+}
+
+/**
+ * How many bytes a value has in a MySQL character set, as its `text` column counts them: UTF-8's
+ * own count (where none is named too), one byte a character in a single-byte set, two per UTF-16
+ * unit, four per character in UTF-32. A set this does not know is counted at four bytes a
+ * character, the most any of them takes, so a value is never judged to fit a column it overflows.
+ */
+export function byteLengthIn(
+  text: string,
+  charset: string | undefined
+): number {
+  const set = charset?.toLowerCase();
+  if (set === undefined || set.startsWith("utf8")) {
+    return new TextEncoder().encode(text).length;
+  }
+  if (SINGLE_BYTE_SETS.has(set)) return Array.from(text).length;
+  if (set === "ucs2" || set === "utf16" || set === "utf16le") {
+    return text.length * 2;
+  }
+  return Array.from(text).length * 4;
+}
+
+/** MySQL's character sets that keep each character in one byte. */
+const SINGLE_BYTE_SETS = new Set([
+  "latin1",
+  "latin2",
+  "latin5",
+  "latin7",
+  "ascii",
+  "cp1250",
+  "cp1251",
+  "cp1256",
+  "cp1257",
+  "cp850",
+  "cp852",
+  "cp866",
+  "greek",
+  "hebrew",
+  "koi8r",
+  "koi8u",
+  "armscii8",
+  "keybcs2",
+  "macce",
+  "macroman",
+  "swe7",
+  "dec8",
+  "hp8",
+  "tis620",
+  "geostd8",
+]);
+
+/** How many bits a whole-number column holds: 32 on PostgreSQL and MySQL (`int`), 64 on SQLite. */
+export function integerBits(dialect: SupportedDialect): 32 | 64 {
+  return dialect === "sqlite" ? 64 : 32;
+}
+
+/** A number's canonical spelling (`exactNumber`) as its significant digits and exponent. */
+function digitsAndExponent(
+  text: string
+): { negative: boolean; digits: string; exponent: number } | null {
+  const canonical = exactNumber(text);
+  if (canonical === null) return null;
+  if (canonical === "0") return { negative: false, digits: "", exponent: 0 };
+  const parts = /^(-)?(\d+)e(-?\d+)$/.exec(canonical);
+  if (parts === null) return null;
+  return {
+    negative: parts[1] === "-",
+    digits: parts[2],
+    exponent: Number(parts[3]),
+  };
+}
+
+/**
+ * Whether a whole number written as `text` fits a signed integer of `bits` bits, read from its
+ * digits: a fraction never fits, and neither does a number with more digits than any integer has.
+ */
+export function keptByInteger(text: string, bits: 32 | 64): boolean {
+  const read = digitsAndExponent(text);
+  if (read === null || read.exponent < 0) return false;
+  // Twenty digits is past any 64-bit integer, so a longer number is refused without expanding it.
+  if (read.digits.length + read.exponent > 20) return false;
+  const magnitude = BigInt(`${read.digits || "0"}${"0".repeat(read.exponent)}`);
+  const limit = 1n << BigInt(bits - 1);
+  return read.negative ? magnitude <= limit : magnitude < limit;
+}
+
+/**
+ * Whether a `decimal(precision, scale)` column holds a number written as `text` exactly, only
+ * rounded (more digits after the point than its scale), or not at all (more before the point
+ * than its precision leaves).
+ */
+export function decimalFit(
+  text: string,
+  precision: number,
+  scale: number
+): "exactly" | "rounded" | "out of range" {
+  const read = digitsAndExponent(text);
+  if (read === null) return "out of range";
+  const whole = Math.max(0, read.digits.length + read.exponent);
+  const fraction = Math.max(0, -read.exponent);
+  if (whole > precision - scale) return "out of range";
+  return fraction > scale ? "rounded" : "exactly";
+}
+
+/**
+ * Which number columns hold a non-finite number, as measured on each database, written as a bound
+ * parameter and read back (`non-finite-columns.integration.test.ts`): PostgreSQL's double holds all
+ * three, its constrained `numeric` holds `NaN` and no infinity, and its integer none; every SQLite
+ * number column, whatever its affinity, holds the infinities and keeps no `NaN`; MySQL's hold none;
+ * and a JSON number holds none on any database.
+ */
+export function holdsNonFinite(
+  kind: "integer" | "double" | "decimal" | "json",
+  dialect: SupportedDialect,
+  value: "NaN" | "Infinity" | "-Infinity"
+): boolean {
+  if (kind === "json" || dialect === "mysql") return false;
+  if (dialect === "sqlite") return value !== "NaN";
+  if (kind === "integer") return false;
+  return kind === "double" || value === "NaN";
 }

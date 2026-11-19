@@ -16,7 +16,7 @@ import type { AppliedConditions } from "../conditions/applied-conditions";
 import type { SelectionMode } from "../selection";
 
 import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
-import type { CanvasRegion } from "./canvas-regions";
+import type { CanvasRegion, EmptyRegionBandProps } from "./canvas-regions";
 
 export interface CanvasProps {
   /** The document being edited. */
@@ -211,6 +211,13 @@ export interface CanvasProps {
    */
   editingRegion?: CanvasEditingRegion;
   /**
+   * What is drawn where an area has no region, by area: a band saying the
+   * site shows no header (or footer) yet, with the host's ways to fill it.
+   * In the editor's canvas only, in the region's place; never in the page.
+   * @experimental Settles with the site's empty header and footer.
+   */
+  emptyRegions?: Partial<Readonly<Record<RegionArea, EmptyRegionBandProps>>>;
+  /**
    * The blocks whose visibility conditions the page can't check, which the
    * canvas marks in red: visitors never see them. Judged by the host, which
    * knows the collections' fields. Absent, every conditioned block is marked
@@ -237,6 +244,15 @@ export interface CanvasProps {
    * `document` with the entry the seam names.
    */
   composed?: BlockDocument;
+  /**
+   * Words drawn in a grey box in the page's place, between `regions`, for a
+   * document view with no page of its own (a header and footer shown around
+   * where any page goes). `document` is still drawn, so the site's styles
+   * reach the regions as on a page; a host passing this passes an empty one.
+   * Absent, the page is drawn alone, as it always is.
+   * @experimental Settles with the header & footer set view.
+   */
+  placeholder?: string;
 }
 
 /** A region of the page's layout as the canvas draws it while it is edited. */

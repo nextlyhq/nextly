@@ -30,6 +30,7 @@ import {
   SheetFooter,
   SheetTitle,
 } from "@nextlyhq/ui";
+import { fieldProducesColumn } from "nextly/config";
 import type { JSX } from "react";
 import { useState } from "react";
 
@@ -185,6 +186,8 @@ function nameCheckFor(
     // Inside a named container the field is a key in its value.
     nested: level !== null,
     lifecycleEnabled,
+    // A field that makes no column (a field-group field) is not held to a column's length.
+    producesColumn: fieldProducesColumn(field),
     siblingNames: siblings
       .filter(other => other.id !== field.id)
       .map(other => other.name),

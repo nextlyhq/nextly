@@ -12,7 +12,13 @@ import { documentsIn, heldLanguages } from "../languages/versions";
 import { typeOf } from "../outputs/listing";
 
 import { contentFingerprint, earlierContentFingerprints } from "./fingerprint";
-import { forgetContentDates, hasContentDate, recordContentDate } from "./store";
+import {
+  forgetContentDates,
+  hasContentDate,
+  keptFingerprints,
+  recordContentDate,
+  type KeptFingerprints,
+} from "./store";
 
 /** A stored date read back, where it is one. */
 export function dateOf(value: unknown): Date | undefined {
@@ -50,24 +56,29 @@ async function recordVersion(
   holder: AddressHolder,
   locale: string,
   document: Readonly<Record<string, unknown>>,
-  before: UnchangedSince | undefined
+  before: UnchangedSince | undefined,
+  kept?: KeptFingerprints
 ): Promise<void> {
   const savedAt = dateOf(document.updatedAt);
   // A page's first row takes the date it already had where the save changed
   // none of its content, and only while the version read is the one that
   // save made: a later save, committed before this read, may have changed
   // it. Every other date is the save time of the version read.
-  const kept =
+  const keepsDate =
     before !== undefined &&
     sameSave(savedAt, before.version) &&
     !(await hasContentDate(ctx, holder, locale));
-  await recordContentDate(ctx, {
-    holder,
-    locale,
-    fingerprint: contentFingerprint(document),
-    earlier: earlierContentFingerprints(document),
-    changedAt: kept ? before.date : (savedAt ?? new Date()),
-  });
+  await recordContentDate(
+    ctx,
+    {
+      holder,
+      locale,
+      fingerprint: contentFingerprint(document),
+      earlier: earlierContentFingerprints(document),
+      changedAt: keepsDate ? before.date : (savedAt ?? new Date()),
+    },
+    kept
+  );
 }
 
 /**
@@ -140,10 +151,23 @@ async function refreshGroup(
       batch.map(page => page.holder.id),
       first.language
     );
+    // What each row holds, read for the batch, so a row already holding its
+    // page's content costs nothing more.
+    const kept = await keptFingerprints(
+      ctx,
+      batch.map(page => ({ holder: page.holder, locale: page.language }))
+    );
     for (const page of batch) {
       const document = documents.get(page.holder.id);
       if (document === undefined) continue;
-      await recordVersion(ctx, page.holder, page.language, document, undefined);
+      await recordVersion(
+        ctx,
+        page.holder,
+        page.language,
+        document,
+        undefined,
+        kept
+      );
     }
   }
 }

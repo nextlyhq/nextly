@@ -71,3 +71,34 @@ export function starterSlug(
 ): string {
   return firstFree(STARTER_NAMES[area].slug, "-", taken);
 }
+
+/**
+ * The titles and slugs of a header or footer an author creates from the
+ * canvas's "No header yet" band. The starter's design, but the author's own
+ * component: never named "Starter", which reads as the seed's.
+ */
+const CREATED_NAMES: {
+  readonly [A in StarterArea]: {
+    readonly title: string;
+    readonly slug: string;
+  };
+} = {
+  header: { title: "Header", slug: "header" },
+  footer: { title: "Footer", slug: "footer" },
+};
+
+/** A created header's title: "Header", "Header 2", ... */
+export function createdTitle(
+  area: StarterArea,
+  taken: ReadonlySet<string>
+): string {
+  return firstFree(CREATED_NAMES[area].title, " ", taken);
+}
+
+/** A created header's slug: "header", "header-2", ... */
+export function createdSlug(
+  area: StarterArea,
+  taken: ReadonlySet<string>
+): string {
+  return firstFree(CREATED_NAMES[area].slug, "-", taken);
+}

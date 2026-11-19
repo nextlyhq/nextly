@@ -43,6 +43,7 @@ import {
 } from "../site-header-footer";
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
 import type { VariablesInUseCheck } from "../site-style-storage";
+import type { RegisteredStarterPage } from "../starter-pages/starter-pages";
 import { checkedTemplateAddresses } from "../templates/template-addresses";
 import type { TemplateGuardSetup } from "../templates/template-guard";
 import type { BackfillHost } from "../usage-backfill-wiring";
@@ -84,6 +85,9 @@ export interface DefinitionState {
   // plugins declare on each boot. Its own, so two sites in one process never
   // resolve each other's.
   namedQueries: NamedQueryRegistry;
+  // This boot's starter pages, judged once every block is registered, and
+  // judged again on each boot. Empty until `init` has run.
+  starterPages: readonly RegisteredStarterPage[];
   /**
    * What the default-Layout repair needs from the installed plugin: the
    * RESOLVED slugs and the log. Published by `init` for the same reason
@@ -233,6 +237,7 @@ export function createDefinition(opts: PageBuilderOptions): Definition {
   const state: DefinitionState = {
     installed: null,
     namedQueries: createNamedQueryRegistry(),
+    starterPages: [],
     defaultLayoutSetup: null,
     pageClaimsBackfilled: false,
     pageClaimsInit: 0,

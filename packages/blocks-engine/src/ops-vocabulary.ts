@@ -267,6 +267,20 @@ export type BuilderOp =
        */
       readonly kind: "code";
       readonly code: DocumentCode | null;
+    }
+  | {
+      /**
+       * An edit to the document's own custom CSS (`settings.customCss`):
+       * written whole, as `code` is, so one change is one undo step; `null`
+       * removes it. Judged by its shape; what the CSS may hold, and who may
+       * change it, is the save's question.
+       *
+       * A ninth member of a published union, as `code` is the eighth.
+       *
+       * @experimental Settles with page CSS.
+       */
+      readonly kind: "customCss";
+      readonly customCss: string | null;
     };
 
 /**
@@ -275,8 +289,16 @@ export type BuilderOp =
  */
 export function addressesNoNode(
   op: BuilderOp
-): op is Extract<BuilderOp, { readonly kind: "envelope" | "seo" | "code" }> {
-  return op.kind === "envelope" || op.kind === "seo" || op.kind === "code";
+): op is Extract<
+  BuilderOp,
+  { readonly kind: "envelope" | "seo" | "code" | "customCss" }
+> {
+  return (
+    op.kind === "envelope" ||
+    op.kind === "seo" ||
+    op.kind === "code" ||
+    op.kind === "customCss"
+  );
 }
 
 /**

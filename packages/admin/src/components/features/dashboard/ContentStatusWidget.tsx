@@ -117,9 +117,12 @@ export const ContentStatusWidget: React.FC = () => {
               <p className="text-sm font-bold text-foreground">
                 No active content detected
               </p>
+              {/* In the text colour: the primary token is a fill a brand may
+                  set to any colour, and small text drawn in it can fall
+                  under AA. Underlined at rest, so it reads as a link. */}
               <Link
                 href={ROUTES.BUILDER_COLLECTIONS}
-                className="text-xs font-black uppercase tracking-[0.2em] text-primary hover:underline group flex items-center justify-center gap-2"
+                className="text-xs font-black uppercase tracking-[0.2em] text-foreground underline underline-offset-2 group flex items-center justify-center gap-2"
               >
                 Launch Initial Entry{" "}
                 <ChevronRight className="h-3 w-3 group-hover:translate-x-1 transition-transform" />

@@ -66,11 +66,13 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import { consoleLogger } from "../../../shared/types";
+import { MetaService } from "../../meta/services/meta-service";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import { getSchemaEventsDdl } from "../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { generateMigration } from "../migrate-create/generate";
-import { EMPTY_SNAPSHOT, writeSnapshot } from "../migrate-create/snapshot-io";
+import { recordedSnapshot } from "../migrate-create/__tests__/helpers/recorded-snapshot";
+import { EMPTY_SNAPSHOT } from "../migrate-create/snapshot-io";
 import { runMigrationStatements } from "../migrate/migration-transaction";
 import { noPendingEntities } from "../migrate/pending-entities";
 import { reconcileMigrationMetadata } from "../migrate/reconcile-metadata";
@@ -199,7 +201,7 @@ describe.each(getConfiguredTestDialects())(
     it("`nextly migrate`'s registry phase: rows and version together, naming the newest applied migration", async () => {
       const slug = `svw_migrate_${dialect.slice(0, 2)}`;
       await recordApplied(MIGRATED);
-      await writeSnapshot(
+      await recordedSnapshot(
         join(dir, "meta"),
         MIGRATED,
         EMPTY_SNAPSHOT,
@@ -243,6 +245,9 @@ describe.each(getConfiguredTestDialects())(
       // Two collections a snapshot records on one table: the registry holds
       // a table once, so one row is written and the other refused.
       mkdirSync(join(dir, "meta"));
+      // Its migration file beside it: a snapshot is read only once its
+      // migration was written.
+      writeFileSync(join(dir, `${REGISTERED}.sql`), "");
       writeFileSync(
         join(dir, "meta", `${REGISTERED}.snapshot.json`),
         JSON.stringify({
@@ -492,15 +497,33 @@ describe.each(getConfiguredTestDialects())(
      * Runs `save` with `nextly_meta` taken away, whatever the save answers,
      * and says what it reported of the failure: the error it threw, and the
      * warnings it logged, each with the context it carried.
+     *
+     * The table goes once the save has recorded that it is in progress, a
+     * row of the same table written before anything of the save, so the
+     * first write it cannot make is the version's, in the registry's
+     * transaction. The record's read-back is where that happens; a save that
+     * never reached it would test nothing, and fails here.
      */
     async function savedWithoutTheVersionTable(
       t: TestNextly,
       save: () => Promise<unknown>
     ): Promise<string> {
       const warned = vi.spyOn(consoleLogger, "warn");
-      await t.adapter.executeQuery(
-        "ALTER TABLE nextly_meta RENAME TO nextly_meta_away"
-      );
+      let away = false;
+      const get = MetaService.prototype.get;
+      vi.spyOn(MetaService.prototype, "get").mockImplementation(async function (
+        this: MetaService,
+        ...args: Parameters<MetaService["get"]>
+      ) {
+        const value = await get.apply(this, args);
+        if (!away && args[0].startsWith("builder-save-in-progress:")) {
+          await t.adapter.executeQuery(
+            "ALTER TABLE nextly_meta RENAME TO nextly_meta_away"
+          );
+          away = true;
+        }
+        return value;
+      });
       let reported = "";
       let logged: string[] = [];
       try {
@@ -510,13 +533,23 @@ describe.each(getConfiguredTestDialects())(
           )}`;
         });
       } finally {
-        await t.adapter.executeQuery(
-          "ALTER TABLE nextly_meta_away RENAME TO nextly_meta"
-        );
-        // Read before the spy is restored, which clears what it recorded.
-        logged = warned.mock.calls.map(call => call.map(String).join(" "));
+        vi.mocked(MetaService.prototype.get).mockRestore();
+        if (away) {
+          await t.adapter.executeQuery(
+            "ALTER TABLE nextly_meta_away RENAME TO nextly_meta"
+          );
+        }
+        // Read before the spy is restored, which clears what it recorded. The save's record that it
+        // is in progress cannot be cleared while the table is away, and its warning says so naming
+        // the table: left in, it alone would answer for the version's write.
+        logged = warned.mock.calls
+          .map(call => call.map(String).join(" "))
+          .filter(line => !line.includes("its record that it was in progress"));
         warned.mockRestore();
       }
+      expect(away, "the save never recorded that it was in progress").toBe(
+        true
+      );
       return [reported, ...logged].join("\n");
     }
 

@@ -654,7 +654,10 @@ export {
  * stays open. `useDocumentSession(target)` reads the target's latest
  * version (its working draft where one is held), holds its lock, saves it as
  * a draft or publishes it, and records a recovery point for it; naming no
- * target, or unmounting, lets the lock go. Each is the admin's own lock, read,
+ * target, or unmounting, lets the lock go, unmounting recording first the
+ * work it was asked to record. `writesSettled()` waits, before a store, for
+ * the writes the view tracks (`useTrackedWrite`), as the view's own Save
+ * does. Each is the admin's own lock, read,
  * update and recording, so the server judges every write as the signed-in
  * person, and a save sends the version the copy started from.
  *

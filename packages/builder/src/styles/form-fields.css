@@ -112,10 +112,14 @@
   gap: 0.125rem;
 }
 
-/* "+ Add field" and "+ Add option": quiet, in the editor's accent. */
+/* "+ Add field" and "+ Add option": quiet, in the editor's text colour.
+   Not the accent: that is --nx-primary, a fill a site's brand may set to a
+   shade too light to read as small text on the panel. The weight and the
+   "+" keep it reading as a control beside the field labels. */
 .nx-form-fields__add {
   justify-self: start;
-  color: var(--nx-builder-accent);
+  color: var(--nx-builder-text);
+  font-weight: 500;
 }
 
 .nx-form-fields__advanced > summary {

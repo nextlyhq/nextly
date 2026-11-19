@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import type { BlockDefinition, BlockSupports, InferBlockProps } from "./block";
 import type { BlockNode, TokenRef } from "./document";
 import { defineBlock } from "./block";
-import { migrateDocument } from "./migration";
+import { migrateDocument } from "./migrate-document";
 import {
   allBlocks,
   allSupports,

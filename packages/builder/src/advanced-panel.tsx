@@ -33,8 +33,6 @@ import { Button, Input, Label } from "@nextlyhq/ui";
 import { Plus } from "lucide-react";
 import * as React from "react";
 
-import { SettingSlot } from "./settings-filter";
-
 import { BUILT_IN_WRITES } from "./code-hints";
 import { CssHint } from "./css-hint";
 import {
@@ -56,6 +54,7 @@ import {
 } from "./custom-attributes";
 import type { EditorState } from "./editor-state";
 import { designReadOnlyReason, lockViewOf } from "./inspector";
+import { SettingSlot } from "./settings-filter";
 
 /**
  * What a refused write says, wherever it is refused.

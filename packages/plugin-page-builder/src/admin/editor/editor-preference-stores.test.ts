@@ -41,6 +41,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 import {
   checklistStoreFor,
+  fontPreviewsStoreFor,
   shellPreferenceStore,
 } from "./editor-preference-stores";
 import { recentPagesStore } from "./recent-pages";
@@ -90,6 +91,17 @@ describe("the editor's kept choices", () => {
     checklistStoreFor("u1")?.write("1");
     expect(port.held.get(`${CHECKLIST_STORAGE_KEY}:u1`)).toBe("1");
     expect(browserKeys()).toEqual([]);
+  });
+
+  it("keeps the author's choice to show font previews through the admin's store, per author", () => {
+    fontPreviewsStoreFor("u1")?.write("shown");
+    expect(port.held.get("nx-pb-font-previews:u1")).toBe("shown");
+    expect(port.opened).toEqual([
+      { key: "nx-pb-font-previews:u1", lifetime: "device" },
+    ]);
+    expect(browserKeys()).toEqual([]);
+    // Nobody known, nothing kept: the author is asked on every visit.
+    expect(fontPreviewsStoreFor(null)).toBeUndefined();
   });
 
   it("keeps nothing for nobody where the store is per author", () => {

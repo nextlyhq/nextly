@@ -63,6 +63,9 @@ let project: string;
 beforeEach(() => {
   project = mkdtempSync(join(tmpdir(), "nextly-error-shape-"));
   vi.stubEnv("NEXTLY_TELEMETRY_DISABLED", "1");
+  // What a developer's machine prints: under `CI` an error shows no line of the user's source,
+  // and the runner that runs these sets it.
+  vi.stubEnv("CI", "");
 });
 
 afterEach(() => {

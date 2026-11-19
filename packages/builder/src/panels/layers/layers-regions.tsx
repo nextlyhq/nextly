@@ -58,7 +58,9 @@ export function RegionRow({
       onClick={row.onActivate}
     >
       <Lock size={14} aria-hidden="true" />
-      <span className="nx-layers-region__name">{row.name}</span>
+      {/* A real space between name and origin, which the flex row does not
+          draw: the words drawn stay apart, so the name holds them. */}
+      <span className="nx-layers-region__name">{row.name}</span>{" "}
       <span className="nx-layers-region__origin">{row.origin}</span>
     </button>
   );

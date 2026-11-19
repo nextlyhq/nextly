@@ -63,11 +63,34 @@ export async function withSchemaChangeExcluded<T>(
     /** Names the operation in the refusal's log line, so an operator can see what was held off. */
     label: string;
     issuesDdl: boolean;
+    /**
+     * Where this change writes a migration: given by a Schema Builder save
+     * that has a writer. The project's migration files are then held from
+     * before `work` begins, so the save changes nothing, its definition
+     * included, while another writer of those files is at work.
+     */
+    migrationsDir?: string | undefined;
   },
   work: () => Promise<T>
 ): Promise<T> {
+  // Loaded on demand, as the migration machinery below is.
+  const { withBuilderWriterScope } = await import(
+    "../migrate-create/writer-hold"
+  );
+  // Loaded on demand, as the writer hold is.
+  const { withSaveRecords } = await import("../builder-save/save-in-progress");
+  // A migration this change writes is written holding the project's
+  // migration files, refused at once where another writer holds them. A
+  // save's record that it is in progress is cleared once the whole change
+  // has ended, its registry write included, as its outcome allows.
+  const held = () =>
+    withBuilderWriterScope(
+      args.label,
+      () => withSaveRecords(work, args.logger),
+      args.migrationsDir
+    );
   const { adapter } = args;
-  if (!adapter) return work();
+  if (!adapter) return held();
 
   // Loaded on demand for the reason the services' own imports are: this module is reached from DI
   // registration, and a static import would pull the migration machinery into the boot graph of
@@ -91,6 +114,6 @@ export async function withSchemaChangeExcluded<T>(
       whenHeld: "refuse",
       refusal: "editor",
     },
-    work
+    held
   );
 }

@@ -43,18 +43,18 @@ import {
   FORM_SERVICE,
   startFormProviders,
 } from "./forms/providers";
-import {
-  createPageCheckProviders,
-  PAGE_CHECKS_SERVICE,
-  startPageCheckProviders,
-} from "./page-check-providers";
-import { providedChecksRoute } from "./page-checks-provided-route";
 import { FORM_SEND_LIMITS, formReceiverRoute } from "./forms/route";
 import { SITE_FORMS_SERVICE_NAME, siteForms } from "./forms/site-forms";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
 import { registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { PAGE_BUILDER_PLACEMENT } from "./overview/admin-panel";
+import {
+  createPageCheckProviders,
+  PAGE_CHECKS_SERVICE,
+  startPageCheckProviders,
+} from "./page-check-providers";
+import { providedChecksRoute } from "./page-checks-provided-route";
 import { adminContributions } from "./plugin-definition/admin";
 import {
   bindingReportParts,
@@ -105,6 +105,11 @@ import {
   installSiteStyleLocks,
   routesForSiteStyle,
 } from "./plugin-definition/site-style";
+import {
+  installStarterPages,
+  routesForStarterPages,
+  starterPagesOf,
+} from "./plugin-definition/starter-pages";
 import { routesForStartup } from "./plugin-definition/startup";
 import { createDefinition } from "./plugin-definition/state";
 import {
@@ -125,16 +130,18 @@ import {
   BREAKPOINT_REMOVAL_UNDONE_AUDIT,
   BREAKPOINT_REMOVAL_UNDONE_METADATA,
 } from "./site-breakpoint-undo";
-import { appOrigin } from "./site-code/page-code";
-import {
-  PAGE_CODE_SAVED_AUDIT,
-  PAGE_CODE_SAVED_METADATA,
-  registerPageCodeAudit,
-} from "./site-code/page-code-audit";
 import {
   SITE_CSS_SAVED_AUDIT,
   SITE_CSS_SAVED_METADATA,
 } from "./site-code/css-route";
+import { appOrigin } from "./site-code/page-code";
+import {
+  DOCUMENT_CSS_SAVED_AUDIT,
+  DOCUMENT_CSS_SAVED_METADATA,
+  PAGE_CODE_SAVED_AUDIT,
+  PAGE_CODE_SAVED_METADATA,
+  registerPageCodeAudit,
+} from "./site-code/page-code-audit";
 import {
   SITE_CODE_SAVED_AUDIT,
   SITE_CODE_SAVED_METADATA,
@@ -189,7 +196,11 @@ export const pageBuilder = (
     breakpointRemovalParts(def);
   // Each area's routes by name, listed below in the order the plugin
   // declares them.
-  const pages = routesForPages(def);
+  // The starter pages a new page may start from: one source for the New
+  // page read, the create and the empty page's list.
+  const starters = starterPagesOf(def);
+  const pages = routesForPages(def, starters);
+  const starterPages = routesForStarterPages(starters);
   const components = routesForComponents(def, {
     countPlacements,
     readRetiredFor,
@@ -316,6 +327,9 @@ export const pageBuilder = (
       // The site's named queries and the ones plugins declare, into a
       // registry emptied for this boot.
       state.namedQueries = registerNamedQueriesAtBoot(ctx, opts.namedQueries);
+      // The starter pages, judged once every block is known, so one naming
+      // a block another plugin declares is judged by it.
+      installStarterPages(ctx, def);
       // Every registered block is known now, other plugins' among them, so
       // the code tier takes all their looks.
       refreshCodeTier(
@@ -380,7 +394,8 @@ export const pageBuilder = (
         countPlacements
       );
       installBindingReport(ctx, def, bindingReportDeps);
-      // An audit row for each committed change to a page's own code.
+      // An audit row for each committed change to a page's own code, and
+      // to a document's custom CSS.
       registerPageCodeAudit({
         ctx,
         mayHoldBlocks: collection =>
@@ -446,6 +461,12 @@ export const pageBuilder = (
             kind: SITE_CSS_SAVED_AUDIT,
             metadataKeys: [...SITE_CSS_SAVED_METADATA],
           },
+          // And one per committed change to a document's own or its
+          // blocks' custom CSS, the same.
+          {
+            kind: DOCUMENT_CSS_SAVED_AUDIT,
+            metadataKeys: [...DOCUMENT_CSS_SAVED_METADATA],
+          },
         ],
       },
       // The channel another plugin adds blocks through. Core carries no
@@ -490,7 +511,15 @@ export const pageBuilder = (
           () => state.composition,
           // The started site's registry: a dev server's config reload builds
           // this field type again from a definition whose init never runs.
-          runningBlocks(def.blocks)
+          runningBlocks(def.blocks),
+          // A page's own code, judged on every write that changes it against
+          // the policy the site declared for its site code, from the site's
+          // own origin as the app knows it. Known here, so a reload keeps
+          // judging it.
+          {
+            options: opts.siteCode,
+            siteOrigin: () => appOrigin(process.env.NEXT_PUBLIC_APP_URL),
+          }
         ),
       ],
       // The one read the insert panel makes. A route rather than a collection
@@ -553,6 +582,8 @@ export const pageBuilder = (
         pages.pageAddress,
         pages.addressWaiting,
         ...pages.pagesWrite,
+        // The starter pages an empty page offers.
+        starterPages.starterPages,
         layouts.makeDefault,
         layouts.removeLayout,
         ...components.componentDelete,
@@ -561,6 +592,9 @@ export const pageBuilder = (
         layouts.fillNotices,
         ...layouts.layoutWrites,
         ...layouts.layoutArea,
+        layouts.setAreaChoices,
+        layouts.areaComponent,
+        layouts.createInArea,
         pages.pageCollection,
         breakpoints.siteSettings,
         breakpoints.siteBreakpoints,
