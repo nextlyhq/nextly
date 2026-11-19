@@ -78,7 +78,33 @@ vi.mock("../../../../cli/utils/config-loader", async importOriginal => ({
  * removal once, after the field-group values are removed in the same
  * transaction, as a run stopped there would.
  */
-const leftovers = vi.hoisted(() => ({ earlier: false, stop: false }));
+const leftovers = vi.hoisted(() => ({
+  earlier: false,
+  stop: false,
+  labelling: false,
+}));
+// `labelling` fails the older archived translations' labelling once, as a database error would.
+vi.mock(
+  "../../../i18n/migration/label-legacy-archive-rows",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../i18n/migration/label-legacy-archive-rows")
+      >();
+    return {
+      ...actual,
+      labelLegacyArchiveRows: (
+        ...args: Parameters<typeof actual.labelLegacyArchiveRows>
+      ) => {
+        if (leftovers.labelling) {
+          leftovers.labelling = false;
+          return Promise.reject(new Error("the labelling failed"));
+        }
+        return actual.labelLegacyArchiveRows(...args);
+      },
+    };
+  }
+);
 vi.mock("../dropped-entity-leftovers", async importOriginal => {
   const actual =
     await importOriginal<typeof import("../dropped-entity-leftovers")>();
@@ -248,6 +274,7 @@ beforeEach(() => {
 afterEach(async () => {
   leftovers.earlier = false;
   leftovers.stop = false;
+  leftovers.labelling = false;
   setNonInteractive(false);
   await shutdownServices().catch(() => {});
   for (const close of closers.splice(0)) await close();
@@ -966,6 +993,33 @@ describe.each(getConfiguredTestDialects())(
       },
       180_000
     );
+    it("stops the metadata pass before the registry write when the labelling fails, keeping the deleted collection registered, and the next run finishes", async () => {
+      const { deployed, deleted, after } =
+        await deleteNotesOnTheDeployedDatabase(() => {
+          leftovers.labelling = true;
+        });
+      expect(leftovers.labelling, "the labelling was reached").toBe(false);
+      // The metadata pass stops and says so, and the run goes no further with it.
+      expect(deleted.said).toContain(
+        "Migration metadata was not recorded: the labelling failed"
+      );
+      // Nothing of the registry changed: the row that names the collection is there for the next
+      // run's labelling, and its rows with it.
+      expect(after).toMatchObject({
+        registryRow: 1,
+        values: 1,
+        archiveRows: 1,
+      });
+
+      const next = await migrate();
+      expect(next.code, next.said).toBeUndefined();
+      expect(await sharedLeftOf(deployed.adapter), next.said).toEqual({
+        registryRow: 0,
+        values: 0,
+        archiveRows: 0,
+        keptValues: 1,
+      });
+    }, 180_000);
 
     it("removes none of its rows in a run stopped part-way through them, and all of them in the next", async () => {
       const { deployed, before, deleted, after } =

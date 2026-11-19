@@ -476,27 +476,22 @@ export async function reconcileMigrationMetadata(
  * the registries, and a row whose entity is no longer registered can only be
  * kept, unresolved, so the leftovers removal after the write could never take
  * it. Not inside a registry write a caller holds open, whose transaction the
- * archive's DDL would commit on MySQL; nothing when there is no archive. A
- * failure costs only the labelling, which the next run does.
+ * archive's DDL would commit on MySQL; nothing when there is no archive.
+ *
+ * A failure stops the pass before the registry write: written anyway, the
+ * write would remove the rows that name the dropped entities, and their older
+ * archived translations could then never be labelled, nor removed. The run
+ * fails with nothing of the registry changed, and the next run labels them.
  */
 async function labelArchiveWhileRegistered(
   deps: ReconcileMetadataDeps
 ): Promise<void> {
   if (registryWriteOpen()) return;
-  const { adapter, dialect, logger } = deps;
-  try {
-    if (!(await adapter.tableExists(ARCHIVE_TABLE))) return;
-    await assertSchemaLockHeld();
-    await ensureI18nArchive(adapter, dialect);
-    await labelLegacyArchiveRows(adapter);
-  } catch (error) {
-    if (isSchemaLockLost(error)) throw error;
-    logger.warn(
-      `Could not label the older archived translations with their entity's kind: ${
-        error instanceof Error ? error.message : String(error)
-      }. The next \`nextly migrate\` tries again.`
-    );
-  }
+  const { adapter, dialect } = deps;
+  if (!(await adapter.tableExists(ARCHIVE_TABLE))) return;
+  await assertSchemaLockHeld();
+  await ensureI18nArchive(adapter, dialect);
+  await labelLegacyArchiveRows(adapter);
 }
 
 /**
