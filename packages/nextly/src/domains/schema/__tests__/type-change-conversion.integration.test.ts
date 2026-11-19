@@ -177,6 +177,20 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v", "es")).toEqual({ a: 34 });
     });
 
+    // A family this conversion does not write yet keeps today's answer exactly: a date read as text
+    // is a form no save writes, so the change is refused and nothing changes, never half converted.
+    it("still refuses a date becoming a text, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "date" }]);
+      await write(t, "a", { v: "2024-01-02T03:04:05.000Z" });
+      const before = await read(t, "v");
+
+      expect(await save(t, [{ name: "v", type: "text" }])).toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+
+      expect(await read(t, "v")).toEqual(before);
+    });
+
     it("refuses a change that would lose a value when no clear is confirmed, and changes nothing", async () => {
       const t = await boot([{ name: "v", type: "text" }]);
       await write(t, "kept", { v: "12" });
