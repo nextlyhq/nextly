@@ -3030,13 +3030,17 @@ export class ReleasesService {
         release,
       ])
     );
-    const read = new Map(
-      [...(known?.members ?? []), ...reached.members].map(member => [
-        member.id,
-        member,
-      ])
-    );
-    return duePlanOf([...releases.values()], [...read.values()], now);
+    // A release the walk read again is planned from what it read now, its revision and its
+    // members both: a member kept from the earlier read could be one since removed, and would
+    // join the release to a component it has left.
+    const refreshed = new Set(reached.releases.map(release => release.id));
+    const read = [
+      ...(known?.members ?? []).filter(
+        member => !refreshed.has(member.releaseId)
+      ),
+      ...reached.members,
+    ];
+    return duePlanOf([...releases.values()], read, now);
   }
 
   /**
