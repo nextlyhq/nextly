@@ -32,6 +32,8 @@ beforeEach(async () => {
 interface Fields {
   /** The field before was a relationship, its column carrying the key Nextly made for it. */
   fromRelationship?: boolean;
+  /** The table that relationship's key referenced. */
+  referencedTable?: string;
   /** The field after is unique. */
   unique?: boolean;
 }
@@ -60,6 +62,9 @@ const changeScoreTo = (
           {
             type,
             fromRelationship: fields.fromRelationship === true,
+            ...(fields.referencedTable === undefined
+              ? {}
+              : { referencedTable: fields.referencedTable }),
             unique: fields.unique === true,
           },
         ],
@@ -171,13 +176,40 @@ describe("a SQLite rebuild that changes a column's type", () => {
       INSERT INTO single_home VALUES ('h1', NULL);
     `);
 
-    await changeScoreTo("integer", undefined, { fromRelationship: true });
+    await changeScoreTo("integer", undefined, {
+      fromRelationship: true,
+      referencedTable: "posts",
+    });
 
     expect(declared()).toBe("integer");
     expect(references(), "the table's references").toEqual([]);
     sqlite.pragma("foreign_keys = ON");
     sqlite.prepare("UPDATE single_home SET score = 5").run();
     expect(stored()).toEqual({ score: 5, class: "integer" });
+  });
+
+  // The key Nextly made for the relationship references its target; another on the same column,
+  // added by hand, is not Nextly's to drop, and stays as any constraint the table has.
+  it("drops only the former relationship's own key where the column carries another", async () => {
+    sqlite.exec(`
+      CREATE TABLE posts (id TEXT PRIMARY KEY);
+      CREATE TABLE authors (id TEXT PRIMARY KEY);
+      CREATE TABLE single_home (
+        id TEXT PRIMARY KEY,
+        score TEXT,
+        FOREIGN KEY (score) REFERENCES posts(id) ON DELETE SET NULL,
+        FOREIGN KEY (score) REFERENCES authors(id)
+      );
+      INSERT INTO single_home VALUES ('h1', NULL);
+    `);
+
+    await changeScoreTo("integer", undefined, {
+      fromRelationship: true,
+      referencedTable: "posts",
+    });
+
+    expect(declared()).toBe("integer");
+    expect(references(), "the table's references").toEqual(["authors"]);
   });
 
   // A reference added by hand, on a column whose field was never a relationship, is not one
