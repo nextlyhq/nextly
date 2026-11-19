@@ -104,14 +104,7 @@ export function saveOfSchemaChange(args: {
   const previous =
     listed.find(c => c.slug === args.slug) ??
     args.stored ??
-    ({
-      slug: args.slug,
-      labels: args.row.labels ?? { singular: args.slug, plural: args.slug },
-      fields: args.row.fields ?? [],
-      // Translated as the registry stores it, which decides where the entity's values are before
-      // the save (`deletionHoldOf` counts them there).
-      ...(args.row.localized === true ? { localized: true } : {}),
-    } satisfies UiSchemaEntity);
+    entityOfRegistryRow(args.slug, args.row);
   // Answers name columns of the row, a field inside a group with no name included: it is a
   // column there (`fieldsStoredOnRow`), and its change is asked about like one beside the group.
   const answers = answersOf(
@@ -187,6 +180,27 @@ function withOptional(
     }
     return optional.has(field.name) ? { ...field, required: false } : field;
   });
+}
+
+/**
+ * A collection the definition file lacks, as its registry row records it: translated as the
+ * registry stores it, which decides where its values are before the save (`deletionHoldOf` counts
+ * them there).
+ */
+function entityOfRegistryRow(
+  slug: string,
+  row: {
+    labels?: { singular: string; plural: string };
+    fields?: FieldDefinition[];
+    localized?: boolean;
+  }
+): UiSchemaEntity {
+  return {
+    slug,
+    labels: row.labels ?? { singular: slug, plural: slug },
+    fields: row.fields ?? [],
+    ...(row.localized === true ? { localized: true } : {}),
+  } satisfies UiSchemaEntity;
 }
 
 /**

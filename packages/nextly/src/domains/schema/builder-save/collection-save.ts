@@ -3125,15 +3125,37 @@ function deletionHoldOfSave(
 
 /**
  * Where a file-by-file run of `ordered` counts what `hold` deletes, by file: each held table in the
- * last file whose statements change it, which deletes its values after any file that converts
- * it. A file whose tables cannot be named may change any, and takes a table no file names; a table
- * neither names is counted in the first file, so its count is still taken.
+ * last file whose statements change it (`fileDeletingFrom`), which deletes its values after any
+ * file that converts it.
  */
 async function deletingFilesOf(
   deps: CollectionSaveDeps,
   ordered: readonly string[],
   hold: DeletionHold
 ): Promise<Map<string, (db: unknown) => Promise<void>>> {
+  const deleting = await fileDeletingFrom(deps, ordered, hold.tables);
+  const tablesByFile = new Map<string, string[]>();
+  for (const [table, filename] of deleting) {
+    tablesByFile.set(filename, [...(tablesByFile.get(filename) ?? []), table]);
+  }
+  const checks = new Map<string, (db: unknown) => Promise<void>>();
+  for (const [filename, tables] of tablesByFile) {
+    const check = hold.checkIn(tables);
+    if (check !== undefined) checks.set(filename, check);
+  }
+  return checks;
+}
+
+/**
+ * The file of `ordered` each of `tables` is counted in: the last whose statements name it. A file
+ * whose tables cannot be named may change any, and takes a table no file names; a table neither
+ * names is counted in the first file, so its count is still taken.
+ */
+async function fileDeletingFrom(
+  deps: CollectionSaveDeps,
+  ordered: readonly string[],
+  tables: readonly string[]
+): Promise<Map<string, string>> {
   const dialect = deps.adapter.getCapabilities().dialect;
   const named = new Map<string, string>();
   let unnamed: string | undefined;
@@ -3144,22 +3166,17 @@ async function deletingFilesOf(
       continue;
     }
     const lower = new Set(changed.map(table => table.toLowerCase()));
-    for (const table of hold.tables) {
+    for (const table of tables) {
       if (lower.has(table.toLowerCase())) named.set(table, filename);
     }
   }
-  const tablesByFile = new Map<string, string[]>();
-  for (const table of hold.tables) {
-    const filename = named.get(table) ?? unnamed ?? ordered[0];
-    if (filename === undefined) continue;
-    tablesByFile.set(filename, [...(tablesByFile.get(filename) ?? []), table]);
+  const fallback = unnamed ?? ordered[0];
+  const deleting = new Map<string, string>();
+  for (const table of tables) {
+    const filename = named.get(table) ?? fallback;
+    if (filename !== undefined) deleting.set(table, filename);
   }
-  const checks = new Map<string, (db: unknown) => Promise<void>>();
-  for (const [filename, tables] of tablesByFile) {
-    const check = hold.checkIn(tables);
-    if (check !== undefined) checks.set(filename, check);
-  }
-  return checks;
+  return deleting;
 }
 
 /**
