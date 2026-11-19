@@ -63,6 +63,10 @@ export interface EntityMoves {
     required: boolean;
     /** The column's kind, which says what a value from the group must be to be read into it. */
     kind: MoveColumn["kind"];
+    /** The column's SQL type and a decimal's digits, which bound what it keeps (`keptValuesOf`). */
+    columnType: string;
+    precision?: number;
+    scale?: number;
     /** Where the values come from: the group's column and the keys inside it. */
     source: { column: string; keys: readonly string[] };
   }[];
@@ -517,13 +521,16 @@ function moveColumn(
   table: string,
   dialect: SupportedDialect
 ): MoveColumn {
+  const descriptor = getColumnDescriptor(move.field, dialect, "collection");
   return {
     table,
     dialect,
     kind: classifyFieldKind(move.field, "collection"),
-    columnType:
-      getColumnDescriptor(move.field, dialect, "collection")?.dialectType ??
-      "text",
+    columnType: descriptor?.dialectType ?? "text",
+    ...(descriptor?.precision === undefined
+      ? {}
+      : { precision: descriptor.precision }),
+    ...(descriptor?.scale === undefined ? {} : { scale: descriptor.scale }),
   };
 }
 
@@ -646,6 +653,11 @@ function recordColumns(
       field: request.to.join("."),
       required: (move.field as { required?: unknown }).required === true,
       kind: target.kind,
+      columnType: target.columnType,
+      ...(target.precision === undefined
+        ? {}
+        : { precision: target.precision }),
+      ...(target.scale === undefined ? {} : { scale: target.scale }),
       source: { column: from.column, keys: from.keys },
     });
   }

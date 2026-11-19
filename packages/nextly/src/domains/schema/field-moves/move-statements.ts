@@ -29,6 +29,9 @@ export interface MoveColumn {
   kind: ColumnKind;
   /** The column's SQL type, which a value read out of JSON is cast to. */
   columnType: string;
+  /** A decimal's digits, and those after the point, which a value read into it must fit. */
+  precision?: number;
+  scale?: number;
 }
 
 export interface MoveDataStatements {

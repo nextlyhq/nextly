@@ -1197,6 +1197,108 @@ describe.each(getConfiguredTestDialects())(
         expect(await readAll(t)).toEqual(before);
       });
 
+      // SQLite's text has no width, so a longer value is kept there.
+      it.runIf(dialect !== "sqlite")(
+        "a text out of a group longer than the width its column narrows to, naming that entry",
+        async () => {
+          const t = await boot(dialect);
+          const headline = (maxLength: number): Field => ({
+            name: "headline",
+            type: "text",
+            options: { variant: "short" },
+            validation: { maxLength },
+          });
+          await createPosts(t, SLUG, {
+            fields: [group("meta", [NOTE, headline(120)])],
+          });
+          const ids = new Map<string, string>();
+          for (const [slug, text] of [
+            ["long", "x".repeat(100)],
+            ["fits", "y".repeat(40)],
+          ] as const) {
+            const { item } = await t.nextly.create({
+              collection: SLUG,
+              data: { title: slug, slug, meta: { headline: text } },
+            });
+            ids.set(slug, String((item as { id: unknown }).id));
+          }
+          const before = await readAll(t);
+          // The width narrows from 120 to 40 as the field moves: varchar(40) on its new column.
+          await expectRefused(
+            t,
+            [headline(40), group("meta", [NOTE])],
+            [{ from: ["meta", "headline"], to: ["headline"] }],
+            `1 entry holds a text for headline its own column would not keep as the same text (${ids.get("long")}). Write it in at most 40 characters, then move the field.`
+          );
+          expect(await readAll(t)).toEqual(before);
+        }
+      );
+
+      // SQLite's numeric keeps a decimal's digits as they are.
+      it.runIf(dialect !== "sqlite")(
+        "a decimal out of a group with digits past its scale, which the cast would round, naming that entry",
+        async () => {
+          const t = await boot(dialect);
+          const price: Field = {
+            name: "price",
+            type: "number",
+            dbType: "decimal",
+            precision: 10,
+            scale: 2,
+          };
+          await createPosts(t, SLUG, {
+            fields: [group("meta", [NOTE, price])],
+          });
+          const ids = new Map<string, string>();
+          for (const [slug, value] of [
+            ["rounded", 1.239],
+            ["exact", 1.23],
+            ["wide", 12345678.9],
+          ] as const) {
+            const { item } = await t.nextly.create({
+              collection: SLUG,
+              data: { title: slug, slug, meta: { price: value } },
+            });
+            ids.set(slug, String((item as { id: unknown }).id));
+          }
+          const before = await readAll(t);
+          await expectRefused(
+            t,
+            [price, group("meta", [NOTE])],
+            [{ from: ["meta", "price"], to: ["price"] }],
+            `1 entry holds a number for price its own column would not keep as the same number (${ids.get("rounded")}). Write it as a number with at most 8 digits before the point and 2 after it, then move the field.`
+          );
+          expect(await readAll(t)).toEqual(before);
+        }
+      );
+
+      it("a checkbox value out of a group that is neither true nor false, naming that entry", async () => {
+        const t = await boot(dialect);
+        await createPosts(t, SLUG, { fields: INSIDE });
+        await t.nextly.create({
+          collection: SLUG,
+          data: { title: "Two", slug: "two" },
+        });
+        // Written as an entry may hold it, which the API would refuse: "yes" reads as false on
+        // MySQL and SQLite and as true on PostgreSQL.
+        await run(
+          t,
+          `UPDATE ${q(TABLE)} SET ${q("meta")} = '{"featured":"yes"}' WHERE ${q("slug")} = 'two'`
+        );
+        const [two] = await run<{ id: unknown }>(
+          t,
+          `SELECT ${q("id")} AS id FROM ${q(TABLE)} WHERE ${q("slug")} = 'two'`
+        );
+        const before = await readAll(t);
+        await expectRefused(
+          t,
+          OUTSIDE,
+          OUT,
+          `1 entry holds a checkbox value for featured its own column would not keep as the same checkbox value (${String(two?.id)}). Write it as true or false, then move the field.`
+        );
+        expect(await readAll(t)).toEqual(before);
+      });
+
       // SQLite's integer holds every whole number a JSON value from JavaScript can.
       it.runIf(dialect !== "sqlite")(
         "a number out of a group its integer column does not hold, naming only that entry",

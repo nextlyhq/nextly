@@ -87,11 +87,8 @@ import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type { FieldMoveRequest } from "../field-moves/check-move";
-import {
-  heldValueAt,
-  holdsValueAt,
-  movesAsTheSameDate,
-} from "../field-moves/move-statements";
+import { keptValuesOf, type KeptValues } from "../field-moves/kept-values";
+import { heldValueAt, holdsValueAt } from "../field-moves/move-statements";
 import { movedColumnSentences } from "../field-moves/moved-column-facts";
 import { planEntityMoves, type EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
@@ -2161,69 +2158,11 @@ const DATE_CHECK_PAGE = 500;
 const NAMED_ENTRIES = 3;
 
 /**
- * What a refused date must be, past an ISO date, for each dialect's column to keep it as the same
- * date (`movesAsTheSameDate`): MySQL's TIMESTAMP holds whole seconds in its own range, SQLite
- * whole seconds.
- */
-const DATES_KEPT: Record<SupportedDialect, string> = {
-  postgresql: "",
-  mysql:
-    " in whole seconds, from 1970-01-01T00:00:01Z to 2038-01-19T03:14:07Z, the dates MySQL's column holds",
-  sqlite: " in whole seconds",
-};
-
-/**
- * What a value moved out of a group must be for the column it moves to to keep it, by the
- * column's kind: `keeps` judges one value as read out of the group, and `ask` says what to write
- * instead. A kind not named keeps every value the copy reads.
- */
-interface KeptValues {
-  what: string;
-  keeps: (row: { type: unknown; text: unknown }) => boolean;
-  ask: (each: string) => string;
-}
-
-/** The whole numbers an integer column holds on PostgreSQL (int4) and MySQL (int). */
-const INT_RANGE = { least: -2147483648, most: 2147483647 } as const;
-
-/** What `kind`'s column keeps on `dialect`, where it keeps less than the group can hold. */
-function keptValuesOf(
-  kind: string,
-  dialect: SupportedDialect
-): KeptValues | undefined {
-  if (kind === "timestamp") {
-    return {
-      what: "a date",
-      keeps: row => readsAsTheSameDate(row, dialect),
-      ask: each =>
-        `Write ${each} as an ISO date${DATES_KEPT[dialect]}, such as 2026-07-17 or 2026-07-17T10:00:00Z`,
-    };
-  }
-  // SQLite's integer holds every whole number a JSON value from JavaScript can.
-  if (kind === "integer" && dialect !== "sqlite") {
-    return {
-      what: "a number",
-      keeps: row => isWholeNumberInRange(String(row.text)),
-      ask: each =>
-        `Write ${each} as a whole number from ${INT_RANGE.least} to ${INT_RANGE.most}`,
-    };
-  }
-  return undefined;
-}
-
-/** Whether a value's text is a whole number an integer column holds, as the copy casts it. */
-function isWholeNumberInRange(text: string): boolean {
-  if (!/^-?\d{1,10}$/.test(text)) return false;
-  const value = Number(text);
-  return value >= INT_RANGE.least && value <= INT_RANGE.most;
-}
-
-/**
  * Refuses a field moved out of a group while some entry's group holds a value its column would
- * not keep as the same value (`keptValuesOf`): a date in a form the copy does not read or at an
- * instant its column does not hold, or a number outside an integer column's range. It names the
- * field and the entries, read before anything is written. The copy would otherwise write nothing
- * for that entry on SQLite, roll the file back on PostgreSQL, and stop part-way on MySQL.
+ * not keep as the same value (`keptValuesOf`, one rule per column kind). It names the field and
+ * the entries, read before anything is written. The copy would otherwise change the value without
+ * saying so (a rounded decimal, MySQL's rounded seconds, a checkbox value read as false), write
+ * nothing for that entry on SQLite, roll the file back on PostgreSQL, or stop part-way on MySQL.
  */
 async function refuseUnkeptValues(
   deps: CollectionSaveDeps,
@@ -2232,7 +2171,7 @@ async function refuseUnkeptValues(
 ): Promise<void> {
   const dialect = deps.adapter.getCapabilities().dialect;
   for (const refill of planned.refilledColumns) {
-    const kept = keptValuesOf(refill.kind, dialect);
+    const kept = keptValuesOf(refill, dialect);
     if (kept === undefined) continue;
     const unkept = await unkeptEntries(deps, table, refill.source, kept.keeps);
     if (unkept.length === 0) continue;
@@ -2245,7 +2184,7 @@ async function refuseUnkeptValues(
         {
           path: refill.field,
           code: "FIELD_MOVE_REFUSED",
-          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} ${kept.what} for ${refill.field} its own column would not keep as the same ${kept.what.slice(2)} (${named}${more}). ${kept.ask(count === 1 ? "it" : "each")}, then move the field.`,
+          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} a ${kept.noun} for ${refill.field} its own column would not keep as the same ${kept.noun} (${named}${more}). ${kept.ask(count === 1 ? "it" : "each")}, then move the field.`,
         },
       ],
       logContext: { table, column: refill.column, unkept: count },
@@ -2287,18 +2226,6 @@ async function unkeptEntries(
     if (rows.length < DATE_CHECK_PAGE) return unkept;
     after = rows[rows.length - 1].id;
   }
-}
-
-/** Whether a value read out of a group is a string the copy reads as the same date. */
-function readsAsTheSameDate(
-  row: { type: unknown; text: unknown },
-  dialect: SupportedDialect
-): boolean {
-  const type = String(row.type).toLowerCase();
-  return (
-    (type === "string" || type === "text") &&
-    movesAsTheSameDate(String(row.text), dialect)
-  );
 }
 
 /**
