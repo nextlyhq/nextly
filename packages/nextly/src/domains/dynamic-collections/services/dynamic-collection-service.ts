@@ -1575,7 +1575,8 @@ export class DynamicCollectionService extends BaseService {
       // before anything is written.
       const renameCandidates = this.schemaService.renameCandidatesOf(
         oldUserFields,
-        userDefinedFields
+        userDefinedFields,
+        { was: collectionWasLocalized, is: collectionIsLocalized }
       );
       refuseUnansweredRename(
         `The collection "${collectionName}"`,

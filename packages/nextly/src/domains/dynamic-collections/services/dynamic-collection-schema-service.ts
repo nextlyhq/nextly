@@ -37,7 +37,10 @@ import {
   fieldGroupRenamePairs,
   removedAndAddedFields as renameCandidates,
 } from "../../field-groups/storage/field-group-rename";
-import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import {
+  isFieldLocalized,
+  resolveLocalizedFieldNames,
+} from "../../i18n/classify-fields";
 import { declinedRename } from "../../schema/field-rename-answers";
 import {
   builderColumnIsUnique,
@@ -2847,19 +2850,27 @@ ${allColumnDefs.join(",\n")}
    */
   renameCandidatesOf(
     oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
+    newFields: FieldDefinition[],
+    /** Whether the entity stores per language before and after the change. */
+    localized: { was: boolean; is: boolean } = { was: false, is: false }
   ): { from: FieldDefinition; to: FieldDefinition }[] {
-    const translated = (fields: FieldDefinition[], yes: boolean) =>
-      fields.filter(field => (field.localized === true) === yes);
+    // Classified as storage plans each field (`isFieldLocalized`): an explicit flag, else the
+    // type's default on an entity that stores per language.
+    const translated = (
+      fields: FieldDefinition[],
+      entityLocalized: boolean,
+      yes: boolean
+    ) =>
+      fields.filter(field => isFieldLocalized(field, entityLocalized) === yes);
     const found = [
       this.fieldRenameCandidate(oldFields, newFields),
       this.fieldRenameCandidate(
-        translated(oldFields, false),
-        translated(newFields, false)
+        translated(oldFields, localized.was, false),
+        translated(newFields, localized.is, false)
       ),
       this.fieldRenameCandidate(
-        translated(oldFields, true),
-        translated(newFields, true)
+        translated(oldFields, localized.was, true),
+        translated(newFields, localized.is, true)
       ),
       this.junctionRenameCandidate(oldFields, newFields),
       this.fieldGroupRenameCandidate(oldFields, newFields),

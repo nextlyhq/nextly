@@ -353,7 +353,7 @@ describeEachDialect(
 
     it("refuses a shared field replaced beside a translated one added, which the shared table alone pairs", async () => {
       await posts([
-        { name: "heading", type: "text" },
+        { name: "heading", type: "text", localized: false },
         { name: "body", type: "text", localized: true },
       ]);
 
@@ -362,12 +362,32 @@ describeEachDialect(
       expect(
         await codeOf(
           change([
-            { name: "headline", type: "text" },
+            { name: "headline", type: "text", localized: false },
             { name: "body", type: "text", localized: true },
             { name: "summary", type: "text", localized: true },
           ])
         )
       ).toBe("FIELD_RENAME_UNANSWERED");
+    });
+
+    it("asks nothing of a text field translated by default replaced beside another translated field added", async () => {
+      // `heading` and `headline` carry no flag, so the collection's default translates them: the
+      // companion sees one removal and two additions, which pair nothing to ask about. What is
+      // left is the translated-field preflight's own answer, as before.
+      await posts([
+        { name: "heading", type: "text" },
+        { name: "views", type: "number" },
+      ]);
+
+      expect(
+        await codeOf(
+          change([
+            { name: "headline", type: "text" },
+            { name: "summary", type: "text", localized: true },
+            { name: "views", type: "number" },
+          ])
+        )
+      ).toBe("TRANSLATED_FIELD_REMOVED_BESIDE_ADDED");
     });
 
     it("drops and adds a translated field when the request says so, not refusing its removal as unanswered", async () => {

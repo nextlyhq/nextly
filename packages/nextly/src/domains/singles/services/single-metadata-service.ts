@@ -1685,7 +1685,8 @@ export class SingleMetadataService {
       schema,
       candidates: schema.renameCandidatesOf(
         (input.existing.fields ?? []) as unknown as FieldDefinition[],
-        fields
+        fields,
+        { was: input.wasLocalized, is: input.isLocalized }
       ),
     };
   }
