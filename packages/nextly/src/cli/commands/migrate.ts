@@ -3700,7 +3700,15 @@ async function judgeFileDeletions(
     deps.judgeLeftoverTranslations === true
       ? await leftoverTranslationsOf(
           deps,
-          new Set(fileUnits.map(unit => unit.label))
+          // The app files the run applies, from the window it runs them in: plugin modules
+          // take their part of a step first (`appStepAfter`), as the run applies them.
+          new Set(
+            appFileUnits(
+              listed,
+              appStepAfter(deps.step, modules.length),
+              deps.dialect
+            ).map(unit => unit.label)
+          )
         )
       : [];
   if (leftovers.length > 0) {

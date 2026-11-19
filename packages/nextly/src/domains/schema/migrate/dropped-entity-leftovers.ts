@@ -43,7 +43,10 @@ import type {
   SettingsEntityKind,
 } from "../migrate-create/entity-settings";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
-import { assertSchemaLockHeld } from "../pipeline/schema-lock";
+import {
+  assertSchemaLockHeld,
+  isSchemaLockLost,
+} from "../pipeline/schema-lock";
 
 import { droppedEntities, RECORDED_KINDS } from "./registry-history";
 
@@ -161,6 +164,9 @@ export async function removeDroppedEntityLeftovers(args: {
         ])
       );
     } catch (error) {
+      // A run that lost the schema lock stops: it may change nothing further, and the caller
+      // must not go on as if only this entity's removal had failed.
+      if (isSchemaLockLost(error)) throw error;
       left.push(`${word} "${entity.slug}"`);
       if (dropped.length > 0) {
         removedFrom.push(removedLine(word, entity.slug, droppedParts(dropped)));
