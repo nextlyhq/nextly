@@ -721,6 +721,85 @@ describe.each(getConfiguredTestDialects())(
         expect(recordMarker(path)).toBeUndefined();
       }, 300_000);
 
+      // A definition rename the file system made and then reported failed: the new definition is
+      // in place, so the withdrawal puts the old one back, with the save's files taken back too.
+      it("a save whose definition rename reports a failure after it was made puts the definition back", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const definitionBefore = definitionText();
+        const folderBefore = filesBelow(join(basePath, HISTORY));
+        let failed = 0;
+        kill.failAfter = point => {
+          if (point !== `file:${join(basePath, DEFINITION)}`) return false;
+          failed += 1;
+          return true;
+        };
+
+        const answer = await path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+        expect(failed, "the definition's rename was never made").toBe(1);
+        expect(
+          answer instanceof Response ? answer.ok : !(answer instanceof Error),
+          "the save was not refused"
+        ).toBe(false);
+        expect(definitionText(), "the definition").toBe(definitionBefore);
+        expect(
+          filesBelow(join(basePath, HISTORY)).filter(f => !f.endsWith(".lock")),
+          "the migration folder"
+        ).toEqual(folderBefore.filter(f => !f.endsWith(".lock")));
+        expect(await recordRow(t, path), "the record's row").toBeUndefined();
+        expect(recordMarker(path), "the record's marker").toBeUndefined();
+      }, 300_000);
+
+      // MySQL keeps the statements before a failing one, and the save settles to what applied: its
+      // stopped file is replaced by one for the applied changes, then the definition is brought to
+      // that shape. Killed between the two, the record stands, with the definition the save
+      // started from, so the stop is settled again from the live tables.
+      it.runIf(dialect === "mysql")(
+        "a settle killed after its replacement file, before its definition, keeps the record",
+        async () => {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const definitionBefore = definitionText();
+          const refused = refuseAdding(t, "beta");
+          let placed = 0;
+          const reached = new Promise<void>(resolve => {
+            kill.reached = resolve;
+          });
+          // The save's own file is the first migration file put in place; the settle's
+          // replacement, the second.
+          kill.at = point => {
+            if (
+              !point.startsWith(`file:${join(basePath, HISTORY)}`) ||
+              !point.endsWith(".sql")
+            ) {
+              return false;
+            }
+            placed += 1;
+            return placed === 2;
+          };
+          stopped = path
+            .save(t, [text("heading"), text("alpha"), text("beta")])
+            .catch((error: unknown) => error);
+
+          expect(
+            await reachedKill(reached),
+            "the settle never put its replacement in place"
+          ).toBe("reached");
+          expect(refused(), "no statement adding `beta` was met").toBe(1);
+          const row = await recordRow(t, path);
+          expect(row, "the record's row").toBeDefined();
+          expect(recordMarker(path), "the record's marker").toEqual(row);
+          expect(row).toMatchObject({
+            kind: path.kind,
+            slug: path.slug,
+            definitionBefore,
+          });
+        },
+        300_000
+      );
+
       // A marker linked in place whose temporary copy then cannot be removed: the placing failed,
       // so the marker goes again with the row, and nothing of the save stands.
       it("a marker whose temporary copy cannot be removed is taken back with its row", async () => {
