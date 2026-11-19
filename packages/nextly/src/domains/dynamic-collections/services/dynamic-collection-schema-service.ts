@@ -2317,9 +2317,16 @@ ${allColumnDefs.join(",\n")}
           // With what the fields were, so the rebuild drops only the reference Nextly made for a
           // former relationship, and an older one-to-one's inline UNIQUE only where the field after
           // is not unique.
+          const referenced = relationshipKeyTarget(
+            oldField,
+            options?.targetTables
+          );
           options?.onSqliteTypeChange?.(toSnakeCase(field.name), {
             type: described.dialectType,
             fromRelationship: oldField.type === "relationship",
+            ...(referenced === null
+              ? {}
+              : { referencedTable: referenced.table }),
             unique: field.unique === true,
           });
         }

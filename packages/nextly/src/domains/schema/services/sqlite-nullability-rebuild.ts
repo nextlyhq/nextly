@@ -31,14 +31,20 @@ export interface SqliteTypeChange {
    * and, in a table an older release made, a UNIQUE declared inline for a one-to-one.
    */
   fromRelationship: boolean;
+  /**
+   * The table the former relationship's key referenced, where Nextly made one: the key the rebuild
+   * drops. Absent where the field before had none.
+   */
+  referencedTable?: string;
   /** The field after is unique. */
   unique: boolean;
 }
 
 /**
  * The references a rebuild drops: the one Nextly made for a former relationship's column, on that
- * column alone, now that it holds another type. Any other reference stays, and the rebuild keeps it
- * as it keeps every constraint the table has.
+ * column alone and to the relationship's target, now that it holds another type. Any other
+ * reference, on the same column too, stays, and the rebuild keeps it as it keeps every constraint
+ * the table has.
  */
 function formerRelationshipKeys(
   keys: readonly ForeignKeySpec[],
@@ -46,10 +52,13 @@ function formerRelationshipKeys(
 ): ForeignKeySpec[] {
   return keys.filter(key => {
     const [column] = key.columns;
+    const change =
+      column === undefined ? undefined : retyped.get(column.toLowerCase());
     return (
       key.columns.length === 1 &&
-      column !== undefined &&
-      retyped.get(column.toLowerCase())?.fromRelationship === true
+      change?.fromRelationship === true &&
+      change.referencedTable !== undefined &&
+      key.referencesTable.toLowerCase() === change.referencedTable.toLowerCase()
     );
   });
 }
