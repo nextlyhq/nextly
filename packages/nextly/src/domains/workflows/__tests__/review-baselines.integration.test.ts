@@ -127,15 +127,20 @@ async function postWithSharedChange(): Promise<{
 }
 
 /**
- * The names of a comparison's nodes that changed, and whether it holds a node for the translated
- * title at all, changed or not.
+ * The names of a comparison's content nodes that changed, and whether it holds a node for the
+ * translated title at all, changed or not. A column the framework keeps on every document (when
+ * it was first published) is a `system` node, which a dialect storing whole seconds can show as
+ * changed between a publish and a later save; it is no field of the content type.
  */
-function namesOf(diff: { fields: { name: string | null; status: string }[] }) {
+function namesOf(diff: {
+  fields: { name: string | null; status: string; reason?: string }[];
+}) {
+  const content = diff.fields.filter(field => field.reason !== "system");
   return {
-    changed: diff.fields
+    changed: content
       .filter(field => field.status !== "unchanged")
       .map(field => field.name),
-    title: diff.fields.some(field => field.name === "title"),
+    title: content.some(field => field.name === "title"),
   };
 }
 
