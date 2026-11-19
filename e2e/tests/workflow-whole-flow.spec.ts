@@ -10,7 +10,6 @@ import { expect } from "@playwright/test";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
 import {
-  announced,
   expectEditorAccessible,
   expectPublishHeldForReview,
   expectStage,
@@ -19,6 +18,7 @@ import {
   openNote,
   publishControl,
   resetReviewSettings,
+  reviewAnnouncer,
   reviewedNote,
   signInAs,
   statusLine,
@@ -82,9 +82,9 @@ test("a writer submits, a reviewer approves, and a publisher publishes, Publish 
     await expect(publishControl(writer.page)).toHaveCount(0);
     await expectEditorAccessible(writer.page);
     await leading(writer.page).click();
-    await expect(
-      announced(writer.page, "Submit for review: done.")
-    ).toHaveCount(1);
+    await expect(reviewAnnouncer(writer.page)).toHaveText(
+      "Submit for review: done."
+    );
     await expectStage(writer, id, "inReview");
     await expect(statusLine(writer.page)).toContainText(
       "Draft · In review · waiting for "
@@ -112,7 +112,7 @@ test("a writer submits, a reviewer approves, and a publisher publishes, Publish 
     await expectEditorAccessible(reviewer.page);
     await leading(reviewer.page).click();
     // Said to assistive technology, not only in a toast.
-    await expect(announced(reviewer.page, "Approve: done.")).toHaveCount(1);
+    await expect(reviewAnnouncer(reviewer.page)).toHaveText("Approve: done.");
     await expectStage(reviewer, id, "approved");
     // Approved allows publishing, so nobody is waited for any more.
     await expect(statusLine(reviewer.page)).toHaveText("Draft · Approved");

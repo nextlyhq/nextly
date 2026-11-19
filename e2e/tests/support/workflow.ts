@@ -284,9 +284,15 @@ export async function expectPublishHeldForReview(
   await expect(ready).toBeHidden();
 }
 
-/** What the review's polite status region last said, as a locator on its words. */
-export function announced(page: Page, words: string): Locator {
-  return page.getByRole("status").filter({ hasText: words });
+/**
+ * The review's own polite status region, which says each step to assistive
+ * technology. By its id, since a toast is a status region too and says the
+ * same words: a locator by role would match both.
+ */
+export function reviewAnnouncer(page: Page): Locator {
+  return page.locator(
+    '#nextly-review-announcer[role="status"][aria-live="polite"]'
+  );
 }
 
 /**
