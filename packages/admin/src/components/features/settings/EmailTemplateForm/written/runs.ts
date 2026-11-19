@@ -100,7 +100,9 @@ export class ChipNode extends DecoratorNode<string> {
     span.dataset.variable = this.__variable;
     // Its marks, as the sent email draws them: a chip is not a text node, so
     // the editor's text theme never reaches it.
+    // A pill, so a variable never reads as typed text.
     span.className = [
+      "mx-0.5 rounded-md border border-border bg-muted px-1.5 py-0.5 text-xs",
       this.__marks.bold ? "font-semibold" : "",
       this.__marks.italic ? "italic" : "",
     ]

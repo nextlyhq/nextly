@@ -322,89 +322,93 @@ function BlockCard({
       aria-label={`${name} block`}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={cn(
-        "group/block @container grid grid-cols-[1.375rem_1fr] gap-2 rounded-lg border border-border bg-card p-2",
+        // The card is the container its own layout answers to: a handle
+        // column only where the card is wide enough to keep one.
+        "group/block @container rounded-lg border border-border bg-card p-2",
         isDragging && "opacity-60"
       )}
     >
-      {edit.readOnly ? (
-        <span />
-      ) : (
-        <button
-          ref={setActivatorNodeRef}
-          type="button"
-          title="Drag to move"
-          className="hidden cursor-grab touch-none items-start justify-center pt-1 text-muted-foreground @[40rem]:flex"
-          {...attributes}
-          {...listeners}
-          // Pointer and touch only: a keyboard moves a block with Move up and
-          // Move down, which a screen reader announces.
-          aria-hidden
-          tabIndex={-1}
-        >
-          <GripVertical className="size-4" />
-        </button>
-      )}
-      <div className="grid min-w-0 gap-2">
-        <div className="flex items-center gap-1">
-          <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-            {name}
-          </span>
-          {edit.readOnly ? null : (
-            <div className="ml-auto flex items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="Move up"
-                title="Move up"
-                disabled={isFirst}
-                onClick={() => move(-1)}
-              >
-                <ArrowUp className="size-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                aria-label="Move down"
-                title="Move down"
-                disabled={isLast}
-                onClick={() => move(1)}
-              >
-                <ArrowDown className="size-4" />
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Actions for this ${name.toLowerCase()} block`}
-                  >
-                    <MoreHorizontal className="size-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      edit.change(duplicateBlock(edit.current(), path).doc)
-                    }
-                  >
-                    Duplicate
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    className="text-destructive"
-                    onSelect={remove}
-                  >
-                    Remove
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          )}
+      <div className="grid grid-cols-1 gap-2 @[40rem]:grid-cols-[1.375rem_1fr]">
+        {edit.readOnly ? (
+          <span className="hidden @[40rem]:block" />
+        ) : (
+          <button
+            ref={setActivatorNodeRef}
+            type="button"
+            title="Drag to move"
+            className="hidden cursor-grab touch-none items-start justify-center pt-1 text-muted-foreground @[40rem]:flex"
+            {...attributes}
+            {...listeners}
+            // Pointer and touch only: a keyboard moves a block with Move up and
+            // Move down, which a screen reader announces.
+            aria-hidden
+            tabIndex={-1}
+          >
+            <GripVertical className="size-4" />
+          </button>
+        )}
+        <div className="grid min-w-0 gap-2">
+          <div className="flex items-center gap-1">
+            <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              {name}
+            </span>
+            {edit.readOnly ? null : (
+              <div className="ml-auto flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Move up"
+                  title="Move up"
+                  disabled={isFirst}
+                  onClick={() => move(-1)}
+                >
+                  <ArrowUp className="size-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Move down"
+                  title="Move down"
+                  disabled={isLast}
+                  onClick={() => move(1)}
+                >
+                  <ArrowDown className="size-4" />
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Actions for this ${name.toLowerCase()} block`}
+                    >
+                      <MoreHorizontal className="size-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        edit.change(duplicateBlock(edit.current(), path).doc)
+                      }
+                    >
+                      Duplicate
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      className="text-destructive"
+                      onSelect={remove}
+                    >
+                      Remove
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
+          </div>
+          <BlockFields block={block} path={path} edit={edit} />
         </div>
-        <BlockFields block={block} path={path} edit={edit} />
       </div>
     </div>
   );
