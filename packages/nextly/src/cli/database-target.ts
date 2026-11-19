@@ -32,33 +32,44 @@ const NAMES: Record<Dialect, string> = {
 };
 const DEFAULT_PORTS = { postgresql: "5432", mysql: "3306" } as const;
 
-/** The query parameter each dialect's URL names a socket with. */
-const SOCKET_PARAMETERS = { postgresql: "host", mysql: "socketPath" } as const;
-
-/** The dialect stated (`DB_DIALECT`) when it names one, else the one the URL implies. */
+/**
+ * The dialect the connection is made with: the one the URL implies, as the
+ * command's own connection reads it, else the one stated (`DB_DIALECT`).
+ */
 function dialectOf(
   url: string,
   stated: string | undefined
 ): Dialect | undefined {
-  return (DIALECTS as readonly string[]).includes(stated ?? "")
-    ? (stated as Dialect)
-    : dialectFromUrl(url);
+  return (
+    dialectFromUrl(url) ??
+    ((DIALECTS as readonly string[]).includes(stated ?? "")
+      ? (stated as Dialect)
+      : undefined)
+  );
 }
 
-/** A SQLite URL's file, resolved against `folder`, or `:memory:`. */
+const UNREADABLE = "(address not readable)";
+
+/**
+ * A SQLite URL's file, resolved against `folder`, or `:memory:`. A value
+ * that is another kind of address (it names a scheme, or holds an `@`) is
+ * not a path, and is never printed as one.
+ */
 function sqliteTarget(url: string, folder: string): string {
   const path = url.replace(/^file:/, "").split("?")[0] ?? "";
-  return path === "" || path === ":memory:"
-    ? ":memory:"
-    : resolve(folder, path);
+  if (path === "" || path === ":memory:") return ":memory:";
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path) || path.includes("@")) {
+    return UNREADABLE;
+  }
+  return resolve(folder, path);
 }
 
 /** Stands in for the host of a URL that names none, so the rest of it can be read. */
 const NO_HOST = "no-host.invalid";
 
 /**
- * `url` parsed. A URL naming a socket may leave the host out
- * (`postgres://user@/shop?host=/run/pg`), which the parser refuses: it is
+ * `url` parsed. A URL may leave the host out (`postgres:///shop`,
+ * `postgres://user@/shop?host=/run/pg`), which the parser refuses: it is
  * read with a stand-in host, which is never printed.
  */
 function parseServerUrl(url: string): URL | undefined {
@@ -75,23 +86,56 @@ function parseServerUrl(url: string): URL | undefined {
   return undefined;
 }
 
-/** A server's address: its socket where the URL names one, else host and port, then the database. */
+/** `text` with its percent-escapes read, or undefined where one cannot be. */
+function decoded(text: string): string | undefined {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The host, port and database a server's URL names, each as written or absent. */
+function serverParts(
+  parsed: URL,
+  dialect: keyof typeof DEFAULT_PORTS
+): { host: string; port: string; database: string } | undefined {
+  const database = decoded(parsed.pathname.replace(/^\//, ""));
+  const named = decoded(parsed.hostname);
+  // A database name holding an `@` or a `/` is a credential that held a
+  // slash, read into the wrong part: nothing of such a URL is certain.
+  if (database === undefined || named === undefined || /[@/]/.test(database)) {
+    return undefined;
+  }
+  // PostgreSQL reads a host and a port given as parameters over the URL's own.
+  const parameter = (name: string) =>
+    dialect === "postgresql" ? parsed.searchParams.get(name) : null;
+  return {
+    host: parameter("host") || (named === NO_HOST ? "" : named),
+    port: parameter("port") || parsed.port || DEFAULT_PORTS[dialect],
+    database,
+  };
+}
+
+/**
+ * A server's address: its socket where the URL names one, else its host and
+ * port, then the database where the URL names one. A URL naming no host is
+ * the driver's own default, the local machine.
+ */
 function serverTarget(
   url: string,
   dialect: keyof typeof DEFAULT_PORTS
 ): string | undefined {
   const parsed = parseServerUrl(url);
-  if (parsed === undefined) return undefined;
-  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
-  const host = decodeURIComponent(parsed.hostname);
-  // A socket is named by the dialect's own parameter, or, for PostgreSQL, by
-  // a path in the host's place.
+  const parts = parsed && serverParts(parsed, dialect);
+  if (!parsed || !parts) return undefined;
+  const name = parts.database === "" ? "" : `/${parts.database}`;
+  // A socket is named by MySQL's own parameter, or by a path where
+  // PostgreSQL's host goes.
   const socket =
-    parsed.searchParams.get(SOCKET_PARAMETERS[dialect]) ??
-    (host.startsWith("/") ? host : undefined);
-  if (socket?.startsWith("/")) return `${socket}/${database}`;
-  if (host === "" || host === NO_HOST) return undefined;
-  return `${host}:${parsed.port || DEFAULT_PORTS[dialect]}/${database}`;
+    dialect === "mysql" ? parsed.searchParams.get("socketPath") : parts.host;
+  if (socket?.startsWith("/")) return `${socket}${name}`;
+  return `${parts.host || "localhost"}:${parts.port}${name}`;
 }
 
 /**
@@ -112,5 +156,5 @@ export function databaseTarget(args: {
   if (dialect === "sqlite") {
     return `${NAMES.sqlite} ${sqliteTarget(url, args.folder)}`;
   }
-  return `${NAMES[dialect]} ${serverTarget(url, dialect) ?? "(address not readable)"}`;
+  return `${NAMES[dialect]} ${serverTarget(url, dialect) ?? UNREADABLE}`;
 }

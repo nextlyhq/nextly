@@ -115,14 +115,29 @@ export function loadCliEnvironment(
   };
 }
 
-/** Next.js's own loader of environment files, typed from its declarations. */
-function nextEnv(): typeof NextEnv {
+/**
+ * Next.js's own loader of environment files, typed from its declarations.
+ * `fresh` gives a copy of its own: the loader remembers the first folder it
+ * read and the environment it started from, for the whole process.
+ */
+function nextEnv(fresh = false): typeof NextEnv {
   // `@next/env` is a bundled CommonJS file whose exports Node's ESM loader
   // cannot name, so it is loaded through `require`. Loaded when asked, not
   // when this module is imported: the app's dev boot imports the database
   // check that prints the run's line, and never reads environment files
   // through the CLI.
-  return createRequire(import.meta.url)("@next/env") as typeof NextEnv;
+  const load = createRequire(import.meta.url);
+  if (!fresh) return load("@next/env") as typeof NextEnv;
+  const id = load.resolve("@next/env");
+  const kept = load.cache[id];
+  delete load.cache[id];
+  try {
+    return load(id) as typeof NextEnv;
+  } finally {
+    // The run's own copy stays the one every other reader gets.
+    if (kept) load.cache[id] = kept;
+    else delete load.cache[id];
+  }
 }
 
 /**
@@ -130,28 +145,29 @@ function nextEnv(): typeof NextEnv {
  * to work in another folder than the one the CLI ran in: the files Next.js
  * reads there for the run's mode, in its order of precedence, each setting
  * only what nothing has set yet. A value the first folder's files or the
- * process environment gave stays as it is.
+ * process environment gave stays as it is, and a variable the process has
+ * removed stays removed.
  */
 export function readFurtherEnvironment(folder: string): void {
-  if (!current) return;
-  const { loadEnvConfig, updateInitialEnv } = nextEnv();
-  // The loader starts a second reading from the environment it first saw.
-  // Told that what is set now is that environment, it keeps every value
-  // already read and adds only what is missing.
-  updateInitialEnv({ ...process.env });
-  const { loadedEnvFiles } = loadEnvConfig(
+  const mode = current?.mode ?? readMode(undefined, process.env.NODE_ENV);
+  // A loader of its own starts from the environment as it stands now, so it
+  // adds what that folder's files set and nothing has, and changes nothing
+  // else; the run's loader keeps what it read first.
+  const { loadedEnvFiles } = nextEnv(true).loadEnvConfig(
     folder,
-    current.mode === "development",
+    mode === "development",
     { info: () => {}, error: (...args: unknown[]) => console.error(...args) },
     true
   );
+  if (!current) return;
   // Recorded after the first folder's files, which won where both set a value.
+  const ranIn = current.folder;
   current = {
     ...current,
     files: [
       ...current.files,
       ...loadedEnvFiles.map(file =>
-        relative(current?.folder ?? folder, resolve(folder, file.path))
+        relative(ranIn, resolve(folder, file.path))
       ),
     ],
     values: [...current.values, ...loadedEnvFiles.map(file => file.env)],
@@ -203,7 +219,9 @@ export function modeLine(): string | undefined {
   const target = databaseTarget({
     url: process.env.DATABASE_URL,
     dialect: process.env.DB_DIALECT,
-    folder: current.folder,
+    // Where the connection resolves a relative file: the folder the
+    // process is in now, which a command told to work elsewhere has entered.
+    folder: process.cwd(),
   });
   return `Database: ${target} (${current.mode}; DATABASE_URL ${sourceOf(current, "DATABASE_URL")})`;
 }

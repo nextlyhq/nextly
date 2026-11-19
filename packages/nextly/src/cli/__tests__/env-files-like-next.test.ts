@@ -313,14 +313,18 @@ describe("a second project folder's environment files", () => {
   function readsBoth(ranIn: string, other: string, env: NodeJS.ProcessEnv) {
     const script = `
       const { loadCliEnvironment, readFurtherEnvironment, setModeLineWriter, announceMode } = await import(${JSON.stringify(ENVIRONMENT)});
-      loadCliEnvironment(undefined);
+      if (!process.env.SKIP_FIRST_LOAD) loadCliEnvironment(undefined);
+      delete process.env.DELETED_SINCE;
       readFurtherEnvironment(${JSON.stringify(other)});
+      // As a command told to work in that folder then does.
+      process.chdir(${JSON.stringify(other)});
       const printed = [];
       setModeLineWriter(line => printed.push(line));
       announceMode();
       process.stdout.write(JSON.stringify({
         databaseUrl: process.env.DATABASE_URL,
         extra: process.env.EXTRA_SETTING,
+        deleted: process.env.DELETED_SINCE,
         printed,
       }));
     `;
@@ -332,6 +336,7 @@ describe("a second project folder's environment files", () => {
     return JSON.parse(out) as {
       databaseUrl?: string;
       extra?: string;
+      deleted?: string;
       printed: string[];
     };
   }
@@ -345,8 +350,12 @@ describe("a second project folder's environment files", () => {
     expect(read.databaseUrl).toBe("file:./other-env-local.db");
     // Named with the file it came from, by its path from where the CLI ran.
     expect(read.printed).toHaveLength(1);
+    // The file is the one the command opens: resolved in the folder it
+    // works in, not the one the CLI ran in.
     expect(read.printed[0]).toMatch(
-      /^Database: SQLite \S+other-env-local\.db \(development; DATABASE_URL from \S*\.env\.local\)$/
+      new RegExp(
+        `^Database: SQLite ${join(realpathSync(other), "other-env-local.db").replaceAll(".", "\\.")} \\(development; DATABASE_URL from \\S*\\.env\\.local\\)$`
+      )
     );
   });
 
@@ -366,6 +375,17 @@ describe("a second project folder's environment files", () => {
       childEnv(undefined, "file:./from-process.db")
     );
     expect(fromProcess.databaseUrl).toBe("file:./from-process.db");
+  });
+
+  it("are read where the CLI's own environment step never ran, and bring back nothing the process removed", () => {
+    const other = project({ ".env": "file:./other.db" });
+    const read = readsBoth(project({}), other, {
+      ...childEnv(undefined),
+      SKIP_FIRST_LOAD: "1",
+      DELETED_SINCE: "set at the start",
+    });
+    expect(read.databaseUrl).toBe("file:./other.db");
+    expect(read.deleted).toBeUndefined();
   });
 });
 
