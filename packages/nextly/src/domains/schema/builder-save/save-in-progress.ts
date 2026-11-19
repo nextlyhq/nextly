@@ -172,6 +172,16 @@ export interface StartedSave {
    * marker, so a settle after a stop knows them by name.
    */
   filesWritten(names: readonly string[]): Promise<void>;
+  /**
+   * The save is about to write another definition and files named for another moment (a stopped
+   * save settled to what applied, `settleStoppedSave`): the record says so first, so a stop after
+   * that write settles against it. Answers the step that puts the record back as it was, for a
+   * settle that puts the save back as the stop left it.
+   */
+  rewriting(next: {
+    definitionAfter: string;
+    filesAt: string;
+  }): Promise<() => Promise<void>>;
   /** The save failed and withdrew everything it wrote: its record clears with the scope. */
   withdrawn(): void;
   /**
@@ -186,6 +196,7 @@ export interface StartedSave {
 /** For a save that made no record of its own (one already stood for the entity). */
 const NO_RECORD: StartedSave = {
   filesWritten: () => Promise.resolve(),
+  rewriting: () => Promise.resolve(() => Promise.resolve()),
   withdrawn: () => undefined,
   settled: () => undefined,
   left: () => undefined,
@@ -405,18 +416,7 @@ export async function recordSaveStarted(args: {
     }
     throw error;
   }
-  return {
-    filesWritten: names => noteFilesWritten(entry, meta, key, names),
-    withdrawn: () => {
-      if (entry.ending === "open") entry.ending = "withdrawn";
-    },
-    settled: () => {
-      if (entry.ending === "open") entry.ending = "settled";
-    },
-    left: () => {
-      entry.ending = "left";
-    },
-  };
+  return startedSaveOf(entry, meta, key, "first");
 }
 
 /**
@@ -477,38 +477,69 @@ async function joinedStep(
   key: string,
   step: { definitionAfter?: string; filesAt?: string }
 ): Promise<StartedSave> {
-  const next: SaveInProgress = {
-    ...entry.record,
+  await amendRecord(entry, meta, key, record => ({
+    ...record,
     ...(step.definitionAfter === undefined
       ? {}
       : { definitionAfter: step.definitionAfter }),
     ...(step.filesAt === undefined ? {} : { filesAt: step.filesAt }),
-  };
-  if (await meta.compareAndSet(key, entry.record, next)) {
-    const path = markerPath(entry.projectRoot, entry.record);
-    entry.record = next;
-    await replaceMarker(path, next);
-  }
+  }));
+  return startedSaveOf(entry, meta, key, "later");
+}
+
+/**
+ * What a save's step tells the record `entry` holds. A first step says how the save ended; a
+ * later step (`joinedStep`) cannot withdraw a save its first step applied, so its withdrawal leaves
+ * the ending as it was.
+ */
+function startedSaveOf(
+  entry: MadeRecord,
+  meta: MetaService,
+  key: string,
+  step: "first" | "later"
+): StartedSave {
   return {
-    filesWritten: names => noteFilesWritten(entry, meta, key, names),
-    withdrawn: () => undefined,
+    filesWritten: names =>
+      names.length === 0
+        ? Promise.resolve()
+        : amendRecord(entry, meta, key, record => ({
+            ...record,
+            files: [...(record.files ?? []), ...names],
+          })),
+    rewriting: async next => {
+      const was = {
+        definitionAfter: entry.record.definitionAfter,
+        filesAt: entry.record.filesAt,
+      };
+      await amendRecord(entry, meta, key, record => ({ ...record, ...next }));
+      return () =>
+        amendRecord(entry, meta, key, record => ({ ...record, ...was }));
+    },
+    withdrawn: () => {
+      if (step === "first" && entry.ending === "open") {
+        entry.ending = "withdrawn";
+      }
+    },
+    settled: () => {
+      if (entry.ending === "open") entry.ending = "settled";
+    },
     left: () => {
       entry.ending = "left";
     },
   };
 }
 
-async function noteFilesWritten(
+/**
+ * Bring the record `entry` holds to `change` of it, in the row and then the marker: only while
+ * the row still holds that record, so a record cleared or replaced since is not written back.
+ */
+async function amendRecord(
   entry: MadeRecord,
   meta: MetaService,
   key: string,
-  names: readonly string[]
+  change: (record: SaveInProgress) => SaveInProgress
 ): Promise<void> {
-  if (names.length === 0) return;
-  const next: SaveInProgress = {
-    ...entry.record,
-    files: [...(entry.record.files ?? []), ...names],
-  };
+  const next = change(entry.record);
   if (!(await meta.compareAndSet(key, entry.record, next))) return;
   const path = markerPath(entry.projectRoot, entry.record);
   entry.record = next;

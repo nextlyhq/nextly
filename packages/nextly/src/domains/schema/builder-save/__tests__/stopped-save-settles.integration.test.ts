@@ -613,6 +613,67 @@ describe.each(getConfiguredTestDialects())(
       // writer has no registry write to settle it with: it keeps its files, as before.
       const settles = path.push === true ? it.fails : it;
 
+      // Settled to what applied, the save writes another definition than the one it set out to:
+      // its record says so first, so a process stopped after that write leaves a record a later
+      // settle judges against what is on disk, not the shape first asked for.
+      (keepsPartWay(dialect, path) && path.push !== true ? it : it.skip)(
+        "brings its record to the applied shape before the definition is written to it",
+        async () => {
+          const t = await boot();
+          await path.create(t, [text("heading")]);
+          const definitionFile = join(basePath, DEFINITION);
+          const onDisk = () =>
+            existsSync(definitionFile)
+              ? readFileSync(definitionFile, "utf8")
+              : null;
+          // Each change to the save's record, with the definition as it stood at that moment.
+          const amended: { definitionAfter?: string; then: string | null }[] =
+            [];
+          const compareAndSet = MetaService.prototype.compareAndSet;
+          vi.spyOn(MetaService.prototype, "compareAndSet").mockImplementation(
+            async function (
+              this: MetaService,
+              ...args: Parameters<MetaService["compareAndSet"]>
+            ) {
+              if (args[0].startsWith("builder-save-in-progress:")) {
+                amended.push({
+                  definitionAfter: (args[2] as { definitionAfter?: string })
+                    .definitionAfter,
+                  then: onDisk(),
+                });
+              }
+              return compareAndSet.apply(this, args);
+            }
+          );
+          const failed = failStatement(t, adding(path.table, "beta"));
+
+          const outcome = await outcomeOf(
+            path.save(t, [text("heading"), text("alpha"), text("beta")])
+          );
+
+          expect(failed(), "no statement adding `beta` was met").toBe(1);
+          expect(outcome.failed, "the save was reported as going through").toBe(
+            true
+          );
+          const settled = onDisk();
+          expect(definedFields(path), "the definition").toEqual([
+            "alpha",
+            "heading",
+          ]);
+          // The first change that gave the record the applied shape came before the definition held it.
+          const first = amended.find(a => a.definitionAfter === settled);
+          expect(
+            first,
+            "the record never held the applied shape"
+          ).toBeDefined();
+          expect(
+            first?.then,
+            "the record took it only once the definition was written"
+          ).not.toBe(settled);
+        },
+        300_000
+      );
+
       (keepsPartWay(dialect, path) ? settles : it.skip)(
         "stopped at its second addition, keeps the first: one file for it, recorded applied, the definition and the registry at that shape",
         async () => {

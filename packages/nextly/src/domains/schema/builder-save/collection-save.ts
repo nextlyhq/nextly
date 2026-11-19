@@ -611,16 +611,27 @@ async function settleStoppedSave(
     files: await readSaveFiles(deps, written.files.change),
   };
   const replacement: string[] = [];
+  // Puts the record back as the stop left it, once it has been brought to the replacement.
+  let recordBack: (() => Promise<void>) | undefined;
   try {
     for (const filename of written.files.change) {
       await removeFileAndSnapshot(deps, filename);
     }
     const settled = settledSaveOf(save, judged.applied, judged.report);
     const plan = await planSave(deps, settled);
-    await writeAtomically(definitionPath, serializeUiSchema(plan.next));
-    const files = await writeFiles(deps, settled, plan, names =>
-      replacement.push(...names)
-    );
+    const definition = serializeUiSchema(plan.next);
+    // The record says what the settle writes before it writes it: the applied shape, and the
+    // moment the replacement is named for. A process stopped after the definition's write then
+    // leaves a record a later settle judges against what is there, not the shape first asked for.
+    recordBack = await written.started.rewriting({
+      definitionAfter: definition,
+      filesAt: (settled.now ?? new Date()).toISOString(),
+    });
+    await writeAtomically(definitionPath, definition);
+    const files = await writeFiles(deps, settled, plan, async names => {
+      replacement.push(...names);
+      await written.started.filesWritten(names);
+    });
     // Compared with the live table before it is recorded, as a pushed save's files are.
     const units = await verifiedUnits(deps, files, plan.table);
     // The replacement recorded applied, the ledger's attempt at the stopped file cleared and the
@@ -639,6 +650,17 @@ async function settleStoppedSave(
     });
   } catch (error) {
     await putBack(deps, left, replacement, definitionPath);
+    // The record as the stop left it, with the save it describes; the replacement's names it
+    // learned are no longer on disk, which a settle reads them against.
+    await recordBack?.().catch((recordError: unknown) => {
+      deps.logger.error(
+        `The stopped save's record could not be put back: ${
+          recordError instanceof Error
+            ? recordError.message
+            : String(recordError)
+        }`
+      );
+    });
     throw error;
   }
   return judged.report;
