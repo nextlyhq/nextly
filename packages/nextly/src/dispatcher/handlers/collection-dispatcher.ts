@@ -382,8 +382,9 @@ function dialogConfirmations(
 ): {
   legacy?: { tableName: string; byFieldName: Record<string, FieldResolution> };
 } {
+  const confirmDrop: FieldResolution = { action: "confirm_drop" };
   const counted = (confirmedDeletions ?? []).map(
-    deletion => [deletion.field, { action: "confirm_drop" as const }] as const
+    deletion => [deletion.field, confirmDrop] as const
   );
   if (resolutions === undefined && counted.length === 0) return {};
   return {
