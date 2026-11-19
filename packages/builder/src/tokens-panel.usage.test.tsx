@@ -37,6 +37,29 @@ import type {
   VariableUsesPage,
 } from "./variable-usage";
 
+/**
+ * An element's accessible name, as a screen reader hears it: from its content
+ * where it has no label of its own. Read through the role query, which
+ * computes the name the same way for every button it finds.
+ */
+function nameOf(element: Element | null | undefined): string | undefined {
+  let heard: string | undefined;
+  screen.queryAllByRole("button", {
+    name: (name, each) => {
+      if (each === element) heard = name;
+      return false;
+    },
+  });
+  return heard;
+}
+
+/** What a row draws: its text without the words only a screen reader hears. */
+function drawnText(element: Element): string {
+  const drawn = element.cloneNode(true) as Element;
+  for (const hidden of drawn.querySelectorAll(".nx-sr-only")) hidden.remove();
+  return drawn.textContent ?? "";
+}
+
 afterEach(cleanup);
 
 beforeAll(() => {
@@ -245,7 +268,7 @@ describe("how widely each row's variable is used", () => {
       name: /^Brand.*\. Used in 14 places$/,
     });
     // Nothing on the row itself: the tooltip says it.
-    expect(brand.textContent).not.toContain("14");
+    expect(drawnText(brand)).not.toContain("14");
     await act(async () => {
       brand.focus();
     });
@@ -318,14 +341,10 @@ describe("how widely each row's variable is used", () => {
     const usage = host({ reaches: () => ({ "color.brand": reach(3) }) });
     const { unmount } = render(<Hosted usage={usage} />);
     await screen.findByRole("button", { name: /^Brand.*Used in 3 places$/ });
-    expect(row(/^Text/).getAttribute("aria-label")).not.toMatch(
-      /used|counted/i
-    );
+    expect(nameOf(row(/^Text/))).not.toMatch(/used|counted/i);
     unmount();
     render(<Hosted />);
-    expect(row(/^Brand/).getAttribute("aria-label")).not.toMatch(
-      /used|counted/i
-    );
+    expect(nameOf(row(/^Brand/))).not.toMatch(/used|counted/i);
   });
 });
 
@@ -395,11 +414,9 @@ describe("removing a variable in use", () => {
     expect(within(editor).getByText("Used in 14 places")).toBeDefined();
     // The row stays drawn as chosen while its editor is open, though its
     // tooltip marks `data-state` as well.
-    expect(
-      document
-        .querySelector(".nx-vars__row[data-open]")
-        ?.getAttribute("aria-label")
-    ).toMatch(/^Brand/);
+    expect(nameOf(document.querySelector(".nx-vars__row[data-open]"))).toMatch(
+      /^Brand/
+    );
     const remove = within(editor).getByRole("button", { name: "Remove" });
     // Not disabled: pressing it is how the author learns why.
     expect(remove.hasAttribute("disabled")).toBe(false);

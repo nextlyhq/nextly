@@ -249,6 +249,7 @@ describe("init - Nextly API", () => {
       "delete",
       "duplicate",
       "email",
+      "emailDeliveries",
       "emailProviders",
       "emailTemplates",
       "fieldGroups",
@@ -288,6 +289,7 @@ describe("init - Nextly API", () => {
       "userService",
       "users",
       "verifyEmail",
+      "workflows",
     ];
 
     function shapeOf(instance: Nextly): Record<string, string> {

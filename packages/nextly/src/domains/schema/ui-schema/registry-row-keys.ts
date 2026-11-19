@@ -11,12 +11,18 @@
 import { createHash } from "node:crypto";
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 
-/** The prefix of the data table each registry's entities are stored in. */
+/**
+ * The prefix of the data table each registry's entities are stored in. The field-group registry
+ * under either of its names: a site whose field-group storage is on the current names keeps its
+ * groups in `fg_` tables, recorded in `dynamic_field_groups`.
+ */
 const TABLE_PREFIX_BY_REGISTRY: Readonly<Record<string, string>> = {
   dynamic_collections: "dc_",
   dynamic_singles: "single_",
   [STORAGE_FORMAT.registryTable]: STORAGE_FORMAT.tablePrefix,
+  [MIGRATION_TARGET.registryTable]: MIGRATION_TARGET.tablePrefix,
 };
 
 /** A registry row's unique keys besides its slug, by column. */
@@ -39,7 +45,7 @@ function deterministicId(slug: string): string {
 
 /**
  * The `id` and `table_name` the row of `slug` in `registryTable` is written
- * with, or undefined for a table that is not one of the three registries:
+ * with, or undefined for a table that is not one of the registries:
  * nothing here says what that table's keys are.
  */
 export function registryRowKeys(

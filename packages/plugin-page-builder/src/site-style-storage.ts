@@ -45,6 +45,7 @@ import {
   siteCssPrefix,
   type SiteStyleData,
 } from "./site-style";
+import { fluidClassesFollowRange } from "./site-style-fluid-classes";
 import {
   checkStoredBreakpoints,
   checkStoredClasses,
@@ -806,6 +807,9 @@ export function siteStyleSingle(
     // change is made rather than what is wrong with a value it may not set.
     hooks: {
       beforeValidate: [
+        // First, so every guard below judges the classes it remakes: a text
+        // style's fluid size follows a change of the range in this same write.
+        fluidClassesFollowRange(policy.defaults, sharedStyleName),
         refuseBreakpointsOutsideSettings,
         // The prefix's one door, judged like the breakpoints' above.
         prefixOutsideSettingsGuard(policy.defaults),
