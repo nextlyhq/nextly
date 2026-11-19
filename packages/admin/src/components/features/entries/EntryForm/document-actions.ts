@@ -178,6 +178,11 @@ export interface ReviewActionState {
   waitingFor: string | null;
   /** Why no step can be taken at this moment, such as unsaved edits. */
   stepReason?: string;
+  /**
+   * Why Publish is held other than for approval: the review state is not
+   * known yet, or could not be read. Said in place of the stage it waits in.
+   */
+  publishReason?: string;
 }
 
 /**
@@ -651,9 +656,11 @@ function publishLabel(state: DocumentActionState): string {
 
 /**
  * Why a held Publish cannot run: the stage it waits in, and who it waits for
- * where the review state names anyone.
+ * where the review state names anyone; or, before the review state is known,
+ * why it is not.
  */
 function needsApprovalReason(review: ReviewActionState): string {
+  if (review.publishReason !== undefined) return review.publishReason;
   return review.waitingFor === null
     ? `Needs approval: ${review.stageLabel}`
     : `Needs approval: ${review.stageLabel}, waiting for ${review.waitingFor}`;

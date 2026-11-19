@@ -83,6 +83,12 @@ export interface DocumentPanelProps {
   releaseDocument?: ReleaseDocumentRef;
   /** The active editing locale, forwarded to the language panel. */
   locale?: string;
+  /**
+   * Why the Review section's steps wait at this moment, as the editor holds
+   * its header's (`useEditorReview`'s `stepsHold`): unsaved edits, a save on
+   * its way, a past version on screen. Absent, nothing holds them.
+   */
+  reviewHold?: string | undefined;
   /** Switch the editor to a language, forwarded to the language panel. */
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Withholds the panel's mutating actions (reading a past version). */
@@ -138,6 +144,7 @@ export function DocumentPanel({
   documentStatus,
   releaseDocument,
   locale,
+  reviewHold,
   onLocaleChange,
   actionsDisabled = false,
   navigationDisabled = actionsDisabled,
@@ -170,18 +177,8 @@ export function DocumentPanel({
   const builtIn = (name: string): React.ReactNode => {
     switch (name) {
       case "status":
-        // The Review section follows the status it qualifies, and draws
-        // nothing where no workflow is attached.
         return hasStatus && documentStatus ? (
-          <>
-            <StatusSection documentStatus={documentStatus} />
-            {releaseDocument === undefined ? null : (
-              <ReviewSection
-                document={releaseDocument}
-                {...(locale === undefined ? {} : { locale })}
-              />
-            )}
-          </>
+          <StatusSection documentStatus={documentStatus} />
         ) : null;
       case "publishing":
         // A release publishes or unpublishes, so only a document with that
@@ -225,9 +222,25 @@ export function DocumentPanel({
   // A Single's own sections, and where its last change goes.
   const about = singleParts({ single, entry, apiAddress, details, panelOrder });
 
+  // The Review section is a part of the panel of its own, not of the Status
+  // section a plugin may replace: it follows Status where Status is drawn,
+  // and leads the panel's sections where the order leaves Status out, so the
+  // workflow's steps stay on offer whoever draws the status. It draws nothing
+  // where no workflow is attached.
+  const review =
+    hasStatus && releaseDocument !== undefined ? (
+      <ReviewSection
+        document={releaseDocument}
+        {...(locale === undefined ? {} : { locale })}
+        hold={reviewHold}
+      />
+    ) : null;
+  const statusPlaced = panelOrder.some(isStatusPart);
+
   return (
     <div className="flex flex-col" data-testid="document-panel-sections">
       {about.lead}
+      {statusPlaced ? null : review}
       {panelOrder.map((part, index) => (
         <Fragment
           key={
@@ -241,6 +254,7 @@ export function DocumentPanel({
           ) : placedSectionProps === undefined ? null : (
             <PlacedSection part={part} props={placedSectionProps} />
           )}
+          {isStatusPart(part) ? review : null}
           {about.after(index)}
         </Fragment>
       ))}
@@ -273,6 +287,11 @@ export function DocumentPanel({
           ))}
     </div>
   );
+}
+
+/** Whether a part of the panel's order is the built-in Status section. */
+function isStatusPart(part: PanelOrderEntry): boolean {
+  return part.kind === "builtIn" && part.name === "status";
 }
 
 /** A Single's own sections, or none of them for an entry's panel. */

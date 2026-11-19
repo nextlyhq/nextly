@@ -69,6 +69,13 @@ export interface EditorReviewInput {
    * actions read it from `hold`.
    */
   held?: string | undefined;
+  /**
+   * Whether a workflow may hold the document's publishing, as the schema read
+   * says before the review state is: false where none is attached, so
+   * Publish is not held while the state is read. Absent where the page cannot
+   * tell, and Publish waits for the review state.
+   */
+  workflowExpected?: boolean;
 }
 
 export interface EditorReview {
@@ -94,6 +101,13 @@ export interface EditorReview {
    * unsaved document. Undefined where nothing holds them.
    */
   hold: string | undefined;
+  /**
+   * Why no step can be taken on any part at this moment, whichever surface
+   * offers it: the host's hold, else unsaved edits, which a step would not
+   * carry. The side panel's steps wait for it as the header's do. Undefined
+   * where nothing holds them.
+   */
+  stepsHold: string | undefined;
   /** The dialog a step needing a comment asks with. */
   dialog: ReactNode;
 }
@@ -104,6 +118,7 @@ export function useEditorReview({
   isDirty,
   storedStamp,
   held,
+  workflowExpected,
 }: EditorReviewInput): EditorReview {
   const query = useReviewState(document);
   const { defaultLocale, locales } = useLocalization();
@@ -150,21 +165,34 @@ export function useEditorReview({
     );
   const sharedHold =
     hidden && sharedApproves(onScreen) ? SHARED_APPROVAL_HELD : undefined;
-  const stepReason = stepHold(isDirty, onScreen).stepReason ?? sharedHold;
+  const stepsHold = held ?? (isDirty ? SAVE_FIRST : undefined);
+  const stepReason =
+    stepHold(isDirty, taker.pending, onScreen).stepReason ?? sharedHold;
   const hold =
-    held ??
+    stepsHold ??
     stepReason ??
     (hidden && sharedApproves(parts) ? SHARED_APPROVAL_HELD : undefined);
 
+  // Until the review state is known, a workflow may be holding the part: the
+  // header holds Publish, saying why, rather than offering it as free. Not
+  // where the page knows no workflow is attached.
+  const unknown =
+    document !== undefined &&
+    query.data === undefined &&
+    workflowExpected !== false
+      ? reviewUnknown(query.isError)
+      : undefined;
+
   if (document === undefined || part === undefined) {
     return {
-      binding: undefined,
+      binding: unknown,
       part: undefined,
       onScreen: [],
       parts,
       refusal: null,
       clearRefusal: taker.clearRefusal,
       hold,
+      stepsHold,
       dialog: null,
     };
   }
@@ -202,16 +230,46 @@ export function useEditorReview({
     refusal: taker.refusal,
     clearRefusal: taker.clearRefusal,
     hold,
+    stepsHold,
     dialog: taker.dialog,
   };
 }
 
-/** Why no step can be taken at this moment, where something holds them. */
+/**
+ * What the header's actions read while the review state is not known: no
+ * step, and Publish held with why, as a stage that does not allow publishing
+ * holds it. No step is offered, so none is taken.
+ */
+function reviewUnknown(failed: boolean): DocumentReviewBinding {
+  return {
+    state: {
+      stageLabel: "",
+      publishable: false,
+      steps: [],
+      waitingFor: null,
+      publishReason: failed
+        ? "The review state couldn't be read. Reload the page to try again."
+        : "Checking the review…",
+    },
+    takeStep: () => Promise.resolve(STEP_NOT_OFFERED),
+  };
+}
+
+/** Why a step waits while the page holds edits a step would not carry. */
+const SAVE_FIRST = "Save your changes first.";
+
+/**
+ * Why no step can be taken at this moment, where something holds them: a step
+ * already on its way holds the others, so a second click sends no second step
+ * with the revision the first is about to move.
+ */
 function stepHold(
   isDirty: boolean,
+  stepPending: boolean,
   parts: readonly PartReview[]
 ): { stepReason?: string } {
-  if (isDirty) return { stepReason: "Save your changes first." };
+  if (isDirty) return { stepReason: SAVE_FIRST };
+  if (stepPending) return { stepReason: "Taking the step…" };
   if (parts.some(part => part.version === null)) {
     return { stepReason: "Save the document first." };
   }
