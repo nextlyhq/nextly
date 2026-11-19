@@ -724,6 +724,70 @@ describe.each(getConfiguredTestDialects())(
       expect(await releaseState(t, arranged.releaseId)).toBe("published");
     });
 
+    it("keeps a component scheduled when a write landed unconfirmed and a later document is held", async () => {
+      // The first page's write and its receipt commit, then what runs after it fails and the
+      // pass cannot read the receipt back, so it records a failed write. The second page loses
+      // its approval and its gate refuses it. Stopped, the first page would stay live for good.
+      const t = await boot(dialect);
+      const pages = [await doc(t, "pages"), await doc(t, "pages")];
+      for (const page of pages) await approve(t, "pages", page);
+      const arranged = await arrange(t, pages.map(publishPage), PAST);
+      const [first, second] = await plannedOrder(t);
+      if (first === undefined || second === undefined) {
+        throw new Error("the pass plans fewer than two documents");
+      }
+      const repo = new ReleasesRepository(t.adapter);
+      const firstMember = (await repo.listMembers(arranged.releaseId)).find(
+        member => member.entryId === first
+      );
+      if (!firstMember) throw new Error("no member for the first page");
+      const applied = ReleasesRepository.prototype.isMemberApplied;
+      vi.spyOn(
+        ReleasesRepository.prototype,
+        "isMemberApplied"
+      ).mockImplementation(async function (
+        this: ReleasesRepository,
+        memberId,
+        revision
+      ) {
+        if (memberId === firstMember.id) throw new Error("connection reset");
+        return applied.call(this, memberId, revision);
+      });
+      const mutations = createReleaseMutations({
+        contentApi: t.nextly,
+        lockServer: lockServerOf(t),
+      });
+
+      const pass = await applyDueReleases({
+        repository: repo,
+        mutations: {
+          publish: async input => {
+            if (input.ref.entryId === second) {
+              await withdrawSilently(t, "pages", second);
+            }
+            await mutations.publish(input);
+            if (input.ref.entryId === first) {
+              throw new Error("a hook after the write failed");
+            }
+          },
+          unpublish: input => mutations.unpublish(input),
+        },
+        runAs: {
+          findUser: id => Promise.resolve({ id, isActive: true }),
+          listRoleSlugs: () => Promise.resolve([]),
+        },
+      });
+
+      expect(
+        pass.outcomes.map(outcome => [outcome.ref.entryId, outcome.failure])
+      ).toEqual([
+        [first, "WRITE_FAILED"],
+        [second, "NOT_APPROVED"],
+      ]);
+      expect(await storedPageStatus(t, first)).toBe("published");
+      expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
+    });
+
     it("keeps a due release a pass began scheduled when its run meets a hold, and flushes what readers were shown", async () => {
       const t = await boot(dialect);
       const written = await doc(t, "pages");

@@ -170,7 +170,13 @@ export interface ApplyDueReleasesDeps {
      * @returns the ids actually blocked: every entry, or none.
      */
     blockReleases(
-      entries: readonly { id: string; scheduledAt: Date }[]
+      entries: readonly { id: string; scheduledAt: Date }[],
+      /**
+       * `unlessBegun`: refuse the stop when a member of the component holds a
+       * receipt for its release's current revision, asked inside the stop's
+       * own transaction. Asked for a component stopped for holds alone.
+       */
+      options?: { unlessBegun?: boolean }
     ): Promise<readonly string[]>;
     /**
      * Flush these releases' documents without moving them: for a component
@@ -352,9 +358,20 @@ async function stopHopelessReleases(
     const at = plannedInstants.get(id);
     return at === undefined ? undefined : { id, scheduledAt: at };
   })) {
+    // A component stopped for holds alone stays scheduled once part of it is written. Asked
+    // again inside the stop's transaction (`unlessBegun`), for a receipt this pass committed
+    // but could not read back, which neither the receipts read before the pass nor its
+    // outcomes show. Any other permanent failure stops the component as before.
+    const ids = new Set(entries.map(entry => entry.id));
+    const holdsOnly = outcomes.every(
+      o =>
+        !ids.has(o.releaseId) ||
+        !permanentFailure(o, begun) ||
+        COMPONENT_HOLD_FAILURES.has(o.failure)
+    );
     blocked +=
       (await withinComponent("stop", entries, () =>
-        deps.repository.blockReleases(entries)
+        deps.repository.blockReleases(entries, { unlessBegun: holdsOnly })
       )) ?? 0;
   }
   return blocked;
@@ -454,14 +471,19 @@ function permanentlyBrokenReleases(
   begun: ReadonlySet<string>
 ): Set<string> {
   return new Set(
-    outcomes
-      .filter(
-        o =>
-          o.failure !== null &&
-          !RETRY_COULD_HELP[o.failure] &&
-          !heldBegun(o, begun)
-      )
-      .map(o => o.releaseId)
+    outcomes.filter(o => permanentFailure(o, begun)).map(o => o.releaseId)
+  );
+}
+
+/** Whether this outcome is a failure no retry could fix, which stops its release. */
+function permanentFailure(
+  outcome: MaterialisationOutcome,
+  begun: ReadonlySet<string>
+): boolean {
+  return (
+    outcome.failure !== null &&
+    !RETRY_COULD_HELP[outcome.failure] &&
+    !heldBegun(outcome, begun)
   );
 }
 
