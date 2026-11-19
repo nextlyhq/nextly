@@ -575,11 +575,17 @@
   color: var(--nx-destructive);
 }
 
+/*
+ * The Tabs root keeps its content's height and the panel scrolls it. The
+ * panel is a scrolling flex column, and a root free to shrink there takes the
+ * panel's height while its content runs on: the sticky tab row inside it is
+ * held only within that shorter box, and scrolled away with it.
+ */
 .nx-inspector__tabs {
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
   gap: 0.75rem;
-  min-height: 0;
 }
 
 /*
