@@ -212,6 +212,27 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
+describe("ContentPanel — Waiting for my review", () => {
+  it("leads with Waiting for my review where a workflow holds content, opening the waiting view", () => {
+    renderPanel({ hasWorkflows: true });
+
+    expect(outline()[0]).toBe("Waiting for my review");
+    expect(
+      within(contentNav()).getByRole("link", { name: "Waiting for my review" })
+    ).toHaveAttribute("href", "/admin/content/waiting");
+  });
+
+  it("draws no Waiting for my review where no workflow holds content", () => {
+    renderPanel({ hasWorkflows: false });
+
+    expect(
+      within(contentNav()).queryByRole("link", {
+        name: "Waiting for my review",
+      })
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe("ContentPanel", () => {
   it("lists Collections, then Singles, each heading with its count, and no segmented control", () => {
     renderPanel();
