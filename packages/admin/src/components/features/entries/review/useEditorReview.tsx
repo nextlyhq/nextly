@@ -98,7 +98,10 @@ export function useEditorReview({
   // speaks for.
   const onScreen = partsOnScreen(query.data, locale ?? defaultLocale);
   const part = onScreen[0];
-  const parts = document === undefined ? [] : (query.data?.parts ?? []);
+  const parts =
+    document !== undefined && query.data?.attached === true
+      ? query.data.review.parts
+      : [];
 
   if (document === undefined || part === undefined) {
     return { binding: undefined, part: undefined, parts, dialog: null };
