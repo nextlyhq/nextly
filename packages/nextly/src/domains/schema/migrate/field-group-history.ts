@@ -74,21 +74,21 @@ export async function underDatabaseFieldGroupNames<
 }
 
 /**
- * The legacy names of the field-group tables a moved registry holds: `comp_<rest>` for each
- * `fg_<rest>` it names, the rename the storage migration made. A table under a name of its own
- * was never renamed, so it is not one of them.
+ * Each field-group table's current name, by its legacy one, for the tables a moved registry
+ * holds: `fg_<rest>` was `comp_<rest>`, the rename the storage migration made; a table under a
+ * name of its own kept it, and only its type column moved.
  */
 function movedGroupTables(
   stored: ReadonlyMap<string, string>
-): ReadonlySet<string> {
-  return new Set(
-    [...stored.values()]
-      .filter(table => table.startsWith(MIGRATION_TARGET.tablePrefix))
-      .map(
-        table =>
-          STORAGE_FORMAT.tablePrefix +
+): ReadonlyMap<string, string> {
+  return new Map(
+    [...stored.values()].map(table => [
+      table.startsWith(MIGRATION_TARGET.tablePrefix)
+        ? STORAGE_FORMAT.tablePrefix +
           table.slice(MIGRATION_TARGET.tablePrefix.length)
-      )
+        : table,
+      table,
+    ])
   );
 }
 

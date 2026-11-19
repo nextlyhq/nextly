@@ -169,10 +169,16 @@ export function deployStepDeps(run: DeployStepRun): DeployStepDeps {
       );
       if (pending.length > 0) return;
       // Each field group's translations table beside the table its registry row names.
-      const { readStoredFieldGroupTables, storedOrNewTableName } = await import(
-        "../../field-groups/services/field-group-stored-tables"
-      );
+      const {
+        fieldGroupRegistryUnreadable,
+        readStoredFieldGroupTables,
+        storedOrNewTableName,
+      } = await import("../../field-groups/services/field-group-stored-tables");
       const stored = await readStoredFieldGroupTables(adapter);
+      // Never names derived from a registry that could not be read: on a moved database they
+      // would be the legacy ones, and the check would judge a translations table that is not
+      // there and let the registry record definitions the real one cannot hold.
+      if (!stored.usable) throw fieldGroupRegistryUnreadable(stored.reason);
       await refuseCompanionColumnsThatCannotHold(
         adapter,
         config,

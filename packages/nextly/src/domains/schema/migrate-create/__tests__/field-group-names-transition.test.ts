@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   contributionsUnderCurrentNames,
+  currentNamesOf,
   historyFieldGroupNaming,
   refuseChangesToTransition,
   refuseNamingAgainstHistory,
@@ -90,7 +91,7 @@ describe("the transition to the current names", () => {
           },
         ],
       },
-      new Set(["comp_card"])
+      currentNamesOf(["comp_card"])
     );
 
     expect(moved.tables.map(t => t.name)).toEqual(["fg_card", "dc_posts"]);
@@ -130,12 +131,65 @@ describe("the transition to the current names", () => {
           },
         ],
       },
-      new Set(["comp_card"])
+      currentNamesOf(["comp_card"])
     );
 
     const [card] = moved.tables;
     expect(card?.indexes?.[0]?.columns).toEqual(["_field_group_type"]);
     expect(card?.foreignKeys?.[0]?.columns).toEqual(["_field_group_type"]);
+  });
+
+  // A foreign key on any table that points at a field-group table, or at its type column, follows
+  // the rename, or the next migrate:check reads a dropped and an added key.
+  it("moves every table's foreign keys that point at a field-group table", () => {
+    const moved = snapshotUnderCurrentNames(
+      {
+        tables: [
+          { name: "comp_card", columns: [] },
+          {
+            name: "dc_posts",
+            columns: [],
+            foreignKeys: [
+              {
+                name: "posts_card_fk",
+                columns: ["card_type"],
+                referencesTable: "comp_card",
+                referencesColumns: ["_component_type"],
+                onDelete: "cascade",
+                onUpdate: "no action",
+              } as never,
+            ],
+          },
+        ],
+      },
+      currentNamesOf(["comp_card"])
+    );
+
+    expect(moved.tables[1]?.foreignKeys?.[0]).toMatchObject({
+      columns: ["card_type"],
+      referencesTable: "fg_card",
+      referencesColumns: ["_field_group_type"],
+    });
+  });
+
+  it("keeps a field-group table under a name of its own, and moves its type column", () => {
+    const moved = snapshotUnderCurrentNames(
+      {
+        tables: [
+          {
+            name: "my_seo_block",
+            columns: [
+              { name: "_component_type", type: "varchar", nullable: true },
+            ],
+          },
+        ],
+      },
+      currentNamesOf(["my_seo_block"])
+    );
+    expect(moved.tables[0]?.name).toBe("my_seo_block");
+    expect(moved.tables[0]?.columns.map(c => c.name)).toEqual([
+      "_field_group_type",
+    ]);
   });
 
   it("keys the app's contributions to a field-group table by its current name", () => {
@@ -148,7 +202,7 @@ describe("the transition to the current names", () => {
     expect(
       contributionsUnderCurrentNames(
         { comp_card: elements, dc_posts: elements },
-        new Set(["comp_card"])
+        currentNamesOf(["comp_card"])
       )
     ).toEqual({ fg_card: elements, dc_posts: elements });
   });

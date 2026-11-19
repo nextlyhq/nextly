@@ -2751,6 +2751,7 @@ export async function migrateCore(
   await deps.refuseUnwrittenChanges?.();
   // And a database that lacks what its applied migrations made, read-only;
   // asked again under the lock, below.
+  await refuseFieldGroupHistoryBehindStorage(deps);
   await refuseDatabaseBehindLedger(deps);
   // Before the lock as well, so a person is asked without other runs waiting
   // on them; judged again under the lock, below, against the database as it
@@ -3033,6 +3034,7 @@ export async function migrateCore(
       );
       // The ledger as no other run changes it now: what it says applied is
       // still in the database, before Phase 1's first write.
+      await refuseFieldGroupHistoryBehindStorage(deps);
       await refuseDatabaseBehindLedger(deps);
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
@@ -3402,16 +3404,6 @@ async function missingFromAppStream(
       ),
     },
   }));
-  // A database whose field groups moved ahead of the history is named as that, before its tables
-  // are compared with a snapshot that names every field-group table by its legacy name.
-  const newest = snapshots.at(-1);
-  if (newest !== undefined) {
-    await refuseMovedStorageBehindLegacyHistory({
-      adapter: deps.adapter as unknown as DrizzleAdapter,
-      newestApplied: newest.fieldGroupNaming ?? "legacy",
-      nextPending: await namingOfNextPending(deps.migrationsDir, files),
-    });
-  }
   // With the move to the current names still to apply, the database already holds the field
   // groups under them, so the legacy snapshots are read as the storage migration renamed them.
   const compared = await underDatabaseFieldGroupNames(
@@ -3424,6 +3416,39 @@ async function missingFromAppStream(
   // files then, so nothing is named rather than a table or column it removed on purpose.
   if (appliedInOrder.at(-1) !== snapshots.at(-1)?.migration) return [];
   return missingFromStream(deps, compared);
+}
+
+/**
+ * Refuses, before anything applies, a database whose field groups moved to the current names
+ * while the history's newest applied file is still on the legacy ones and the next file is not
+ * the one that moves it (`refuseMovedStorageBehindLegacyHistory`). Run on every migrate run, the
+ * development start's included: unlike the comparison of the database with its ledger, which
+ * only some runs make, a legacy file applied to moved storage writes under names the registry no
+ * longer has.
+ */
+async function refuseFieldGroupHistoryBehindStorage(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  const files = await listMigrationFiles(
+    deps.adapter,
+    deps.db,
+    deps.dialect,
+    deps.migrationsDir,
+    deps.logger,
+    deps.declared
+  );
+  const metaDir = resolve(deps.migrationsDir, "meta");
+  for (const entry of [...files].reverse()) {
+    if (!entry.applied) continue;
+    const newest = await loadTargetSnapshot(metaDir, entry.file.name);
+    if (newest === null) continue;
+    await refuseMovedStorageBehindLegacyHistory({
+      adapter: deps.adapter as unknown as DrizzleAdapter,
+      newestApplied: snapshotFieldGroupNaming(newest),
+      nextPending: await namingOfNextPending(deps.migrationsDir, files),
+    });
+    return;
+  }
 }
 
 /**

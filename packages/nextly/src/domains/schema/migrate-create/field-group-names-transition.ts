@@ -146,44 +146,66 @@ export function refuseChangesToTransition(pending: {
 }
 
 /**
- * `snapshot` with each field-group table under its current name, and its type discriminator
- * under the current column name, as `nextly migrate:field-groups` leaves the database: a table
- * keeps its columns, indexes, keys and checks through a rename, so nothing else changes.
- * `groupTables` are the legacy names of the project's field-group tables.
+ * Each field-group table's current name, by its legacy one: the slug's name under the current
+ * names (`fg_<slug>` for `comp_<slug>`), and a table under a name of its own kept as it is, as
+ * `nextly migrate:field-groups` renames them.
+ */
+export function currentNamesOf(
+  legacyTables: Iterable<string>
+): ReadonlyMap<string, string> {
+  return new Map(
+    [...legacyTables].map(table => [table, underNaming("current", table)])
+  );
+}
+
+/**
+ * `snapshot` as `nextly migrate:field-groups` leaves the database: each field-group table in
+ * `renames` (legacy name to current name) under its current name, with its type discriminator
+ * under the current column name, and every reference to either moved with it, in its own indexes
+ * and keys and in every other table's foreign keys. A table keeps its columns, indexes, keys and
+ * checks through a rename, so nothing else changes.
  */
 export function snapshotUnderCurrentNames(
   snapshot: NextlySchemaSnapshot,
-  groupTables: ReadonlySet<string>
+  renames: ReadonlyMap<string, string>
 ): NextlySchemaSnapshot {
   return {
     ...snapshot,
     tables: snapshot.tables.map(table => {
-      if (!groupTables.has(table.name)) return table;
+      const own = renames.has(table.name);
+      const ownColumn = own ? currentTypeColumn : (column: string) => column;
       return {
         ...table,
-        name: underNaming("current", table.name),
-        columns: table.columns.map(column =>
-          column.name === STORAGE_FORMAT.columns.type
-            ? { ...column, name: MIGRATION_TARGET.columnType }
-            : column
-        ),
-        // The rename carries every index and key on the column with it, so each one that names
-        // the type column names it under its current name.
+        name: renames.get(table.name) ?? table.name,
+        columns: table.columns.map(column => ({
+          ...column,
+          name: ownColumn(column.name),
+        })),
         ...(table.indexes === undefined
           ? {}
           : {
               indexes: table.indexes.map(index => ({
                 ...index,
-                columns: index.columns.map(currentTypeColumn),
+                columns: index.columns.map(ownColumn),
               })),
             }),
         ...(table.foreignKeys === undefined
           ? {}
           : {
-              foreignKeys: table.foreignKeys.map(key => ({
-                ...key,
-                columns: key.columns.map(currentTypeColumn),
-              })),
+              foreignKeys: table.foreignKeys.map(key => {
+                const target = renames.get(key.referencesTable);
+                return {
+                  ...key,
+                  columns: key.columns.map(ownColumn),
+                  ...(target === undefined
+                    ? {}
+                    : {
+                        referencesTable: target,
+                        referencesColumns:
+                          key.referencesColumns.map(currentTypeColumn),
+                      }),
+                };
+              }),
             }),
       };
     }),
@@ -200,11 +222,11 @@ function currentTypeColumn(column: string): string {
 /** `contributions` keyed by each field-group table's current name. */
 export function contributionsUnderCurrentNames(
   contributions: Readonly<Record<string, ContributedElements>>,
-  groupTables: ReadonlySet<string>
+  renames: ReadonlyMap<string, string>
 ): Record<string, ContributedElements> {
   return Object.fromEntries(
     Object.entries(contributions).map(([table, elements]) => [
-      groupTables.has(table) ? underNaming("current", table) : table,
+      renames.get(table) ?? table,
       elements,
     ])
   );

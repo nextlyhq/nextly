@@ -165,6 +165,7 @@ import {
 } from "./entity-settings";
 import {
   contributionsUnderCurrentNames,
+  currentNamesOf,
   fieldGroupNamingOfRun,
   refuseChangesToTransition,
   snapshotUnderCurrentNames,
@@ -1899,7 +1900,7 @@ async function transitionSnapshot(
   args: GenerateArgs,
   record: Omit<MigrationPair, "sqlContent">
 ): Promise<GenerateResult> {
-  const groupTables = new Set(args.components.map(c => c.tableName));
+  const groupTables = currentNamesOf(args.components.map(c => c.tableName));
   return writeUnchangedMigration(args, {
     ...record,
     written: snapshotUnderCurrentNames(record.written, groupTables),

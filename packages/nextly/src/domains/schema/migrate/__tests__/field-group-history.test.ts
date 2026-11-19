@@ -130,6 +130,32 @@ describe("a legacy snapshot read under a moved database's names", () => {
     ]);
   });
 
+  // The storage migration keeps a table under a name of its own and moves only its type column.
+  it("moves the type column of a group stored under a name of its own", async () => {
+    database.tables = new Map([["seo", "my_seo_block"]]);
+
+    const [read] = await underDatabaseFieldGroupNames(adapter, [
+      {
+        fieldGroupNaming: "legacy" as const,
+        snapshot: {
+          tables: [
+            {
+              name: "my_seo_block",
+              columns: [
+                { name: "_component_type", type: "text", nullable: true },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(read?.snapshot.tables[0]?.name).toBe("my_seo_block");
+    expect(read?.snapshot.tables[0]?.columns.map(c => c.name)).toEqual([
+      "_field_group_type",
+    ]);
+  });
+
   it("reads them as they are on a database that has not moved", async () => {
     database.registry = "dynamic_components";
     const [read] = await underDatabaseFieldGroupNames(adapter, [
