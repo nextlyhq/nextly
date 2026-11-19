@@ -225,6 +225,21 @@ describe("browsing", () => {
     ).toBe("Inter");
   });
 
+  it("is named by the family, not by the preview text drawn in its place", async () => {
+    view(catalogue());
+    await row(/^Inter/);
+    fireEvent.change(screen.getByRole("textbox", { name: "Preview text" }), {
+      target: { value: "Hamburgefonstiv" },
+    });
+    const inter = await row(/^Inter, /);
+    // Its own text names it, with no aria-label laid over a row that draws
+    // a sentence the label could not hold: the sentence is for the eye.
+    expect(inter.getAttribute("aria-label")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Hamburgefonstiv/ })
+    ).toBeNull();
+  });
+
   it("shows thirty at a time", async () => {
     view(catalogue({}, MANY));
     await row(/^Family 00/);

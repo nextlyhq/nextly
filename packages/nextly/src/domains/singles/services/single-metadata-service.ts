@@ -1386,6 +1386,7 @@ export class SingleMetadataService {
       newFields: after,
       wasStored: input.wasLocalized,
       isStored: input.isLocalized,
+      statusChanges: input.wasStatus !== input.hasStatus,
       renamed: companion?.rename,
       liveTable: async () =>
         (
