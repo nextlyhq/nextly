@@ -255,8 +255,8 @@ export type {
  * under a bound image's chip; exported so the same row can be given more
  * ways to fill it without a second implementation. @experimental
  */
-export { ImageBindingFallback } from "./image-binding-fallback";
-export type { ImageBindingFallbackProps } from "./image-binding-fallback";
+export { ImageBindingFallback } from "./bindings/image-binding-fallback";
+export type { ImageBindingFallbackProps } from "./bindings/image-binding-fallback";
 // What a host tells the inspector about the component it edits, beside it.
 export type { ComponentFieldsHost } from "./component-fields";
 // The banner over a component's own view: its name, its reach, and Back.

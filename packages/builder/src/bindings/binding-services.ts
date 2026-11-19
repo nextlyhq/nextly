@@ -15,12 +15,13 @@ import type {
   BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
-import type { KeptProps } from "./binding-ops";
-import type { UnbindAnswer, UnbindKeep } from "./composition-actions";
+import type { UnbindAnswer, UnbindKeep } from "../composition-actions";
 import type {
   ComponentSettingAnswer,
   ComponentSettingAsk,
-} from "./make-component-setting";
+} from "../make-component-setting";
+
+import type { KeptProps } from "./binding-ops";
 
 /**
  * One field a binding can read, as the picker lists it.

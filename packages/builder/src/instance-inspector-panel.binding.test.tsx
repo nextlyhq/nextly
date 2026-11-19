@@ -30,7 +30,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { BindingFieldSource } from "./binding-services";
+import type { BindingFieldSource } from "./bindings/binding-services";
 import type { ContentServices, LoopCollection } from "./content-controls";
 import type { EditorState } from "./editor-state";
 import { InspectorPanel } from "./inspector-panel";

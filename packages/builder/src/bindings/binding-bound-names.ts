@@ -12,6 +12,9 @@ import type {
   BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
+import type { ContentServices } from "../content-controls";
+import { fieldLabel } from "../inspector";
+
 import {
   choiceLabel,
   type EntryLink,
@@ -21,8 +24,6 @@ import {
 import { useBindingSources } from "./binding-picker-reads";
 import type { BindingFieldSource } from "./binding-services";
 import { settingBoundFrom } from "./binding-setting-source";
-import type { ContentServices } from "./content-controls";
-import { fieldLabel } from "./inspector";
 import { useItemSource, type ItemSource } from "./item-binding-source";
 
 /**

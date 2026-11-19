@@ -22,6 +22,16 @@ import {
 import { EyeOff } from "lucide-react";
 import * as React from "react";
 
+import {
+  ChoiceList,
+  type ChoiceGroup,
+  type ListedChoice,
+} from "../choice-list";
+import { useClickedEntries } from "../clicked-entry";
+import type { ContentServices } from "../content-controls";
+import { fieldLabel, propLabel, type EditableProp } from "../inspector";
+import { withArticle } from "../with-article";
+
 import { defaultFormatFor, previewWithFormat } from "./binding-format-field";
 import { bindOp } from "./binding-ops";
 import {
@@ -41,16 +51,11 @@ import {
   SettingsReach,
   type SettingSource,
 } from "./binding-setting-source";
-import { ChoiceList, type ChoiceGroup, type ListedChoice } from "./choice-list";
-import { useClickedEntries } from "./clicked-entry";
-import type { ContentServices } from "./content-controls";
-import { fieldLabel, propLabel, type EditableProp } from "./inspector";
 import {
   itemChoices,
   useListItems,
   type ItemSource,
 } from "./item-binding-source";
-import { withArticle } from "./with-article";
 
 /**
  * A source the picker lists: one the host lists, or the item of the list the

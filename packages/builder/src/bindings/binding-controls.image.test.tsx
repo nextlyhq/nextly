@@ -28,10 +28,10 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { BindingFieldSource, UnbindPlanAnswer } from "./binding-services";
-import type { ContentServices } from "./content-controls";
-import type { EditorState } from "./editor-state";
-import { InspectorPanel } from "./inspector-panel";
-import { VisitorUnreadableProvider } from "./visitor-unreadable-context";
+import type { ContentServices } from "../content-controls";
+import type { EditorState } from "../editor-state";
+import { InspectorPanel } from "../inspector-panel";
+import { VisitorUnreadableProvider } from "../visitor-unreadable-context";
 
 beforeAll(() => {
   // What Radix's menus ask of an element, which jsdom does not draw.

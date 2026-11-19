@@ -21,13 +21,14 @@ import {
 } from "@nextlyhq/blocks-engine";
 import * as React from "react";
 
+import type { ComponentFieldsHost } from "../component-fields";
+import { ComponentFieldsContext } from "../component-fields-panel";
+import type { EditableProp } from "../inspector";
+
 import type {
   BindingFieldChoice,
   BindingFieldSource,
 } from "./binding-services";
-import type { ComponentFieldsHost } from "./component-fields";
-import { ComponentFieldsContext } from "./component-fields-panel";
-import type { EditableProp } from "./inspector";
 
 /** What the picker heads the group and the chip names the source. */
 const COMPONENT_SETTINGS_SOURCE = "This component's settings";
