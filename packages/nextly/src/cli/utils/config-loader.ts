@@ -160,6 +160,17 @@ async function refuseLostBuilderDefinitions(
   });
 }
 
+/** The refusals of a plugin's extend, or a relationship, whose target nothing declares. */
+const UNKNOWN_TARGET_CODES: ReadonlySet<string> = new Set([
+  "NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN",
+  "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
+]);
+
+/** Whether `error` refuses a target nothing declares, which may be an entity the file lost. */
+function namesAnUnknownTarget(error: unknown): boolean {
+  return NextlyError.is(error) && UNKNOWN_TARGET_CODES.has(error.code);
+}
+
 /** Builder collection slugs (the only valid relationTo targets among Builder entities). */
 function builderCollectionSlugs(builder: BuilderEntities): string[] {
   return (builder.collections ?? []).map(c => c.slug);
@@ -870,8 +881,11 @@ async function loadConfigInternal(
         );
       } catch (error) {
         // A target the definition file lost is that loss first: refused as the migrate commands
-        // refuse it, so the fix named is restoring the file, not creating the target.
-        await refuseLostBuilderDefinitions(cwd, config, builderEntities);
+        // refuse it, so the fix named is restoring the file, not creating the target. Only a
+        // target nothing declares can be that entity; any other refusal is reported as itself.
+        if (namesAnUnknownTarget(error)) {
+          await refuseLostBuilderDefinitions(cwd, config, builderEntities);
+        }
         throw error;
       }
       builderFieldGroups = {

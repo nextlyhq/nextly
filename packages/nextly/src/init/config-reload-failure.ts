@@ -31,12 +31,26 @@ function where(message: BuildMessage): string {
     : ` (${place.file}:${place.line}:${place.column})`;
 }
 
+/**
+ * The loader's refusals of a configuration that the CLI reports with a code of its own, each
+ * problem with its place and fix: every problem in it, no file at all, and a Builder entity the
+ * definition file lost.
+ */
+const REPORTED_AS_COMMANDS_REPORT: ReadonlySet<string> = new Set([
+  "config-invalid",
+  "config-missing",
+  "builder-definition-missing",
+]);
+
 /** The dev-log line for a config that could not be read. */
 export function describeConfigReloadFailure(error: unknown): string {
   // A configuration the rules refuse is reported as every command reports it: each problem at its
   // path, with the fix, then the count. Rendered by the CLI's own formatter, so the two cannot
   // drift apart.
-  if (NextlyError.is(error) && error.logContext?.reason === "config-invalid") {
+  if (
+    NextlyError.is(error) &&
+    REPORTED_AS_COMMANDS_REPORT.has(String(error.logContext?.reason))
+  ) {
     return `${LEAD}:\n${formatCliError(toCliError(error), { color: false })}\n${KEPT}`;
   }
   if (

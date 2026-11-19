@@ -410,3 +410,87 @@ describe("a Builder entity the definition file lost, which a code relationship n
     expect(ran.stderr).not.toContain("BUILDER_DEFINITION_MISSING");
   }, 300_000);
 });
+
+describe("a plugin's extend refused for a reason of its own, beside an unrelated lost entity", () => {
+  // Only a target nothing declares may be the lost entity; a field the extend declares twice is
+  // its own problem, and is reported as that.
+  it("is reported as itself, not as the loss", async () => {
+    writeFileSync(join(dir, "nextly.config.ts"), "export default {};\n");
+    const definitions = join(dir, "ui-schema.json");
+    const cases = {
+      slug: "cases",
+      fields: [{ name: "rating", type: "number" }],
+    };
+    writeFileSync(
+      definitions,
+      JSON.stringify({
+        collections: [
+          cases,
+          { slug: "docs", fields: [{ name: "pages", type: "number" }] },
+        ],
+        singles: [],
+        components: [],
+      })
+    );
+    exported.config = { db: { migrationsDir: "./migrations" } };
+    const first = await run(["migrate:create", "--name", "both"]);
+    expect(first.status, first.stderr).toBe(0);
+
+    writeFileSync(
+      definitions,
+      JSON.stringify({ collections: [cases], singles: [], components: [] })
+    );
+    exported.config = {
+      db: { migrationsDir: "./migrations" },
+      plugins: [
+        {
+          name: "@acme/seo",
+          version: "1.0.0",
+          nextly: "*",
+          contributes: {
+            extend: [
+              { target: "cases", fields: [{ name: "rating", type: "number" }] },
+            ],
+          },
+        },
+      ],
+    };
+
+    const ran = await run(["generate:types"]);
+
+    expect(ran.status, ran.stderr).toBe(1);
+    expect(ran.stderr).not.toContain("BUILDER_DEFINITION_MISSING");
+    expect(ran.stderr).toContain("rating");
+  }, 300_000);
+});
+
+describe("a configuration file deleted while the development server runs", () => {
+  afterEach(async () => {
+    await shutdownServices();
+  });
+
+  // A save that leaves no configuration file is not a configuration that declares nothing: the
+  // reload keeps the one it has and says why, rather than planning to remove every table.
+  it("is refused by the reload, with the report a command prints", async () => {
+    const adapter = await createAdapter({
+      type: "sqlite",
+      memory: true,
+    } as Parameters<typeof createAdapter>[0]);
+    await registerServices({
+      adapter,
+      collections: [],
+    } as unknown as Parameters<typeof registerServices>[0]);
+    const warned: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...parts: unknown[]) => {
+      warned.push(parts.map(String).join(" "));
+    });
+    vi.spyOn(process, "cwd").mockReturnValue(dir);
+
+    await reloadNextlyConfig();
+
+    expect(
+      warned.some(message => message.includes("CONFIG_MISSING")),
+      warned.join("\n---\n")
+    ).toBe(true);
+  }, 120_000);
+});
