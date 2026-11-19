@@ -84,23 +84,36 @@ async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
   vi.stubEnv("DB_DIALECT", dialect);
   _resetEnvCache();
   const server = await createAdapter({ type: dialect, url: serverUrl });
-  await server.executeQuery(createDatabaseStatement(dialect, name));
-  const url = new URL(serverUrl);
-  url.pathname = `/${name}`;
-  vi.stubEnv("DATABASE_URL", url.toString());
-  _resetEnvCache();
-  const adapter = (await createAdapter({
-    type: dialect,
-    url: url.toString(),
-  })) as unknown as DrizzleAdapter;
-  return {
-    adapter,
-    async close() {
-      await adapter.disconnect().catch(() => {});
+  /** Drops the database and lets the server connection go, whatever came of the case. */
+  const drop = async (): Promise<void> => {
+    try {
       await server.executeQuery(dropDatabaseStatement(dialect, name));
+    } finally {
       await server.disconnect();
-    },
+    }
   };
+  try {
+    await server.executeQuery(createDatabaseStatement(dialect, name));
+    const url = new URL(serverUrl);
+    url.pathname = `/${name}`;
+    vi.stubEnv("DATABASE_URL", url.toString());
+    _resetEnvCache();
+    const adapter = (await createAdapter({
+      type: dialect,
+      url: url.toString(),
+    })) as unknown as DrizzleAdapter;
+    return {
+      adapter,
+      async close() {
+        await adapter.disconnect().catch(() => {});
+        await drop();
+      },
+    };
+  } catch (error) {
+    // The database may have been made before the failure: nothing would drop it otherwise.
+    await drop().catch(() => {});
+    throw error;
+  }
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -112,6 +125,8 @@ describe.each(getConfiguredTestDialects())(
 
     /** A start of the app on the case's database and project folder. */
     async function start(): Promise<TestNextly> {
+      // Between starts only the services are cleared: the database and the folder stay, as
+      // they do across a restart.
       clearServices();
       current = await createTestNextly({
         adapter: database!.adapter as never,
@@ -132,14 +147,16 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
 
     afterEach(async () => {
-      clearServices();
+      // The last instance is torn down whole, so nothing of it is left pending or registered
+      // for the next case; the database is the case's own, closed and dropped below.
+      await current?.destroy().catch(() => {});
       current = undefined;
-      await database?.close();
+      await database?.close().catch(() => {});
       database = undefined;
       await rm(project, { recursive: true, force: true });
       vi.unstubAllEnvs();
       _resetEnvCache();
-    });
+    }, 120_000);
 
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;

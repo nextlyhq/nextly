@@ -197,7 +197,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect(columnLines(upSql, "metatitle")).toEqual([]);
     });
 
-    it("migrate:create records each field under its own name", async () => {
+    it("migrate:create records each field under its own name, and its column in snake case", async () => {
       await create();
 
       const meta = join(dir, "migrations", "meta");
@@ -208,7 +208,22 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         await readFile(join(meta, snapshotFile), "utf-8")
       ) as {
         snapshot: { tables: { name: string; columns: { name: string }[] }[] };
+        entities: Record<
+          "collections" | "singles" | "fieldGroups",
+          Record<string, { settings: { fields: { name: string }[] } }>
+        >;
       };
+      // Each declaration as the snapshot records it: the field under its own name, as given.
+      for (const [kind, slug] of [
+        ["collections", "cases"],
+        ["singles", "about"],
+        ["fieldGroups", "teaser"],
+      ] as const) {
+        expect(
+          recorded.entities[kind][slug]?.settings.fields.map(f => f.name),
+          `${kind}.${slug}`
+        ).toEqual(["summary", "metaTitle"]);
+      }
       // The tables' columns, as the snapshot the next run diffs against holds them.
       for (const table of ["dc_cases", "single_about", "comp_teaser"]) {
         const columns = recorded.snapshot.tables
