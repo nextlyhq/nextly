@@ -2228,7 +2228,7 @@ export async function companionDriftItems(
  * missing one with it.
  */
 async function companionPresenceItems(
-  deps: CollectionSaveDeps,
+  deps: Pick<CollectionSaveDeps, "adapter">,
   companion: string,
   recordedTable: TableSpec,
   pushTarget: PushTarget | undefined
@@ -2262,7 +2262,7 @@ async function companionPresenceItems(
  * where the save runs its file (`companionDriftItems`).
  */
 async function translatedColumnsKeptOnMain(
-  deps: CollectionSaveDeps,
+  deps: Pick<CollectionSaveDeps, "adapter">,
   table: string,
   recordedTable: TableSpec
 ): Promise<string[]> {
@@ -2498,7 +2498,7 @@ async function companionPresentItems(
  * change to what a healthy translations table must have changes both.
  */
 async function companionShapeItems(
-  deps: CollectionSaveDeps,
+  deps: Pick<CollectionSaveDeps, "adapter">,
   companion: string
 ): Promise<DriftItem[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -2542,7 +2542,7 @@ async function companionShapeItems(
  * compared as the same introspection reads both tables.
  */
 async function keyColumnItems(
-  deps: CollectionSaveDeps,
+  deps: Pick<CollectionSaveDeps, "adapter">,
   companion: string,
   columns: readonly ColumnSpec[]
 ): Promise<DriftItem[]> {
@@ -2587,7 +2587,7 @@ async function keyColumnItems(
 
 /** Where `_parent` does not reference the main table, as the translations table's create makes it. */
 async function parentForeignKeyItems(
-  deps: CollectionSaveDeps,
+  deps: Pick<CollectionSaveDeps, "adapter">,
   companion: string
 ): Promise<DriftItem[]> {
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -3360,7 +3360,7 @@ function tablesChangedBy(
 
 /** The tables of `names` the database has now, as it has them. */
 async function liveTables(
-  deps: CollectionSaveDeps,
+  deps: Pick<CollectionSaveDeps, "adapter">,
   names: readonly string[]
 ): Promise<NextlySchemaSnapshot> {
   const dialect = deps.adapter.getCapabilities().dialect;

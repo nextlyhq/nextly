@@ -379,38 +379,51 @@ async function dependentsOf(
 ): Promise<string[]> {
   const saves = new Set(files.map(baseName));
   const meta = join(deps.migrationsDir, "meta");
-  let names: string[];
+  const dependents: string[] = [];
+  for (const name of await snapshotNamesIn(meta)) {
+    const own = name.replace(/\.snapshot\.json$/, "");
+    if (saves.has(own)) continue;
+    const from = await writtenFrom(join(meta, name), own);
+    if (from === undefined || from.some(parent => saves.has(parent))) {
+      dependents.push(own);
+    }
+  }
+  return dependents;
+}
+
+/** The snapshot files in `meta`, in name order; none where it is absent. */
+async function snapshotNamesIn(meta: string): Promise<string[]> {
   try {
-    names = (await readdir(meta)).filter(n => n.endsWith(".snapshot.json"));
+    return (await readdir(meta))
+      .filter(n => n.endsWith(".snapshot.json"))
+      .sort();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  const dependents: string[] = [];
-  for (const name of names.sort()) {
-    const own = name.replace(/\.snapshot\.json$/, "");
-    if (saves.has(own)) continue;
-    let from: string[];
-    try {
-      const file = parseSnapshotFile(
-        await readFile(join(meta, name), "utf-8"),
-        name
-      );
-      from = [
-        ...(file.parent === undefined || file.parent === null
-          ? []
-          : [file.parent]),
-        ...(file.merges ?? []),
-        ...(file.migration === undefined || file.migration === own
-          ? []
-          : [file.migration]),
-      ];
-    } catch {
-      from = [...saves];
-    }
-    if (from.some(parent => saves.has(parent))) dependents.push(own);
+}
+
+/**
+ * The migrations the snapshot at `path`, of migration `own`, was written from: its parent, its
+ * merges, and the migration it was copied from where that is not its own. Undefined where it
+ * cannot be read.
+ */
+async function writtenFrom(
+  path: string,
+  own: string
+): Promise<string[] | undefined> {
+  let file: ReturnType<typeof parseSnapshotFile>;
+  try {
+    file = parseSnapshotFile(await readFile(path, "utf-8"), path);
+  } catch {
+    return undefined;
   }
-  return dependents;
+  const from = [...(file.merges ?? [])];
+  if (typeof file.parent === "string") from.push(file.parent);
+  if (file.migration !== undefined && file.migration !== own) {
+    from.push(file.migration);
+  }
+  return from;
 }
 
 /**
