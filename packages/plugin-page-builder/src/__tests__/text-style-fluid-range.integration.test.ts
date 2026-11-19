@@ -28,6 +28,7 @@ import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { pageBuilder } from "../plugin";
+import { classOverrideOf } from "../site-style";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 
 const ORIGIN = "http://localhost";
@@ -90,10 +91,13 @@ describe.each(getConfiguredTestDialects())(
     });
 
     /** A site storing the old range, a fluid text style and a plain one. */
-    async function boot(lead: Record<string, unknown> = LEAD) {
+    async function boot(
+      lead: Record<string, unknown> = LEAD,
+      config: Parameters<typeof pageBuilder>[0] = {}
+    ) {
       current = await createTestNextly({
         dialect,
-        plugins: [pageBuilder()],
+        plugins: [pageBuilder(config)],
         seedPublic: true,
       });
       const t = current;
@@ -308,6 +312,47 @@ describe.each(getConfiguredTestDialects())(
       expect(after.rev).toBe(before.rev);
       expect(after.tokens).toBe(before.tokens);
       expect(after.classesText).toBe(before.classesText);
+    });
+
+    it("stores the sizes alone for a text style the site's code supplies, and the size then follows the range", async () => {
+      // The code's text style already holds the clamp "Fluid…" makes, so the
+      // sizes are the whole edit the author saves.
+      const configured = {
+        id: "t-code-lead",
+        slug: "code-lead",
+        label: "Code lead",
+        orderIndex: 2,
+        role: "text" as const,
+        styles: { base: { base: { fontSize: fluidValue(SIZES, OLD) } } },
+      };
+      const t = await boot(LEAD, { siteStyle: { classes: [configured] } });
+      const designer = await holding(t, ...DESIGN);
+      const before = await stored(t);
+      // What the editor saves: the stored tier the edited library leaves,
+      // the code's entries dropped where unchanged.
+      const edited = [
+        ...before.classes,
+        { ...configured, fluidSizes: { base: SIZES } },
+      ] as Parameters<typeof classOverrideOf>[1];
+      const tier = classOverrideOf([configured], edited);
+      const saved = await patch(designer, { classes: tier, _overwrite: true });
+      expect(saved.status).toBe(200);
+      const kept = await stored(t);
+      expect(
+        kept.classes.find(entry => entry.id === "t-code-lead")
+      ).toMatchObject({ fluidSizes: { base: SIZES } });
+
+      expect(
+        (
+          await patch(designer, {
+            tokens: tokensAcross(NEW),
+            _overwrite: true,
+          })
+        ).status
+      ).toBe(200);
+      expect(sizeOf((await stored(t)).classes, "t-code-lead")).toBe(
+        fluidValue(SIZES, NEW)
+      );
     });
   }
 );
