@@ -1819,14 +1819,19 @@ export class CollectionMetadataService extends BaseService {
     // teardown can drop a table): until then a failure on MySQL has
     // committed nothing, and is answered as on the other dialects.
     let ddlStarted = false;
+    // The plugins' handler calls the current try made: a try that made any, then ended waiting
+    // for a busy table, is not run again, since a handler may act outside the database.
+    let handlerCalls = 0;
     try {
       // In tries for a busy table on PostgreSQL and SQLite: a try whose wait for a held table
-      // ended rolled back whole, and the next runs all of it again. MySQL runs it once, as before.
+      // ended rolled back whole, and the next runs all of it again, unless it ran a plugin's
+      // handler. MySQL runs it once, as before.
       await deleteTransactionInTries(
         this.adapter,
         `delete ${slugs.length === 1 ? "collection" : "collections"} ${slugs.map(slug => JSON.stringify(slug)).join(", ")}`,
         line => this.logger.warn(line),
         async tx => {
+          handlerCalls = 0;
           // The registry rows first, held for update to the end: a write that
           // must not outlive a collection holds its row for share
           // (`holdCollectionsIn`), so it either commits before the plugins'
@@ -1850,7 +1855,7 @@ export class CollectionMetadataService extends BaseService {
             // here, before any DDL, a handler that throws rolls the whole
             // delete back on every dialect, MySQL included, whose table drops
             // below commit what ran before them.
-            await runCollectionDeleteHandlers(
+            handlerCalls = await runCollectionDeleteHandlers(
               getActiveHookRegistry(),
               slugs,
               tx
@@ -1886,7 +1891,8 @@ export class CollectionMetadataService extends BaseService {
             // with it; the delete's own outcome is what the caller is told.
             await hold.release().catch(() => undefined);
           }
-        }
+        },
+        { ranUnknownCode: () => handlerCalls > 0 }
       );
     } catch (error) {
       // On MySQL a registry row can have gone before the failure, so the

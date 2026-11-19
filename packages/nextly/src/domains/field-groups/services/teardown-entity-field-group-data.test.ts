@@ -12,7 +12,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { teardownEntityComponentData } from "./teardown-entity-field-group-data";
+import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
+
+import {
+  countEntityComponentRows,
+  teardownEntityComponentData,
+} from "./teardown-entity-field-group-data";
 
 // The catalog the sweep asks whether a table it cannot address has a `_parent_table` column:
 // every table has one, unless named in `withoutParent`.
@@ -37,6 +42,7 @@ vi.mock("../../schema/pipeline/diff/introspect-live", async importOriginal => ({
 }));
 afterEach(() => {
   catalog.withoutParent.clear();
+  vi.mocked(liveColumnNames).mockClear();
 });
 
 const UNREGISTERED =
@@ -165,6 +171,26 @@ describe("teardownEntityComponentData failure handling", () => {
 
     expect(result.skippedTables).toEqual(["comp_ghost"]);
     expect(adapter.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it("reads the catalog once for every table it counts", async () => {
+    // One round trip for the columns of every candidate table, not one per table counted.
+    const adapter = makeAdapter("comp_ghost", new Error(UNREGISTERED), 2);
+
+    const owned = await countEntityComponentRows({
+      adapter: adapter as never,
+      parentTable: "dc_posts",
+    });
+
+    expect(owned).toEqual([
+      { table: "comp_hero", rows: 2 },
+      { table: "comp_ghost", rows: 2 },
+    ]);
+    expect(vi.mocked(liveColumnNames)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(liveColumnNames).mock.calls[0]?.[2]).toEqual([
+      "comp_hero",
+      "comp_ghost",
+    ]);
   });
 
   it("probes an unresolvable table once, not once per parent", async () => {

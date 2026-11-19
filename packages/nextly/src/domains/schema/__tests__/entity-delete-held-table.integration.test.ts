@@ -26,6 +26,7 @@ import { resetSessionStandingForTests } from "../../../auth/session/session-stan
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import { definePlugin } from "../../../plugins/plugin-context";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -40,7 +41,10 @@ import {
 } from "../utils/resolve-table-name";
 
 let instance: TestNextly | undefined;
+/** The calls a plugin's in-transaction collection-delete handler received, by slug. */
+const handled: string[] = [];
 afterEach(async () => {
+  handled.length = 0;
   vi.unstubAllEnvs();
   resetSessionStandingForTests();
   await instance?.destroy();
@@ -65,11 +69,33 @@ const KINDS: readonly Kind[] = ["collection", "single", "fieldGroup"];
 describe.each(getConfiguredTestDialects())(
   "an entity delete against a held table or a stray field-group table (%s)",
   dialect => {
-    async function boot(): Promise<TestNextly> {
+    async function boot(
+      options: { deleteHandler?: boolean } = {}
+    ): Promise<TestNextly> {
       const t = await createTestNextly({
         dialect,
         db: { migrationsDir: HISTORY, uiSchemaFile: "./schema/builder.json" },
         localization: { locales: ["en", "de"], defaultLocale: "en" },
+        // A plugin removing what it holds for a collection in the delete's transaction: code the
+        // system does not know, which a second try would run again.
+        ...(options.deleteHandler === true
+          ? {
+              plugins: [
+                definePlugin({
+                  name: "edh-designer",
+                  version: "1.0.0",
+                  nextly: ">=0.0.0",
+                  init(ctx) {
+                    ctx.hooks.onCollectionDelete({
+                      inTransaction: async ({ slug }) => {
+                        handled.push(slug);
+                      },
+                    });
+                  },
+                }),
+              ],
+            }
+          : {}),
       });
       instance = t;
       // As the Builder runs: each save is applied, and recorded, here.
@@ -184,6 +210,45 @@ describe.each(getConfiguredTestDialects())(
         await holding;
       };
     }
+
+    it.runIf(dialect === "postgresql")(
+      "a collection's, whose plugin handler ran before the held table, stops without trying again",
+      async () => {
+        const t = await boot({ deleteHandler: true });
+        const entity = await anEntity(t, "collection");
+        const companion = `${entity.table}_locales`;
+        const release = await holdTable(t, companion);
+        try {
+          vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+          vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "3");
+
+          const stopped = await remove(entity).then(
+            () => "deleted",
+            (error: unknown) => error
+          );
+
+          // Stopped at the first try's wait: a second try would run the handler again, and what it
+          // does outside the database a rollback does not undo.
+          // Asked of what the caller is told: the collection's road rebuilds the error from its
+          // code and message, so the stop's log context does not reach it.
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            publicMessage: expect.stringMatching(
+              /stopped without trying again: table busy\.[\s\S]*a call of code the system does not know[\s\S]*through 1 try /
+            ),
+          });
+          expect(handled).toEqual([entity.slug]);
+          // Rolled back whole: the collection, its translations and its row stand.
+          expect(await t.adapter.tableExists(entity.table)).toBe(true);
+          expect(await t.adapter.tableExists(companion)).toBe(true);
+          expect(await registryRowCount(t, entity)).toBe(1);
+          expect(deleteFiles(t, entity)).toEqual([]);
+        } finally {
+          await release();
+        }
+      },
+      30_000
+    );
 
     for (const kind of KINDS) {
       it.runIf(dialect === "postgresql")(

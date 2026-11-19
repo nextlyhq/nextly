@@ -9,7 +9,9 @@
  * timeout), as a field-group migration step's tries do, and a try whose wait ended is tried again
  * as the bounds (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`) allow; then the delete stops
  * with `NEXTLY_TABLE_BUSY`. A try that ended rolled its transaction back whole, so the stop has
- * changed nothing, and the next try runs the whole transaction again.
+ * changed nothing, and the next try runs the whole transaction again; unless the try ran code the
+ * system does not know (a plugin's handler), whose effects outside the database a rollback does
+ * not undo: then the delete stops at once, without trying again.
  *
  * MySQL commits each table drop as it runs, and what ran before it, so its deletes run in steps
  * ordered to stay retryable: the transaction runs there as before, unbounded.
@@ -68,14 +70,22 @@ function deleteStopped(stop: BusyTableStop): NextlyError {
  * Runs `work` in one transaction of `adapter`, as `adapter.transaction` does, in tries for a busy
  * table on PostgreSQL and SQLite (see the module's comment); `change` names the delete in each
  * try's notice, told through `warn`, and in the stop. Throws `NEXTLY_TABLE_BUSY` once the tries
- * run out, and `INVALID_INPUT` for a bound out of range before the first; every other failure of
- * `work` goes through as it is.
+ * run out, at once where the try that ended ran code the system does not know
+ * (`options.ranUnknownCode`), and `INVALID_INPUT` for a bound out of range before the first; every
+ * other failure of `work` goes through as it is.
  */
 export async function deleteTransactionInTries<T>(
   adapter: DrizzleAdapter,
   change: string,
   warn: (line: string) => void,
-  work: (tx: TransactionContext) => Promise<T>
+  work: (tx: TransactionContext) => Promise<T>,
+  options: {
+    /**
+     * Whether the try just ended ran code the system does not know, which a next try would run
+     * again: asked once a try's wait has ended, of what that try's `work` ran.
+     */
+    ranUnknownCode?: () => boolean;
+  } = {}
 ): Promise<T> {
   const { dialect } = adapter.getCapabilities();
   if (dialect === "mysql") return adapter.transaction(work);
@@ -114,10 +124,19 @@ export async function deleteTransactionInTries<T>(
         return { kind: "done", value };
       } catch (error) {
         if (!endedWaiting(error, dialect, false)) throw error;
-        // Rolled back whole: nothing of this try stays, and all of it may run again.
+        // Rolled back whole: nothing of this try stays, and all of it may run again, unless it ran
+        // code the system does not know, which runs first in the delete (its first step).
         return {
           kind: "ended",
           ended: { table: null, holder: HOLDER_NOT_LOOKED_UP },
+          ...(options.ranUnknownCode?.() === true
+            ? {
+                lasting: {
+                  statementNumber: 1,
+                  judgement: { kind: "no-retry", reason: "unknown-code" },
+                },
+              }
+            : {}),
           undone: true,
           committed: [],
         };

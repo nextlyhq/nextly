@@ -115,9 +115,16 @@ export async function runCollectionDeleteHandlers(
   registry: CollectionDeleteSource,
   slugs: readonly string[],
   tx: TransactionContext
-): Promise<void> {
+): Promise<number> {
+  // How many handler calls were made: a caller that would run them again in a later try of the
+  // same delete reads it, since what a handler does outside the database no rollback undoes.
+  let calls = 0;
   for (const { handler } of registry.collectionDeleteEntries()) {
     if (handler.inTransaction === undefined) continue;
-    for (const slug of slugs) await handler.inTransaction(slug, tx);
+    for (const slug of slugs) {
+      calls += 1;
+      await handler.inTransaction(slug, tx);
+    }
   }
+  return calls;
 }
