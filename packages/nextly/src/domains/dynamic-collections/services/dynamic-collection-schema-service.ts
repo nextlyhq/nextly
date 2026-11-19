@@ -2102,9 +2102,13 @@ ${allColumnDefs.join(",\n")}
       // it. Reading the toggle for one of those emits a second CREATE INDEX for the same
       // column under the same name.
       if (!oldField || this.storageClassChanged(oldField, field)) continue;
-      if (oldField.index !== field.index) {
+      // Whether the column is indexed by the field's rules, not its `.index` alone: a relationship's
+      // is indexed whatever it says, so a type crossing that line adds or drops the index.
+      const wasIndexed = this.columnIsIndexed(oldField);
+      const isIndexed = this.columnIsIndexed(field);
+      if (wasIndexed !== isIndexed) {
         const idxCol = toSnakeCase(field.name);
-        if (field.index) {
+        if (isIndexed) {
           // Judged by the column as it stands in the database, which the caller reads: a repeater
           // or group is JSON on a table created now and text on one created before, and MySQL can
           // index only the second. Without the live types the legacy rendering stands, as before.
@@ -2314,20 +2318,21 @@ ${allColumnDefs.join(",\n")}
           described !== null &&
           before.dialectType !== described.dialectType
         ) {
-          // With what the fields were, so the rebuild drops only the reference Nextly made for a
-          // former relationship, and an older one-to-one's inline UNIQUE only where the field after
-          // is not unique.
-          const referenced = relationshipKeyTarget(
+          // With what the fields were: the key Nextly made for the field before, as it makes it
+          // (`relationshipForeignKey`), and whether each field is unique (`columnIsUnique`). The
+          // rebuild drops only that key, known by its whole identity, and an older one-to-one's
+          // inline UNIQUE only where the field after is not unique.
+          const formerKey = this.relationshipForeignKey(
+            tableName,
             oldField,
+            false,
             options?.targetTables
           );
           options?.onSqliteTypeChange?.(toSnakeCase(field.name), {
             type: described.dialectType,
-            fromRelationship: oldField.type === "relationship",
-            ...(referenced === null
-              ? {}
-              : { referencedTable: referenced.table }),
-            unique: field.unique === true,
+            ...(formerKey === null ? {} : { formerKey }),
+            formerUnique: this.columnIsUnique(oldField),
+            unique: this.columnIsUnique(field),
           });
         }
         if (this.nullabilityChanged(oldField, field)) {

@@ -27,24 +27,39 @@ export interface SqliteTypeChange {
   /** The type it becomes. */
   type: string;
   /**
-   * The field before was a relationship: its column carries the reference Nextly made for it,
-   * and, in a table an older release made, a UNIQUE declared inline for a one-to-one.
+   * The reference Nextly made for the field before, a relationship's, where it had one: the key
+   * the rebuild drops, matched by its whole identity, so any other reference stays.
    */
-  fromRelationship: boolean;
+  formerKey?: Pick<
+    ForeignKeySpec,
+    | "columns"
+    | "referencesTable"
+    | "referencesColumns"
+    | "onDelete"
+    | "onUpdate"
+  >;
   /**
-   * The table the former relationship's key referenced, where Nextly made one: the key the rebuild
-   * drops. Absent where the field before had none.
+   * The field before was unique (a one-to-one, or marked unique): its column's inline UNIQUE, in a
+   * table an older release made, is Nextly's to leave out.
    */
-  referencedTable?: string;
+  formerUnique: boolean;
   /** The field after is unique. */
   unique: boolean;
 }
 
+/** Two lists of names alike, case aside, in order. */
+function sameNames(a: readonly string[], b: readonly string[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((name, i) => name.toLowerCase() === b[i]?.toLowerCase())
+  );
+}
+
 /**
- * The references a rebuild drops: the one Nextly made for a former relationship's column, on that
- * column alone and to the relationship's target, now that it holds another type. Any other
- * reference, on the same column too, stays, and the rebuild keeps it as it keeps every constraint
- * the table has.
+ * The references a rebuild drops: the one Nextly made for a former relationship's column, now that
+ * it holds another type, known by its whole identity (its column, the table and column it
+ * references, and its actions). Any other reference stays, and the rebuild keeps it as it keeps
+ * every constraint the table has.
  */
 function formerRelationshipKeys(
   keys: readonly ForeignKeySpec[],
@@ -52,20 +67,25 @@ function formerRelationshipKeys(
 ): ForeignKeySpec[] {
   return keys.filter(key => {
     const [column] = key.columns;
-    const change =
-      column === undefined ? undefined : retyped.get(column.toLowerCase());
+    const former =
+      column === undefined
+        ? undefined
+        : retyped.get(column.toLowerCase())?.formerKey;
     return (
-      key.columns.length === 1 &&
-      change?.fromRelationship === true &&
-      change.referencedTable !== undefined &&
-      key.referencesTable.toLowerCase() === change.referencedTable.toLowerCase()
+      former !== undefined &&
+      sameNames(key.columns, former.columns) &&
+      key.referencesTable.toLowerCase() ===
+        former.referencesTable.toLowerCase() &&
+      sameNames(key.referencesColumns, former.referencesColumns) &&
+      key.onDelete === former.onDelete &&
+      key.onUpdate === former.onUpdate
     );
   });
 }
 
 /**
- * The inline UNIQUE constraints a rebuild keeps: each the live table declares, but a former
- * relationship's (an older one-to-one's) where the field after is not unique.
+ * The inline UNIQUE constraints a rebuild keeps: each the live table declares, but a unique former
+ * field's (an older one-to-one's) where the field after is not unique.
  */
 function keptUniqueOf(
   unique: readonly (readonly string[])[],
@@ -75,7 +95,7 @@ function keptUniqueOf(
     const [column] = columns;
     if (columns.length !== 1 || column === undefined) return true;
     const change = retyped.get(column.toLowerCase());
-    return !(change?.fromRelationship === true && !change.unique);
+    return !(change?.formerUnique === true && !change.unique);
   });
 }
 
