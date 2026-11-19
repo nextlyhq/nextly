@@ -120,6 +120,24 @@ const configWithViews = (
     ],
   });
 
+/** Two text fields, `kept` and `moved`, each translated or not. */
+const configMoving = (keptTranslated: boolean, movedTranslated: boolean) =>
+  defineConfig({
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+    db: { migrationsDir: "./migrations" },
+    collections: [
+      defineCollection({
+        slug: SLUG,
+        localized: true,
+        fields: [
+          { name: "title", type: "text" as const, localized: true },
+          { name: "kept", type: "text" as const, localized: keptTranslated },
+          { name: "moved", type: "text" as const, localized: movedTranslated },
+        ],
+      }),
+    ],
+  });
+
 describeEachDialect(
   "nextly migrate checks a translations table before its companion files apply",
   dialect => {
@@ -517,6 +535,64 @@ describeEachDialect(
       },
       240_000
     );
+
+    it("a column left by a translated field deleted from the config is not drift", async () => {
+      await migrateCreate(configWith(["title", "summary"]), "posts");
+      expect(
+        (await migrate(configWith(["title", "summary"]))).code
+      ).toBeUndefined();
+      await migrateCreate(configWith(["title"]), "fewer", {
+        acceptDataLoss: true,
+      });
+      const fewer = await migrate(configWith(["title"]), {
+        acceptDataLoss: true,
+      });
+      expect(fewer.code, fewer.said).toBeUndefined();
+      const left = await companionColumns();
+
+      await migrateCreate(configWith(["title", "subtitle"]), "subtitle");
+      const run = await migrate(configWith(["title", "subtitle"]));
+
+      expect(run.code, `left: ${left.join(",")}\n${run.said}`).toBeUndefined();
+      expect(await companionColumns()).toContain("subtitle");
+    }, 240_000);
+
+    it("a run stopped between a companion file and its main file goes on where it stopped", async () => {
+      // `kept` leaves translation and `moved` joins it in one change: a file moves `moved`
+      // into the translations table before the main file, and one drops `kept` from it after.
+      await migrateCreate(configMoving(true, false), "posts");
+      expect((await migrate(configMoving(true, false))).code).toBeUndefined();
+      await migrateCreate(configMoving(false, true), "swap", {
+        acceptDataLoss: true,
+      });
+      const all = (await pendingFiles()).map(file => file.name);
+      // Stopped at the main file, which refuses a main table changed by hand, once the file
+      // before it has moved `moved` into the translations table.
+      const main = `dc_${SLUG}`;
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(main)} ADD COLUMN ${q("by_hand")} TEXT`
+      );
+      const stopped = await migrate(configMoving(false, true), {
+        acceptDataLoss: true,
+      });
+      expect(stopped.code, stopped.said).toBe(1);
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(main)} DROP COLUMN ${q("by_hand")}`
+      );
+      const left = (await pendingFiles()).map(file => file.name);
+      // The fixture's controls: the column is there, and files of the entity remain.
+      expect(await companionColumns()).toContain("moved");
+      expect(left.length, all.join(", ")).toBeGreaterThan(0);
+      expect(left.length).toBeLessThan(all.length);
+
+      const run = await migrate(configMoving(false, true), {
+        acceptDataLoss: true,
+      });
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(await pendingFiles()).toEqual([]);
+      expect(await companionColumns()).not.toContain("kept");
+    }, 240_000);
 
     it("applying a localized collection's generated files prints no missing-snapshot warning", async () => {
       await migrateCreate(configWith(["title"]), "posts");

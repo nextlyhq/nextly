@@ -163,7 +163,8 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
       ? [
           `  The translations table ${args.translationsTable} differs from what the applied`,
           "  migration files left. It was changed outside a migration (manual SQL, a",
-          "  failed earlier run, another build's files). Nothing has been applied.",
+          "  failed earlier run, another build's files). No migration file of this run",
+          "  has been applied.",
         ]
       : args.unadoptedDatabase
         ? [
