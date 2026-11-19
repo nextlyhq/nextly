@@ -265,6 +265,10 @@ function buildNextlyInstance(
     contentEvents: directAPI.contentEvents,
     // A person's own notices, forwarded for the same reason.
     notices: directAPI.notices,
+    // Review state under a workflow, and the email delivery log, forwarded
+    // for the same reason.
+    workflows: directAPI.workflows,
+    emailDeliveries: directAPI.emailDeliveries,
 
     // RBAC namespaces
     roles: directAPI.roles,
