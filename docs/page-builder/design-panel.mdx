@@ -1,0 +1,223 @@
+---
+title: The Design panel
+description:
+  The site-wide look in four tabs (Colours, Type, Spacing and Styles), with the
+  filters, built-in colours, block styles, the More design actions menu and the
+  CSS variable prefix.
+---
+
+**Design**, in the editor's rail, holds the look your whole site shares: its
+colours, its text, its spacing and its saved styles. A change here reaches every
+page that uses it, on the canvas and on the live site.
+
+At the top of the panel are the title, **Design**, and its **⋯** menu (see
+[More design actions](#more-design-actions)). Under them are four tabs:
+**Colours**, **Type**, **Spacing** and **Styles**. The search box under the tabs
+searches all four. While you search, each tab's name shows how many of its rows
+match.
+
+Each tab lists its rows in groups. Choose a group's heading to fold it or open
+it. The editor remembers which groups you folded, and the tab you left on, the
+next time you open Design.
+
+Changes in Design are saved as you make them. Each is a step of the editor's
+history, so **Undo** and **Redo** take it back and bring it back. If you can't
+change the site's design, the panel is read-only.
+
+**Preview in dark mode**, the ☀/☾ switch in the top bar beside the devices,
+shows the canvas and the panel's swatches with the site's dark values. It is
+there only while some variable has a dark value. It is a preview only: visitors
+see what their own device is set to.
+
+## Colours
+
+The site's colours are listed in groups, such as **Brand** and **Text and
+surfaces** on a new site. A row shows the colour's swatch, split in two when its
+dark value differs, its name and its **⋯** menu. Choose a row to change the
+colour in a popup beside it:
+
+- **Light** and **Dark**, the colour in each mode. A colour with no dark value
+  of its own says **Same as light**, with **Add dark value**;
+- the colour's code name, with a button that copies it;
+- how many places use it, "Used in 4 places" for example, with **Show where** to
+  list them;
+- **Contrast**, against the site's background and its text, in light and in
+  dark.
+
+A row's **⋯** menu holds **Rename**, **Duplicate**, **Move to group…**, **Add
+dark value** (or **Remove dark value**) and **Remove**. A built-in colour has no
+**Remove**: its **Reset to built-in** puts back a value you changed.
+
+**+ Add colour**, at the end of each group, adds a colour to that group and
+opens it. **+ New group** adds a group at the end of the tab. A group's **⋯**
+menu holds **Rename group** and **Remove group**. Groups and their order are
+only how the colours are shown: moving a colour never changes its code name or
+the CSS it writes.
+
+Every colour picker in the editor lists the site's colours in the same groups
+and order, with **Recent colours**.
+
+### Filters
+
+Above the colours, three filters choose which are listed:
+
+- **All**, every colour;
+- **Unused**, the colours nothing on the site uses. While some pages haven't
+  been counted yet, it says "Counting usage…" rather than guess;
+- **Used on this page**, the colours the page you have open and its components
+  use, unsaved changes included.
+
+**Clean up unused…**, under the filters, opens **Clean up unused colours**:
+every colour you added that nothing uses, each ticked. **Remove**, which names
+how many, takes the ticked ones away in one step. A colour that became used
+meanwhile is kept, and the dialog says so. Built-in colours are never listed:
+they can't be removed.
+
+### Show built-in colours
+
+The built-in colours are the ones Nextly, or your site's code, supplies. **Show
+built-in colours**, at the end of the Colours tab, is on to start with. Turn it
+off to hide the built-in colours nothing uses, from this tab and from every
+colour picker. As the setting says, "Hidden colours still work where core blocks
+use them": they are still written on every page. A built-in colour that
+something uses stays listed, marked **Built-in**.
+
+## Type
+
+The Type tab sets your site's text: the **Body font** and **Headings font**,
+**Site text**, the type sizes and fluid sizes, the font and weight variables,
+and **Text styles**. **How text works**, near the top of the tab, opens
+[How text works](/docs/page-builder/how-text-works), which explains each of
+them.
+
+## Spacing
+
+The Spacing tab lists the rest of the site's variables, in groups: **Spacing**,
+**Radius**, **Shadows** and **Content width**. Each group but Content width ends
+with its add row: **+ Add spacing**, **+ Add radius** or **+ Add shadow**. The
+site has one content width, so there is nothing to add beside it.
+
+**Other values** ends the tab, for a variable that fits no other group. **+ Add
+value** offers a **Size**, a **Number**, a **Duration** or a **Custom value**.
+The group is listed once it holds something.
+
+How the spacing variables space out a page is in
+[Spacing](/docs/page-builder/editor#spacing).
+
+## Styles
+
+The Styles tab has two sections, **Block styles** and **Shared styles**, each
+with a line that says which is which.
+
+### Block styles
+
+"Saved looks for one kind of block. ★ is the look a block has until you pick
+another."
+
+The styles are listed by kind of block, under the block's name, which folds like
+any group. The block's own style comes first, then its other styles: the
+built-in ones a block or a plugin brings, and the ones you made. **★ Default**
+marks the style a block has until you pick another, which at first is its own
+style. Each row is drawn as a small block of its kind.
+
+Choose a row to edit that style in the inspector, with no block selected. The
+**State** menu there switches between **Normal**, **Hover**, **Focus** and
+**Pressed**.
+
+A row's **⋯** menu holds what that style offers:
+
+| Style            | Its ⋯ menu                                                               |
+| ---------------- | ------------------------------------------------------------------------ |
+| The block's own  | **Edit** and **Set as default ★**                                        |
+| A built-in style | **Edit**, **Set as default ★**, **Duplicate** and **Hide** (or **Show**) |
+| A style you made | **Edit**, **Set as default ★**, **Rename**, **Duplicate** and **Remove** |
+
+A hidden style is marked **Hidden**. It is no longer offered in the block
+panel's styles, and blocks that already wear it keep it. A built-in style can't
+be renamed or removed; hide it instead.
+
+Each kind's list ends with its add row, such as **+ New button style**. Type a
+name and press Enter: the new style starts from the ★ style's look. A style a
+page still uses can't be removed, and the editor says where it is used.
+
+In the inspector, **Edit block styles**, under a block's style tiles, opens this
+section at that kind of block.
+
+### Shared styles
+
+"Your own styles for any block."
+
+A shared style is made from a block: select it and choose **Save as shared
+style…**. Search the list by name, property or value. Each row says how widely
+the style is used; choose a row for its details. **Remove unused…** removes the
+shared styles nothing uses.
+
+## More design actions
+
+**More design actions**, the **⋯** beside the panel's title, moves the site's
+variables in and out:
+
+- **Import design tokens…** reads one or more design token files (`.json` or
+  `.tokens`). Before anything changes, **Import variables** shows what the files
+  hold: **New**, **Updated**, **Different from this site**, with **Keep mine**
+  or **Use imported** for each, **Names used twice** and **Skipped**. **Import**
+  brings them in and **Cancel** leaves the site as it was. Only someone who can
+  change the site's design sees it.
+- **Export design tokens (.json)** saves the variables as a design token file
+  (DTCG 2025.10). When some variable has a dark value, a second file carries the
+  dark mode.
+- **Export for Figma** saves one file for each mode, as Figma's variable import
+  asks.
+- **Copy CSS variables** copies the variables as CSS custom properties, the dark
+  values included, ready to paste into your own CSS.
+
+A value other tools can't read is kept in the file for Nextly only. After an
+export, **What wasn't exported** lists anything left out.
+
+## Removing a variable
+
+A variable a page, a component, a shared style or a block's default style still
+uses can't be removed: change those uses first. Some pages are never fully
+counted: a page too large to read in full, or one that keeps its blocks in a
+field under a named group. Before removing a variable, the editor reads those
+pages for it. If one of them uses the variable, or can't be read in time, the
+removal is refused and that page is named, or counted instead when you can't
+open it or its title can't be looked up in time.
+
+## The CSS variable prefix
+
+Every variable is written as a CSS custom property under the site's prefix,
+`--site-` unless you change it. So `color.primary` is `--site-color-primary`,
+and your own CSS can use it as `var(--site-color-primary)`.
+
+The prefix is set in **Settings → Site settings → Advanced**, as **CSS variable
+prefix**. Type the new prefix and choose **Change prefix**. Before anything
+changes, the editor asks, "Change the prefix to --brand-?" (with your prefix),
+and says what it leaves behind:
+
+- the canvas and every published page switch to the new names at once;
+- your site's own CSS that uses the old names must change too;
+- a shadow that uses a colour variable through the old prefix loses that colour
+  until you pick it again. The question says how many there are.
+
+**Change prefix** saves it, and **Keep --site-** (with your current prefix)
+leaves it as it was. Like everything in **Site settings**, the change applies to
+the live site straight away.
+
+A prefix starts with two dashes, uses only lowercase letters, numbers and
+dashes, and ends with a dash, like `--brand-`. `--nx-` is kept for the admin's
+own styles and `--tw-` is used by Tailwind, so neither can be chosen. If your
+site's code sets a prefix, the setting shows it, and a prefix saved here
+replaces it.
+
+Only someone allowed to manage the page builder's site settings sees **Site
+settings**.
+
+## Related
+
+- [How text works](/docs/page-builder/how-text-works): Site text, type sizes,
+  fluid sizes, text styles and fonts
+- [Using the editor](/docs/page-builder/editor): the rail, the inspector and
+  Settings
+- [Custom CSS](/docs/page-builder/custom-css): CSS of your own, which can use
+  the site's variables

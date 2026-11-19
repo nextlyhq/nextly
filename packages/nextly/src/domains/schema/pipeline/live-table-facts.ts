@@ -1082,6 +1082,61 @@ export async function readForeignKeyColumns(
   return out;
 }
 
+/**
+ * Each column of `tableName` that carries a foreign key, with the tables its keys reference,
+ * named exactly as the database names them, so two tables a name can tell apart stay apart:
+ * PostgreSQL's `regclass` text, bare for an unquoted name on the search path and quoted for
+ * any other (`"Posts"` is not `posts`), MySQL's name in the current database, and SQLite's
+ * lower-cased, as its names are compared without case. A column without a key has no entry.
+ */
+export async function readForeignKeyTargets(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const record = (column: string, target: string) => {
+    out.set(column, [...(out.get(column) ?? []), target]);
+  };
+
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT a.attname AS column_name, c.confrelid::regclass::text AS target
+          FROM pg_constraint c
+          JOIN unnest(c.conkey) AS k(attnum) ON true
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+          WHERE c.contype = 'f' AND c.conrelid = to_regclass(${tableName})`
+    )) as { rows: { column_name: string; target: string }[] };
+    for (const row of result.rows) record(row.column_name, row.target);
+    return out;
+  }
+
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{
+      COLUMN_NAME: string;
+      REFERENCED_TABLE_NAME: string;
+      REFERENCED_TABLE_SCHEMA: string;
+    }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_TABLE_SCHEMA
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = ${tableName}
+              AND REFERENCED_TABLE_NAME IS NOT NULL
+              AND REFERENCED_TABLE_SCHEMA = DATABASE()`
+      )
+    );
+    for (const row of rows) record(row.COLUMN_NAME, row.REFERENCED_TABLE_NAME);
+    return out;
+  }
+
+  const rows = (await (db as SqliteAll).all(
+    sql`PRAGMA foreign_key_list(${sql.identifier(tableName)})`
+  )) as (SqliteForeignKeyRow & { table: string })[];
+  for (const row of rows) record(row.from, row.table.toLowerCase());
+  return out;
+}
+
 /** What a column carries beside its type and default, as its database reports it. */
 export interface ColumnExtras {
   comment: string | null;

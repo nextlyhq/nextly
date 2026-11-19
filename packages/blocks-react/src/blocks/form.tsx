@@ -399,19 +399,21 @@ export function renderForm(
 
 /**
  * Version 1 to 2: forms always post to the page builder's receiver, so
- * `method` goes. A version 1 form drew "Submit" on a button with no words
- * stored, so that is what it keeps; everything else it stored is kept as it
- * is, "Send to" among it.
+ * `method` goes, with any binding on it (`VERSION_1_DROPS`). A version 1 form
+ * drew "Submit" on a button with no words stored, so that is what it keeps;
+ * everything else it stored is kept as it is, "Send to" among it.
  */
 function fromVersion1(props: Record<string, unknown>): Record<string, unknown> {
-  const { method: _method, ...rest } = props;
-  const upgraded = Array.isArray(rest.fields)
-    ? { ...rest, fields: rest.fields.map(namedAsVersion1) }
-    : rest;
+  const upgraded = Array.isArray(props.fields)
+    ? { ...props, fields: props.fields.map(namedAsVersion1) }
+    : props;
   return text(upgraded.submitText).trim() === ""
     ? { ...upgraded, submitText: "Submit" }
     : upgraded;
 }
+
+/** The props version 1 to 2 drops: the send method. */
+const VERSION_1_DROPS = { 1: ["method"] } as const;
 
 /**
  * A version 1 field with the name it was sent under written down: one with
@@ -450,6 +452,7 @@ export const form: BlockDefinition<FormProps, PageContext> = defineBlock({
   name: "core/form",
   version: 2,
   migrate: { 1: fromVersion1 },
+  drops: VERSION_1_DROPS,
   // What an author reads, in the Add panel and the block card: one plain line.
   description:
     "A form visitors fill in and send, with a message once it's sent.",

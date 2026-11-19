@@ -81,7 +81,7 @@ import {
 } from "./editing.mjs";
 import { EXPECTED_FAILURES } from "./expected-failures.mjs";
 import { judge, percentile, table } from "./report.mjs";
-import { startOwnServer } from "./server.mjs";
+import { SERVER_LOG, startOwnServer } from "./server.mjs";
 import { heapGrowth, idleMinute, opens, publishes } from "./session.mjs";
 
 async function measure(log) {
@@ -327,9 +327,12 @@ async function main() {
     if (OWN_SERVER) server = await startOwnServer(log);
     const started = Date.now();
     const { measured, extra } = await measure(log);
-    const { rows, problems } = judge(measured, BUDGETS, EXPECTED_FAILURES, {
-      ...(ONLY === undefined ? {} : { only: ONLY }),
-    });
+    const { rows, problems } = judge(
+      measured,
+      BUDGETS,
+      EXPECTED_FAILURES,
+      ONLY === undefined ? {} : { only: ONLY }
+    );
     const out = {
       base: BASE,
       rate: RATE,
@@ -356,7 +359,7 @@ async function main() {
     if (server && flag("keep")) {
       server.release();
       console.log(
-        `[builder-speed] the server stays up (process group ${String(server.pid)}); measure it again with --base-url ${BASE}, and stop it with: kill -- -${String(server.pid)}`
+        `[builder-speed] the server stays up (process group ${String(server.pid)}); measure it again with --base-url ${BASE}, and stop it with: kill -- -${String(server.pid)}; it prints to ${path.relative(ROOT, SERVER_LOG)}`
       );
     } else {
       await server?.stop();

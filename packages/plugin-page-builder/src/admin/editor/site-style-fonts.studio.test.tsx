@@ -29,7 +29,10 @@ vi.mock("@nextlyhq/plugin-sdk/client", () => ({
   useCan: (permission: string) => permission === "update-site-style",
 }));
 
-vi.mock("../site-style-client", () => ({
+vi.mock("../site-style-client", async () => ({
+  // Outside an editor: no history, and nothing drawn over the read.
+  SiteStyleHistoryContext: (await import("react")).createContext(null),
+  SiteStylePreviewContext: (await import("react")).createContext(new Map()),
   useSaveSiteStyle: () => ({
     save: (...args: unknown[]) => {
       saves.calls.push(args);
@@ -46,6 +49,8 @@ vi.mock("../site-style-client", () => ({
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
+  // The author the catalogue keeps the choice to show previews for.
+  useCurrentUserId: () => "u1",
   usePluginClientConfig: () => undefined,
   useUploadMedia: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
