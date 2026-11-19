@@ -32,15 +32,34 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  authorizeChecked,
   checkRead,
+  checkedCaller,
   checkedRoleChange,
-  checkWrite,
   createRequestContext,
   isNotFoundError,
   mergeConfig,
   toListResult,
+  type RouteGrant,
 } from "./helpers";
 import { hiddenUserFieldPaths, withoutHiddenPaths } from "./hidden-fields";
+
+/**
+ * The check an identities method runs first, as REST's two doors ask it: a
+ * checked caller acting on its own account needs only to be named, as the
+ * signed-in caller of `/api/me/identities` needs only a session; another
+ * account's identities take the user-management `grant`. A trusted call is
+ * server code, and runs unchecked as every other trusted call does.
+ */
+async function checkIdentityAccess(
+  ctx: NextlyContext,
+  args: DirectAPIConfig,
+  userId: string,
+  grant: RouteGrant
+): Promise<void> {
+  const caller = checkedCaller(ctx.defaultConfig, args);
+  if (caller && caller.userId !== userId) await authorizeChecked(caller, grant);
+}
 
 /**
  * Users namespace API, bound to a Nextly context.
@@ -273,9 +292,15 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         });
       }
 
-      // Checked as REST's user read is — the listing is the same per-user
-      // view `findByID` serves — before anything is read.
-      await checkRead(ctx.defaultConfig, args, SYSTEM_READ_POLICY.users.read);
+      // Checked as REST checks the listing — another account's with the
+      // user read `findByID` asks, the caller's own as `/api/me/identities`
+      // serves it — before anything is read.
+      await checkIdentityAccess(
+        ctx,
+        args,
+        args.userId,
+        SYSTEM_READ_POLICY.users.read
+      );
       return ctx.identityService.listExternalIdentities(args.userId);
     },
 
@@ -291,12 +316,13 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
         });
       }
 
-      // Checked as REST's user update is — the unlink is the same
-      // user-management write the role assignments take — before anything
-      // is written.
-      await checkWrite(
-        ctx.defaultConfig,
+      // Checked as REST checks the unlink — another account's with the
+      // user update the role assignments take, the caller's own as
+      // `/api/me/identities` serves it — before anything is written.
+      await checkIdentityAccess(
+        ctx,
         args,
+        args.userId,
         SYSTEM_WRITE_POLICY.users.update
       );
       await ctx.identityService.unlinkExternalIdentity(

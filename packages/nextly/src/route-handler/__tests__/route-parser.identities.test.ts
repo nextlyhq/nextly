@@ -44,3 +44,37 @@ describe("user identity routes", () => {
     ).toEqual({});
   });
 });
+
+describe("the caller's own identity routes", () => {
+  it("routes listing the caller's own identities, naming no user from the path", () => {
+    const route = parseRestRoute(["me", "identities"], "GET");
+    expect(route).toMatchObject({
+      service: "identities",
+      operation: "list",
+      method: "listUserIdentities",
+    });
+    // The request handler names the account from the session, as for
+    // every /api/me route; the path gives no user id to trust.
+    expect(route.routeParams?.userId).toBeUndefined();
+  });
+
+  it("routes unlinking one of the caller's own identities", () => {
+    const route = parseRestRoute(["me", "identities", "i1"], "DELETE");
+    expect(route).toMatchObject({
+      service: "identities",
+      operation: "delete",
+      method: "unlinkUserIdentity",
+      routeParams: { identityId: "i1" },
+    });
+    expect(route.routeParams?.userId).toBeUndefined();
+  });
+
+  it("does not route what the two routes do not name", () => {
+    expect(parseRestRoute(["me", "identities"], "DELETE")).toEqual({});
+    expect(parseRestRoute(["me", "identities", "i1"], "GET")).toEqual({});
+    // A longer path is another route, not this one with its tail ignored.
+    expect(
+      parseRestRoute(["me", "identities", "i1", "extra"], "DELETE")
+    ).toEqual({});
+  });
+});

@@ -1,12 +1,17 @@
 /**
- * The Direct API's identities methods on the users namespace are checked
- * when their caller asks to be.
+ * A user's external identities, listed and unlinked through both doors —
+ * the REST endpoints and the Direct API's users namespace — under the same
+ * rule: a signed-in person manages their own with no permission at all,
+ * and another account's only with the user-management permissions (the
+ * user read to list, the user update to unlink), each refused before
+ * anything is read or written.
  *
- * A Nextly instance (or a single call) with `overrideAccess: false` and a
- * `user` is judged as the REST routes judge that person: the listing asks
- * the user read, the unlink the user update, each before anything is read
- * or written, and a refusal leaves the identities exactly as they were. A
- * trusted instance, the default, keeps doing what server code asks of it.
+ * The REST cases run through the catch-all handler with a real session
+ * cookie, so the gate, the cross-site check and the dispatch are the ones
+ * a browser meets. A Direct API instance (or a single call) with
+ * `overrideAccess: false` and a `user` is judged as REST judges that
+ * person; a trusted instance, the default, keeps doing what server code
+ * asks of it.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -18,6 +23,9 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { COOKIE_NAMES } from "../../auth/cookies/cookie-config";
+import { buildClaims } from "../../auth/jwt/claims";
+import { signAccessToken } from "../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../auth/session/session-standing";
 import { externalIdentityKeyDigest } from "../../schemas/external-identities";
 import {
@@ -26,7 +34,43 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../routeHandler";
 import { Nextly } from "../nextly";
+
+/** The origin the test requests are addressed to, which is the app's own. */
+const OWN_ORIGIN = "http://localhost";
+
+/** A request through the catch-all REST handler, signed in as `userId`. */
+async function rest(
+  userId: string,
+  method: "GET" | "DELETE",
+  segments: string[],
+  origin: string = OWN_ORIGIN
+): Promise<Response> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId,
+      email: `${userId}@example.com`,
+      name: userId,
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET as string
+  );
+  const request = new Request(`${OWN_ORIGIN}/api/${segments.join("/")}`, {
+    method,
+    headers: {
+      cookie: `${COOKIE_NAMES.accessToken}=${token}`,
+      origin,
+    },
+  });
+  const context = { params: Promise.resolve({ params: segments }) };
+  const handlers = createDynamicHandlers();
+  return method === "GET"
+    ? handlers.GET(request, context)
+    : handlers.DELETE(request, context);
+}
 
 /** The part of the Direct API the set-up drives, typed where the shim is not. */
 interface Direct {
@@ -256,6 +300,148 @@ describe.each(getConfiguredTestDialects())(
         ).rejects.toMatchObject({ code: "NOT_FOUND", statusCode: 404 });
 
         expect((await heldBy(holder)).map(i => i.id)).toEqual([theirs.id]);
+      });
+    });
+
+    describe("a person managing their own identities", () => {
+      it("lists their own through REST with no permission, and no provider token", async () => {
+        const own = await identityFor(lackerId, "own, listed over REST");
+
+        const response = await rest(lackerId, "GET", ["me", "identities"]);
+        const body = (await response.json()) as {
+          identities: Record<string, unknown>[];
+        };
+
+        expect(response.status, JSON.stringify(body)).toBe(200);
+        expect(body.identities.map(identity => identity.id)).toContain(own.id);
+        // The link's own record and nothing else: no field a provider token
+        // could ride in.
+        for (const identity of body.identities) {
+          expect(Object.keys(identity).sort()).toEqual(
+            [
+              "address",
+              "createdAt",
+              "id",
+              "issuer",
+              "providerKey",
+              "subject",
+              "userId",
+            ].sort()
+          );
+          expect(identity.userId).toBe(lackerId);
+        }
+      });
+
+      it("unlinks their own through REST with no permission", async () => {
+        const own = await identityFor(lackerId, "own, unlinked over REST");
+
+        const response = await rest(lackerId, "DELETE", [
+          "me",
+          "identities",
+          own.id,
+        ]);
+
+        expect(response.status, await response.clone().text()).toBe(200);
+        expect((await heldBy(lackerId)).map(i => i.id)).not.toContain(own.id);
+      });
+
+      it("lists and unlinks their own through the Direct API with no permission", async () => {
+        const own = await identityFor(lackerId, "own, through server code");
+        const as = checkedAs(lackerId);
+
+        const listed = await as.users.listIdentities({ userId: lackerId });
+        expect(listed.map(identity => identity.id)).toContain(own.id);
+
+        await as.users.unlinkIdentity({ userId: lackerId, identityId: own.id });
+        expect((await heldBy(lackerId)).map(i => i.id)).not.toContain(own.id);
+      });
+    });
+
+    describe("another account's identities over REST", () => {
+      it("are refused to a person without the permissions, and stay", async () => {
+        const target = await account("rest-unmanaged@example.com");
+        const theirs = await identityFor(target, "not theirs to manage");
+
+        const listing = await rest(lackerId, "GET", [
+          "users",
+          target,
+          "identities",
+        ]);
+        expect(listing.status).toBe(403);
+
+        const unlink = await rest(lackerId, "DELETE", [
+          "users",
+          target,
+          "identities",
+          theirs.id,
+        ]);
+        expect(unlink.status).toBe(403);
+        expect((await heldBy(target)).map(i => i.id)).toEqual([theirs.id]);
+      });
+
+      it("are listed and unlinked by a person holding the user-management permissions", async () => {
+        const target = await account("rest-managed@example.com");
+        const theirs = await identityFor(target, "managed over REST");
+
+        const listing = await rest(managerId, "GET", [
+          "users",
+          target,
+          "identities",
+        ]);
+        const body = (await listing.json()) as {
+          identities: { id: string }[];
+        };
+        expect(listing.status, JSON.stringify(body)).toBe(200);
+        expect(body.identities.map(identity => identity.id)).toEqual([
+          theirs.id,
+        ]);
+
+        const unlink = await rest(managerId, "DELETE", [
+          "users",
+          target,
+          "identities",
+          theirs.id,
+        ]);
+        expect(unlink.status, await unlink.clone().text()).toBe(200);
+        expect(await heldBy(target)).toEqual([]);
+      });
+    });
+
+    describe("a cross-site unlink", () => {
+      it("is refused on the caller's own identities, and the identity stays", async () => {
+        const own = await identityFor(lackerId, "kept from a forged unlink");
+
+        const response = await rest(
+          lackerId,
+          "DELETE",
+          ["me", "identities", own.id],
+          "https://attacker.example"
+        );
+        const body = (await response.json()) as { error: { code: string } };
+
+        expect(response.status).toBe(403);
+        expect(body.error.code).toBe("CSRF_FAILED");
+        expect((await heldBy(lackerId)).map(i => i.id)).toContain(own.id);
+      });
+
+      it("is refused on another account's identities, even with the permissions", async () => {
+        const target = await account("cross-site-target@example.com");
+        const theirs = await identityFor(
+          target,
+          "kept from a forged admin unlink"
+        );
+
+        const response = await rest(
+          managerId,
+          "DELETE",
+          ["users", target, "identities", theirs.id],
+          "https://attacker.example"
+        );
+        const body = (await response.json()) as { error: { code: string } };
+
+        expect(response.status).toBe(403);
+        expect(body.error.code).toBe("CSRF_FAILED");
+        expect((await heldBy(target)).map(i => i.id)).toEqual([theirs.id]);
       });
     });
   }

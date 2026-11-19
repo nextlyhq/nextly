@@ -4,11 +4,9 @@ import { getDialectTables } from "../database/index";
 import { resolveRelations } from "../database/resolve-relations";
 import { container } from "../di/container";
 import type { NextlyServiceConfig } from "../di/register";
+import { linkingPolicyFromAuthConfig } from "../domains/auth/linking-policy";
 import { AuthService } from "../domains/auth/services/auth-service";
-import {
-  IdentityService,
-  noConfiguredKeysLinkingPolicy,
-} from "../domains/auth/services/identity-service";
+import { IdentityService } from "../domains/auth/services/identity-service";
 import { PermissionCheckerService } from "../domains/auth/services/permission-checker-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import { RoleInheritanceService } from "../domains/auth/services/role-inheritance-service";
@@ -266,14 +264,15 @@ export class ServiceContainer {
       // The registered instance when services have booted, so the dispatcher
       // and the Direct API hold the one the app built. A bare container
       // (CLI, test) makes its own, with the linking policy a configuration
-      // naming no provider keys answers with — the doors this container
-      // serves never ask it.
+      // naming no provider keys resolves to, as the registration does.
       if (container.has("identityService")) {
         this._identities = container.get<IdentityService>("identityService");
         return this._identities;
       }
       this._identities = new IdentityService(this.adapter, this.getLogger(), {
-        linkingPolicy: noConfiguredKeysLinkingPolicy(),
+        linkingPolicy: linkingPolicyFromAuthConfig(undefined),
+        roles: this.roles,
+        users: this.users,
       });
     }
     return this._identities;

@@ -25,6 +25,7 @@ process.env.NEXTLY_SECRET =
 
 import { randomUUID } from "node:crypto";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { COOKIE_NAMES } from "../../../auth/cookies/cookie-config";
@@ -66,6 +67,9 @@ const ACME: PluginDefinition = {
 
 /** A linking policy that enables every key: the matrix is another change's. */
 const EVERY_KEY_ENABLED: LinkingPolicyPort = {
+  policyFor() {
+    return { enabled: true };
+  },
   requireEnabled(providerKey: string) {
     return {
       providerKey,
@@ -81,12 +85,32 @@ const EVERY_KEY_ENABLED: LinkingPolicyPort = {
  */
 function provisioningPolicy(roles: readonly string[]): LinkingPolicyPort {
   return {
+    policyFor() {
+      return { enabled: true };
+    },
     requireEnabled(providerKey: string) {
       return {
         providerKey,
         trustedForImplicitLinking: false,
         provisioning: { mayProvision: true, roles },
       };
+    },
+  };
+}
+
+/** A linking policy that enables only the keys it is handed. */
+function enablingOnly(...keys: string[]): LinkingPolicyPort {
+  return {
+    policyFor(providerKey: string) {
+      return { enabled: keys.includes(providerKey) };
+    },
+    requireEnabled(providerKey: string) {
+      if (!keys.includes(providerKey)) {
+        throw NextlyError.forbidden({
+          logContext: { reason: "provider-key-not-enabled", providerKey },
+        });
+      }
+      return EVERY_KEY_ENABLED.requireEnabled(providerKey);
     },
   };
 }
@@ -101,6 +125,66 @@ function serviceOn(
     linkingPolicy,
     roles: services.roles,
     users: services.users,
+  });
+}
+
+/**
+ * A gate both racing unlinks pass through at their delete, after their
+ * check: each arrival waits, and the second opens the way for both. An
+ * unlink that held no lock across its check would let both arrive and both
+ * delete, each having read the other's identity as still there. Under the
+ * account's lock the second never reaches the gate while the first holds
+ * it, so the first is let through by the timeout instead and the second
+ * reads what it left.
+ */
+function startGate(timeoutMs = 1500): { enter: () => Promise<void> } {
+  let arrived = 0;
+  let open!: () => void;
+  const gate = new Promise<void>(resolve => (open = resolve));
+  return {
+    async enter(): Promise<void> {
+      arrived += 1;
+      if (arrived === 2) open();
+      await Promise.race([
+        gate,
+        new Promise<void>(resolve => setTimeout(resolve, timeoutMs)),
+      ]);
+    },
+  };
+}
+
+/** The adapter, every transaction's delete held at `gate` first. */
+function gatedAtTheDelete(
+  adapter: DrizzleAdapter,
+  gate: { enter: () => Promise<void> }
+): DrizzleAdapter {
+  const gatedTransaction = (tx: object): object =>
+    new Proxy(tx, {
+      get(target, property) {
+        const value: unknown = Reflect.get(target, property);
+        if (typeof value !== "function") return value;
+        if (property === "delete") {
+          return async (...args: unknown[]) => {
+            await gate.enter();
+            return (value as (...a: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return (value as (...a: unknown[]) => unknown).bind(target);
+      },
+    });
+  return new Proxy(adapter, {
+    get(target, property) {
+      if (property === "transaction") {
+        return (work: (tx: object) => Promise<unknown>, ...rest: unknown[]) =>
+          (target.transaction as (...a: unknown[]) => Promise<unknown>).call(
+            target,
+            (tx: object) => work(gatedTransaction(tx)),
+            ...rest
+          );
+      }
+      const value: unknown = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
   });
 }
 
@@ -688,6 +772,112 @@ describe.each(getConfiguredTestDialects())(
         service.unlinkExternalIdentity("owner", theirs)
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
       expect(await service.listExternalIdentities("other")).toHaveLength(1);
+    });
+
+    it("refuses to unlink the last way in when the other identity's provider is disabled", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+      // No password: the account signs in only through its identities.
+      await handle.adapter.insert("users", {
+        id: "owner",
+        email: "owner@example.com",
+        isActive: true,
+      });
+      await insertIdentity(handle, {
+        providerKey: "acme-auth:github",
+        issuer: "",
+        subject: "at-a-disabled-provider",
+        userId: "owner",
+      });
+      const target = await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "target",
+        userId: "owner",
+      });
+
+      // The identity left behind is at a provider the policy no longer
+      // enables, so it is no way in, and the unlink is refused.
+      await expect(
+        serviceOn(
+          handle,
+          enablingOnly("acme-auth:google")
+        ).unlinkExternalIdentity("owner", target)
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(await identityRows(handle)).toHaveLength(2);
+
+      // The control: with the other provider enabled, the same unlink runs.
+      await serviceOn(
+        handle,
+        enablingOnly("acme-auth:google", "acme-auth:github")
+      ).unlinkExternalIdentity("owner", target);
+      expect(await identityRows(handle)).toHaveLength(1);
+    });
+
+    it("unlinks an account's only identity when it has a password", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+      await handle.adapter.insert("users", {
+        id: "owner",
+        email: "owner@example.com",
+        isActive: true,
+        passwordHash: "a-stored-hash",
+      });
+      const only = await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "only",
+        userId: "owner",
+      });
+
+      await serviceOn(handle).unlinkExternalIdentity("owner", only);
+      expect(await identityRows(handle)).toHaveLength(0);
+    });
+
+    it("two unlinks at once of a password-less account's two usable identities: exactly one succeeds", async () => {
+      current = await createTestNextly({ dialect });
+      const handle = current;
+      await handle.adapter.insert("users", {
+        id: "racer",
+        email: "racer@example.com",
+        isActive: true,
+      });
+      const first = await insertIdentity(handle, {
+        providerKey: "acme-auth:google",
+        issuer: "https://accounts.google.com",
+        subject: "race-one",
+        userId: "racer",
+      });
+      const second = await insertIdentity(handle, {
+        providerKey: "acme-auth:github",
+        issuer: "",
+        subject: "race-two",
+        userId: "racer",
+      });
+      const services = new ServiceContainer(handle.adapter);
+      const service = new IdentityService(
+        gatedAtTheDelete(handle.adapter, startGate()),
+        handle.getService("logger"),
+        {
+          linkingPolicy: EVERY_KEY_ENABLED,
+          roles: services.roles,
+          users: services.users,
+        }
+      );
+
+      // Each alone is allowed (the other identity is a way in) but not
+      // both: whichever goes second must read the first's removal.
+      const results = await Promise.allSettled([
+        service.unlinkExternalIdentity("racer", first),
+        service.unlinkExternalIdentity("racer", second),
+      ]);
+
+      expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+      const refused = results.find(
+        (r): r is PromiseRejectedResult => r.status === "rejected"
+      );
+      expect(refused?.reason).toMatchObject({ code: "CONFLICT" });
+      expect(await identityRows(handle)).toHaveLength(1);
     });
   }
 );

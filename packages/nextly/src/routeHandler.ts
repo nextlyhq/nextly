@@ -121,6 +121,7 @@ import {
 } from "./auth/caller-scope";
 import { COLLECTION_DEFINITION_PERMISSIONS } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
+import { isUnsafeMethod, validateOrigin } from "./auth/csrf/validate";
 import { hasAuthRateLimit } from "./auth/handlers/router";
 import { LIST_READ_GATES, requireListRead } from "./auth/list-read-gates";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
@@ -174,6 +175,7 @@ import {
   SKIP_TIMEZONE_FORMAT_HEADER,
   withTimezoneFormatting,
 } from "./lib/date-formatting";
+import { env } from "./lib/env";
 import { writeGateFor } from "./lib/immutable-system-fields";
 import { createCorsMiddleware } from "./middleware/cors";
 import { defaultRestCallerReaders } from "./middleware/rest-callers";
@@ -1883,6 +1885,14 @@ async function serveServiceRequest(
     }
   }
 
+  const crossSite = refuseCrossSiteIdentityWrite(
+    req,
+    service,
+    httpMethod,
+    authorizedUser
+  );
+  if (crossSite) return crossSite;
+
   // ==================== PARSE REQUEST BODY ====================
   let body: unknown = undefined;
   if (httpMethod === "POST" || httpMethod === "PUT" || httpMethod === "PATCH") {
@@ -2437,6 +2447,38 @@ function gateRuleCouldNotRun(req: Request, error: unknown): Response {
     buildErrorResponse(couldNotRun, {
       requestId: readOrGenerateRequestId(req),
     })
+  );
+}
+
+/**
+ * The cross-site check an identity's unlink takes: a write the session
+ * cookie authenticated is refused unless it came from the app's own origin,
+ * or one the app allows — the origin half of the check the plugin route
+ * dispatcher gives an authenticated route's cookie writes. A `SameSite=Lax`
+ * cookie already stays off a cross-site write from another site; this holds
+ * where the cookie does travel, from a sibling subdomain or a browser that
+ * ignores the attribute. An API key carries no ambient cookie and sends no
+ * browser origin, so it is exempt, as everywhere else.
+ */
+function refuseCrossSiteIdentityWrite(
+  req: Request,
+  service: string,
+  httpMethod: string,
+  caller: AuthContext | undefined
+): Response | null {
+  if (
+    service !== "identities" ||
+    !isUnsafeMethod(httpMethod) ||
+    caller?.authMethod !== "session" ||
+    validateOrigin(req, env.NEXTLY_ALLOWED_ORIGINS_PARSED ?? [])
+  ) {
+    return null;
+  }
+  return buildErrorResponse(
+    NextlyError.csrfFailed({
+      logContext: { reason: "identity-write-cross-site", httpMethod },
+    }),
+    { requestId: readOrGenerateRequestId(req) }
   );
 }
 

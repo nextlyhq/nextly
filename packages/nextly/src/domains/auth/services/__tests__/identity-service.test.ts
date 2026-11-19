@@ -155,8 +155,41 @@ function countedAdapter() {
   return new Proxy(testDb.adapter, {
     get(target, property) {
       if (property === "getDrizzle") return () => db;
+      // A transaction's reads and writes are counted the same way, at the
+      // transaction handle the work is given.
+      if (property === "transaction") {
+        return (work: (tx: unknown) => Promise<unknown>, ...rest: unknown[]) =>
+          (target.transaction as (...a: unknown[]) => Promise<unknown>).call(
+            target,
+            (tx: object) => work(countedTransaction(tx)),
+            ...rest
+          );
+      }
       const value: unknown = Reflect.get(target, property);
       return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+/** A transaction handle counting its selects, inserts and deletes into `seen`. */
+function countedTransaction(tx: object): object {
+  const counters: Record<string, "selects" | "inserts" | "deletes"> = {
+    select: "selects",
+    insert: "inserts",
+    delete: "deletes",
+  };
+  return new Proxy(tx, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property);
+      if (typeof value !== "function") return value;
+      const counted =
+        typeof property === "string" && Object.hasOwn(counters, property)
+          ? counters[property]
+          : undefined;
+      return (...args: unknown[]) => {
+        if (counted) seen[counted] += 1;
+        return (value as (...a: unknown[]) => unknown).apply(target, args);
+      };
     },
   });
 }
@@ -168,6 +201,9 @@ function policyEnabling(
   const asked: string[] = [];
   return {
     asked,
+    policyFor(providerKey: string) {
+      return { enabled: keys.includes(providerKey) };
+    },
     requireEnabled(providerKey: string) {
       asked.push(providerKey);
       if (!keys.includes(providerKey)) {
@@ -194,6 +230,9 @@ function policyProvisioning(
   trustedForImplicitLinking = false
 ): LinkingPolicyPort {
   return {
+    policyFor() {
+      return { enabled: true };
+    },
     requireEnabled(providerKey: string) {
       return { providerKey, trustedForImplicitLinking, provisioning };
     },
@@ -248,14 +287,18 @@ function service(deps: {
   });
 }
 
-/** A user row the identity table's foreign key can point at. */
+/** A user row the identity table's foreign key can point at, password-less unless given one. */
 async function plantUser(
   id: string,
-  email = `${id}@example.com`
+  email = `${id}@example.com`,
+  options: { passwordHash?: string } = {}
 ): Promise<void> {
-  await testDb.db
-    .insert(testDb.schema.users)
-    .values({ id, email, isActive: true });
+  await testDb.db.insert(testDb.schema.users).values({
+    id,
+    email,
+    isActive: true,
+    passwordHash: options.passwordHash ?? null,
+  });
 }
 
 /** One identity row, written straight to the table as the fixture does. Its id. */
@@ -1422,18 +1465,21 @@ describe("the unlink of one identity", () => {
       userId: "owner",
     });
 
-    const unlinker = service({ linkingPolicy: policyEnabling() });
+    // The kept identity's provider is enabled, so it is the account's way in.
+    const unlinker = service({
+      linkingPolicy: policyEnabling("acme-auth:github"),
+    });
     await unlinker.unlinkExternalIdentity("owner", removed);
 
     // The named row alone: the sibling keeps its place, and the unlink made
     // no write of any other kind — its one delete statement, nothing else.
-    expect(seen).toEqual({ selects: 0, inserts: 0, deletes: 1 });
+    expect(seen).toMatchObject({ inserts: 0, deletes: 1 });
     const held = await unlinker.listExternalIdentities("owner");
     expect(held.map(identity => identity.id)).toEqual([kept]);
   });
 
   it("refuses an identity another user holds, leaving both accounts as they were", async () => {
-    await plantUser("owner");
+    await plantUser("owner", "owner@example.com", { passwordHash: "hash" });
     await plantUser("other");
     const theirs = await plantIdentity({
       providerKey: "acme-auth:google",
@@ -1449,16 +1495,16 @@ describe("the unlink of one identity", () => {
     );
 
     // The same refusal a missing identity gets: whose row an id names is
-    // not the caller's to learn from this door. The scoped delete ran and
-    // removed nothing — the row counts say so — and no other write ran.
+    // not the caller's to learn from this door. Only the owner's own rows
+    // were read, and nothing was written.
     expect(error.code).toBe("NOT_FOUND");
     expect(await identitiesOf("other")).toBe(1);
     expect(await identitiesOf("owner")).toBe(0);
-    expect(seen).toEqual({ selects: 0, inserts: 0, deletes: 1 });
+    expect(seen).toMatchObject({ inserts: 0, deletes: 0 });
   });
 
   it("answers a second unlink of the same identity as a clean not-found", async () => {
-    await plantUser("owner");
+    await plantUser("owner", "owner@example.com", { passwordHash: "hash" });
     const removed = await plantIdentity({
       providerKey: "acme-auth:google",
       issuer: GOOGLE_ISSUER,
@@ -1473,6 +1519,73 @@ describe("the unlink of one identity", () => {
     );
 
     expect(error.code).toBe("NOT_FOUND");
+    expect(await identitiesOf("owner")).toBe(0);
+  });
+});
+
+describe("the unlink of the last way in (L8)", () => {
+  it("refuses the only identity of an account with no password", async () => {
+    await plantUser("owner");
+    const only = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "only",
+      userId: "owner",
+    });
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyEnabling("acme-auth:google"),
+      }).unlinkExternalIdentity("owner", only)
+    );
+
+    expect(error.code).toBe("CONFLICT");
+    expect(error.logContext).toMatchObject({ reason: "identity-last-way-in" });
+    expect(await identitiesOf("owner")).toBe(1);
+    expect(seen).toMatchObject({ deletes: 0 });
+  });
+
+  it("refuses when the other identity's provider is disabled", async () => {
+    await plantUser("owner");
+    await plantIdentity({
+      providerKey: "acme-auth:github",
+      issuer: "",
+      subject: "at-a-disabled-provider",
+      userId: "owner",
+    });
+    const target = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "target",
+      userId: "owner",
+    });
+
+    // Only the target's own provider is enabled: the identity left behind
+    // is at a disabled one, which is no way in.
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyEnabling("acme-auth:google"),
+      }).unlinkExternalIdentity("owner", target)
+    );
+
+    expect(error.code).toBe("CONFLICT");
+    expect(await identitiesOf("owner")).toBe(2);
+  });
+
+  it("unlinks the only identity of an account that has a password", async () => {
+    await plantUser("owner", "owner@example.com", { passwordHash: "hash" });
+    const only = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "only",
+      userId: "owner",
+    });
+
+    await service({ linkingPolicy: policyEnabling() }).unlinkExternalIdentity(
+      "owner",
+      only
+    );
+
     expect(await identitiesOf("owner")).toBe(0);
   });
 });

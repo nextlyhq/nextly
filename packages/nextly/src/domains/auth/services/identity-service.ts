@@ -40,7 +40,8 @@
 import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, asc, eq } from "drizzle-orm";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { asc, eq } from "drizzle-orm";
 
 import { readAccessTokenCookie } from "../../../auth/cookies/access-token-cookie";
 import { verifyAccessToken } from "../../../auth/jwt/verify";
@@ -52,13 +53,15 @@ import { env } from "../../../lib/env";
 import { bootNameOf } from "../../../plugins/plugin-consent";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
-import { externalIdentityKeyDigest } from "../../../schemas/external-identities";
+import {
+  EXTERNAL_IDENTITIES_TABLE,
+  externalIdentityKeyDigest,
+} from "../../../schemas/external-identities";
 import type { nextlyExternalIdentitiesMysql } from "../../../schemas/external-identities/mysql";
 import type { nextlyExternalIdentitiesPg } from "../../../schemas/external-identities/postgres";
 import type { nextlyExternalIdentitiesSqlite } from "../../../schemas/external-identities/sqlite";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
-import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 
 /**
@@ -97,9 +100,14 @@ export interface EnabledProviderKey {
  * what the gate already answered, never from anything the plugin handed
  * over. Whether an unlinked identity may be linked implicitly is another
  * slice's branch, and nothing here reads that answer.
+ *
+ * The unlink asks the second question, `policyFor`, the policy's
+ * non-throwing read: whether an identity the account keeps is at a provider
+ * still enabled, and so still a way in.
  */
 export interface LinkingPolicyPort {
   requireEnabled(providerKey: string): EnabledProviderKey;
+  policyFor(providerKey: string): { readonly enabled: boolean };
 }
 
 /**
@@ -144,26 +152,6 @@ export interface ExternalUserCreator {
     // The id as the users service types it (`MinimalUser.id`); the one
     // reader, `provisionFor`, normalizes it to the string the table stores.
   }): Promise<{ id: string | number }>;
-}
-
-/**
- * The linking policy of an app whose own auth configuration names no provider
- * keys: no key is enabled, so every sign-in hand-off is refused before any
- * lookup.
- *
- * What an instance built with this policy serves safely is everything that
- * never asks it — the listing and unlinking doors below — and a hand-off door
- * wired later hands the service a policy that reads a configuration naming
- * keys, in place of this one.
- */
-export function noConfiguredKeysLinkingPolicy(): LinkingPolicyPort {
-  return {
-    requireEnabled(providerKey: string): EnabledProviderKey {
-      throw NextlyError.forbidden({
-        logContext: { reason: "provider-key-not-enabled", providerKey },
-      });
-    },
-  };
 }
 
 /** What a listed login plugin hands over about one external identity. */
@@ -919,35 +907,75 @@ export class IdentityService extends BaseService {
    * The removal is scoped to the owning account — an identity another
    * account holds is not unlinkable through this door, and answers exactly
    * as an identity nobody holds does, so a caller learns nothing about
-   * whose row an id names. The scoped delete is itself the whole decision,
-   * so nothing is read first and no session, token or account is touched:
-   * whoever was signed in through the identity stays signed in by the
-   * session they hold, and signs in differently only next time.
+   * whose row an id names. No session, token or account is touched: whoever
+   * was signed in through the identity stays signed in by the session they
+   * hold, and signs in differently only next time.
+   *
+   * An account is never left with no way in (the single sign-on spec's
+   * L8): with no password, the unlink is refused unless the account keeps
+   * another identity at a provider the linking policy still enables. An
+   * identity at a disabled provider is no way in, so it does not count.
+   *
+   * The check and the removal are one transaction under the lock on the
+   * account's row, so two unlinks for one account take turns: the second
+   * reads what the first left, and two at once can never remove the last
+   * way in together. SQLite's transactions are already serialized, which
+   * the same lock call answers there.
    */
   async unlinkExternalIdentity(
     userId: string,
     identityId: string
   ): Promise<void> {
-    const removed = affectedRowCount(
-      await this.db
-        .delete(this.identitiesTable)
-        .where(
-          and(
-            eq(this.identitiesTable.id, identityId),
-            eq(this.identitiesTable.userId, userId)
-          )
-        ),
-      this.dialect
-    );
-    if (removed === 0) {
-      // The one refusal, for a row that is absent and a row another account
-      // owns alike: the count cannot tell the two apart, and neither may the
-      // answer.
-      throw NextlyError.notFound({
-        message: "No such identity for this user.",
-        logContext: { reason: "identity-not-held", userId, identityId },
+    await this.adapter.transaction(async tx => {
+      await tx.lockRow("users", userId);
+      const held = await tx.select<{ id: unknown; providerKey: unknown }>(
+        EXTERNAL_IDENTITIES_TABLE,
+        {
+          columns: ["id", "providerKey"],
+          where: { and: [{ column: "userId", op: "=", value: userId }] },
+        }
+      );
+      if (!held.some(row => String(row.id) === identityId)) {
+        // The one refusal for a row that is absent and a row another
+        // account owns alike: the account's own rows are all that was read,
+        // so the answer cannot tell the two apart.
+        throw NextlyError.notFound({
+          message: "No such identity for this user.",
+          logContext: { reason: "identity-not-held", userId, identityId },
+        });
+      }
+      const anotherWayIn = held.some(
+        row =>
+          String(row.id) !== identityId &&
+          this.deps.linkingPolicy.policyFor(String(row.providerKey)).enabled
+      );
+      if (!anotherWayIn && !(await this.holdsPassword(tx, userId))) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "This is the account's last way to sign in. Set a password or link another account first.",
+          logContext: { reason: "identity-last-way-in", userId, identityId },
+        });
+      }
+      await tx.delete(EXTERNAL_IDENTITIES_TABLE, {
+        and: [
+          { column: "id", op: "=", value: identityId },
+          { column: "userId", op: "=", value: userId },
+        ],
       });
-    }
+    });
+  }
+
+  /** Whether the account has a password to sign in with, read in the unlink's transaction. */
+  private async holdsPassword(
+    tx: TransactionContext,
+    userId: string
+  ): Promise<boolean> {
+    const [user] = await tx.select<{ passwordHash: unknown }>("users", {
+      columns: ["passwordHash"],
+      where: { and: [{ column: "id", op: "=", value: userId }] },
+    });
+    return typeof user?.passwordHash === "string" && user.passwordHash !== "";
   }
 
   /**
