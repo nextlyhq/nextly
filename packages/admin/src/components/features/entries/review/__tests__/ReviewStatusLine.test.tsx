@@ -14,6 +14,7 @@ function part(over: Partial<PartReview> = {}): PartReview {
     part: null,
     stage: "inReview",
     stageLabel: "In review",
+    stageColour: null,
     publishable: false,
     enteredAt: null,
     enteredBy: null,
@@ -25,6 +26,7 @@ function part(over: Partial<PartReview> = {}): PartReview {
     steps: [],
     waitingFor: { kind: "roles", roles: [{ id: "r1", name: "Editors" }] },
     lastMove: null,
+    reviewedVersionNo: null,
     ...over,
   };
 }
@@ -118,6 +120,31 @@ describe("ReviewStatusLine", () => {
     expect(screen.getByTestId("review-status-line").parentElement).toHaveClass(
       "px-4"
     );
+  });
+
+  it("marks the stage with the colour Settings gives it, and with none where it has none", () => {
+    const { rerender } = render(
+      <ReviewStatusLine
+        status="draft"
+        hasWorkingDraft={false}
+        part={part({
+          stageLabel: "Waiting for review",
+          stageColour: "#d97706",
+        })}
+      />
+    );
+    const line = screen.getByTestId("review-status-line");
+    expect(line).toHaveTextContent("Draft · Waiting for review");
+    expect(line.querySelector(".bg-warning-solid")).not.toBeNull();
+
+    rerender(
+      <ReviewStatusLine status="draft" hasWorkingDraft={false} part={part()} />
+    );
+    expect(
+      screen
+        .getByTestId("review-status-line")
+        .querySelector("[class*='-solid']")
+    ).toBeNull();
   });
 
   it("says a live page's changes are in review, and who they wait for", () => {

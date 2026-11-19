@@ -209,10 +209,18 @@ export function SchemaChangeDialog({
   // by the rename resolutions and filtered server-side, so a confirm_drop for
   // one of those is a harmless no-op. Interactive resolutions (NOT NULL /
   // default) win on a name collision.
+  // A changed field the preview classed destructive, such as a relationship whose links move
+  // into or out of a link table, loses values the person was warned of above, so it is confirmed
+  // by name too: the server refuses such a drop it was not told to make.
   const buildResolutions = (): Record<string, FieldResolution> => {
     const confirmed: Record<string, FieldResolution> = {};
     for (const field of changes.removed) {
       confirmed[field.name] = { action: "confirm_drop" };
+    }
+    for (const field of changes.changed) {
+      if (field.classification === "destructive") {
+        confirmed[field.name] = { action: "confirm_drop" };
+      }
     }
     return { ...confirmed, ...resolutions };
   };

@@ -531,6 +531,19 @@ describe("FieldGroupRegistryService", () => {
       // On PostgreSQL the teardowns, the drop and the row's removal run in one transaction. The
       // double runs it straight through, each statement reaching the adapter's own doubles, so
       // what ran is asserted below as it would be outside one.
+      const drizzleFindingNoRecord = () => ({
+        ...(ctx.adapter.getDrizzle() as object),
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: () =>
+                Object.assign(Promise.resolve([]), {
+                  for: () => Promise.resolve([]),
+                }),
+            }),
+          }),
+        }),
+      });
       const tx = {
         execute: (sql: string, params?: unknown[]) =>
           ctx.adapter.executeQuery(sql, params),
@@ -538,8 +551,10 @@ describe("FieldGroupRegistryService", () => {
           ctx.adapter.select(table, options),
         delete: (table: string, where: unknown) =>
           ctx.adapter.delete(table, where),
-        drizzleWithRelations: () => ctx.adapter.getDrizzle(),
-        getDrizzle: () => ctx.adapter.getDrizzle(),
+        // The teardown, through the adapter scoped to this transaction, looks the field group's
+        // translation transition record up on it, and finds none: there is nothing to forget.
+        drizzleWithRelations: () => drizzleFindingNoRecord(),
+        getDrizzle: () => drizzleFindingNoRecord(),
       };
       ctx.adapter.transaction = vi.fn(
         async (work: (t: typeof tx) => Promise<unknown>) => work(tx)

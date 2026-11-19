@@ -90,6 +90,11 @@ export async function writeEntitySave(
      */
     inLastTransaction?: () => Promise<void>;
     /**
+     * `apply` builds the whole table again from the definition (the writer's `buildsWholeTable`),
+     * so a table the database lacks is not drift.
+     */
+    buildsWholeTable?: boolean;
+    /**
      * With `runsFile`, the registry write for a file that stops part way, once it is settled to
      * what of it applied (the writer's `onSettled`).
      */
@@ -121,6 +126,7 @@ export async function writeEntitySave(
     // elsewhere it runs once they are written. Either way a failure that
     // changed nothing withdraws them.
     ...(deps.applies ? { appliedBy: run } : { appliedAfter: run }),
+    ...(options.buildsWholeTable === true ? { buildsWholeTable: true } : {}),
   });
 }
 

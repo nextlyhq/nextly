@@ -72,6 +72,7 @@ const inReview: PartReview = {
   part: null,
   stage: "inReview",
   stageLabel: "In review",
+  stageColour: null,
   publishable: false,
   enteredAt: null,
   enteredBy: null,
@@ -83,6 +84,7 @@ const inReview: PartReview = {
   steps: [],
   waitingFor: null,
   lastMove: null,
+  reviewedVersionNo: null,
 };
 
 describe("a document with no workflow attached", () => {
