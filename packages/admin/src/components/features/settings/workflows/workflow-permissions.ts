@@ -23,7 +23,7 @@ export const WORKFLOW_SETTINGS_READ: readonly string[] = [
 ];
 
 /** Changing a workflow's settings: what the PATCH route asks. */
-export const WORKFLOW_SETTINGS_UPDATE: readonly string[] = slugsOf(
+const WORKFLOW_SETTINGS_UPDATE: readonly string[] = slugsOf(
   SYSTEM_WRITE_POLICY.settings.update
 );
 
@@ -31,16 +31,25 @@ export const WORKFLOW_SETTINGS_UPDATE: readonly string[] = slugsOf(
  * Changing who holds a step: the settings change and also updating roles, as
  * the PATCH route asks of a change naming `grants`.
  */
-export const WORKFLOW_GRANTS_UPDATE: readonly string[] = slugsOf(
+const WORKFLOW_GRANTS_UPDATE: readonly string[] = slugsOf(
   SYSTEM_WRITE_POLICY.roles.setPermissions
 );
 
+/**
+ * Reading the roles a step's holders and a default reviewer are chosen from:
+ * what the roles list asks. Without it the list is refused, so no choice of
+ * roles is offered rather than an empty one.
+ */
+const ROLES_READ: readonly string[] = slugsOf(SYSTEM_READ_POLICY.roles.read);
+
 /** What the reader may change, from the permissions they hold. */
 export interface WorkflowSettingsAccess {
-  /** Default reviewers, labels and colours, and emails. */
+  /** Labels and colours, and emails. */
   update: boolean;
-  /** Who holds each step: needs `update` too. */
+  /** Who holds each step: needs `update`, updating roles, and reading them. */
   grants: boolean;
+  /** Each review stage's default reviewer: needs `update` and reading roles. */
+  reviewers: boolean;
 }
 
 /** The changes `hasPermission` allows. */
@@ -48,8 +57,10 @@ export function workflowSettingsAccess(
   hasPermission: (slug: string) => boolean
 ): WorkflowSettingsAccess {
   const update = WORKFLOW_SETTINGS_UPDATE.some(hasPermission);
+  const readsRoles = ROLES_READ.some(hasPermission);
   return {
     update,
-    grants: update && WORKFLOW_GRANTS_UPDATE.some(hasPermission),
+    grants: update && readsRoles && WORKFLOW_GRANTS_UPDATE.some(hasPermission),
+    reviewers: update && readsRoles,
   };
 }

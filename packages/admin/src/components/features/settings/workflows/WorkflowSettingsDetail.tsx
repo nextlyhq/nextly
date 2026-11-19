@@ -123,9 +123,10 @@ export function WorkflowSettingsDetail({
   const { hasPermission } = useCurrentUserPermissions();
   const access = workflowSettingsAccess(hasPermission);
   const roles = useRoles(ONE_PAGE);
-  // People are offered as reviewers only to a reader who may list them.
+  // People are offered as reviewers only to a reader who may choose a reviewer
+  // and may list them.
   const users = useUsers(ONE_PAGE, {
-    enabled: access.update && hasPermission("read-users"),
+    enabled: access.reviewers && hasPermission("read-users"),
   });
   const { refetch } = settingsQuery;
   const refetchSettings = useCallback(() => refetch(), [refetch]);
@@ -285,10 +286,18 @@ export function WorkflowSettingsDetail({
           title="Who takes each step"
           description="The roles holding each step's permission on every collection and Single using this workflow."
         >
-          {access.update && !access.grants && (
+          {access.update && !access.reviewers ? (
             <p className="text-sm text-muted-foreground">
-              Changing who takes a step also needs permission to update roles.
+              Changing who takes a step, or choosing a default reviewer, also
+              needs permission to read roles.
             </p>
+          ) : (
+            access.update &&
+            !access.grants && (
+              <p className="text-sm text-muted-foreground">
+                Changing who takes a step also needs permission to update roles.
+              </p>
+            )
           )}
           <StepGrantsTable
             workflow={workflow}
@@ -313,7 +322,7 @@ export function WorkflowSettingsDetail({
               reviewerOptions(settings, roleItems, userItems, stage)
             }
             nameOf={nameOf}
-            canChange={access.update}
+            canChange={access.reviewers}
             saving={saving}
             errors={errors}
             onSave={(stage, reviewer) =>

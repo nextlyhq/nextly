@@ -26,6 +26,8 @@ import {
   unheldPermissions,
 } from "../workflow-settings-model";
 
+import { workflowSettingsAccess } from "../workflow-permissions";
+
 import { EDITORIAL, ROLES, USERS, settingsOf } from "./fixtures";
 
 describe("the workflow settings model", () => {
@@ -137,5 +139,28 @@ describe("the workflow settings model", () => {
       "An edit to approved content returns it to Legal check.",
       "Once published, the next draft starts at Writing.",
     ]);
+  });
+
+  it("allows the role choices only to a reader who may also read the roles they are chosen from", () => {
+    const holding =
+      (...slugs: string[]) =>
+      (slug: string) =>
+        slugs.includes(slug);
+    expect(
+      workflowSettingsAccess(
+        holding("update-settings", "update-roles", "read-roles")
+      )
+    ).toEqual({ update: true, grants: true, reviewers: true });
+    expect(
+      workflowSettingsAccess(holding("update-settings", "update-roles"))
+    ).toEqual({ update: true, grants: false, reviewers: false });
+    expect(
+      workflowSettingsAccess(holding("update-settings", "read-roles"))
+    ).toEqual({ update: true, grants: false, reviewers: true });
+    expect(workflowSettingsAccess(holding("read-roles"))).toEqual({
+      update: false,
+      grants: false,
+      reviewers: false,
+    });
   });
 });

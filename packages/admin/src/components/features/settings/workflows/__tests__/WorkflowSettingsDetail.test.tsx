@@ -62,6 +62,7 @@ const ADMIN = [
   "read-settings",
   "update-settings",
   "update-roles",
+  "read-roles",
   "read-users",
 ];
 
@@ -134,7 +135,11 @@ describe("a workflow in Settings", () => {
   });
 
   it("keeps who takes each step read-only for a reader who may not update roles", async () => {
-    await open(settingsOf(), ["read-settings", "update-settings"]);
+    await open(settingsOf(), [
+      "read-settings",
+      "update-settings",
+      "read-roles",
+    ]);
 
     expect(
       screen.queryByRole("button", { name: /Change who takes/ })
@@ -143,6 +148,36 @@ describe("a workflow in Settings", () => {
       screen.getByText(
         "Changing who takes a step also needs permission to update roles."
       )
+    ).toBeTruthy();
+  });
+
+  it("offers no role choice to a reader who may change settings and roles but not read the roles", async () => {
+    // The roles list answers such a reader 403, so a dialog of roles or a reviewer picker would
+    // open empty while the server would accept the write.
+    await open(settingsOf(), [
+      "read-settings",
+      "update-settings",
+      "update-roles",
+      "read-users",
+    ]);
+
+    expect(
+      screen.queryAllByRole("button", { name: /Change who takes/ })
+    ).toEqual([]);
+    expect(
+      screen.queryAllByRole("combobox", { name: /Default reviewer for/ })
+    ).toEqual([]);
+    expect(
+      screen.getByText(
+        "Changing who takes a step, or choosing a default reviewer, also needs permission to read roles."
+      )
+    ).toBeTruthy();
+    // What needs no role list is still offered.
+    expect(
+      screen.getByRole("switch", { name: "Email for Approved" })
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("textbox", { name: "Label for Legal check" })
     ).toBeTruthy();
   });
 
