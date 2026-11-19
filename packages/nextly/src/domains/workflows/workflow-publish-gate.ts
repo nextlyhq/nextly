@@ -96,6 +96,15 @@ function partName(part: string | null): string {
   return part === null ? "The shared fields" : `The "${part}" language`;
 }
 
+/**
+ * A part named for a person with `verb` agreeing with it: a language is one ("is", "has"), the
+ * shared fields are many ("are", "have").
+ */
+function partWith(part: string | null, verb: "is" | "has"): string {
+  if (part !== null) return `${partName(part)} ${verb}`;
+  return `${partName(part)} ${verb === "is" ? "are" : "have"}`;
+}
+
 /** Whether a part was live before the move, as core read it. */
 function wasLive(question: PublishGateQuestion, part: string | null): boolean {
   return part === null
@@ -236,13 +245,13 @@ export function holdReason(
   // Live with nothing pending: the publish puts nothing new live.
   if (stage === null) return null;
   if (!allowsPublish(registered.workflow, stage)) {
-    return `${partName(part)} is in "${stageLabel(registered, stage)}", which does not allow publishing.`;
+    return `${partWith(part, "is")} in "${stageLabel(registered, stage)}", which does not allow publishing.`;
   }
   if (
     state?.approval == null ||
     state.definitionHash !== registered.definitionHash
   ) {
-    return `${partName(part)} has no current approval.`;
+    return `${partWith(part, "has")} no current approval.`;
   }
   if (approvedNow === false) {
     return `${partName(part)} changed since it was approved.`;
