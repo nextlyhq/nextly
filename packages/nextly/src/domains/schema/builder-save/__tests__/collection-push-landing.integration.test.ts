@@ -473,7 +473,10 @@ for (const dialect of getConfiguredTestDialects()) {
           expect(failing.sent.length, failing.sent.join("\n")).toBeGreaterThan(
             1
           );
-          expect(failure, "the failed push was reported as applied").toBeDefined();
+          expect(
+            failure,
+            "the failed push was reported as applied"
+          ).toBeDefined();
           // The first statement ran and was rolled back with the one that failed.
           expect(await definitionOf()).toEqual(tableBefore);
           expect(
@@ -531,7 +534,10 @@ for (const dialect of getConfiguredTestDialects()) {
 
         // The rewritten values were taken back with the statement that failed, and the shape
         // never changed.
-        expect(failure, "the failed push was reported as applied").toBeDefined();
+        expect(
+          failure,
+          "the failed push was reported as applied"
+        ).toBeDefined();
         expect(await rows()).toEqual(rowsBefore);
         expect(await definitionOf()).toEqual(tableBefore);
         expect(

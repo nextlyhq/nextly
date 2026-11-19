@@ -5,7 +5,7 @@
 // it always has.
 //
 // Against a real in-memory SQLite database and the real executor, with every statement the
-// connection is asked to prepare recorded.
+// connection runs recorded.
 
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
@@ -32,17 +32,29 @@ const TABLE = `dc_${P}_posts`;
 describe("PushSchemaPipeline — a SQLite push is all or nothing", () => {
   let sqlite: Database.Database;
   let db: ReturnType<typeof drizzle>;
-  /** Every statement the connection was asked to prepare, in order, once recording starts. */
+  /** Every statement the connection ran, in order, once recording starts. */
   let sent: string[];
   let recording = false;
 
   beforeEach(async () => {
     sqlite = new Database(":memory:");
-    // Recorded at the driver, so the pipeline's own statements and the executor's are seen alike.
+    // Recorded at the driver as each prepared statement runs, so the pipeline's own statements and
+    // the executor's are seen alike, and a statement prepared more than once counts once per run.
     const prepare = sqlite.prepare.bind(sqlite);
     sqlite.prepare = ((source: string) => {
-      if (recording) sent.push(source);
-      return prepare(source);
+      const statement = prepare(source);
+      for (const method of ["run", "all", "get", "iterate"] as const) {
+        const real = statement[method].bind(statement) as (
+          ...args: unknown[]
+        ) => unknown;
+        Object.assign(statement, {
+          [method]: (...args: unknown[]) => {
+            if (recording) sent.push(source);
+            return real(...args);
+          },
+        });
+      }
+      return statement;
     }) as typeof sqlite.prepare;
     db = drizzle({ client: sqlite });
     await freshPushSchema("sqlite", db, getDialectTables("sqlite"));
@@ -162,9 +174,9 @@ describe("PushSchemaPipeline — a SQLite push is all or nothing", () => {
     ).toBe(true);
     expect(columns()).toEqual(before);
     // The row is as it was.
-    expect(
-      sqlite.prepare(`SELECT "heading" FROM "${TABLE}"`).all()
-    ).toEqual([{ heading: "Hello" }]);
+    expect(sqlite.prepare(`SELECT "heading" FROM "${TABLE}"`).all()).toEqual([
+      { heading: "Hello" },
+    ]);
   });
 
   it("runs an apply that changes the table in one transaction, foreign keys switched off before it opens", async () => {
