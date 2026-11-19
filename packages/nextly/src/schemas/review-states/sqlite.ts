@@ -66,6 +66,15 @@ export const nextlyReviewStatesSqlite = sqliteTable(
       table.scopeSlug,
       table.stage
     ),
+    // What waits for a caller in a stage, oldest first: the waiting list reads a stage's parts in
+    // this order, a bounded number at a time, so the order is served and the limit stops the read.
+    index("nextly_review_states_waiting_idx").on(
+      table.scopeKind,
+      table.scopeSlug,
+      table.stage,
+      table.enteredAt,
+      table.partKey
+    ),
     index("nextly_review_states_assignee_idx").on(
       table.assigneeKind,
       table.assigneeId
