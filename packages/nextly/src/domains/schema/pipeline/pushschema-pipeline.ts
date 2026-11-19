@@ -1210,20 +1210,12 @@ export class PushSchemaPipeline {
           }),
         });
 
-        // Drops that have a rename candidate are resolved by the
-        // dispatcher's shrinking-pool prompt — its "drop_and_add" option
-        // already implies user consent to data loss. Filter their
-        // destructive_drop events here so the user isn't asked the same
-        // question twice (once for the rename pair, once for the drop).
-        const dropsCoveredByCandidates = new Set<string>();
-        for (const c of candidates) {
-          dropsCoveredByCandidates.add(`${c.tableName}::${c.fromColumn}`);
-        }
-        const dispatchEvents = classificationResult.events.filter(
-          e =>
-            e.kind !== "destructive_drop" ||
-            !dropsCoveredByCandidates.has(`${e.tableName}::${e.columnName}`)
-        );
+        // The questions this change asks: its rename candidates, and the classifier's events less
+        // each drop a candidate covers (`pushQuestionSet`).
+        const { events: dispatchEvents } = pushQuestionSet({
+          candidates,
+          events: classificationResult.events,
+        });
 
         const needsPrompt = candidates.length > 0 || dispatchEvents.length > 0;
         const dispatchResult = needsPrompt
@@ -2688,6 +2680,29 @@ export class PushSchemaPipeline {
     if (err instanceof PromptCancelledError) return "CONFIRMATION_DECLINED";
     return "INTERNAL_ERROR";
   }
+}
+
+/**
+ * The questions the push asks of a change: its rename candidates, and the classifier's events less
+ * each column drop a candidate covers. A covered drop is asked as that pair, where answering
+ * `drop_and_add` is the consent to lose its values, so nobody is asked the same question twice. The
+ * schema dialog's own questions are drawn from this same set (`refuseUnansweredDialogQuestions`).
+ */
+export function pushQuestionSet(args: {
+  candidates: readonly RenameCandidate[];
+  events: readonly ClassifierEvent[];
+}): { candidates: RenameCandidate[]; events: ClassifierEvent[] } {
+  const covered = new Set(
+    args.candidates.map(c => `${c.tableName}::${c.fromColumn}`)
+  );
+  return {
+    candidates: [...args.candidates],
+    events: args.events.filter(
+      e =>
+        e.kind !== "destructive_drop" ||
+        !covered.has(`${e.tableName}::${e.columnName}`)
+    ),
+  };
 }
 
 // Convert RenameCandidate[] from PromptDispatcher into RenameResolution[]
