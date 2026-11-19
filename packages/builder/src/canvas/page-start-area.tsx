@@ -49,6 +49,12 @@ export interface StarterPage {
   readonly title: string;
   /** A small picture of the page, drawn by the host. */
   readonly picture?: React.ReactNode;
+  /**
+   * Why the site can't use this starter, in the host's words; absent for one
+   * it can. Such a starter is still listed, dimmed, so an author sees it and
+   * why rather than wondering where it went, but pressing it starts nothing.
+   */
+  readonly unavailable?: string | undefined;
 }
 
 /**
@@ -158,31 +164,90 @@ interface StartAreaProps {
 /** The row of starter pages, under its heading. */
 function StarterRow({
   heading,
+  notAvailable,
   starters,
   onStarter,
 }: {
   readonly heading: string;
+  /** What a starter the site can't use says above its reason. */
+  readonly notAvailable: string;
   readonly starters: readonly StarterPage[];
   readonly onStarter: ((id: string) => void) | undefined;
 }): React.JSX.Element {
+  const id = React.useId();
   return (
     <div className="nx-page-start__starters">
       <p className="nx-page-start__line">{heading}</p>
       <ul className="nx-page-start__tiles">
-        {starters.map(starter => (
+        {starters.map((starter, index) => (
           <li key={starter.id}>
-            <button
-              type="button"
-              className="nx-page-start__tile"
-              onClick={() => onStarter?.(starter.id)}
-            >
-              {starter.picture}
-              <span>{starter.title}</span>
-            </button>
+            <StarterTile
+              id={`${id}-${String(index)}`}
+              starter={starter}
+              notAvailable={notAvailable}
+              onStarter={onStarter}
+            />
           </li>
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * One starter's tile: its picture and title, pressed to start the page from
+ * it. A starter the site can't use is dimmed and says so, with the host's
+ * reason, and pressing it does nothing. It stays a focusable button
+ * (`aria-disabled`, not `disabled`) so a keyboard user can reach it and hear
+ * why; its name is its title alone, and the note and reason describe it.
+ */
+function StarterTile({
+  id,
+  starter,
+  notAvailable,
+  onStarter,
+}: {
+  /** A prefix unique on the page, for the ids its words are read by. */
+  readonly id: string;
+  readonly starter: StarterPage;
+  readonly notAvailable: string;
+  readonly onStarter: ((id: string) => void) | undefined;
+}): React.JSX.Element {
+  const reason = starter.unavailable;
+  if (reason === undefined) {
+    return (
+      <button
+        type="button"
+        className="nx-page-start__tile"
+        onClick={() => onStarter?.(starter.id)}
+      >
+        {starter.picture}
+        <span>{starter.title}</span>
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="nx-page-start__tile"
+      aria-disabled="true"
+      aria-labelledby={`${id}-title`}
+      aria-describedby={`${id}-note ${id}-reason`}
+      // Reported to nobody: the site can't hold this starter, so there is
+      // nothing for the host to start.
+      onClick={event => event.preventDefault()}
+    >
+      {/* Its own box, so the picture alone is dimmed and the words that say
+        why keep their contrast. */}
+      <span className="nx-page-start__tile-picture">{starter.picture}</span>
+      <span id={`${id}-title`}>{starter.title}</span>
+      <span id={`${id}-note`} className="nx-page-start__tile-note">
+        {notAvailable}
+      </span>
+      <span id={`${id}-reason`} className="nx-page-start__tile-reason">
+        {reason}
+      </span>
+    </button>
   );
 }
 
@@ -245,6 +310,7 @@ export function StartArea({
       {starters.length === 0 ? null : (
         <StarterRow
           heading={words.starters}
+          notAvailable={words.notAvailable}
           starters={starters}
           onStarter={onStarter}
         />

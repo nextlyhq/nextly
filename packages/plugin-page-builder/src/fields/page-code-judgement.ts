@@ -26,8 +26,11 @@ import {
 } from "../site-code/page-code";
 import { judgeCode, type PageBuilderSiteCodeOptions } from "../site-code/route";
 
-import type { JudgedField, StoredForms } from "./added-undefined-ids";
-import { readStoredForms } from "./lock-baselines";
+import {
+  storedFormsOnce,
+  type JudgedField,
+  type StoredForms,
+} from "./added-undefined-ids";
 
 /** The issue code a refused change to page code carries. */
 export const PAGE_CODE_REFUSED = "PAGE_CODE_REFUSED";
@@ -75,12 +78,12 @@ export function changedFormsBaseline(
   args: JudgedField & Pick<PluginFieldValidateArgs, "data">
 ): () => Promise<StoredForms> {
   const status = (args.data as { status?: unknown } | undefined)?.status;
+  // The forms read once for the whole judgement, so the reference and lock
+  // checks judging the same write read them no second time.
   return () =>
-    readStoredForms(
-      args.write,
-      args.path,
-      formsChangedBy(typeof status === "string" ? status : undefined),
-      (args.field as { localized?: unknown } | undefined)?.localized === true
+    storedFormsOnce(
+      args,
+      formsChangedBy(typeof status === "string" ? status : undefined)
     );
 }
 
