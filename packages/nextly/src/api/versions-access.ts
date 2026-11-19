@@ -1694,6 +1694,12 @@ async function sharedFieldsView(document: {
   return {
     snapshot: snapshot => sharedValuesOf(document, snapshot, translated),
     withheld: paths =>
-      new Set([...paths].filter(path => !own.has(path.split(".")[0] ?? ""))),
+      new Set([...paths].filter(path => !own.has(topLevelNameOf(path)))),
   };
+}
+
+/** The top-level field a withheld path names: `banner` of `banner.secret`. */
+function topLevelNameOf(path: string): string {
+  const dot = path.indexOf(".");
+  return dot === -1 ? path : path.slice(0, dot);
 }

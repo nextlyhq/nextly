@@ -101,14 +101,16 @@ async function pinPost(id: string, slot: string, versionNo: number) {
  * with only its own title changed: `since` the English version the shared part is compared
  * from, `spanish` the Spanish version that carries the shared change.
  */
-async function postWithSharedChange(
-  sinceStatus: "draft" | "published"
-): Promise<{ id: string; since: number; spanish: number }> {
+async function postWithSharedChange(): Promise<{
+  id: string;
+  since: number;
+  spanish: number;
+}> {
   const id = await entry(app(), "posts");
   await saveIn(app(), "posts", id, "en", {
     title: "English one",
     code: "A",
-    status: sinceStatus,
+    status: "draft",
   });
   const since = await shownVersion(app(), "posts", id, "en");
   await saveIn(app(), "posts", id, "en", {
@@ -124,13 +126,16 @@ async function postWithSharedChange(
   return { id, since, spanish };
 }
 
-/** The names of a comparison's nodes that changed, and of every node it holds. */
+/**
+ * The names of a comparison's nodes that changed, and whether it holds a node for the translated
+ * title at all, changed or not.
+ */
 function namesOf(diff: { fields: { name: string | null; status: string }[] }) {
   return {
     changed: diff.fields
       .filter(field => field.status !== "unchanged")
       .map(field => field.name),
-    all: diff.fields.map(field => field.name),
+    title: diff.fields.some(field => field.name === "title"),
   };
 }
 
@@ -214,7 +219,7 @@ describe.each(getConfiguredTestDialects())(
       t = await bootSteps(dialect);
       // A super-admin the read gate can look up: role names on a user grant nothing.
       await superAdminUser(t, superAdmin.id);
-      const { id, since, spanish } = await postWithSharedChange("draft");
+      const { id, since, spanish } = await postWithSharedChange();
       await pinPost(id, approvedSlot(null), since);
 
       const fromApproval = await compare(
@@ -232,7 +237,7 @@ describe.each(getConfiguredTestDialects())(
       // language, though both languages' titles differ between the two versions.
       expect(namesOf(fromApproval)).toEqual({
         changed: ["code"],
-        all: ["code"],
+        title: false,
       });
 
       // The same pair named outright compares the same fields.
@@ -244,14 +249,32 @@ describe.each(getConfiguredTestDialects())(
             "posts"
           )
         )
-      ).toEqual({ changed: ["code"], all: ["code"] });
+      ).toEqual({ changed: ["code"], title: false });
     });
 
     it("compares the shared fields from the last publish in any language", async () => {
       t = await bootSteps(dialect);
       // A super-admin the read gate can look up: role names on a user grant nothing.
       await superAdminUser(t, superAdmin.id);
-      const { id, since, spanish } = await postWithSharedChange("published");
+      // Published in English, then the shared field changed by a Spanish draft and the Spanish
+      // title saved again: a Spanish draft leaves the document published.
+      const id = await entry(app(), "posts");
+      await saveIn(app(), "posts", id, "en", {
+        title: "English one",
+        code: "A",
+        status: "published",
+      });
+      const since = await shownVersion(app(), "posts", id, "en");
+      await saveIn(app(), "posts", id, "es", {
+        title: "Español",
+        code: "B",
+        status: "draft",
+      });
+      await saveIn(app(), "posts", id, "es", {
+        title: "Español dos",
+        status: "draft",
+      });
+      const spanish = await shownVersion(app(), "posts", id, "es");
 
       const fromPublish = await compare(
         id,
@@ -265,7 +288,7 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(namesOf(fromPublish)).toEqual({
         changed: ["code"],
-        all: ["code"],
+        title: false,
       });
     });
 
@@ -273,7 +296,7 @@ describe.each(getConfiguredTestDialects())(
       t = await bootSteps(dialect);
       // A super-admin the read gate can look up: role names on a user grant nothing.
       await superAdminUser(t, superAdmin.id);
-      const { id, since, spanish } = await postWithSharedChange("draft");
+      const { id, since, spanish } = await postWithSharedChange();
 
       expect(
         await refusalOf(compare(id, { from: since, to: spanish }, "posts"))
