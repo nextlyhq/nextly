@@ -32,10 +32,14 @@ import type {
 } from "../../releases/readiness/check-sources";
 import { releaseCheckSources } from "../../releases/readiness/check-sources";
 import { createReleaseMutations } from "../../releases/release-mutations";
-import { RELEASE_MEMBERS_TABLE } from "../../releases/release-tables";
+import {
+  RELEASE_MEMBERS_TABLE,
+  RELEASES_TABLE,
+} from "../../releases/release-tables";
 import {
   IDS_PER_LOOKUP,
   ReleasesRepository,
+  type ReleasesDbApi,
 } from "../../releases/releases-repository";
 import { ReleasesService } from "../../releases/services/releases-service";
 import { updateReviewState } from "../review-state-repository";
@@ -811,6 +815,64 @@ describe.each(getConfiguredTestDialects())(
         )
       );
       expect(Math.max(...bound)).toBeLessThanOrEqual(IDS_PER_LOOKUP);
+    }, 120_000);
+
+    it("binds no more release ids in one statement than every dialect accepts when a stop asks whether its component began", async () => {
+      const t = await boot(dialect);
+      // More releases than one run binds, none of them there: the stop asks whether a pass began
+      // the component before it moves anything, then finds nothing to move.
+      const entries = Array.from({ length: IDS_PER_LOOKUP + 1 }, () => ({
+        id: randomUUID(),
+        scheduledAt: PAST,
+      }));
+      // Every read made inside a transaction of this repository, as the stop's question reads.
+      const reads: { table: string; ids: unknown[] }[] = [];
+      const recording = <T extends object>(tx: T): T =>
+        new Proxy(tx, {
+          get(target, name) {
+            const value: unknown = Reflect.get(target, name);
+            if (typeof value !== "function") return value;
+            return (...args: unknown[]) => {
+              if (name === "select") {
+                const [table, options] = args as [
+                  string,
+                  { where?: { and?: { op?: string; value?: unknown }[] } },
+                ];
+                for (const condition of options?.where?.and ?? []) {
+                  if (condition.op === "IN" && Array.isArray(condition.value)) {
+                    reads.push({ table, ids: condition.value });
+                  }
+                }
+              }
+              return Reflect.apply(value, target, args);
+            };
+          },
+        });
+      const db: ReleasesDbApi = new Proxy(t.adapter, {
+        get(target, name) {
+          if (name === "transaction") {
+            return (work: Parameters<ReleasesDbApi["transaction"]>[0]) =>
+              target.transaction(tx => work(recording(tx)));
+          }
+          const value: unknown = Reflect.get(target, name);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+
+      expect(
+        await new ReleasesRepository(db).blockReleases(entries, {
+          unlessBegun: true,
+        })
+      ).toEqual([]);
+
+      const releaseReads = reads.filter(read => read.table === RELEASES_TABLE);
+      // Every release asked about, and no statement binding more than a run.
+      expect(new Set(releaseReads.flatMap(read => read.ids))).toEqual(
+        new Set(entries.map(entry => entry.id))
+      );
+      expect(
+        Math.max(...reads.map(read => read.ids.length))
+      ).toBeLessThanOrEqual(IDS_PER_LOOKUP);
     }, 120_000);
 
     it("refuses Publish now for an unapproved member, even to a person who may publish without review", async () => {

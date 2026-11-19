@@ -615,32 +615,45 @@ async function recordRunStart(
 
 /**
  * Whether an earlier pass wrote part of these releases: a member holds a
- * receipt for its release's current revision. Read on `tx`, the stop's own.
+ * receipt for its release's current revision. Read on `tx`, the stop's own,
+ * in runs of release ids ({@link idBatches}), so a component of more releases
+ * than one statement may bind is still asked whole; each run's receipts are
+ * judged against that run's own releases.
  */
 async function componentBegun(
   tx: ReleasesTxApi,
   ids: readonly string[]
 ): Promise<boolean> {
-  const releases = await tx.select<{ id: string; revision: number }>(RELEASES, {
-    columns: ["id", "revision"],
-    where: { and: [{ column: "id", op: "IN", value: [...ids] }] },
-  });
-  const revisionOf = new Map(releases.map(row => [row.id, row.revision]));
-  const receipts = await tx.select<{
-    releaseId: string;
-    appliedRevision: number | null;
-  }>(MEMBERS, {
-    columns: ["releaseId", "appliedRevision"],
-    where: {
-      and: [
-        { column: "releaseId", op: "IN", value: [...ids] },
-        { column: "appliedRevision", op: "IS NOT NULL" },
-      ],
-    },
-  });
-  return receipts.some(
-    receipt => receipt.appliedRevision === revisionOf.get(receipt.releaseId)
-  );
+  for (const run of idBatches(ids)) {
+    const releases = await tx.select<{ id: string; revision: number }>(
+      RELEASES,
+      {
+        columns: ["id", "revision"],
+        where: { and: [{ column: "id", op: "IN", value: run }] },
+      }
+    );
+    const revisionOf = new Map(releases.map(row => [row.id, row.revision]));
+    const receipts = await tx.select<{
+      releaseId: string;
+      appliedRevision: number | null;
+    }>(MEMBERS, {
+      columns: ["releaseId", "appliedRevision"],
+      where: {
+        and: [
+          { column: "releaseId", op: "IN", value: run },
+          { column: "appliedRevision", op: "IS NOT NULL" },
+        ],
+      },
+    });
+    if (
+      receipts.some(
+        receipt => receipt.appliedRevision === revisionOf.get(receipt.releaseId)
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Move the applied mark to this member, off any other naming its document. */
