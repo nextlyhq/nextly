@@ -36,6 +36,7 @@ import {
 } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { readUniqueColumns } from "../pipeline/live-table-facts";
+import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-restate";
 import type { RequiredColumnEntity } from "../required-column-refusal";
 import { requiredColumnRegistries } from "../required-column-registries";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
@@ -323,7 +324,7 @@ function writtenBefore(
   table: string,
   at: number
 ): boolean {
-  return statements.slice(0, at).some(statement => {
+  return statementsBefore(statements, dialect, at).some(statement => {
     const writes = rowWriteOf(statement, dialect);
     if (writes === "unread") return true;
     return (
@@ -331,6 +332,21 @@ function writtenBefore(
       (tablesChangedIn(statement, dialect)?.includes(table) ?? true)
     );
   });
+}
+
+/**
+ * The statements of a file before its statement `at`, as the checks read them: on MySQL each run
+ * `migrate:create` writes (a column's rename or nullability change built from the catalog when the
+ * file runs) read as the one plain statement it amounts to (`plainMysqlEquivalents`), where its
+ * four statements read one at a time are unreadable and may write any table.
+ */
+function statementsBefore(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  at: number
+): readonly string[] {
+  const before = statements.slice(0, at);
+  return dialect === "mysql" ? plainMysqlEquivalents(before) : before;
 }
 
 /**
@@ -363,8 +379,9 @@ function liveOrigin(
     place: { table: target.table, column: target.column },
     renamed: new Set(),
   };
-  for (let at = target.at - 1; at >= 0; at -= 1) {
-    if (!stepBack(statements[at], dialect, walk)) return AT_STATEMENT;
+  const before = statementsBefore(statements, dialect, target.at);
+  for (let at = before.length - 1; at >= 0; at -= 1) {
+    if (!stepBack(before[at] ?? "", dialect, walk)) return AT_STATEMENT;
   }
   return walk.filledWith === undefined
     ? { kind: "live", ...walk.place }
