@@ -175,29 +175,6 @@ function newestOfAnyPart(
 }
 
 /**
- * The number of the version {@link shownVersionOn} answers for a part, read without its snapshot
- * or a lock: what an approval of the part approves, as the review state names it. Undefined for a
- * part never saved.
- */
-export async function reviewedVersionNoOn(
-  tx: VersionsDbApi,
-  document: ReviewDocument,
-  part: string | null
-): Promise<number | undefined> {
-  const repo = new VersionsRepository(tx);
-  const ref = {
-    scopeKind: document.scopeKind,
-    scopeSlug: document.scopeSlug,
-    entryId: document.entryId,
-  };
-  if (part === null) {
-    const newest = await repo.getMaxVersionNo(ref);
-    return newest === 0 ? undefined : newest;
-  }
-  return (await repo.newestVersionNoByLocale(ref, [part])).get(part);
-}
-
-/**
  * The number of a part's version under review, from each language's newest recorded version
  * number (null for the versions recorded without one): a language's own newest, or for the shared
  * part the newest of any language, since each language's snapshot carries the shared fields.
