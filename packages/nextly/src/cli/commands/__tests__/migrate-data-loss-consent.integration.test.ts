@@ -274,10 +274,29 @@ describe.each(LOCK_DIALECTS)("a migration that deletes data on %s", dialect => {
     });
     const listing = lines.join("\n");
     expect(listing).toContain(name);
+    // With how much it deletes: the table's two rows.
     expect(listing).toContain(
-      `deletes data: table ${posts}. A real run needs --accept-data-loss=${posts}`
+      `deletes data: table ${posts} (2 rows). A real run needs --accept-data-loss=${posts}`
     );
     expect(await databaseState()).toEqual(before);
+  }, 180_000);
+
+  it("lists each deletion with how much it deletes, leaving uncounted a later file's in a table an earlier file changes", async () => {
+    const first = file([`ALTER TABLE ${posts} DROP COLUMN summary`], []);
+    const second = file([`DROP TABLE ${posts}`], []);
+    const printed: string[] = [];
+    await declinedUnchanged(() =>
+      migrate(NO_CONSENT, { interactive: true, answer: false, printed })
+    );
+    // Each file above what it deletes: the column's two values, read from the database before
+    // the run; the table's drop uncounted, since the first file has changed the table by the
+    // time the second drops it, and the database before the run cannot say what is left.
+    expect(printed.slice(printed.indexOf(`  ${first}:`))).toEqual([
+      `  ${first}:`,
+      `    - column ${posts}.summary (2 non-empty values)`,
+      `  ${second}:`,
+      `    - table ${posts}`,
+    ]);
   }, 180_000);
 
   it("asks nothing for a table rebuild in a later file of the run, when an earlier file of the run creates the table", async () => {

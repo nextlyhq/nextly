@@ -235,7 +235,7 @@ describe("migrate --dry-run", () => {
 
     const more = lines.indexOf("  • plugin:acme/002_more");
     expect(lines[more + 1]).toMatch(
-      /^ {4}⚠ deletes data: table app_notes\. A real run needs .*app_notes/
+      /^ {4}⚠ deletes data: table app_notes \(1 row\)\. A real run needs .*app_notes/
     );
     // The file deletes rows only from the table the module before it creates.
     expect(lines.join("\n")).not.toMatch(/deletes data:.*acme_notes/);

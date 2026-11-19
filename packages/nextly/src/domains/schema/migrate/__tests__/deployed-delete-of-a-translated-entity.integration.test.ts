@@ -455,13 +455,16 @@ describe.each(getConfiguredTestDialects())(
       expect(before.translations).toBe(2);
       expect(deleted.code, deleted.said).toBeUndefined();
 
-      // The file drops the translations table first; the listing reads it beside its table.
-      // `nextly migrate` lists a file's drops without counting their rows.
+      // The file drops the translations table first; the listing reads it beside its table,
+      // each with the rows it held before the run.
       const lines = deleted.said.split("\n").map(line => line.trim());
-      const at = lines.indexOf(`- table ${notes.table}`);
+      const at = lines.findIndex(line =>
+        line.startsWith(`- table ${notes.table} (`)
+      );
       expect(at, deleted.said).toBeGreaterThanOrEqual(0);
+      expect(lines[at], deleted.said).toMatch(/ \([1-9]\d* rows?\)$/);
       expect(lines[at + 1], deleted.said).toBe(
-        `- table ${notes.table}_locales`
+        `- table ${notes.table}_locales (2 rows)`
       );
     }, 180_000);
 
