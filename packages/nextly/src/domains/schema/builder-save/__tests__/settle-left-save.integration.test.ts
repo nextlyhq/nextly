@@ -723,6 +723,59 @@ describe.each(getConfiguredTestDialects())(
       expect(await registryFieldNames(t)).toEqual(["heading", "alpha"]);
     }, 300_000);
 
+    // A later migration that only mentions the slug in data (a plugin's row, say) writes no
+    // registry row of this entity: the settle brings the row up all the same.
+    it("brings the registry row up over a later migration that mentions the slug only in data", async () => {
+      const t = await boot();
+      await created(t);
+      const realDelete = MetaService.prototype.delete;
+      vi.spyOn(MetaService.prototype, "delete").mockImplementation(
+        async function (this: MetaService, key: string) {
+          if (key === RECORD_KEY) await stopHere("clear");
+          return realDelete.call(this, key);
+        }
+      );
+      await stopSave(
+        t,
+        [text("heading"), text("alpha")],
+        point => point === "clear"
+      );
+      vi.mocked(MetaService.prototype.delete).mockRestore();
+      const repo = new SchemaEventsRepository(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect
+      );
+      const later = "29991231_000000_000_plugin_data.sql";
+      writeFileSync(
+        join(HISTORY_DIR(), later),
+        [
+          "-- Migration: plugin_data",
+          "",
+          "-- UP",
+          `INSERT INTO "plugin_redirects" ("from_slug", "to_slug") VALUES ('${SLUG}', 'elsewhere');`,
+          "",
+          "-- DOWN",
+          "SELECT 1;",
+          "",
+        ].join("\n")
+      );
+      await recordAlreadyApplied({ filename: later }, repo);
+      // The row as it stood before the save's own write.
+      await writeAppliedFieldsRow(t.adapter, {
+        table: "dynamic_singles",
+        slug: SLUG,
+        fields: [text("heading")] as never,
+        localized: false,
+        schemaVersion: (await versionOf(t)) + 1,
+      });
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["all"]);
+      expect(await recordRow(t)).toBeUndefined();
+      expect(await registryFieldNames(t)).toEqual(["heading", "alpha"]);
+    }, 300_000);
+
     // A left record whose table stands at neither end (here, a column added by hand after the
     // stop) stays "left": nothing proves the change landed, so nothing is recorded applied. A save
     // of the entity is refused, unless it is the same save again, which is how that save is

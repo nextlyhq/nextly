@@ -35,6 +35,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import { parseUiSchema } from "../../../schemas/_zod/ui-schema";
 import type { AddressKind } from "../../../shared/address-rule";
+import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
@@ -586,18 +587,49 @@ async function movedPast(
     );
   const dialect = deps.adapter.getCapabilities().dialect;
   const tables = entityTables(record);
+  const registry = await registryTableOf(deps.adapter, record.kind);
   for (const name of later) {
     const content = await readIfPresent(join(deps.migrationsDir, name));
     if (
       content === undefined ||
       namesEntity(content, record) ||
       touches(content, tables, dialect) ||
-      content.includes(`'${record.slug}'`)
+      writesRegistryRow(content, registry, record.slug, dialect)
     ) {
       return true;
     }
   }
   return false;
+}
+
+/** The registry table an entity of `kind` is recorded in. */
+async function registryTableOf(
+  adapter: DrizzleAdapter,
+  kind: AddressKind
+): Promise<string> {
+  if (kind === "collection") return "dynamic_collections";
+  if (kind === "single") return "dynamic_singles";
+  return resolveRegistryTableName(adapter);
+}
+
+/**
+ * Whether a file's UP writes the registry row of the entity `slug`: a statement that changes the
+ * kind's registry table (`registry`) and names the slug as a value. A slug only mentioned in
+ * another table's data, or in another kind's row, is not this entity's row.
+ */
+function writesRegistryRow(
+  content: string,
+  registry: string,
+  slug: string,
+  dialect: ReturnType<DrizzleAdapter["getCapabilities"]>["dialect"]
+): boolean {
+  const { upSql } = parseSqlSections(content);
+  const table = registry.toLowerCase();
+  return splitSqlStatements(upSql, dialect).some(
+    statement =>
+      (tablesChangedIn(statement, dialect) ?? []).includes(table) &&
+      statement.includes(`'${slug}'`)
+  );
 }
 
 /** Which of `files` the ledger records applied, and which have an attempt still unresolved. */
