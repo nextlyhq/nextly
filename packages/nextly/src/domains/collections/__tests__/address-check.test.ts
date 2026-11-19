@@ -16,6 +16,26 @@ import { FieldGroupMetadataService } from "../../field-groups/services/field-gro
 import type { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { checkNewAddress, type AddressCheckDeps } from "../address-check";
 
+/** The names the site's field-group storage is on, as the catalog would answer. */
+const siteNaming = vi.hoisted(() => ({
+  naming: "legacy" as "legacy" | "current",
+}));
+vi.mock(
+  "../../field-groups/services/field-group-storage-names",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("../../field-groups/services/field-group-storage-names")
+      >();
+    return {
+      ...actual,
+      resolveFieldGroupStorageNames: vi.fn(async () =>
+        actual.storageNamesFor(siteNaming.naming)
+      ),
+    };
+  }
+);
+
 /** The addresses each registry table holds. */
 let registered: Record<string, string[]> = {};
 
@@ -52,6 +72,7 @@ const check = (
 ) => checkNewAddress(deps, { kind, address, pendingCreates });
 
 beforeEach(() => {
+  siteNaming.naming = "legacy";
   registered = {};
   singles = [];
   vi.clearAllMocks();
@@ -163,6 +184,17 @@ describe("a field group's address", () => {
     expect(fieldGroups.assertNewAddressAvailable).toHaveBeenCalledWith(
       "hero-banner",
       "comp_hero_banner"
+    );
+  });
+
+  // A site whose field-group storage was migrated creates `fg_<slug>`, so the check asks about
+  // that table family, not one the create would never make.
+  it("is judged with the current-name table on a site whose storage was migrated", async () => {
+    siteNaming.naming = "current";
+    await check("fieldGroup", "hero-banner");
+    expect(fieldGroups.assertNewAddressAvailable).toHaveBeenCalledWith(
+      "hero-banner",
+      "fg_hero_banner"
     );
   });
 
