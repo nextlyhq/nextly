@@ -338,6 +338,10 @@ export {
   paintsBackgroundImage,
 } from "../style/declarations";
 export type { CompiledDeclarations, Declaration } from "../style/declarations";
+// Pointing an imported file's `$token` and `var()` references at the site
+// importing it: the one remap a design token file and a transfer file share.
+export { cssTextProperties, remapTokenReferences } from "../style/token-remap";
+export type { TokenRemap } from "../style/token-remap";
 /**
  * A background overlay's two custom properties, for an editor drawing their
  * controls.

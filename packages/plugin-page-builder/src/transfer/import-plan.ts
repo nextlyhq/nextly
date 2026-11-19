@@ -33,6 +33,8 @@ import { createHash } from "node:crypto";
 import {
   COMPONENT_INSTANCE_TYPE,
   MAX_BREAKPOINTS_PER_AXIS,
+  remapTokenReferences,
+  resolveTokenPrefix,
   sameJsonValue,
   tokenDisplayLabel,
   tokenIdentity,
@@ -41,6 +43,7 @@ import {
   type BreakpointSet,
   type NamedClass,
   type SiteToken,
+  type TokenRemap,
 } from "@nextlyhq/blocks-engine";
 
 import { rewriteClass, type ReferenceMaps } from "./import-rewrite";
@@ -95,6 +98,11 @@ export interface ImportSite {
   readonly items: Readonly<Record<TransferKind, ExistingItems>>;
   readonly classes: readonly NamedClass[];
   readonly tokens: readonly SiteToken[];
+  /**
+   * The prefix this site writes its variables under, which every `var()` of
+   * one of the file's variables is pointed at.
+   */
+  readonly tokenPrefix: string;
   readonly breakpoints: BreakpointSet;
   /** By the file's media id. */
   readonly media: ReadonlyMap<string, ExistingMedia>;
@@ -138,8 +146,14 @@ export interface ImportPlan {
       readonly slug: string;
     }[];
   };
+  /**
+   * The file's variables: where each lands here and the prefixes their
+   * custom properties are written under (`remap`, one per import, which every
+   * value the import writes is read through), and the new ones, their values
+   * already pointed here.
+   */
   readonly tokens: {
-    readonly map: ReadonlyMap<string, string>;
+    readonly remap: TokenRemap;
     readonly create: readonly SiteToken[];
   };
   /** Kept breakpoints only, file id to the site's. */
@@ -234,7 +248,12 @@ export function planImport(
   const order = componentOrder(file, items.component, ledger.problems);
   // Variables and breakpoints first: a shared style is the same as one here
   // only once what its styles name is mapped as the import maps it.
-  const tokens = planTokens(file.tokens, site.tokens, ledger);
+  const tokens = planTokens(file.tokens, site.tokens, ledger, {
+    // A file that doesn't name its prefix was written under the default, as
+    // a design token file without one is read.
+    from: resolveTokenPrefix(file.tokenPrefix).prefix,
+    to: site.tokenPrefix,
+  });
   const breakpoints = planBreakpoints(
     file,
     site,
@@ -243,7 +262,7 @@ export function planImport(
     ledger.problems
   );
   const classes = planClasses(file.classes, site.classes, ledger, {
-    tokens: tokens.map,
+    tokens: tokens.remap,
     breakpoints: breakpoints.map,
   });
   const media = planMedia(file, site, ledger);
@@ -428,22 +447,38 @@ function planClasses(
   return { map, create };
 }
 
-/** Variables: reused when identical, else added, renamed or pointed at one here. */
+/**
+ * Variables: reused when identical, else added, renamed or pointed at one
+ * here. Each new one's value names the others as the import writes them.
+ */
 function planTokens(
   listed: readonly SiteToken[],
   own: readonly SiteToken[],
-  ledger: Ledger
+  ledger: Ledger,
+  prefixes: Pick<TokenRemap, "from" | "to">
 ): ImportPlan["tokens"] {
   const map = new Map<string, string>();
   const create: SiteToken[] = [];
   const identities = new Set(own.map(tokenIdentity));
+  const listedIdentities = listed.map(tokenIdentity);
+  // A value as this site would write it, before any rename is known: its
+  // `var()`s under this site's prefix. Compared so, a shadow naming its
+  // colour is the same variable on two sites with different prefixes.
+  const underThisPrefix: TokenRemap = {
+    ids: new Map(),
+    identities: listedIdentities,
+    ...prefixes,
+  };
   for (const token of listed) {
     const identity = tokenIdentity(token);
     const clash = own.find(mine => tokenIdentity(mine) === identity);
     if (
       clash !== undefined &&
       clash.kind === token.kind &&
-      sameJsonValue(clash.values, token.values)
+      sameJsonValue(
+        clash.values,
+        remapTokenReferences(token.values, underThisPrefix)
+      )
     ) {
       map.set(identity, identity);
       ledger.reused.push({
@@ -490,7 +525,15 @@ function planTokens(
     delete (copy as { id?: string }).id;
     create.push(copy);
   }
-  return { map, create };
+  const remap: TokenRemap = { ids: map, identities: listedIdentities, ...prefixes };
+  return {
+    remap,
+    // Their values point at the variables they name as those land here.
+    create: create.map(token => ({
+      ...token,
+      values: remapTokenReferences(token.values, remap),
+    })),
+  };
 }
 
 /** Media: reused when identical, else uploaded, renamed or pointed at one here. */
@@ -812,6 +855,8 @@ function fingerprintOf(
   const { added, conflicts, reused } = ledger;
   const judged = {
     breakpoints: site.breakpoints,
+    // What the import writes names this site's variables under it.
+    tokenPrefix: site.tokenPrefix,
     mayAddBreakpoints: site.mayAddBreakpoints,
     added: added.map(entry => [entry.kind, entry.fileId, entry.name]),
     // The choice in force too: an apply choosing otherwise than the

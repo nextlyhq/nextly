@@ -322,6 +322,68 @@ describe.each(getConfiguredTestDialects())(
         "color.ink",
         "shadow.lift",
       ]);
+      // A site on the default prefix names none, so the file reads in a
+      // Nextly that predates the field.
+      expect("tokenPrefix" in file).toBe(false);
+    });
+
+    it("names the site's variable prefix, and carries the variables custom CSS reads through var()", async () => {
+      const t = await boot();
+      const colour = (name: string, light: string) => ({
+        name,
+        kind: "color",
+        values: { light },
+      });
+      await t.nextly.updateSingle({
+        slug: SITE_STYLE_SLUG,
+        data: {
+          tokens: {
+            prefix: "--acme-",
+            tokens: [
+              colour("color.ink", "#111111"),
+              colour("color.edge", "#222222"),
+              colour("color.unused", "#444444"),
+            ],
+          },
+          _overwrite: true,
+        },
+      });
+      const pattern = await created(t, PATTERNS_SLUG, {
+        title: "Inked",
+        slug: unique("inked"),
+        granularity: "section",
+        status: "published",
+        content: {
+          formatVersion: 1,
+          kind: "pattern",
+          settings: { customCss: ".mark { color: var(--acme-color-edge); }" },
+          nodes: [
+            {
+              id: "a",
+              type: "core/box",
+              version: 1,
+              props: {},
+              customCss: "selector { border-color: var(--acme-color-ink); }",
+            },
+          ],
+        },
+      });
+      const { cookie } = await holding(t, READS_EVERYTHING);
+
+      const answer = await post(cookie, [
+        "transfer",
+        "patterns",
+        pattern,
+        "export",
+      ]);
+
+      expect(answer.status).toBe(200);
+      const file = answer.body as unknown as TransferFile;
+      expect(file.tokenPrefix).toBe("--acme-");
+      expect(file.tokens.map(token => token.name).sort()).toEqual([
+        "color.edge",
+        "color.ink",
+      ]);
     });
 
     it("answers a missing item as not found", async () => {
