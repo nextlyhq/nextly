@@ -67,14 +67,13 @@ describe("the database a command names", () => {
     expect(target(":memory:", "sqlite")).toBe("SQLite :memory:");
   });
 
-  it("takes the dialect stated where the URL implies none, and the URL's own where it implies one", () => {
+  it("names the dialect the command connects with: the one stated, else the one the URL implies", () => {
     expect(target("./app.data", "sqlite")).toBe(
       `SQLite ${resolve(FOLDER, "app.data")}`
     );
-    // A server's URL is that server's, whatever is stated beside it, as the
-    // connection itself reads it.
+    // Stated beside another dialect's URL, the stated one is what connects.
     expect(target("postgres://appuser:s3cr3t@db.internal/shop", "mysql")).toBe(
-      "PostgreSQL db.internal:5432/shop"
+      "MySQL db.internal:3306/shop"
     );
   });
 
@@ -83,12 +82,45 @@ describe("the database a command names", () => {
       "postgres://appuser:s3cr3t@db.internal:5432/shop?password=hunter2",
       "sqlite"
     );
-    expect(line).toBe("PostgreSQL db.internal:5432/shop");
-    // A URL of no known scheme, read as SQLite because that is stated.
-    const other = target("libsql://appuser:s3cr3t@db.internal/shop", "sqlite");
-    expect(other).toBe("SQLite (address not readable)");
-    for (const secret of SECRETS) {
-      expect(`${line} ${other}`).not.toContain(secret);
+    expect(line).toBe("SQLite (address not readable)");
+    for (const secret of SECRETS) expect(line).not.toContain(secret);
+  });
+
+  it("does not name a SQLite file the adapter would not open: a URL with a query part is unreadable", () => {
+    // The adapter opens the text after `file:` whole, the `?mode=ro` included.
+    expect(target("file:./app.db?mode=ro")).toBe(
+      "SQLite (address not readable)"
+    );
+  });
+
+  it("fills what a PostgreSQL URL leaves out from the variables its driver reads", () => {
+    const pg = { PGHOST: "pg.internal", PGPORT: "6432", PGDATABASE: "ledger" };
+    const withEnv = (url: string) =>
+      databaseTarget({ url, folder: FOLDER, env: pg });
+    expect(withEnv("postgres://appuser:s3cr3t@db.internal/shop")).toBe(
+      "PostgreSQL db.internal:6432/shop"
+    );
+    expect(withEnv("postgres:///shop")).toBe(
+      "PostgreSQL pg.internal:6432/shop"
+    );
+    expect(withEnv("postgres://db.internal:5433")).toBe(
+      "PostgreSQL db.internal:5433/ledger"
+    );
+    // MySQL's driver reads none of them.
+    expect(withEnv("mysql://root:s3cr3t@db.internal")).toBe(
+      "MySQL db.internal:3306"
+    );
+  });
+
+  it("never prints an address parameter that is not an address", () => {
+    for (const url of [
+      "postgres://localhost/shop?host=postgres%3A%2F%2Fadmin%3As3cr3t%40db",
+      "postgres://localhost/shop?host=db.internal&port=s3cr3t",
+      "mysql://root@localhost/shop?socketPath=%2Ftmp%2Fs3cr3t%40x",
+    ]) {
+      const line = target(url);
+      expect(line).toMatch(/ \(address not readable\)$/);
+      expect(line).not.toContain("s3cr3t");
     }
   });
 

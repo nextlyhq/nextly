@@ -219,6 +219,7 @@ export function modeLine(): string | undefined {
   const target = databaseTarget({
     url: process.env.DATABASE_URL,
     dialect: process.env.DB_DIALECT,
+    env: process.env,
     // Where the connection resolves a relative file: the folder the
     // process is in now, which a command told to work elsewhere has entered.
     folder: process.cwd(),
