@@ -573,10 +573,12 @@ function AlsoNeeded({
   fields: readonly { path: string; message: string }[];
 }): JSX.Element | null {
   if (fields.length === 0) return null;
+  // The box's edge is the destructive token at full strength, which clears
+  // 3:1 against the page and the tint inside it in both modes.
   return (
     <div
       role="alert"
-      className="grid gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3"
+      className="grid gap-2 rounded-md border border-destructive bg-destructive/5 p-3"
       data-slot="new-page-also-needed"
     >
       <p className="text-sm font-medium">{NEW_PAGE_WORDS.alsoNeeded}</p>

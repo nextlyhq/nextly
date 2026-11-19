@@ -286,20 +286,6 @@ function SheetDragHandle({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
-/**
- * SheetContent
- *
- * Main content container for the sheet.
- *
- * - **Position**: Fixed to screen edge (side prop)
- * - **Width**: Responsive (w-3/4 on mobile, max-w-sm on sm+)
- * - **Padding**: 24px (p-6)
- * - **Border**: On appropriate edge based on side
- * - **Close Button**: Positioned in top-right corner (16px from edges)
- *
- * @param side - Which edge to slide in from: "left", "right", "top", "bottom"
- * @public
- */
 /** What the keyboard can reach by Tab: enabled, not hidden, and in the tab order. */
 const TABBABLE =
   'a[href], area[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex], [contenteditable="true"]';
@@ -388,6 +374,24 @@ function leaveNonModalAtEdge(event: React.KeyboardEvent<HTMLElement>): void {
   next.focus();
 }
 
+/**
+ * SheetContent
+ *
+ * Main content container for the sheet.
+ *
+ * - **Position**: Fixed to screen edge (side prop)
+ * - **Width**: Responsive (w-3/4 on mobile, max-w-sm on sm+)
+ * - **Padding**: 24px (p-6)
+ * - **Border**: On appropriate edge based on side
+ * - **Close Button**: Positioned in top-right corner (16px from edges)
+ *
+ * Kept directly above the declaration: the declaration bundler carries a doc
+ * comment only when it is attached to the declaration, so the `@public` tag
+ * reaches the published types from here and from nowhere else.
+ *
+ * @param side - Which edge to slide in from: "left", "right", "top", "bottom"
+ * @public
+ */
 const SheetContent: React.ForwardRefExoticComponent<
   React.PropsWithoutRef<SheetContentProps> &
     React.RefAttributes<React.ElementRef<typeof DialogPrimitive.Content>>

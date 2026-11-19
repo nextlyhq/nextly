@@ -96,10 +96,13 @@ function StarterChoices({
                 {...(option.id === undefined
                   ? { "data-blank": "" }
                   : { "data-starter": option.id })}
+                // Hover darkens the edge to the control border, the token
+                // that clears 3:1 in both modes; a faded foreground fell
+                // below it, and an un-faded one would read as selected.
                 className={`grid cursor-pointer gap-1 rounded-lg border p-1.5 text-xs transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring ${
                   on
                     ? "border-primary ring-1 ring-primary"
-                    : "border-border hover:border-foreground/30"
+                    : "border-border hover:border-control-border"
                 }`}
               >
                 <input
