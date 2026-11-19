@@ -103,6 +103,48 @@ export interface CanvasReading {
    * its value rather than its stored words.
    */
   readonly words?: string | undefined;
+  /**
+   * The text sizes the node is drawn at, computed: `font-size` and
+   * `line-height`, at the device the canvas is sized to. What a size reaching
+   * a field as a variable (Site text's) comes to, which the inspector cannot
+   * read from the stored styles. `undefined` when the node isn't drawn.
+   */
+  readonly lengths?: Readonly<Record<string, string>> | undefined;
+}
+
+/**
+ * The computed text sizes a field may show for a variable reaching it, by
+ * CSS property, with the style declaration's name for each.
+ */
+const READ_LENGTHS = {
+  "font-size": "fontSize",
+  "line-height": "lineHeight",
+} as const;
+
+/** The node's computed text sizes, or `undefined` when it isn't drawn. */
+function lengthsOf(
+  element: Element | undefined | null
+): Readonly<Record<string, string>> | undefined {
+  if (element == null) return undefined;
+  const computed = element.ownerDocument.defaultView?.getComputedStyle(element);
+  if (computed === undefined) return undefined;
+  const lengths: Record<string, string> = {};
+  for (const [property, name] of Object.entries(READ_LENGTHS)) {
+    // Read by name, as the axes are: a declaration missing one gives none.
+    const value: unknown = computed[name];
+    if (typeof value === "string" && value !== "") lengths[property] = value;
+  }
+  return lengths;
+}
+
+/** Whether two readings of the text sizes agree. */
+function sameLengths(
+  a: Readonly<Record<string, string>> | undefined,
+  b: Readonly<Record<string, string>> | undefined
+): boolean {
+  return Object.keys(READ_LENGTHS).every(
+    property => a?.[property] === b?.[property]
+  );
 }
 
 /**
@@ -191,6 +233,7 @@ function same(a: CanvasReading, b: CanvasReading): boolean {
     a.picture === b.picture &&
     a.picturePosition === b.picturePosition &&
     a.words === b.words &&
+    sameLengths(a.lengths, b.lengths) &&
     a.orientation?.writingMode === b.orientation?.writingMode &&
     a.orientation?.direction === b.orientation?.direction &&
     // The layout too: alignment icons follow it, and it can change alone.
@@ -216,6 +259,7 @@ function readSelected(
     picture: addressOf(image),
     picturePosition: positionOf(image),
     words: quotationOf(element),
+    lengths: lengthsOf(element),
   };
 }
 
