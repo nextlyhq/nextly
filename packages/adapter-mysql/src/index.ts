@@ -1869,27 +1869,12 @@ export class MySqlAdapter extends DrizzleAdapter {
       // undone alone (a failed item of a batch, say) and the rest kept, as on PostgreSQL and SQLite.
       // A transaction opened inside this one's work still joins it flat: see `joinSteps`. Left
       // undefined on a server that may refuse them (`takesSavepoints`), so a caller runs its work
-      // without one rather than fail on the SAVEPOINT.
+      // without one rather than fail on the SAVEPOINT. The effects held for the transaction are
+      // scoped to each savepoint (`contextSavepointMethods`).
       ...(this.takesSavepoints
-        ? {
-            savepoint: async (name: string): Promise<void> => {
-              await connection.query(
-                `SAVEPOINT ${this.escapeIdentifier(name)}`
-              );
-            },
-
-            rollbackToSavepoint: async (name: string): Promise<void> => {
-              await connection.query(
-                `ROLLBACK TO SAVEPOINT ${this.escapeIdentifier(name)}`
-              );
-            },
-
-            releaseSavepoint: async (name: string): Promise<void> => {
-              await connection.query(
-                `RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`
-              );
-            },
-          }
+        ? this.contextSavepointMethods(async statement => {
+            await connection.query(statement);
+          })
         : {}),
     };
   }

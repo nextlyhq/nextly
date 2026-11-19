@@ -121,6 +121,13 @@ class FrameAdapter extends DrizzleAdapter {
     return this.holdEffect(effect);
   }
 
+  /** A transaction context's savepoint methods, recording their statements. */
+  savepoints() {
+    return this.contextSavepointMethods(statement => {
+      this.statements.push(statement);
+    });
+  }
+
   getCapabilities(): DatabaseCapabilities {
     return {
       dialect: "sqlite",
@@ -394,6 +401,85 @@ describe("transaction frames", () => {
 
     expect(ranBeforeRollback).toEqual([]);
     expect(ran).toEqual(["from a part", "from the outer"]);
+  });
+
+  it("drops what a rolled-back context savepoint held for the commit, and keeps the rest", async () => {
+    const adapter = new FrameAdapter();
+    const tx = adapter.savepoints();
+    const ran: string[] = [];
+    let undoneBeforeRollback: boolean | undefined;
+    let undoneAfterRollback: boolean | undefined;
+
+    await adapter.transaction(async () => {
+      await adapter.afterCommit(() => ran.push("before the savepoint"));
+      const inFlow = adapter.transactionInFlow();
+      await tx.savepoint("item_1");
+      await adapter.afterCommit(() => ran.push("from the undone item"));
+      await tx.savepoint("inner");
+      await adapter.afterCommit(() => ran.push("from inside the undone item"));
+      undoneBeforeRollback = inFlow?.undone();
+      await tx.rollbackToSavepoint("item_1");
+      undoneAfterRollback = inFlow?.undone();
+      await tx.releaseSavepoint("item_1");
+      await tx.savepoint("item_2");
+      await adapter.afterCommit(() => ran.push("from the kept item"));
+      await tx.releaseSavepoint("item_2");
+    });
+
+    expect(ran).toEqual(["before the savepoint", "from the kept item"]);
+    expect([undoneBeforeRollback, undoneAfterRollback]).toEqual([false, true]);
+    expect(adapter.statements).toEqual([
+      "BEGIN",
+      'SAVEPOINT "item_1"',
+      'SAVEPOINT "inner"',
+      'ROLLBACK TO SAVEPOINT "item_1"',
+      'RELEASE SAVEPOINT "item_1"',
+      'SAVEPOINT "item_2"',
+      'RELEASE SAVEPOINT "item_2"',
+      "COMMIT",
+    ]);
+  });
+
+  it("keeps a rolled-back context savepoint's rollback effects with the outermost transaction, as a part's", async () => {
+    const adapter = new FrameAdapter();
+    const tx = adapter.savepoints();
+    const ran: string[] = [];
+
+    await adapter.transaction(async () => {
+      await tx.savepoint("item_1");
+      await adapter.afterRollback(() => ran.push("dropped by the commit"));
+      await tx.rollbackToSavepoint("item_1");
+      await tx.releaseSavepoint("item_1");
+    });
+    await adapter
+      .transaction(async () => {
+        await tx.savepoint("item_1");
+        await adapter.afterRollback(() => ran.push("from the undone item"));
+        await tx.rollbackToSavepoint("item_1");
+        await tx.releaseSavepoint("item_1");
+        throw new Error("undo everything");
+      })
+      .catch(() => undefined);
+
+    expect(ran).toEqual(["from the undone item"]);
+  });
+
+  it("only sends the statements of a context savepoint used outside any transaction", async () => {
+    const adapter = new FrameAdapter();
+    const tx = adapter.savepoints();
+    const ran: string[] = [];
+
+    await tx.savepoint("loose");
+    await tx.rollbackToSavepoint("loose");
+    await tx.releaseSavepoint("loose");
+    await adapter.afterCommit(() => ran.push("runs now"));
+
+    expect(ran).toEqual(["runs now"]);
+    expect(adapter.statements).toEqual([
+      'SAVEPOINT "loose"',
+      'ROLLBACK TO SAVEPOINT "loose"',
+      'RELEASE SAVEPOINT "loose"',
+    ]);
   });
 
   it("keeps runOutermost's contract: resolves with the result and held effects, rejects with the work's error", async () => {

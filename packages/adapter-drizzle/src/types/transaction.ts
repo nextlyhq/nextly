@@ -423,7 +423,10 @@ export interface TransactionContext {
    * Rollback to a savepoint (PostgreSQL, SQLite, MySQL; undefined on TiDB).
    *
    * @remarks
-   * Discards all changes made after the savepoint was created.
+   * Discards all changes made after the savepoint was created, and drops the
+   * adapter's `afterCommit` effects registered since then, as a rolled-back
+   * nested transaction's are dropped. `afterRollback` effects stay held for
+   * the outermost transaction.
    *
    * @param name - Savepoint name
    */

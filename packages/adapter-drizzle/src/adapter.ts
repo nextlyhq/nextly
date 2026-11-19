@@ -975,6 +975,85 @@ export abstract class DrizzleAdapter {
   }
 
   /**
+   * The savepoints a transaction context set on each outermost transaction
+   * still open, innermost last, each with how many `afterCommit` effects the
+   * transaction held when it was set. Gone with the transaction.
+   */
+  private readonly contextSavepoints = new WeakMap<
+    TransactionFrame,
+    { name: string; heldBefore: number }[]
+  >();
+
+  /**
+   * A transaction context's savepoint methods, each sending its statement
+   * with `send` on the transaction's connection.
+   *
+   * The effects held for the transaction are scoped to each savepoint, as
+   * they are to a part joined to it ({@link runJoined}): a ROLLBACK TO drops
+   * the `afterCommit` effects registered since its savepoint was set, as it
+   * undoes the writes they announce, and counts as a part rolled back
+   * (`TransactionInFlow.undone`); a RELEASE keeps them for the enclosing
+   * transaction. `afterRollback` effects stay with the outermost
+   * transaction, as a rolled-back part's do. The calling flow's open
+   * transaction is the one scoped; outside one the statements are only sent.
+   *
+   * @param send - Runs one statement on the transaction's connection
+   * @returns `savepoint`, `rollbackToSavepoint` and `releaseSavepoint`
+   */
+  protected contextSavepointMethods(
+    send: (statement: string) => void | Promise<void>
+  ): Required<
+    Pick<
+      TransactionContext,
+      "savepoint" | "rollbackToSavepoint" | "releaseSavepoint"
+    >
+  > {
+    const run = async (statement: string): Promise<void> => {
+      const sent = send(statement);
+      if (isPending(sent)) await sent;
+    };
+    return {
+      savepoint: async name => {
+        await run(`SAVEPOINT ${this.escapeIdentifier(name)}`);
+        const root = this.openTransactionInFlow();
+        if (root === undefined) return;
+        const marks = this.contextSavepoints.get(root) ?? [];
+        marks.push({ name, heldBefore: root.held.length });
+        this.contextSavepoints.set(root, marks);
+      },
+      rollbackToSavepoint: async name => {
+        await run(`ROLLBACK TO SAVEPOINT ${this.escapeIdentifier(name)}`);
+        const root = this.openTransactionInFlow();
+        const marks = root && this.contextSavepoints.get(root);
+        const at = marks?.findLastIndex(mark => mark.name === name) ?? -1;
+        if (root === undefined || marks === undefined || at === -1) return;
+        // The savepoint stays set; those set after it are gone with what
+        // the rollback undid.
+        marks.length = at + 1;
+        root.held.splice(marks[at].heldBefore);
+        root.rollbacks += 1;
+      },
+      releaseSavepoint: async name => {
+        await run(`RELEASE SAVEPOINT ${this.escapeIdentifier(name)}`);
+        const root = this.openTransactionInFlow();
+        const marks = root && this.contextSavepoints.get(root);
+        const at = marks?.findLastIndex(mark => mark.name === name) ?? -1;
+        // It and every savepoint set after it end; what they held stays held
+        // for the enclosing transaction.
+        if (marks !== undefined && at !== -1) marks.length = at;
+      },
+    };
+  }
+
+  /** The outermost transaction the calling flow is inside, while it is open. */
+  private openTransactionInFlow(): TransactionFrame | undefined {
+    const frame = this.scope.getStore();
+    if (frame === undefined) return undefined;
+    const root = outermost(frame);
+    return root.finished ? undefined : root;
+  }
+
+  /**
    * A dialect's `transaction()`: join the transaction the calling flow is
    * inside, or run an outermost one, attempt by attempt.
    *

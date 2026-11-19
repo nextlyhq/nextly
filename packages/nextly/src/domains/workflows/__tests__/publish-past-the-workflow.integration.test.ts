@@ -1150,6 +1150,44 @@ describe.each(getConfiguredTestDialects())(
         ]);
       });
 
+      it("runs nothing a batch item held for the commit once its failed settle undoes it, and runs the rest's", async () => {
+        await boot(dialect);
+        const adapter = app().adapter;
+        const ran: string[] = [];
+        let judged = 0;
+        // A gate that lets every create through, holds an effect for the commit and one for a
+        // rollback as it judges each, and fails as it settles the first.
+        container.register<PublishGate>("publishGate", () => ({
+          refusals: () => Promise.resolve([]),
+          judge: async () => {
+            judged += 1;
+            const item = judged;
+            await adapter.afterCommit(() => ran.push(`commit ${String(item)}`));
+            await adapter.afterRollback(() =>
+              ran.push(`rollback ${String(item)}`)
+            );
+            return {
+              refusals: [],
+              settle: () =>
+                item === 1
+                  ? Promise.reject(new Error("settle failed"))
+                  : Promise.resolve(),
+            };
+          },
+        }));
+
+        const result = await pluginService().createMany(PAGES, [
+          { title: "Undone", status: "published" },
+          { title: "Kept", status: "published" },
+        ]);
+
+        expect(result.failed, JSON.stringify(result)).toBe(1);
+        expect((await storedPages()).map(page => page.title)).toEqual(["Kept"]);
+        // The batch committed: the kept item's effect runs, the undone item's never does, and
+        // no rollback effect runs, as for a part of a transaction that rolled back on its own.
+        expect(ran).toEqual(["commit 2"]);
+      });
+
       it("creates as published for trusted code that names a reason, which is the control", async () => {
         await boot(dialect);
         const reason = { [WITHOUT_REVIEW_KEY]: { reason: "Nightly import" } };
