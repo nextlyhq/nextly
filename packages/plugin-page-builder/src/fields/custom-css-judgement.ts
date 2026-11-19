@@ -15,7 +15,11 @@
  * there, so text the section it came from holds is no change either. A
  * component placed on a page holds no CSS of its own on the page at all, and
  * detaching one the stored page placed brings the CSS its definition holds,
- * which is no change either.
+ * which is no change either. A create that copies a stored entry the caller
+ * could read (a duplicated page, a selection saved as a section or a
+ * component) brings the CSS that entry holds, in the forms the caller could
+ * see, and that is no change either: the document's CSS against the source
+ * document's, and a block's against the source's blocks'.
  *
  * @module fields/custom-css-judgement
  */
@@ -33,6 +37,7 @@ import { checkCustomCss, customCssProblemText } from "../site-code/css-check";
 import { blocksValueRecord } from "../site-code/page-code";
 
 import type { JudgedField, StoredForms } from "./added-undefined-ids";
+import { copiedSourceValues } from "./copied-source";
 import { isTopLevel, siteSettingsCallerRefusal } from "./page-code-judgement";
 
 /** The issue code a refused change to custom CSS carries. */
@@ -187,6 +192,25 @@ async function libraryTexts(
 }
 
 /**
+ * Whether the write changes the document's CSS: no stored form it changes
+ * holds the same (a new page holds nothing yet, so no CSS is no change),
+ * and the entry it copies holds no such document CSS either. A copy vouches
+ * for text only, never for removing it.
+ */
+function documentCssChanged(
+  document: string | null,
+  held: readonly HeldCustomCss[],
+  copied: readonly HeldCustomCss[]
+): boolean {
+  if (document !== null && copied.some(form => form.document === document)) {
+    return false;
+  }
+  return held.length === 0
+    ? document !== null
+    : !held.some(form => form.document === document);
+}
+
+/**
  * What the write changes: the document's CSS where no stored form it
  * changes holds the same, and each block's CSS no stored form holds. A
  * stored value that can't be read counts every CSS the write holds as a
@@ -215,20 +239,29 @@ async function cssChangedBy(
       : { blocks: [] };
   }
   const held = forms.forms.map(form => customCssHeldBy(form, limits));
-  // A new page holds nothing yet: no CSS is no change.
-  const documentChanged =
-    held.length === 0
-      ? written.document !== null
-      : !held.some(form => form.document === written.document);
-  const blocks = await newBlockCss(written, held, args.write, library, limits);
+  // The entry a create copies, in the form the caller's read showed, walked
+  // under the same site limits as the write: its document's CSS vouches for
+  // the document's, its blocks' for the blocks'. A source block past those
+  // limits is never walked, so it vouches for nothing.
+  const copied = (await copiedSourceValues(args)).map(form =>
+    customCssHeldBy(form, limits)
+  );
+  const documentChanged = documentCssChanged(written.document, held, copied);
+  const blocks = await newBlockCss(
+    written,
+    [...held, ...copied],
+    args.write,
+    library,
+    limits
+  );
   return documentChanged ? { document: written.document, blocks } : { blocks };
 }
 
 /**
- * The blocks' CSS texts no stored form holds, nor the saved section a block
- * was placed from, nor a component the stored page placed (which detaching
- * it copies into the page). Each library is read only while some CSS is
- * still unknown.
+ * The blocks' CSS texts no stored form holds (the entry's own, or the one a
+ * create copies), nor the saved section a block was placed from, nor a
+ * component a stored form placed (which detaching it copies into the page).
+ * Each library is read only while some CSS is still unknown.
  */
 async function newBlockCss(
   written: HeldCustomCss,

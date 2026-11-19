@@ -669,6 +669,43 @@ export interface PluginFieldWrite {
    * to its stored value, a removal included, refuses a value here.
    */
   readonly inFieldGroup?: boolean;
+  /**
+   * @experimental The stored entry this create copies, where core read it as
+   * the caller in the same call before creating (a duplicate, or a create
+   * made through `createEntryFromSource`). Absent on every other write.
+   *
+   * Core sets it only after that read succeeds, and nothing a request sends
+   * can set it. A validator may treat a value the source already holds, in
+   * one of `forms` and in one of `fields`, as no change: the copy puts on a
+   * new entry what someone allowed already wrote on one the caller can read.
+   * Read the source with {@link readStoredOf}, naming only those forms.
+   */
+  readonly copiedFrom?: {
+    /** The source entry's collection slug. */
+    readonly collection: string;
+    /** The source entry's id. */
+    readonly id: string;
+    /**
+     * The stored form of the source the caller's read showed: `draft` where
+     * that read showed the caller the source's pending draft, else
+     * `published`. Never both: field rules were judged against the shown
+     * form's data only, so the other form vouches for nothing.
+     */
+    readonly forms: readonly ("published" | "draft")[];
+    /**
+     * The source's field paths the caller's read returned: each top-level
+     * field, and each field inside a named group, dotted (`hero.content`).
+     * A field that read withheld, at any depth, is one the caller may not
+     * see, and vouches for nothing.
+     */
+    readonly fields: readonly string[];
+    /**
+     * The source field the copied value came from, where the create named
+     * one (a selection saved from a page's blocks field). Absent: each
+     * copied field came from the source's field at the same path.
+     */
+    readonly field?: string;
+  };
 }
 
 /**

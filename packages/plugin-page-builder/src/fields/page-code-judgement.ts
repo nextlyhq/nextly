@@ -31,6 +31,7 @@ import {
   type JudgedField,
   type StoredForms,
 } from "./added-undefined-ids";
+import { copiedSourceValues } from "./copied-source";
 
 /** The issue code a refused change to page code carries. */
 export const PAGE_CODE_REFUSED = "PAGE_CODE_REFUSED";
@@ -53,14 +54,23 @@ export interface PageCodeJudgeDeps {
  * Whether the write changes the page's code: whether it holds code other than
  * what either stored form holds. A stored value that can't be read counts as
  * a change, so a write that might add or remove code is judged rather than
- * let through.
+ * let through. Code the entry a create copies already holds, in a form the
+ * caller could read, is no change: the copy places it, unchanged, on a new
+ * page (`copiedSourceValues`).
  */
 async function changesCode(
   written: HeldPageCode | null,
+  args: JudgedField,
   stored: () => Promise<StoredForms>
 ): Promise<boolean> {
   const forms = await stored();
   if (!forms.readable) return true;
+  if (written !== null) {
+    const copied = await copiedSourceValues(args);
+    if (copied.some(value => samePageCode(pageCodeOf(value), written))) {
+      return false;
+    }
+  }
   const held = forms.forms.map(form => pageCodeOf(form));
   // A new page holds nothing yet: no code is no change.
   if (held.length === 0) return written !== null;
@@ -191,7 +201,7 @@ export async function pageCodeIssues(
       ),
     ];
   }
-  if (!(await changesCode(written, stored))) return [];
+  if (!(await changesCode(written, args, stored))) return [];
   // The caller first, before anything about the code is read out.
   const refused = await siteSettingsCallerRefusal(args, PAGE_CODE_CALLER_WORDS);
   if (refused !== null) return [refusal(args, `${label}: ${refused}`)];

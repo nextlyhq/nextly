@@ -50,6 +50,7 @@ import type {
   CreateRoleArgs,
   CreateUserArgs,
   CreateUserFieldArgs,
+  CreateFromSourceArgs,
   RowFromCollectionSlug,
   RowFromSingleSlug,
   DeleteArgs,
@@ -340,6 +341,27 @@ export interface Nextly {
    */
   duplicate: <TSlug extends CollectionSlug>(
     args: DuplicateArgs<TSlug>
+  ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
+
+  /**
+   * @experimental Create a document that copies a stored one: the source is
+   * read as the caller first, and nothing is created where that read is
+   * refused. The new document's field validators are told what it copies.
+   * Intended to become stable, since plugins call it.
+   *
+   * @example
+   * ```typescript
+   * const section = await nextly.createFromSource({
+   *   collection: 'patterns',
+   *   data: { title: 'Hero', content },
+   *   source: { collection: 'pages', id: 'page-1', field: 'content' },
+   *   user: { id: userId },
+   *   overrideAccess: false,
+   * });
+   * ```
+   */
+  createFromSource: <TSlug extends CollectionSlug>(
+    args: CreateFromSourceArgs<TSlug>
   ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
