@@ -227,11 +227,20 @@ async function insertWithRetry(
   }
 }
 
+/** A handle whose transaction takes savepoints. */
+type SavepointDb = VersionsDbApi &
+  Required<
+    Pick<
+      VersionsDbApi,
+      "savepoint" | "rollbackToSavepoint" | "releaseSavepoint"
+    >
+  >;
+
 /**
- * Whether `db` takes savepoints, so {@link underSavepoint} can undo its work alone. MySQL's
- * adapter keeps them off: there, nothing but the whole transaction undoes a part of it.
+ * Whether `db` takes savepoints, so {@link underSavepoint} can undo its work alone. Where it
+ * does not, nothing but the whole transaction undoes a part of it.
  */
-export function takesSavepoints(db: VersionsDbApi): boolean {
+export function takesSavepoints(db: VersionsDbApi): db is SavepointDb {
   return !(!db.savepoint || !db.rollbackToSavepoint || !db.releaseSavepoint);
 }
 

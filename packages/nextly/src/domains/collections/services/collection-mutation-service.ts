@@ -22519,7 +22519,7 @@ export class CollectionMutationService extends BaseService {
       // field-group table this instance has not registered, say) then undoes
       // the row too, so a caller that catches the failure and commits its own
       // transaction keeps nothing of this create. Side effects and hooks run
-      // after it, as before. Where the transaction takes no savepoint (MySQL),
+      // after it, as before. Where the transaction takes no savepoint,
       // nothing but the whole transaction can take the row back: a failure once
       // it is written is marked a write-integrity failure, so a batch aborts and
       // rolls back rather than carrying on and committing it.

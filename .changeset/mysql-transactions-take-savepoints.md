@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-On MySQL, a batch create no longer keeps the row of an item it reports as failed. MySQL's transactions take no savepoint, so a failure after an item's row is written, such as the publish gate failing to settle, now rolls the whole batch back; a create on a caller's own transaction throws instead of answering a failure the caller could commit past. SQLite and PostgreSQL still undo only the failed item.
+MySQL transactions now take savepoints, as PostgreSQL and SQLite transactions do. A batch create on MySQL undoes an item that fails after its row is written, such as one whose publish the workflow gate fails to settle, and keeps the rest; before, the failed item's row was kept. A savepoint lost with its transaction (MySQL rolls a whole transaction back on a deadlock) now aborts the transaction instead of reporting the wrong error.
