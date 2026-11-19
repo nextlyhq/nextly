@@ -113,8 +113,13 @@ export function ShellRegions({
   const onKeyDownCapture = useSeparatorRegionEscape(regionRefs, active);
   useDesignSystemStylesheet(chromeRef);
 
-  // Whether the host can fill a panel: see `panelAvailability`.
-  const isAvailable = panelAvailability(availablePanels);
+  // Whether the host can fill a panel: see `panelAvailability`. One function
+  // while the host's panels are the same, since the memoised rail reads it
+  // as it draws and a new one each render would draw it again.
+  const isAvailable = React.useMemo(
+    () => panelAvailability(availablePanels),
+    [availablePanels]
+  );
 
   /**
    * The open panel, NORMALISED against what the host can fill.

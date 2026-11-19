@@ -119,7 +119,7 @@ The adapters share a single CRUD API, but underlying dialect capabilities differ
 | Array columns | Yes | No | No |
 | `RETURNING` clause | Yes | No (extra `SELECT` after writes) | Yes (3.35+) |
 | Case-insensitive text matching (`ILIKE`, `ICONTAINS`) | `LOWER(...) LIKE LOWER(...)`; ASCII letters only under the `C` or `POSIX` collation | `LOWER(...) LIKE LOWER(...)`, even under a case-sensitive collation | `nextly_fold_case(...) LIKE nextly_fold_case(...)`, every letter (SQLite's own `LOWER()` folds ASCII only) |
-| Savepoints (nested transactions) | Yes | Disabled by adapter | Yes |
+| Savepoints (nested transactions) | Yes | No (a nested transaction joins flat) | Yes |
 | Full-text search | `tsvector` | `FULLTEXT` indexes | FTS5 (extension) |
 | Upsert syntax | `ON CONFLICT DO UPDATE` | `ON DUPLICATE KEY UPDATE` | `ON CONFLICT DO UPDATE` |
 | Connection pooling | `pg.Pool` | `mysql2` pool | None (single file handle) |
