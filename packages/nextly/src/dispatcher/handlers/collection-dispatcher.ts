@@ -2154,9 +2154,10 @@ async function saveThroughWriter(
      */
     settled?: (fields: FieldDefinition[]) => void;
     /**
-     * The questions the push asks before it changes anything, asked where the save's file rather
-     * than the push carries the change, before anything is written: a dialog's request that leaves
-     * one unanswered is refused as the push refuses it (`refuseUnansweredDialogQuestions`).
+     * The questions the push asks before it changes anything, asked on every road before anything
+     * is written, with those the push does not ask of the translations table and the link tables:
+     * a dialog's request that leaves one unanswered is refused as the push refuses it
+     * (`refuseUnansweredDialogQuestions`).
      */
     questions?: () => Promise<void>;
   }
@@ -2172,12 +2173,15 @@ async function saveThroughWriter(
   | undefined
 > {
   const prepared = await writerSaveOf(change);
+  // The push's questions come before anything is written, on every road: the push itself asks only
+  // of the main table's columns, while a translated field's values and a relationship's links go
+  // with the translations table and the link tables after it, and a file asks nothing.
+  await change.questions?.();
   if (prepared === undefined) return undefined;
   const viaPush =
     change.appliedBy !== undefined &&
     prepared.deps.applies &&
     (change.pushWhen === undefined || (await change.pushWhen()));
-  if (!viaPush) await change.questions?.();
   // Loaded here, where a save runs: the writer brings the migration generator
   // and runner, which a request that writes no field change never needs.
   const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([

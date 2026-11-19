@@ -657,6 +657,135 @@ for (const dialect of getConfiguredTestDialects()) {
   });
 }
 
+// A translated collection's dialog save takes the push in development, which asks only of the
+// main table's columns. A translated field's values in the translations table, and a
+// relationship's links in its link table, go with that save too: they are asked before the push
+// runs, as on the file road.
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a translated collection's dialog save, which takes the push (${dialect})`, () => {
+    let t: TestNextly;
+    let basePath: string;
+    const translated = (name: string) => ({ ...text(name), localized: true });
+    const related = {
+      name: "related",
+      type: "relationship",
+      relationTo: "tags",
+      hasMany: true,
+      options: { relationType: "manyToMany", target: "tags" },
+    };
+    const link = junctionTableNameFor("dc_posts", related as never);
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "tags", label: "tags", fields: [text("name")] }
+      );
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "posts",
+          label: "posts",
+          localized: true,
+          fields: [translated("heading"), translated("teaser"), related],
+        }
+      );
+      const tag = (await t.nextly.create({
+        collection: "tags",
+        data: { name: "first" },
+      } as never)) as unknown as { item: { id: unknown } };
+      await t.nextly.create({
+        collection: "posts",
+        data: {
+          heading: "Hello",
+          teaser: "Read on",
+          related: [String(tag.item.id)],
+        },
+      } as never);
+    });
+
+    afterEach(async () => {
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    const companionColumns = async () =>
+      (
+        await readTableDefinition(
+          statement => exec(t, statement),
+          (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+          "dc_posts_locales"
+        )
+      ).columns.map(column => column.name);
+    // The links the link table holds, or none where the table is gone.
+    const links = async () =>
+      exec<{ n: number | string }>(t, `SELECT COUNT(*) AS n FROM ${link}`).then(
+        rows => Number(rows[0]?.n ?? 0),
+        () => 0
+      );
+    const save = async (fields: unknown[], answers: Answers) =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "posts" },
+        {
+          fields,
+          confirmed: true,
+          localized: true,
+          schemaVersion: await versionOf(t, "dynamic_collections", "posts"),
+          ...answers,
+        }
+      );
+    const refusalOf = (fields: unknown[]) =>
+      save(fields, {}).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+    it("refuses removing a translated field unconfirmed, keeping every language, and drops it once confirmed by name", async () => {
+      const fields = [translated("heading"), related];
+
+      const refused = await refusalOf(fields);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+      expect(String(refused)).toMatch(/cancelled/);
+      expect(await companionColumns()).toContain("teaser");
+
+      await save(fields, {
+        resolutions: { teaser: { action: "confirm_drop" } },
+      });
+      expect(await companionColumns()).not.toContain("teaser");
+    }, 60_000);
+
+    it("refuses removing a many-to-many unconfirmed, keeping its links, and goes through once confirmed by name", async () => {
+      const fields = [translated("heading"), translated("teaser")];
+      expect(await links()).toBe(1);
+
+      const refused = await refusalOf(fields);
+
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+      expect(String(refused)).toMatch(/cancelled/);
+      expect(await links()).toBe(1);
+
+      await save(fields, {
+        resolutions: { related: { action: "confirm_drop" } },
+      });
+    }, 60_000);
+  });
+}
+
 // A field-group field keeps its values as rows of the field group's own table. Pointed at another
 // field group, the field reads from that group's table, and the rows it had stay where they are.
 for (const dialect of getConfiguredTestDialects()) {

@@ -129,9 +129,10 @@ export async function writeBuilderSchemaChange(
     pushWhen: () => Promise<boolean>;
     afterFile: () => Promise<void>;
     /**
-     * The questions the push asks before it changes anything, asked of the save's file where it
-     * runs instead, before anything is written: a rename the request does not answer, or a drop it
-     * does not confirm, refuses the save as the push refuses it (`refuseUnansweredDialogQuestions`).
+     * The questions the push asks before it changes anything, asked on every road before anything
+     * is written, with those the push does not ask of the translations table and the link tables: a
+     * rename the request does not answer, or a drop it does not confirm, refuses the save as the
+     * push refuses it (`refuseUnansweredDialogQuestions`).
      */
     questions?: () => Promise<void>;
     registry?: (fields: readonly FieldDefinition[]) => Promise<void>;
@@ -142,6 +143,10 @@ export async function writeBuilderSchemaChange(
     settled?: (fields: readonly FieldDefinition[]) => void;
   }
 ): Promise<{ registryWritten: boolean }> {
+  // The push's questions come before anything is written, on every road: the push itself asks only
+  // of the main table's columns, while a translated field's values and a relationship's links go
+  // with the translations table and the link tables after it, and a file asks nothing.
+  await fileRoad?.questions?.();
   if (deps === undefined) {
     await apply();
     return { registryWritten: false };
@@ -150,10 +155,6 @@ export async function writeBuilderSchemaChange(
   // against the live table; only where the answer is used, a save the writer runs.
   const runsFile =
     deps.applies && fileRoad !== undefined && !(await fileRoad.pushWhen());
-  // Outside development the push runs after the files are written (`appliedAfter`) and asks only of
-  // the main table's columns, while the translations table's and the link tables' drops follow it:
-  // the questions are asked there too, before anything is written, as the collection's road asks.
-  if (runsFile || !deps.applies) await fileRoad?.questions?.();
   const { save } = saveOfSchemaChange({
     ...change,
     row: {
