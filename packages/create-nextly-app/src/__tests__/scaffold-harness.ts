@@ -7,7 +7,14 @@
  * test file itself (vi.mock is per file); this module only reads what they
  * recorded.
  */
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -105,6 +112,20 @@ export async function installFakeManagers(dir: string): Promise<FakeRun> {
 
 export async function makeWorkdir(prefix: string): Promise<string> {
   return mkdtemp(path.join(tmpdir(), prefix));
+}
+
+/**
+ * Removes a working directory `makeWorkdir` made. On Windows a process the
+ * case started can still hold a handle inside it for a moment after it
+ * exits, and a removal then fails with EBUSY, so it is retried a while.
+ */
+export async function removeWorkdir(dir: string): Promise<void> {
+  await rm(dir, {
+    recursive: true,
+    force: true,
+    maxRetries: 10,
+    retryDelay: 200,
+  });
 }
 
 /**

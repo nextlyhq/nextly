@@ -7,6 +7,7 @@
 import { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
 import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 
+import { areaComponentRoute } from "../area-component-route";
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
 import { PAGES_SLUG } from "../collections/pages";
@@ -18,11 +19,10 @@ import { layoutAreaRoutes } from "../layout-area-route";
 import { layoutChoicesRoute } from "../layout-choices-route";
 import { registerLayoutComponentGuard } from "../layout-component-guard";
 import { layoutCountsRoute } from "../layout-counts-route";
-import { areaComponentRoute } from "../area-component-route";
-import { setAreaChoicesRoute } from "../set-area-choices-route";
 import { registerLayoutReadinessNotice } from "../layout-readiness-hook";
 import { removeLayoutRoute } from "../layout-removal/remove-route";
 import { layoutWriteRoutes } from "../layout-writes-route";
+import { setAreaChoicesRoute } from "../set-area-choices-route";
 
 import type { InitContext } from "./install-context";
 import { componentStoreOf } from "./options";
