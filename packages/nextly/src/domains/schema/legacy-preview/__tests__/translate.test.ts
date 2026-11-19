@@ -788,6 +788,30 @@ describe("a many-to-many leaving its link table", () => {
     );
   });
 
+  // A group with no name only lays its fields out: a many-to-many inside it is the row's own, and
+  // leaving its link table drops the links as one beside the group does.
+  it("counts the links a many-to-many inside a group with no name drops, as one beside it", async () => {
+    const { db, queries } = linkCountDb(2);
+    const inAGroup = (field: FieldDefinition) =>
+      ({ type: "group", label: "Links", fields: [field] }) as unknown as FieldDefinition;
+    const result = await leaving(
+      inAGroup(manyToMany({ junctionTable: "post-tag-links" })),
+      inAGroup(singleLink),
+      db
+    );
+    expect(queries.some(query => query.includes("post-tag-links"))).toBe(true);
+    expect(result.changes.changed).toEqual([
+      expect.objectContaining({
+        name: "tags",
+        rowCount: 2,
+        classification: "destructive",
+      }),
+    ]);
+    expect(result.warnings).toContain(
+      "Changing 'tags' from many-to-many to a single link drops its link table and the 2 links it holds."
+    );
+  });
+
   // A field group's many-to-many keeps its ids in its own row, with no link table to drop.
   it("applies no link table to a field group's many-to-many", async () => {
     const { db, queries } = linkCountDb(2);

@@ -165,8 +165,9 @@ interface Executes {
  * counts as confirmed at 0, and is refused if it holds any value.
  *
  * A field is removed where its column goes: the fields stored on the row (`fieldsStoredOnRow`, so
- * a field inside a group with no name counts as the row's own) before the save and not after it,
- * apart from those the save renames (`renamed`), whose values the save keeps.
+ * a field inside a group with no name counts as the row's own) in a column before the save and in
+ * none after it, whether gone or changed to a shape with no column, apart from those the save
+ * renames (`renamed`), whose values the save keeps.
  */
 export function deletionHoldOf(args: {
   dialect: SupportedDialect;
@@ -184,15 +185,21 @@ export function deletionHoldOf(args: {
   // By column, as the save's statements name them: a name written in another case or spelling
   // is the same column.
   const columnOf = (name: string): string => toSnakeCase(name);
+  // A field stored in a column of the row, by the shared rule (`fieldProducesColumn`); a virtual
+  // field stores nothing.
+  const inAColumn = (field: FieldDefinition): boolean =>
+    !isVirtualField(field) && fieldProducesColumn(field);
+  // Kept: a column the save leaves, which a field after it still stores in. A field that keeps its
+  // name but no longer has a column (a relationship made many-to-many, a field made virtual) keeps
+  // nothing: its column goes.
   const kept = new Set([
-    ...fieldsStoredOnRow(args.next).map(field => columnOf(field.name)),
+    ...fieldsStoredOnRow(args.next)
+      .filter(inAColumn)
+      .map(field => columnOf(field.name)),
     ...(args.renamed ?? []).map(rename => columnOf(rename.from)),
   ]);
   const removed = fieldsStoredOnRow(args.previous).filter(
-    field =>
-      !kept.has(columnOf(field.name)) &&
-      !isVirtualField(field) &&
-      fieldProducesColumn(field)
+    field => inAColumn(field) && !kept.has(columnOf(field.name))
   );
   if (removed.length === 0) return undefined;
   const tables = [

@@ -95,19 +95,24 @@ export async function translatePipelinePreviewToLegacy(
   preview: PipelinePreviewResult,
   context: TranslateContext
 ): Promise<SchemaPreviewResult> {
-  const { tableName, currentFields, newFields, db, dialect } = context;
+  const { tableName, db, dialect } = context;
   const localized = context.localized === true;
+  // The fields stored on the row (`fieldsStoredOnRow`), before and after: a field inside a group
+  // with no name is the row's own field, compared, counted and judged as one beside it is, by the
+  // diff below and by every check of a changed field after it.
+  const currentFields = fieldsStoredOnRow(context.currentFields);
+  const newFields = fieldsStoredOnRow(context.newFields);
 
   // Step 1: legacy field-level diff (pure function).
   // Where the fields' values are stored, before and after, by the shared rule: an entity keeps its
   // translatable values in the companion when translated, and every entity does under per-language
   // storage, where turning the entity's translation on or off moves none of them.
-  // Compared by the fields stored on the row (`fieldsStoredOnRow`), so a field inside a group with
-  // no name is listed, and counted, as the row's own field it is: removed, its column goes, and a
-  // save that compares the confirmed counts compares it the same way (`deletionHoldOf`).
+  // Compared by the row's fields, so a field removed from a group with no name is listed, and
+  // counted, as its column goes; a save that compares the confirmed counts compares it the same way
+  // (`deletionHoldOf`).
   const diff = computeFieldDiff(
-    fieldsStoredOnRow(currentFields),
-    fieldsStoredOnRow(newFields),
+    currentFields,
+    newFields,
     {
       localized: storesPerLanguage({ localized }),
       newLocalized: storesPerLanguage({

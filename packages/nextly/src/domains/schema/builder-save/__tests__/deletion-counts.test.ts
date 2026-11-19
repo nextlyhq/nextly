@@ -10,6 +10,8 @@
  *   column is the row's own and goes with it;
  * - one that ignores the save's renames compares a renamed field, whose values the save keeps, and
  *   refuses the save when it holds any;
+ * - one that keeps every field whose name stays misses a field changed to a shape with no column
+ *   (a relationship made many-to-many, a field made virtual), whose column goes;
  * - one that places a translatable field by the entity's own setting alone reads the main table
  *   under per-language storage, where the values are in the translations table;
  * - one that quotes names by a narrower grammar than the naming rules refuses to count a table
@@ -68,6 +70,37 @@ describe("the fields a save that removes fields compares", () => {
     expect(await refusedFields(hold!.compare(countingSqlite(2)))).toEqual([
       "fields.note",
     ]);
+  });
+
+  it("compares a field that keeps its name but loses its column", async () => {
+    // A single relationship made many-to-many: its links move to a table of their own, and its
+    // column goes. So does a field made virtual, which stores nothing.
+    const single = {
+      name: "author",
+      type: "relationship",
+      options: { target: "people" },
+    } as unknown as FieldDefinition;
+    const many = {
+      ...single,
+      options: { target: "people", relationType: "manyToMany" },
+    } as unknown as FieldDefinition;
+    const hold = deletionHoldOf({
+      dialect: "sqlite",
+      tableName: "dc_notes",
+      localized: false,
+      previous: [text("label"), single, text("note")],
+      next: [
+        text("label"),
+        many,
+        { ...text("note"), virtual: true } as FieldDefinition,
+      ],
+      confirmed: [],
+    });
+
+    expect(hold).toBeDefined();
+    expect(
+      (await refusedFields(hold!.compare(countingSqlite(2)))).sort()
+    ).toEqual(["fields.author", "fields.note"]);
   });
 
   it("leaves out a field the save renames, whose values it keeps", () => {
