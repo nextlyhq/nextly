@@ -449,35 +449,29 @@ describe.each(getConfiguredTestDialects())(
       }
     }, 120_000);
 
-    it("two migrations that make the same change: migrate:create finds nothing to record, and one is deleted", async () => {
+    it("two migrations that make the same change are not recorded as a merge: one is deleted", async () => {
       // As a writer stopped past its hold leaves the folder beside the one
       // that took its place: the same change, written twice.
       const withTags = configOf([POSTS, TAGS]);
-      const files: string[] = [];
-      for (const name of ["first", "second"]) {
-        const created = await migrateCreate(withTags, name);
-        expect(created.refused, created.said).toBe(false);
-        files.push(fileOf(name));
-        move(fileOf(name), "aside");
-        await pause(5);
-      }
-      for (const file of files) move(file, "back");
+      const files = await eachFromTheSameStart([
+        { name: "first", config: withTags },
+        { name: "second", config: withTags },
+      ]);
+      const both = `They both change ${table(TAGS)}, so they cannot be applied one after the other`;
 
       const refused = await migrate(withTags);
       expect(refused.refused).toBe(true);
       expect(refused.said).toContain(
         `Two migrations were written from ${base}: ${files[0]} and ${files[1]}.`
       );
+      expect(refused.said).toContain(both);
+      expect(refused.said).not.toContain("record_merge");
       expect(await adapter.tableExists(table(TAGS))).toBe(false);
 
-      const nothing = await migrateCreate(withTags, "record_merge");
-      expect(nothing.refused, nothing.said).toBe(false);
-      // The configuration is what the newest of the two records, and the
-      // other is named as the one written without it.
-      expect(nothing.said).toContain(
-        `The configuration is what ${files[1]} records, so there is no merge to write. ${files[0]} was written without it`
-      );
-      expect(nothing.said).toContain("delete it and its snapshot");
+      // `migrate:create` writes no record on top of the two.
+      const unrecorded = await migrateCreate(withTags, "record_merge");
+      expect(unrecorded.refused).toBe(true);
+      expect(unrecorded.said).toContain(both);
       expect(sqlFiles()).toHaveLength(3);
 
       rmSync(join(dir, "migrations", files[0]));
@@ -492,6 +486,21 @@ describe.each(getConfiguredTestDialects())(
       const applied = await migrate(withTags);
       expect(applied.refused, applied.said).toBe(false);
       expect(await adapter.tableExists(table(TAGS))).toBe(true);
+    }, 120_000);
+
+    it("where the merged configuration keeps only the newest branch's change, migrate:create names the other to delete", async () => {
+      const [color, size] = await eachFromTheSameStart([
+        { name: "add_color", config: postsWith(["color"]) },
+        { name: "add_size", config: postsWith(["size"]) },
+      ]);
+
+      const nothing = await migrateCreate(postsWith(["size"]), "record_merge");
+
+      expect(nothing.refused, nothing.said).toBe(false);
+      expect(nothing.said).toContain(
+        `The configuration is what ${size} records, so there is no merge to write. ${color} was written without it`
+      );
+      expect(sqlFiles()).toHaveLength(3);
     }, 120_000);
 
     it("refuses a migration written beside another while the run waited for the lock, before its first write", async () => {

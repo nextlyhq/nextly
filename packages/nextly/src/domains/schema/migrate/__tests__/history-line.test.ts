@@ -17,6 +17,7 @@ import {
   mergedBy,
   nothingToRecordNotice,
   refuseForkedHistory,
+  refuseUnrecordableMerge,
   unrecordedMerges,
 } from "../history-line";
 
@@ -41,14 +42,20 @@ function migration(
   base: string,
   parent: string | null | "none",
   copiedFrom?: string,
-  merges: string[] = []
+  merges: string[] = [],
+  tables: Record<string, string[]> = {}
 ): void {
   writeFileSync(join(dir, `${base}.sql`), "");
   writeFileSync(
     join(dir, "meta", `${base}.snapshot.json`),
     JSON.stringify({
       version: 1,
-      snapshot: { tables: [] },
+      snapshot: {
+        tables: Object.entries(tables).map(([name, columns]) => ({
+          name,
+          columns: columns.map(column => ({ name: column, type: "text" })),
+        })),
+      },
       ...(parent === "none"
         ? {}
         : {
@@ -82,6 +89,7 @@ describe("the merges a migration history does not record", () => {
         migrations: ["0002_b", "0003_c"],
         members: ["0002_b", "0003_c"],
         newest: ["0003_c"],
+        overlap: [],
       },
     ]);
   });
@@ -117,8 +125,50 @@ describe("the merges a migration history does not record", () => {
         migrations: ["0002_a", "0003_b"],
         members: ["0002_a", "0003_b", "0004_c"],
         newest: ["0003_b", "0004_c"],
+        overlap: [],
       },
     ]);
+  });
+
+  it("names what both branches change: a column each touched, or a table each added", async () => {
+    const posts = (...columns: string[]) => ({ dc_posts: ["id", ...columns] });
+    migration("0001_p", null, undefined, [], posts("x"));
+    // One branch renames `x` to `title`; the other drops `x`.
+    migration("0002_a", "0001_p", undefined, [], posts("title"));
+    migration("0003_b", "0001_p", undefined, [], posts());
+    expect((await unrecordedMerges(dir))[0].overlap).toEqual(["dc_posts.x"]);
+
+    // Each adds a column of its own: nothing both change.
+    migration("0002_a", "0001_p", undefined, [], posts("x", "color"));
+    migration("0003_b", "0001_p", undefined, [], posts("x", "size"));
+    expect((await unrecordedMerges(dir))[0].overlap).toEqual([]);
+
+    // Each adds the same table: the same change, written twice.
+    migration("0002_a", "0001_p", undefined, [], {
+      ...posts("x"),
+      dc_tags: ["id"],
+    });
+    migration("0003_b", "0001_p", undefined, [], {
+      ...posts("x"),
+      dc_tags: ["id"],
+    });
+    expect((await unrecordedMerges(dir))[0].overlap).toEqual(["dc_tags"]);
+  });
+
+  it("takes the branch of the folder's newest snapshot as the newest, whichever end sorts last", async () => {
+    migration("0001_p", null);
+    migration("0005_a", "0001_p");
+    // Written from `0005_a` on a machine whose clock was behind.
+    migration("0002_c", "0005_a");
+    migration("0004_b", "0001_p");
+
+    expect((await unrecordedMerges(dir))[0]).toMatchObject({
+      members: ["0002_c", "0004_b", "0005_a"],
+      newest: ["0002_c", "0005_a"],
+    });
+    expect(await nothingToRecordNotice(dir)).toContain(
+      "The configuration is what 0005_a.sql records, so there is no merge to write. 0004_b.sql was written without it"
+    );
   });
 
   it("finds none once a migration written with both in the folder records the merge", async () => {
@@ -206,6 +256,7 @@ describe("the refusal of a merge nothing records", () => {
     migrations: ["0002_b", "0003_c"],
     members: ["0002_b", "0003_c"],
     newest: ["0003_c"],
+    overlap: [] as string[] | undefined,
   };
 
   it("names both files and how to record the merge, where no database says which is applied", () => {
@@ -216,8 +267,35 @@ describe("the refusal of a merge nothing records", () => {
       "Two migrations were written from 0001_a.sql: 0002_b.sql and 0003_c.sql. " +
         "Each was written without the others' changes, so none of them was applied: " +
         "nothing yet records them together. " +
-        "Run `nextly migrate:create --name record_merge` to record the merge; if they make " +
-        "the same change, delete all but one of them, with their snapshots, instead."
+        "Run `nextly migrate:create --name record_merge` to record the merge."
+    );
+  });
+
+  it("says to delete one and write it again where both change the same thing, and never to record that", () => {
+    const refusal = forkedHistoryError([{ ...merge, overlap: ["dc_posts.x"] }]);
+
+    expect(refusal?.publicMessage).toContain(
+      "They both change dc_posts.x, so they cannot be applied one after the other: " +
+        "delete all but one of them, with their snapshots, then run `nextly migrate:create` " +
+        "again so its change is written after the other."
+    );
+    expect(refusal?.publicMessage).not.toContain("record_merge");
+
+    // With one applied on the database read, the other is the one to delete.
+    expect(
+      forkedHistoryError(
+        [{ ...merge, overlap: ["dc_posts.x"] }],
+        new Set(["0003_c"])
+      )?.publicMessage
+    ).toContain("delete 0002_b.sql, with its snapshot, then run");
+  });
+
+  it("offers both where the branches share no parent to compare them from", () => {
+    expect(
+      forkedHistoryError([{ ...merge, parent: undefined, overlap: undefined }])
+        ?.publicMessage
+    ).toContain(
+      "to record the merge; if they change the same thing, delete all but one of them, with their snapshots, instead, then run"
     );
   });
 
@@ -228,8 +306,7 @@ describe("the refusal of a merge nothing records", () => {
       "Two migrations were written from 0001_a.sql: 0002_b.sql and 0003_c.sql. " +
         "0003_c.sql is applied on this database, and 0002_b.sql was written without its " +
         "changes, so it was not applied. " +
-        "Run `nextly migrate:create --name record_merge` to record the merge; if 0002_b.sql " +
-        "makes the same change, delete it and its snapshot instead."
+        "Run `nextly migrate:create --name record_merge` to record the merge."
     );
   });
 
@@ -255,6 +332,24 @@ describe("the refusal of a merge nothing records", () => {
     expect(
       forkedHistoryError([{ ...merge, parent: undefined }])?.publicMessage
     ).toMatch(/^0002_b\.sql and 0003_c\.sql were written without each other\./);
+  });
+});
+
+describe("what migrate:create refuses to record", () => {
+  it("refuses branches that change the same thing, and lets through ones that do not", async () => {
+    const posts = (...columns: string[]) => ({ dc_posts: ["id", ...columns] });
+    migration("0001_p", null, undefined, [], posts("x"));
+    migration("0002_a", "0001_p", undefined, [], posts("x", "color"));
+    migration("0003_b", "0001_p", undefined, [], posts("x", "size"));
+    await refuseUnrecordableMerge(dir);
+
+    migration("0003_b", "0001_p", undefined, [], posts());
+    migration("0002_a", "0001_p", undefined, [], posts("title"));
+    await expect(refuseUnrecordableMerge(dir)).rejects.toMatchObject({
+      publicMessage: expect.stringContaining(
+        "They both change dc_posts.x"
+      ) as unknown,
+    });
   });
 });
 

@@ -2989,10 +2989,6 @@ export async function migrateCore(
       // history checks of `assertAppHistoryHolds`, in its order.
       await assertFilesPresent(lockedHistory);
       await refuseAttempts(lockedHistory);
-      // And the history as one line, read again under the lock: a migration
-      // written beside another while this run waited for it is refused
-      // before the run's first write, from the ledger no other run changes.
-      await refuseForkedAppHistory(deps);
       // And again under the lock, before anything writes (the checksum check
       // below records a missing checksum): a file changed while this run
       // waited for the lock is judged as it now reads.
@@ -3015,6 +3011,11 @@ export async function migrateCore(
         deps,
         agreedDeletions
       );
+      // And the history as one line, read again under the lock and after the
+      // files this run applies were read from the folder: a migration written
+      // beside another while the run waited is among those files only if it
+      // is in the folder now, where this reads it, before the first write.
+      await refuseForkedAppHistory(deps);
       // An applied file edited since it ran is refused here too, before the
       // first write; one recorded without a checksum gets its checksum.
       await (deps.assertAppliedFilesUnchangedFn ?? assertAppliedFilesUnchanged)(
@@ -3993,9 +3994,14 @@ async function refuseForkedAppHistory(args: {
   dialect: SupportedDialect;
   migrationsDir: string;
 }): Promise<void> {
-  const hasLedger = await (
-    args.adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
-  ).tableExists("nextly_schema_events");
+  // Detected, not assumed: a caller of the run's seam may hand an adapter
+  // without this operation, which then has no ledger to read.
+  const probe = args.adapter as unknown as {
+    tableExists?: (table: string) => Promise<boolean>;
+  };
+  const hasLedger =
+    typeof probe.tableExists === "function" &&
+    (await probe.tableExists("nextly_schema_events"));
   const applied = hasLedger
     ? appliedAppMigrations(
         await new SchemaEventsRepository(

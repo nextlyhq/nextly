@@ -38,8 +38,18 @@ export interface UnrecordedMerge {
   migrations: string[];
   /** Every migration of every branch, in file order. */
   members: string[];
-  /** The branch of the newest migration: what the others were written without. */
+  /**
+   * The branch that holds the folder's newest snapshot, the one `nextly
+   * migrate:create` writes from: what the others were written without.
+   */
   newest: string[];
+  /**
+   * What more than one branch changes, as `table` or `table.column`: the
+   * branches cannot be applied one after another where there is any, since
+   * each was written against the same thing as it stood before the other.
+   * Undefined where the branches share no parent to compare them from.
+   */
+  overlap: string[] | undefined;
 }
 
 /** The `logContext.reason` of a refusal over a forked history. */
@@ -55,6 +65,57 @@ interface Placed {
   parent: string | null | undefined;
   /** The other branch ends its snapshot records a merge of. */
   merges: readonly string[];
+  /** The tables its snapshot records: each column's declaration as text, by table and column. */
+  tables: ReadonlyMap<string, ReadonlyMap<string, string>>;
+}
+
+/** The tables `snapshot`, a snapshot file's `snapshot`, records (`Placed.tables`). */
+function tablesIn(snapshot: unknown): Placed["tables"] {
+  const tables = (snapshot as { tables?: unknown } | undefined)?.tables;
+  if (!Array.isArray(tables)) return new Map();
+  return new Map(
+    tables.flatMap((table: { name?: unknown; columns?: unknown }) =>
+      typeof table.name === "string"
+        ? [
+            [
+              table.name,
+              new Map(
+                (Array.isArray(table.columns) ? table.columns : []).flatMap(
+                  (column: { name?: unknown }) =>
+                    typeof column.name === "string"
+                      ? [[column.name, JSON.stringify(column)] as const]
+                      : []
+                )
+              ),
+            ] as const,
+          ]
+        : []
+    )
+  );
+}
+
+/**
+ * What differs between two snapshots' tables, as `table` for one only one
+ * side has and `table.column` for a column added, removed or changed.
+ */
+function changedBetween(
+  from: Placed["tables"],
+  to: Placed["tables"]
+): Set<string> {
+  const changed = new Set<string>();
+  for (const name of new Set([...from.keys(), ...to.keys()])) {
+    const [before, after] = [from.get(name), to.get(name)];
+    if (before === undefined || after === undefined) {
+      changed.add(name);
+      continue;
+    }
+    for (const column of new Set([...before.keys(), ...after.keys()])) {
+      if (before.get(column) !== after.get(column)) {
+        changed.add(`${name}.${column}`);
+      }
+    }
+  }
+  return changed;
 }
 
 /**
@@ -64,24 +125,31 @@ interface Placed {
  * snapshot, which the checks of snapshots themselves name.
  */
 function placedBy(content: string, base: string): Placed {
-  const none: Placed = { base, parent: undefined, merges: [] };
+  const unread: Placed = {
+    base,
+    parent: undefined,
+    merges: [],
+    tables: new Map(),
+  };
   try {
-    const { parent, migration, merges } = JSON.parse(content) as {
+    const { parent, migration, merges, snapshot } = JSON.parse(content) as {
       parent?: unknown;
       migration?: unknown;
       merges?: unknown;
+      snapshot?: unknown;
     };
+    const none = { ...unread, tables: tablesIn(snapshot) };
     if (migration !== base) return none;
     if (parent !== null && typeof parent !== "string") return none;
     return {
-      base,
+      ...none,
       parent,
       merges: Array.isArray(merges)
         ? merges.filter((each): each is string => typeof each === "string")
         : [],
     };
   } catch {
-    return none;
+    return unread;
   }
 }
 
@@ -199,14 +267,49 @@ export async function unrecordedMerges(
     line.placed.find(each => each.base === base)?.parent;
   const starts = branches.map(branch => branch[0]);
   const parents = new Set(starts.map(parentOf));
+  const parent = parents.size === 1 ? [...parents][0] : undefined;
+  const members = branches.flat().sort();
+  // The folder's newest snapshot by name is the one a migration is written
+  // from, whichever branch end sorts last.
+  const latest = line.placed.findLast(each => members.includes(each.base));
   return [
     {
-      parent: parents.size === 1 ? [...parents][0] : undefined,
+      parent,
       migrations: [...starts].sort(),
-      members: branches.flat().sort(),
-      newest: branches[heads.indexOf([...heads].sort().at(-1) ?? "")] ?? [],
+      members,
+      newest:
+        branches.find(branch => branch.includes(latest?.base ?? "")) ?? [],
+      overlap:
+        parent === undefined ? undefined : overlapOf(line, parent, heads),
     },
   ];
+}
+
+/**
+ * What more than one of the branches ending at `heads` changes, each read
+ * as the difference between the snapshot of `parent`, which they share, and
+ * the snapshot of its end.
+ */
+function overlapOf(
+  line: Line,
+  parent: string | null,
+  heads: readonly string[]
+): string[] {
+  const tablesOf = (base: string | null): Placed["tables"] =>
+    line.placed.find(each => each.base === base)?.tables ?? new Map();
+  const changes = heads.map(head =>
+    changedBetween(tablesOf(parent), tablesOf(head))
+  );
+  const seen = new Map<string, number>();
+  for (const changed of changes) {
+    for (const element of changed) {
+      seen.set(element, (seen.get(element) ?? 0) + 1);
+    }
+  }
+  return [...seen]
+    .filter(([, count]) => count > 1)
+    .map(([element]) => element)
+    .sort();
 }
 
 /**
@@ -257,28 +360,47 @@ function mergeLines(
   // Each already applied here: the history is what it is, and nothing is
   // left to refuse.
   if (pending.length === 0) return undefined;
+  const one = pending.length === 1;
+  const why =
+    done.length > 0
+      ? `${listed(done.map(file))} ${done.length === 1 ? "is" : "are"} applied on this database, and ` +
+        `${listed(pending.map(file))} ${one ? "was" : "were"} written without ` +
+        `${done.length === 1 ? "its" : "their"} changes, so ${one ? "it was" : "they were"} not applied.`
+      : "Each was written without the others' changes, so none of them was applied: " +
+        "nothing yet records them together.";
+  return { what: whatOf(merge), why, next: nextFor(merge, done, pending) };
+}
+
+/**
+ * What to do about an unrecorded merge. Branches that change different
+ * things apply one after another, and a migration recording the merge is all
+ * that is missing. Branches that change the same thing do not: each was
+ * written against it as it stood before the other, so one of them is
+ * deleted and its change written again after the other.
+ */
+function nextFor(
+  merge: UnrecordedMerge,
+  done: readonly string[],
+  pending: readonly string[]
+): string {
   const record =
     "Run `nextly migrate:create --name record_merge` to record the merge";
-  if (done.length > 0) {
-    const one = pending.length === 1;
-    return {
-      what: whatOf(merge),
-      why:
-        `${listed(done.map(file))} ${done.length === 1 ? "is" : "are"} applied on this database, and ` +
-        `${listed(pending.map(file))} ${one ? "was" : "were"} written without ` +
-        `${done.length === 1 ? "its" : "their"} changes, so ${one ? "it was" : "they were"} not applied.`,
-      next:
-        `${record}; if ${listed(pending.map(file))} ${one ? "makes" : "make"} the same change, ` +
-        `delete ${one ? "it and its snapshot" : "them and their snapshots"} instead.`,
-    };
+  const again =
+    "then run `nextly migrate:create` again so its change is written after the other";
+  const which =
+    done.length > 0
+      ? `${listed(pending.map(file))}, with ${pending.length === 1 ? "its snapshot" : "their snapshots"}`
+      : "all but one of them, with their snapshots";
+  if (merge.overlap === undefined) {
+    return `${record}; if they change the same thing, delete ${which}, instead, ${again}.`;
   }
-  return {
-    what: whatOf(merge),
-    why:
-      "Each was written without the others' changes, so none of them was applied: " +
-      "nothing yet records them together.",
-    next: `${record}; if they make the same change, delete all but one of them, with their snapshots, instead.`,
-  };
+  if (merge.overlap.length === 0) return `${record}.`;
+  const same = listed(merge.overlap.slice(0, 3));
+  const more = merge.overlap.length > 3 ? " and more" : "";
+  return (
+    `They both change ${same}${more}, so they cannot be applied one after the other: ` +
+    `delete ${which}, ${again}.`
+  );
 }
 
 /**
@@ -317,7 +439,8 @@ export function forkedHistoryError(
  * Refuses where the folder's history holds a merge nothing records
  * (`forkedHistoryError`): asked before a command applies the migrations or
  * checks them, and before a Schema Builder save writes another after them.
- * `nextly migrate:create` is not refused: it is what records the merge.
+ * `nextly migrate:create` asks `refuseUnrecordableMerge` instead: it is what
+ * records a merge.
  */
 export async function refuseForkedHistory(
   migrationsDir: string,
@@ -326,6 +449,22 @@ export async function refuseForkedHistory(
   const refusal = forkedHistoryError(
     await unrecordedMerges(migrationsDir),
     applied
+  );
+  if (refusal !== undefined) throw refusal;
+}
+
+/**
+ * Refuses, for `nextly migrate:create`, a merge it cannot record: branches
+ * that change the same thing, where a migration written after both would
+ * stand on two that cannot be applied one after the other. Branches that
+ * change different things are not refused: the run records them.
+ */
+export async function refuseUnrecordableMerge(
+  migrationsDir: string
+): Promise<void> {
+  const merges = await unrecordedMerges(migrationsDir);
+  const refusal = forkedHistoryError(
+    merges.filter(merge => (merge.overlap ?? []).length > 0)
   );
   if (refusal !== undefined) throw refusal;
 }

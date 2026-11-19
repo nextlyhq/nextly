@@ -54,7 +54,10 @@ import type { Command } from "commander";
 import { buildExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
-import { nothingToRecordNotice } from "../../domains/schema/migrate/history-line";
+import {
+  nothingToRecordNotice,
+  refuseUnrecordableMerge,
+} from "../../domains/schema/migrate/history-line";
 import {
   consentCovers,
   consentToCover,
@@ -686,6 +689,9 @@ export async function runMigrateCreate(
   });
   held.enter();
   try {
+    // Branches written without each other that change the same thing cannot
+    // be recorded as merged; ones that change different things are, below.
+    await refuseUnrecordableMerge(migrationsDir);
     // --blank: write a stub file and exit. No diff, no prompts.
     if (options.blank) {
       await runBlankPath(
