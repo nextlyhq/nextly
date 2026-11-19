@@ -528,13 +528,13 @@ describe.each(getConfiguredTestDialects())(
       expect(before.translations).toBe(2);
       expect(deleted.code, deleted.said).toBeUndefined();
 
-      // The file drops the translations table first; the listing reads it beside its table.
-      // `nextly migrate` lists a file's drops without counting their rows.
+      // The file drops the translations table first; the listing reads it beside its table,
+      // each of the entity's tables with its rows and the translations table as its table's.
       const lines = deleted.said.split("\n").map(line => line.trim());
-      const at = lines.indexOf(`- table ${notes.table}`);
+      const at = lines.indexOf(`- table ${notes.table} (1 row)`);
       expect(at, deleted.said).toBeGreaterThanOrEqual(0);
       expect(lines[at + 1], deleted.said).toBe(
-        `- table ${notes.table}_locales`
+        `- table ${notes.table}_locales (2 rows), belonging to ${notes.table}`
       );
     }, 180_000);
 
