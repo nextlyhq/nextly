@@ -32,6 +32,8 @@ export interface ActivityListProps {
   isLoading: boolean;
   /** Whether any filter narrows the list, for the empty state's words. */
   filtered: boolean;
+  /** Whether the rows are a search by address's, for the empty state's words. */
+  searching?: boolean;
   hasMore: boolean;
   isLoadingMore: boolean;
   onLoadMore: () => void;
@@ -336,6 +338,19 @@ function ActivityCards({
   );
 }
 
+/** Why the list is empty: a search that found nothing, filters, or a quiet time. */
+function emptyText(searching: boolean, filtered: boolean): string {
+  if (searching) {
+    // Filtered, an empty search shows only that nothing sent there matches.
+    return filtered
+      ? "Nothing sent to this address matches these filters."
+      : "Nothing was sent to this address in this time.";
+  }
+  return filtered
+    ? "Nothing matches these filters."
+    : "No email has been sent in this time.";
+}
+
 /**
  * The Activity list: every delivery and queued email, newest first, as a
  * table at tablet width and up and as cards on a phone, with "Load more" at
@@ -347,6 +362,7 @@ export function ActivityList({
   now,
   isLoading,
   filtered,
+  searching = false,
   hasMore,
   isLoadingMore,
   onLoadMore,
@@ -373,9 +389,7 @@ export function ActivityList({
         </div>
       ) : views.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          {filtered
-            ? "Nothing matches these filters."
-            : "No email has been sent in this time."}
+          {emptyText(searching, filtered)}
         </div>
       ) : (
         <>
