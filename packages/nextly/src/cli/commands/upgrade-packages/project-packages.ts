@@ -36,7 +36,7 @@ export interface DeclaredPackage {
 }
 
 /** Whether a package is one of Nextly's, which version together. */
-export function isNextlyPackage(name: string): boolean {
+function isNextlyPackage(name: string): boolean {
   return name === "nextly" || name.startsWith("@nextlyhq/");
 }
 

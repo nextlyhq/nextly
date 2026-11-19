@@ -73,27 +73,37 @@ function parsed(text: string): unknown {
   }
 }
 
+/** The settings an `.npmrc` in `dir` gives, by key; none where it has no such file. */
+function npmrcIn(dir: string): Map<string, string> {
+  const file = join(dir, ".npmrc");
+  if (!existsSync(file)) return new Map();
+  return new Map(
+    readFileSync(file, "utf8")
+      .split(/\r?\n/)
+      .map(line => line.split("=").map(part => part.trim()))
+      .filter(([key, value]) => Boolean(key) && Boolean(value))
+      .map(([key = "", value = ""]) => [key, value])
+  );
+}
+
+/** `dir` and every folder above it, nearest first. */
+function foldersUp(dir: string): string[] {
+  const parent = dirname(dir);
+  return parent === dir ? [dir] : [dir, ...foldersUp(parent)];
+}
+
 /**
  * The registry the project's `.npmrc` names for `name`, from the project
- * folder upwards: its scope's own registry first, then the default one.
+ * folder upwards: its scope's own registry first, then the default one, each
+ * from the nearest file that sets it.
  */
-function registryFor(projectDir: string, name: string): string {
+export function registryFor(projectDir: string, name: string): string {
+  const settings = foldersUp(projectDir).map(npmrcIn);
+  const nearest = (key: string) =>
+    settings.find(file => file.has(key))?.get(key);
   const scope = name.startsWith("@") ? name.split("/")[0] : undefined;
-  let fallback: string | undefined;
-  for (let dir = projectDir; ; dir = dirname(dir)) {
-    const file = join(dir, ".npmrc");
-    const lines = existsSync(file)
-      ? readFileSync(file, "utf8").split(/\r?\n/)
-      : [];
-    for (const line of lines) {
-      const [key, value] = line.split("=").map(part => part.trim());
-      if (value === undefined || value === "") continue;
-      if (scope !== undefined && key === `${scope}:registry`) return value;
-      if (key === "registry") fallback ??= value;
-    }
-    if (dirname(dir) === dir) break;
-  }
-  return fallback ?? DEFAULT_REGISTRY;
+  const scoped = scope === undefined ? undefined : nearest(`${scope}:registry`);
+  return scoped ?? nearest("registry") ?? DEFAULT_REGISTRY;
 }
 
 /** The package's document, asked of the registry itself. */

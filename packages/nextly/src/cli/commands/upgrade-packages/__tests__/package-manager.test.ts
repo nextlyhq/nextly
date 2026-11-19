@@ -3,6 +3,10 @@
  * passes, what it reads back of a registry's answer, and that a run it
  * starts can be stopped and is not kept whole in memory.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,7 +15,7 @@ import {
   runManager,
   viewArgs,
 } from "../package-manager";
-import { parseReleases } from "../registry-releases";
+import { parseReleases, registryFor } from "../registry-releases";
 
 describe("the arguments a package manager is run with", () => {
   it("lets each manager change its lockfile, in the words that manager takes", () => {
@@ -116,4 +120,44 @@ describe("a package manager's run", () => {
     expect(run.output).toContain("the last line");
     expect(run.output.length).toBeLessThan(300_000);
   }, 45_000);
+});
+
+describe("the registry a project's .npmrc names for a package", () => {
+  it("is the scope's own first, then the default, each from the nearest file that sets it", () => {
+    const root = mkdtempSync(join(tmpdir(), "nextly-npmrc-"));
+    try {
+      const app = join(root, "apps", "web");
+      mkdirSync(app, { recursive: true });
+      writeFileSync(
+        join(root, ".npmrc"),
+        "registry=https://root.example/\n@nextlyhq:registry=https://scoped.example/\n"
+      );
+      // The project's own file sets the default alone, and a line with no value.
+      writeFileSync(
+        join(app, ".npmrc"),
+        "; a comment\nregistry = https://app.example/\nempty=\n"
+      );
+
+      expect(registryFor(app, "nextly")).toBe("https://app.example/");
+      expect(registryFor(app, "@nextlyhq/admin")).toBe(
+        "https://scoped.example/"
+      );
+      expect(registryFor(root, "nextly")).toBe("https://root.example/");
+      // A scope with no registry of its own uses the default one.
+      expect(registryFor(app, "@other/thing")).toBe("https://app.example/");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("is npm's own where no file names one", () => {
+    const empty = mkdtempSync(join(tmpdir(), "nextly-npmrc-none-"));
+    try {
+      // No `.npmrc` here; one in a folder above this machine's temp folder
+      // would be the operator's own, so only the shape is asserted.
+      expect(registryFor(empty, "nextly")).toMatch(/^https?:\/\//);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
 });
