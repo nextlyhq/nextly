@@ -781,7 +781,7 @@ describe.each(getConfiguredTestDialects())(
       // Settling removes the stopped file before it writes the replacement: overtaken by another
       // writer before any of the replacement is in place, it puts the stopped file back, so no
       // history the ledger names is lost.
-      it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
+      it.runIf(keepsPartWay(dialect) && path.push !== true)(
         "overtaken while it settles, before its replacement is in place, puts the stopped file back",
         async () => {
           const restoreBounds = setWriterHoldBounds({
