@@ -143,7 +143,6 @@ export function ReviewChanges({
           onOpenChange={setApprovingAll}
           scope={scope}
           approval={approval}
-          parts={everyPart}
           hold={hold}
         />
       )}

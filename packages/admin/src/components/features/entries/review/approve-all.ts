@@ -1,7 +1,7 @@
 /**
  * "Approve all languages": which parts a reviewer approves together, how the
- * one step names them and what it says it saw, and how the parts it leaves
- * are said.
+ * one step names them and what it says it saw, and how the parts left out are
+ * said, before the step and after it.
  *
  * The parts listed are those waiting for this person's approval: each holds
  * the same approval step, and may take it. The step names exactly those
@@ -15,11 +15,9 @@
 
 import { isApiError } from "@admin/lib/api/parseApiError";
 import type {
-  LeftPart,
   PartReview,
   ReviewStep,
   TakeStepPayload,
-  TakeStepResult,
 } from "@admin/types/workflows";
 
 import { waitingForWords } from "./review-words";
@@ -106,48 +104,6 @@ export function outWords(
       : `${name} waits for ${waiting}`;
   }
   return `${name} is in ${part.stageLabel ?? part.stage}`;
-}
-
-/**
- * The parts a taken step left, as the server names them, said with what the
- * review state knows of each: "Arabic is already approved", "French stays in
- * Drafting".
- */
-export function leftWords(
-  left: readonly LeftPart[],
-  parts: readonly PartReview[],
-  nameOf: (part: string | null) => string
-): string[] {
-  return left.map(each => {
-    const review = parts.find(part => part.part === each.part);
-    const name = nameOf(each.part);
-    if (review?.stage === each.stage && review.publishable) {
-      return `${name} is already approved`;
-    }
-    const label =
-      review?.stage === each.stage
-        ? (review.stageLabel ?? each.stage)
-        : each.stage;
-    return `${name} stays in ${label}`;
-  });
-}
-
-/** The parts a step's answer says it left, read off its `item`; none where it names none. */
-export function leftOf(item: unknown): TakeStepResult["left"] {
-  if (typeof item !== "object" || item === null || !("left" in item)) {
-    return [];
-  }
-  const { left } = item;
-  if (!Array.isArray(left)) return [];
-  return left.flatMap((entry: unknown) => {
-    if (typeof entry !== "object" || entry === null) return [];
-    const part: unknown = "part" in entry ? entry.part : undefined;
-    const stage: unknown = "stage" in entry ? entry.stage : undefined;
-    return (typeof part === "string" || part === null) &&
-      typeof stage === "string"
-      ? [{ part, stage }]
-      : [];
-  });
 }
 
 /**

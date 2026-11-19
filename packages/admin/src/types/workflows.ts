@@ -109,19 +109,6 @@ export interface TakeStepPayload {
   comment?: string | null;
 }
 
-/** A part a step did not move, and the stage it stays in. */
-export interface LeftPart {
-  part: string | null;
-  stage: string;
-}
-
-/** What `POST /api/workflows/steps` answers a step taken with, as its `item`. */
-export interface TakeStepResult {
-  step: string;
-  moved: { part: string | null; from: string; to: string }[];
-  left: LeftPart[];
-}
-
 /** One assignment in `POST /api/workflows/assignments`. */
 export interface AssignmentPayload {
   document: WorkflowDocumentRef;

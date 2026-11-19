@@ -33,7 +33,7 @@ import { StepRefusalNote } from "./StepRefusalNote";
  * (its `MAX_STEP_COMMENT_LENGTH`, the content events' note limit). The admin
  * cannot import the server's constant, so it is stated here, once.
  */
-const STEP_COMMENT_MAX_LENGTH = 4000;
+export const STEP_COMMENT_MAX_LENGTH = 4000;
 
 export interface StepCommentDialogProps {
   open: boolean;

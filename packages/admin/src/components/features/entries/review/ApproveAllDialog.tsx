@@ -22,9 +22,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Label,
+  Textarea,
 } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState, type JSX } from "react";
+import { useId, useState, type JSX } from "react";
 
 import { VersionDiffView } from "@admin/components/features/versions/diff/VersionDiffView";
 import {
@@ -40,8 +42,6 @@ import type { VersionScope } from "@admin/services/versionApi";
 import type { PartReview } from "@admin/types/workflows";
 
 import {
-  leftOf,
-  leftWords,
   listWords,
   outWords,
   seenOf,
@@ -55,6 +55,7 @@ import {
   usePartPair,
 } from "./part-changes";
 import { stepRefusalWords } from "./step-refusal";
+import { STEP_COMMENT_MAX_LENGTH } from "./StepCommentDialog";
 
 export interface ApproveAllDialogProps {
   open: boolean;
@@ -63,8 +64,6 @@ export interface ApproveAllDialogProps {
   scope: VersionScope;
   /** The approval, as `approveAllOf` reads it from the review state on screen. */
   approval: ApproveAll;
-  /** Every part of the document, for naming the parts a step leaves. */
-  parts: readonly PartReview[];
   /** Why the approval cannot be sent at this moment, where something holds it. */
   hold?: string | undefined;
 }
@@ -74,7 +73,6 @@ export function ApproveAllDialog({
   onOpenChange,
   scope,
   approval,
-  parts,
   hold,
 }: ApproveAllDialogProps): JSX.Element {
   const document = reviewDocumentOf(scope);
@@ -86,6 +84,12 @@ export function ApproveAllDialog({
     part === null ? "shared fields" : nameOf(part);
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
   const [refusal, setRefusal] = useState<string | null>(null);
+  // An approval whose definition asks for a comment is sent with one, asked
+  // here once for every part it approves.
+  const [comment, setComment] = useState("");
+  const commentId = useId();
+  const asksComment = approval.step.commentRequired;
+  const trimmed = comment.trim();
   const keyOf = (part: string | null): string => part ?? "";
   const names = listWords(approval.listed.map(part => sayName(part.part)));
   const label = `Approve ${names}`;
@@ -93,14 +97,22 @@ export function ApproveAllDialog({
   const approve = async (): Promise<void> => {
     // Held as the header's steps are: nothing is sent meanwhile.
     if (hold !== undefined) return;
+    // The server refuses an approval its definition asks a comment for
+    // without one: none is sent until there is something to say.
+    if (asksComment && trimmed === "") return;
     setRefusal(null);
     try {
-      const answer = await mutation.mutateAsync({
+      await mutation.mutateAsync({
         step: approval.step.name,
         parts: approval.parts,
         seen: seenOf(approval.listed),
+        ...(asksComment ? { comment: trimmed } : {}),
       });
-      const left = leftWords(leftOf(answer.item), parts, nameOf);
+      // The parts left out are those the dialog named before it was sent:
+      // the step names only the listed parts, so the server leaves none.
+      const left = approval.out.map(part =>
+        outWords(part, nameOf(part.part), approval.step.name)
+      );
       toast.success(
         [`Approved ${names}, each for the version you saw.`, ...left]
           .map(sentence => (sentence.endsWith(".") ? sentence : `${sentence}.`))
@@ -171,6 +183,18 @@ export function ApproveAllDialog({
             </ul>
           </div>
         )}
+        {asksComment ? (
+          <div className="space-y-2">
+            <Label htmlFor={commentId}>Comment</Label>
+            <Textarea
+              id={commentId}
+              value={comment}
+              maxLength={STEP_COMMENT_MAX_LENGTH}
+              disabled={mutation.isPending}
+              onChange={event => setComment(event.target.value)}
+            />
+          </div>
+        ) : null}
         <p className="text-xs text-muted-foreground">
           Each part is approved for exactly the version shown here. If any
           changes while you look, nothing is approved.
@@ -198,7 +222,11 @@ export function ApproveAllDialog({
           </Button>
           <Button
             type="button"
-            disabled={mutation.isPending || hold !== undefined}
+            disabled={
+              mutation.isPending ||
+              hold !== undefined ||
+              (asksComment && trimmed === "")
+            }
             title={hold}
             onClick={() => void approve()}
           >

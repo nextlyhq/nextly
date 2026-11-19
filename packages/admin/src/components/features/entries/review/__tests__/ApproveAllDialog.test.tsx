@@ -242,13 +242,14 @@ describe("Approve all languages", () => {
     expect(dialog).toHaveTextContent("Arabic is already approved");
   });
 
-  it("approves every listed part in one step, with what each showed, and names the parts it left", async () => {
+  it("approves every listed part in one step, with what each showed, and its summary names the parts left out", async () => {
     stepSpy.mockResolvedValue({
       message: "Step taken.",
       item: {
         step: "approve",
         moved: [],
-        left: [{ part: "ar", stage: "approved", reason: "not-from-stage" }],
+        // The step names only the listed parts, so the server leaves none.
+        left: [],
       },
     });
     const { dialog } = await openDialog([
@@ -397,6 +398,33 @@ describe("Approve all languages", () => {
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
       "You can't approve this: it changes a field you can't read (price). It can be approved by Rita."
+    );
+  });
+
+  it("asks once for the comment an approval requires, and sends it with every part", async () => {
+    stepSpy.mockResolvedValue({ message: "Step taken.", item: {} });
+    const commented = (part: string): PartReview =>
+      inReview(part, { steps: [{ ...approveStep(), commentRequired: true }] });
+    const { dialog } = await openDialog([commented("en"), commented("es")]);
+    const send = within(dialog).getByRole("button", {
+      name: "Approve English and Spanish",
+    });
+    // Nothing to send until there is something to say.
+    expect(send).toBeDisabled();
+
+    await userEvent.type(
+      within(dialog).getByLabelText("Comment"),
+      "  Both read well.  "
+    );
+    await userEvent.click(send);
+
+    await waitFor(() =>
+      expect(stepSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          parts: ["en", "es"],
+          comment: "Both read well.",
+        })
+      )
     );
   });
 });
