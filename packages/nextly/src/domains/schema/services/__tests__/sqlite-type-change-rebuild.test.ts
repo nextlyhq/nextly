@@ -122,6 +122,32 @@ describe("a SQLite rebuild that changes a column's type", () => {
     expect(stored()).toEqual({ score: 1.5, class: "real" });
   });
 
+  // A relationship's column references its target; retyped to a plain number it holds plain
+  // values, which the old reference would refuse, and the save's file declares it with none.
+  it("drops the old reference from a column it retypes", async () => {
+    sqlite.exec(`
+      CREATE TABLE posts (id TEXT PRIMARY KEY);
+      CREATE TABLE single_home (
+        id TEXT PRIMARY KEY,
+        score TEXT REFERENCES posts(id) ON DELETE SET NULL
+      );
+      INSERT INTO single_home VALUES ('h1', NULL);
+    `);
+
+    await changeScoreTo("integer");
+
+    expect(declared()).toBe("integer");
+    expect(
+      sqlite
+        .prepare("SELECT * FROM pragma_foreign_key_list('single_home')")
+        .all(),
+      "the table's references"
+    ).toEqual([]);
+    sqlite.pragma("foreign_keys = ON");
+    sqlite.prepare("UPDATE single_home SET score = 5").run();
+    expect(stored()).toEqual({ score: 5, class: "integer" });
+  });
+
   it("declares the new type without the old declaration's modifier", async () => {
     sqlite.exec(`
       CREATE TABLE single_home (id TEXT PRIMARY KEY, score NUMERIC(10,2));
