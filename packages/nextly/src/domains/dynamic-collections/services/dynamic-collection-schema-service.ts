@@ -2309,8 +2309,8 @@ ${allColumnDefs.join(",\n")}
         );
         if (
           columnChanged &&
-          before !== undefined &&
-          described !== undefined &&
+          before !== null &&
+          described !== null &&
           before.dialectType !== described.dialectType
         ) {
           options?.onSqliteTypeChange?.(
