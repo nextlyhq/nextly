@@ -8,10 +8,24 @@
  */
 import "./dom-setup";
 
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { getBrandingCss } from "nextly/config";
 import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  compositeOver,
+  contrastRatio,
+} from "../../../../ui/src/styles/contrast/color";
+import {
+  parseThemeScale,
+  parseThemeTokens,
+} from "../../../../ui/src/styles/contrast/parse-theme";
+import { resolveColor } from "../../../../ui/src/styles/contrast/resolve";
 import type { Levels } from "../../resolver/order";
 import type { SeoTabContext } from "../../tab/contract";
 
@@ -210,9 +224,81 @@ describe("the page's search result in the Page Builder", () => {
     expect(screen.queryByRole("link", { name: "SEO settings" })).toBeNull();
   });
 
+  // `--nx-primary` is a fill a site's brand may set to any colour. As the
+  // words of a link, the e2e suite's indigo read 4.35:1 on the light page and
+  // 4.19:1 on the dark one, under AA's 4.5:1 for small text. The link reads
+  // in the text colour instead, underlined so it still reads as a link.
+  it("draws SEO settings in a colour that reads on any surface, in light and dark, under an indigo brand", () => {
+    handed.applies = false;
+    handed.settings = { canChange: true };
+    render(<Block at="general" />);
+    const link = screen.getByRole("link", { name: "SEO settings" });
+    const classes = (link.getAttribute("class") ?? "").split(/\s+/);
+    const lowest = lowestRatioUnderIndigo(classes);
+    expect(
+      lowest.ratio,
+      `${lowest.ink} reads ${lowest.ratio.toFixed(2)}:1 on ${lowest.where}`
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(classes).toContain("underline");
+  });
+
   it("leaves a design's search and sharing to its SEO tab", () => {
     handed.applies = false;
     const { container } = render(<Block at="general" document="template" />);
     expect(container.textContent).toBe("");
   });
 });
+
+/**
+ * The lowest contrast the colour of the element's `text-<token>` class
+ * reaches on the page, a card and a popover, in light and dark, with the
+ * admin's theme branded the way its server stylesheet brands it for the e2e
+ * suite's indigo `#6366f1`. jsdom computes no stylesheet, so the colours are
+ * resolved from the theme file.
+ */
+function lowestRatioUnderIndigo(classes: string[]): {
+  ink: string;
+  ratio: number;
+  where: string;
+} {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const css = readFileSync(
+    resolve(here, "../../../../ui/src/styles/theme.css"),
+    "utf8"
+  );
+  const theme = parseThemeTokens(css);
+  const scale = parseThemeScale(css);
+  // The class that paints the words: `text-sm` sizes them, so only a class
+  // naming a theme colour counts.
+  const ink =
+    classes.find(name => scale.has(`--color-${name.replace(/^text-/, "")}`)) ??
+    "";
+  if (!ink.startsWith("text-")) throw new Error("no text colour class");
+  const token = ink.replace(/^text-/, "");
+  const brand = [
+    ...(getBrandingCss({ colors: { primary: "#6366f1" } }) ?? "").matchAll(
+      /(--nx-[\w-]+)\s*:\s*([^;]+);/g
+    ),
+  ].map(([, name, value]): [string, string] => [
+    name ?? "",
+    (value ?? "").trim(),
+  ]);
+  const measured = (["light", "dark"] as const).flatMap(mode => {
+    const ctx = { tokens: new Map([...theme[mode], ...brand]), scale };
+    return ["background", "card", "popover"].map(surface => {
+      const ground = resolveColor(`var(--color-${surface})`, ctx);
+      const ink = compositeOver(
+        resolveColor(`var(--color-${token})`, ctx),
+        ground
+      );
+      return {
+        ratio: contrastRatio(ink, ground),
+        where: `${mode} ${surface}`,
+      };
+    });
+  });
+  measured.sort((a, b) => a.ratio - b.ratio);
+  const [lowest] = measured;
+  if (!lowest) throw new Error("nothing measured");
+  return { ink, ...lowest };
+}
