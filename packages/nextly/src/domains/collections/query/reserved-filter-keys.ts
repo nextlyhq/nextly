@@ -41,6 +41,12 @@ export const STRANDED_STAGE_KEY = "_strandedStage";
 export const ASSIGNED_TO_ME_KEY = "_assignedToMe";
 
 /**
+ * The reserved key keeping entries with a part changed since its last approval.
+ * @experimental
+ */
+export const CHANGED_SINCE_APPROVED_KEY = "_changedSinceApproved";
+
+/**
  * Every key a filter may carry only at its top level.
  *
  * @experimental
@@ -51,6 +57,7 @@ export const RESERVED_TOP_LEVEL_KEYS = [
   IN_RELEASE_KEY,
   STRANDED_STAGE_KEY,
   ASSIGNED_TO_ME_KEY,
+  CHANGED_SINCE_APPROVED_KEY,
 ] as const;
 
 /** @experimental */

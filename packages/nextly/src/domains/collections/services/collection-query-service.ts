@@ -246,6 +246,7 @@ import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { assignedToCondition } from "../../workflows/assigned-to-condition";
+import { changedSinceApprovedCondition } from "../../workflows/changed-since-approved-condition";
 import type { ReviewAssignee } from "../../workflows/review-state-repository";
 import { strandedStageCondition } from "../../workflows/stranded-stage-condition";
 import {
@@ -282,6 +283,7 @@ import {
 } from "../query/timeseries-interval";
 import {
   ASSIGNED_TO_ME_KEY,
+  CHANGED_SINCE_APPROVED_KEY,
   extractWorkflowFilter,
   IN_RELEASE_KEY,
   PENDING_CHANGE_KEY,
@@ -2855,6 +2857,16 @@ export class CollectionQueryService extends BaseService {
         })
       );
     }
+    if (filter.changedSinceApproved === true) {
+      conditions.push(
+        changedSinceApprovedCondition({
+          dialect,
+          collectionName: params.collectionName,
+          entryId: idColumn,
+          locales,
+        })
+      );
+    }
     if (filter.inRelease !== null) {
       conditions.push(
         inReleaseCondition({
@@ -2955,6 +2967,7 @@ export class CollectionQueryService extends BaseService {
       IN_RELEASE_KEY,
       STRANDED_STAGE_KEY,
       ASSIGNED_TO_ME_KEY,
+      CHANGED_SINCE_APPROVED_KEY,
     ].find(key => Object.prototype.hasOwnProperty.call(where, key));
     if (used === undefined) return;
     const denied = await this.denyCollectionRead({
