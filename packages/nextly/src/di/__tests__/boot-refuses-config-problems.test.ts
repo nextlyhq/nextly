@@ -30,7 +30,7 @@ vi.mock("../../route-handler/auth-handler", () => ({
   setBootedConfig: () => undefined,
 }));
 
-const { registerServices } = await import("../register");
+const { clearServices, registerServices } = await import("../register");
 const { defineCollection } = await import(
   "../../collections/config/define-collection"
 );
@@ -59,6 +59,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   _resetBootMigrationsGateForTest();
+  // A start that went past the check registers services; the next test starts from none.
+  clearServices();
 });
 
 describe("a start given entities declared through define* with problems", () => {
@@ -121,5 +123,54 @@ describe("a start given an entity written as a plain object with a problem", () 
     ).toBe(true);
     // Past the check, on to what the start does next.
     expect(created.adapters).toBe(1);
+  });
+});
+
+describe("a start given a define* entity whose problems include a field type nothing offers", () => {
+  /** The paths the start's refusal names, when it refuses for the configuration's problems. */
+  async function refusedPaths(
+    config: Parameters<typeof registerServices>[0]
+  ): Promise<string[]> {
+    const refused = await refusalOf(config);
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    return (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path ?? "");
+  }
+
+  it("refuses with that problem beside the others, before it connects", async () => {
+    const paths = await refusedPaths({
+      collections: [
+        defineCollection({
+          slug: "Blog Posts",
+          fields: [{ name: "score", type: "acme-rating" }],
+        } as Parameters<typeof defineCollection>[0]),
+      ],
+      db: DB,
+    } as unknown as Parameters<typeof registerServices>[0]);
+
+    expect(paths).toEqual(["collections[0].slug", "collections[0].score.type"]);
+    expect(created.adapters).toBe(0);
+  });
+
+  // `defineCollection` cannot judge a type a plugin may register later, so it finds no problem
+  // at import; the entity was still declared through it, and the start refuses it.
+  it("refuses one whose only problem is that type", async () => {
+    const paths = await refusedPaths({
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [{ name: "score", type: "acme-rating" }],
+        } as Parameters<typeof defineCollection>[0]),
+      ],
+      db: DB,
+    } as unknown as Parameters<typeof registerServices>[0]);
+
+    expect(paths).toEqual(["collections[0].score.type"]);
+    expect(created.adapters).toBe(0);
   });
 });

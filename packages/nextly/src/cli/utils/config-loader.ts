@@ -850,7 +850,9 @@ async function loadConfigInternal(
     // a command refuses an invalid configuration before it does anything else, and names every
     // problem rather than the first. Run once the plugins' field types are registered, since a
     // field's type is judged against them.
-    const problems = configurationProblems(appConfig);
+    // The app's own entities, in the form the plugins' setups left them, placed where the app
+    // declared them; a plugin's contributions keep the checks of their own type.
+    const problems = configurationProblems(appConfig, config);
     if (problems.length > 0) {
       throw NextlyError.validation({
         errors: problems,

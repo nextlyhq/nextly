@@ -76,7 +76,12 @@ export function assertPluginFieldDeclarations(config: SchemaLikeConfig): void {
  */
 export function fieldDeclarationIssues(
   config: SchemaLikeConfig,
-  entityPath: EntityPath = bySlug
+  entityPath: EntityPath = bySlug,
+  /**
+   * Whether a registered type's own option rules are asked too. A reader that also runs each
+   * entity's validator, which asks them, leaves them out so one problem is reported once.
+   */
+  judge: { options: boolean } = { options: true }
 ): FieldDeclarationIssue[] {
   const errors: FieldDeclarationIssue[] = [];
 
@@ -118,7 +123,7 @@ export function fieldDeclarationIssues(
         continue;
       }
 
-      for (const issue of pluginFieldOptionIssues(field)) {
+      for (const issue of judge.options ? pluginFieldOptionIssues(field) : []) {
         errors.push({
           path: issue.path ? `${at}.${issue.path}` : at,
           code: "FIELD_TYPE_INVALID",

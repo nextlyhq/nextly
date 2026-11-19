@@ -37,3 +37,52 @@ describe("a bad Single and a bad collection, each through its define function", 
     ]);
   });
 });
+
+describe("a relationship to a collection Nextly provides", () => {
+  // `users` and `media` are relationship targets without the configuration declaring them; a
+  // relationship's target is judged with every target known (the plugins' and the Schema
+  // Builder's too) where the load and the start resolve them, not here.
+  it("is no problem", () => {
+    expect(
+      configurationProblems({
+        collections: [
+          {
+            slug: "posts",
+            fields: [
+              { name: "author", type: "relationship", relationTo: "users" },
+              { name: "cover", type: "upload", relationTo: "media" },
+            ],
+          },
+        ],
+      })
+    ).toEqual([]);
+  });
+});
+
+describe("an app's entity a plugin's setup changed", () => {
+  // The entity is judged as the commands will use it, after the plugins' setups, and placed
+  // where the app declared it.
+  it("is judged in its changed form, at the place the app declared it", () => {
+    const declared = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const effective = {
+      collections: [
+        {
+          slug: "notes",
+          fields: [
+            { name: "body", type: "text" },
+            { name: "body", type: "text" },
+          ],
+        },
+      ],
+    };
+
+    expect(configurationProblems(declared)).toEqual([]);
+    expect(
+      configurationProblems(declared, effective).map(problem => problem.path)
+    ).toEqual(["collections[0].fields"]);
+  });
+});

@@ -85,12 +85,24 @@ export { sanitizeConfig } from "../../shared/types/config";
  * field groups placed in a cycle (at any depth), and user-field constraints.
  * Returns nothing — throws on validation failure.
  */
+/**
+ * An entity's slug as the uniqueness checks compare it, or undefined when it has no slug that is a
+ * string: that is its own problem, which the configuration's load and start report with every
+ * other, so it is not tripped over here.
+ */
+function slugKey(entity: { slug?: unknown }): string | undefined {
+  return typeof entity.slug === "string"
+    ? entity.slug.toLowerCase()
+    : undefined;
+}
+
 function validateNextlyConfig(config: NextlyConfig): void {
   const collections = config.collections ?? [];
   const slugs = new Set<string>();
 
   for (const collection of collections) {
-    const slug = collection.slug.toLowerCase();
+    const slug = slugKey(collection);
+    if (slug === undefined) continue;
 
     if (slugs.has(slug)) {
       throw new Error(
@@ -105,12 +117,11 @@ function validateNextlyConfig(config: NextlyConfig): void {
   const singles = config.singles ?? [];
 
   for (const single of singles) {
-    const slug = single.slug.toLowerCase();
+    const slug = slugKey(single);
+    if (slug === undefined) continue;
 
     if (slugs.has(slug)) {
-      const isCollectionConflict = collections.some(
-        c => c.slug.toLowerCase() === slug
-      );
+      const isCollectionConflict = collections.some(c => slugKey(c) === slug);
 
       if (isCollectionConflict) {
         throw new Error(
@@ -138,13 +149,12 @@ function validateNextlyConfig(config: NextlyConfig): void {
   const componentTables = new Map<string, string>();
 
   for (const comp of components) {
-    const slug = comp.slug.toLowerCase();
+    const slug = slugKey(comp);
+    if (slug === undefined) continue;
 
     if (slugs.has(slug)) {
-      const isCollectionConflict = collections.some(
-        c => c.slug.toLowerCase() === slug
-      );
-      const isSingleConflict = singles.some(s => s.slug.toLowerCase() === slug);
+      const isCollectionConflict = collections.some(c => slugKey(c) === slug);
+      const isSingleConflict = singles.some(s => slugKey(s) === slug);
 
       if (isCollectionConflict) {
         throw new Error(

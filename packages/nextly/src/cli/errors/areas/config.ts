@@ -69,13 +69,26 @@ function configFile(error: NextlyError): string {
 
 /**
  * What to do about a problem whose rule's own sentence says what is wrong but not how to put it
- * right. A rule whose sentence already says it ("Rename one of them") has no entry.
+ * right, read from the failure itself: one code covers several. A field type nothing offers is
+ * told to use a built-in one or install its plugin, while a registered type's option its own rule
+ * refuses gets that rule's sentence alone, the plugin being installed. A rule whose sentence
+ * already says it ("Rename one of them") has none.
  */
-const PROBLEM_FIX: Readonly<Record<string, string>> = {
-  SLUG_INVALID_FORMAT: "use a lowercase address, such as 'blog-posts'.",
-  FIELD_TYPE_INVALID:
-    "use a built-in field type, or install the plugin that offers this one.",
-};
+function problemFix(
+  code: string | undefined,
+  message: string
+): string | undefined {
+  if (code === "SLUG_INVALID_FORMAT") {
+    return "use a lowercase address, such as 'blog-posts'.";
+  }
+  if (
+    code === "FIELD_TYPE_INVALID" &&
+    message.startsWith("Invalid field type ")
+  ) {
+    return "use a built-in field type, or install the plugin that offers this one.";
+  }
+  return undefined;
+}
 
 export const CONFIG_CODES = defineCodes({
   CONFIG_NOT_FOUND: {
@@ -230,10 +243,7 @@ export const CONFIG_CODES = defineCodes({
             what: `\`${configFile(error)}\` has ${count}, so it cannot be used.`,
             why: [
               ...problems.flatMap(problem => {
-                const fix =
-                  problem.code === undefined
-                    ? undefined
-                    : PROBLEM_FIX[problem.code];
+                const fix = problemFix(problem.code, problem.message ?? "");
                 const line = `${problem.path ?? ""}: ${problem.message ?? ""}`;
                 return fix === undefined ? [line] : [line, `  Fix: ${fix}`];
               }),

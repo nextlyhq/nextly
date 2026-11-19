@@ -27,9 +27,9 @@ export interface ConfigProblem {
   code: string;
   message: string;
   /**
-   * Whether the entity was declared through its `define*` function, which marked it
-   * (`withProblemsRecorded`), rather than written as a plain object. A start refuses the first
-   * and warns about the second, which the start never judged before.
+   * Whether the entity was declared through its `define*` function (`markDeclaredByDefine`)
+   * rather than written as a plain object. A start refuses the first and warns about the second,
+   * which the start never judged before.
    */
   declaredByDefine: boolean;
 }
@@ -42,27 +42,25 @@ export interface ConfigEntities {
 }
 
 /**
- * The mark a `define*` function leaves on an entity it found problems in. A registered symbol,
- * so a second copy of this module (the configuration's bundle beside the runtime's) reads the
- * same one; enumerable, so a copy of the entity made by spreading it keeps the mark, which JSON
- * and the settings records, reading string keys only, never see.
+ * The mark a `define*` function leaves on every entity it returns. A registered symbol, so a
+ * second copy of this module (the configuration's bundle beside the runtime's) reads the same
+ * one; not enumerable, so no comparison, serialisation or settings record of the entity sees it.
+ * The configuration keeps the entity objects the app declared, so the mark is read on them.
  */
-const PROBLEMS_RECORDED = Symbol.for("nextly.config.problemsRecorded");
+const DECLARED_BY_DEFINE = Symbol.for("nextly.config.declaredByDefine");
 
-/**
- * `entity`, as its `define*` function declares it, marked as one whose problems that function
- * found and left for the configuration's load and start to report, rather than throwing.
- */
-export function withProblemsRecorded<T extends object>(entity: T): T {
-  return { ...entity, [PROBLEMS_RECORDED]: true };
+/** `entity`, marked as one its `define*` function returned. */
+export function markDeclaredByDefine<T extends object>(entity: T): T {
+  Object.defineProperty(entity, DECLARED_BY_DEFINE, { value: true });
+  return entity;
 }
 
-/** Whether `entity` carries the mark `withProblemsRecorded` leaves. */
-function problemsRecorded(entity: unknown): boolean {
+/** Whether `entity` carries the mark `markDeclaredByDefine` leaves. */
+function declaredByDefine(entity: unknown): boolean {
   return (
     typeof entity === "object" &&
     entity !== null &&
-    (entity as Record<symbol, unknown>)[PROBLEMS_RECORDED] === true
+    (entity as Record<symbol, unknown>)[DECLARED_BY_DEFINE] === true
   );
 }
 
@@ -72,33 +70,72 @@ function within(kind: string, index: number, path: string): string {
   return path === "" ? entity : `${entity}.${path}`;
 }
 
-/**
- * Every problem in `config`'s collections, Singles and field groups, each placed by the entity's
- * position. An entity's own problems come before the next entity's, collections first, then
- * Singles, then field groups; each entity's field-type problems follow its other ones.
- */
-export function configurationProblems(config: ConfigEntities): ConfigProblem[] {
-  const collections = config.collections ?? [];
-  const singles = config.singles ?? [];
-  const fieldGroups = config.fieldGroups ?? [];
-  // A relationship may name any collection the configuration declares.
-  const collectionSlugs = collections
-    .map(entry => (entry as { slug?: unknown }).slug)
-    .filter((slug): slug is string => typeof slug === "string");
+/** An entity's slug, when it has one that is a string. */
+function slugOf(entity: unknown): string | undefined {
+  const slug = (entity as { slug?: unknown } | null)?.slug;
+  return typeof slug === "string" ? slug : undefined;
+}
 
+/**
+ * Each of the app's `declared` entities as `effective` holds it, where a plugin's setup changed
+ * it, else as declared: the form a command uses, in the app's own order. An entity a setup added
+ * is a plugin's contribution and keeps its own checks, so it is not among them.
+ */
+function asUsed(
+  declared: readonly unknown[],
+  effective: readonly unknown[] | undefined
+): unknown[] {
+  if (effective === undefined) return [...declared];
+  const bySlug = new Map<string, unknown>();
+  for (const entity of effective) {
+    const slug = slugOf(entity);
+    if (slug !== undefined && !bySlug.has(slug)) bySlug.set(slug, entity);
+  }
+  return declared.map(entity => {
+    const slug = slugOf(entity);
+    return (slug === undefined ? undefined : bySlug.get(slug)) ?? entity;
+  });
+}
+
+/**
+ * Every problem in the app's collections, Singles and field groups, each placed by the entity's
+ * position in `declared`. Each is judged as `effective` holds it, where given: the configuration
+ * after the plugins' setups, which is what the commands use. An entity's own problems come before
+ * the next entity's, collections first, then Singles, then field groups; each entity's field-type
+ * problems follow its other ones.
+ *
+ * A relationship's target is not judged here: the load and the start resolve targets with every
+ * one known, Nextly's own (`users`, `media`), the plugins' and the Schema Builder's.
+ */
+export function configurationProblems(
+  declared: ConfigEntities,
+  effective?: ConfigEntities
+): ConfigProblem[] {
+  const collections = asUsed(
+    declared.collections ?? [],
+    effective?.collections
+  );
+  const singles = asUsed(declared.singles ?? [], effective?.singles);
+  const fieldGroups = asUsed(
+    declared.fieldGroups ?? [],
+    effective?.fieldGroups
+  );
+
+  // Only a type nothing offers: a registered type's option problems are each validator's own.
   const fieldTypes = fieldDeclarationIssues(
     {
       collections: collections as CollectionConfig[],
       singles: singles as SingleConfig[],
       fieldGroups: fieldGroups as FieldGroupConfig[],
     },
-    (kind, index) => `${kind}[${index}]`
+    (kind, index) => `${kind}[${index}]`,
+    { options: false }
   );
 
   // Each kind with the validator that judges it, in the order problems are listed.
   const kinds: ReadonlyArray<
     [
-      string,
+      "collections" | "singles" | "fieldGroups",
       readonly unknown[],
       (
         entry: unknown
@@ -108,9 +145,7 @@ export function configurationProblems(config: ConfigEntities): ConfigProblem[] {
     [
       "collections",
       collections,
-      entry =>
-        validateCollectionConfig(entry as CollectionConfig, collectionSlugs)
-          .errors,
+      entry => validateCollectionConfig(entry as CollectionConfig).errors,
     ],
     [
       "singles",
@@ -126,13 +161,15 @@ export function configurationProblems(config: ConfigEntities): ConfigProblem[] {
 
   const problems: ConfigProblem[] = [];
   for (const [kind, entries, validate] of kinds) {
+    const declaredEntries = declared[kind] ?? [];
     entries.forEach((entry, index) => {
-      const declaredByDefine = problemsRecorded(entry);
+      // The mark is on the entity the app declared; a setup's copy of it does not carry it.
+      const byDefine = declaredByDefine(declaredEntries[index]);
       for (const error of validate(entry)) {
         problems.push({
           ...error,
           path: within(kind, index, error.path),
-          declaredByDefine,
+          declaredByDefine: byDefine,
         });
       }
       for (const issue of fieldTypes) {
@@ -140,7 +177,7 @@ export function configurationProblems(config: ConfigEntities): ConfigProblem[] {
           issue.path === `${kind}[${index}]` ||
           issue.path.startsWith(`${kind}[${index}].`)
         ) {
-          problems.push({ ...issue, declaredByDefine });
+          problems.push({ ...issue, declaredByDefine: byDefine });
         }
       }
     });

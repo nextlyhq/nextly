@@ -528,3 +528,21 @@ describe("the direct schema handlers' declaration check", () => {
     ).toBe("0.fields.0.policy.kinds");
   });
 });
+
+describe("a plugin field option a configuration's load reports", () => {
+  // Each entity's validator reports a registered type's option problem; the field-type pass
+  // reports only a type nothing offers, so one problem is one line and the count is right.
+  it("is reported once", () => {
+    registerDocument();
+
+    const problems = configurationProblems({
+      collections: [
+        { slug: "posts", fields: [badField] } as unknown as CollectionConfig,
+      ],
+    });
+
+    expect(
+      problems.filter(problem => problem.message.includes("policy.kinds"))
+    ).toHaveLength(1);
+  });
+});

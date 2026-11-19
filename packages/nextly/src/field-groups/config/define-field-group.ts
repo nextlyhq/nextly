@@ -41,7 +41,7 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import type { AuthorableFieldConfig } from "../../collections/fields/types/plugin-field";
-import { withProblemsRecorded } from "../../shared/lib/config-problems";
+import { markDeclaredByDefine } from "../../shared/lib/config-problems";
 
 import type {
   FieldGroupConfig,
@@ -185,15 +185,15 @@ export function defineFieldGroup(
   // Judged, not thrown: a configuration's load and the start judge every entity in it by the
   // same rules (`configurationProblems`) and report every problem, where a throw here would stop
   // at the first field group with one, during the import. One with a problem is returned as declared
-  // and marked (`withProblemsRecorded`): the defaults below assume an entity the rules accept,
-  // and the mark is what tells the start to refuse it rather than warn.
+  // and marked (`markDeclaredByDefine`), since the defaults below assume an entity the rules
+  // accept; the mark is what tells the start to refuse it rather than warn.
   if (
     !validateFieldGroupConfig({
       ...config,
       fields: asDeclaredFields(config.fields),
     }).valid
   ) {
-    return withProblemsRecorded(config) as unknown as FieldGroupConfig;
+    return markDeclaredByDefine({ ...config }) as unknown as FieldGroupConfig;
   }
 
   // ============================================================
@@ -217,7 +217,9 @@ export function defineFieldGroup(
     },
   };
 
-  return normalized;
+  // Marked as declared through this function, so a start refuses it should the configuration's
+  // load find a problem this call could not, such as a field type nothing registers.
+  return markDeclaredByDefine(normalized);
 }
 
 // ============================================================
