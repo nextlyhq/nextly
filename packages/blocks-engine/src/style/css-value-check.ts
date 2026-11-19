@@ -5,6 +5,7 @@
  * @module style/css-value-check
  */
 import type { CssNode } from "css-tree";
+import parse from "css-tree/parser";
 
 import {
   decodeIdentifier,
@@ -55,7 +56,7 @@ import {
  * exists to catch.
  */
 export function referencesCustomProperty(value: string): boolean {
-  const reading = readVarCalls(value);
+  const reading = readVarCalls(parseValue(value));
   return reading === undefined || reading.calls > 0;
 }
 
@@ -80,21 +81,65 @@ export function referencesCustomProperty(value: string): boolean {
 export function customPropertiesReferenced(
   value: string
 ): readonly string[] | undefined {
-  return readVarCalls(value)?.names;
+  return readVarCalls(parseValue(value, { positions: true }))?.at.flatMap(
+    reference => (reference.kind === "read" ? [reference.name] : [])
+  );
+}
+
+/**
+ * One custom property CSS text names: read through `var()`, or declared
+ * (`--name: …`, in a stylesheet), with the name CSS reads it as and where its
+ * spelling (escapes and all) sits in the text, so a caller can point it
+ * elsewhere without touching anything around it.
+ */
+export interface CustomPropertyReference {
+  readonly kind: "read" | "declared";
+  readonly name: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * Every custom property CSS text reads through `var()` or declares, by the
+ * same walk {@link customPropertiesReferenced} asks: a style value, or where
+ * the text is no value, a stylesheet (a page's or a block's custom CSS), read
+ * as a browser reads it. So quoted strings, comments and URLs name nothing,
+ * and a name or a `var` spelled with escapes is read decoded. A declaration
+ * is named so that a caller pointing a property's reads elsewhere points a
+ * local override of it too. `undefined` where the text cannot be read whole,
+ * as for a value.
+ */
+export function customPropertyReferences(
+  text: string
+): readonly CustomPropertyReference[] | undefined {
+  const value = parseValue(text, { positions: true });
+  return readVarCalls(value ?? parseStylesheet(text))?.at;
+}
+
+/**
+ * CSS text as a stylesheet, with positions, read as leniently as a browser
+ * reads one: a part that doesn't parse is kept as raw text, which the walk
+ * reads as a value where it can.
+ */
+function parseStylesheet(text: string): CssNode | null {
+  try {
+    return parse(text, { positions: true, onParseError: () => undefined });
+  } catch {
+    return null;
+  }
 }
 
 /** What one walk of a value found: how many `var()` calls, and their names. */
 interface VarCalls {
   calls: number;
-  readonly names: string[];
+  readonly at: CustomPropertyReference[];
 }
 
-/** The value's `var()` calls, or `undefined` where it cannot be read whole. */
-function readVarCalls(value: string): VarCalls | undefined {
-  const parsed = parseValue(value);
+/** A parsed text's `var()` calls, or `undefined` where it cannot be read whole. */
+function readVarCalls(parsed: CssNode | null): VarCalls | undefined {
   if (parsed === null) return undefined;
-  const found: VarCalls = { calls: 0, names: [] };
-  return collectVarCalls(parsed, 0, found) ? found : undefined;
+  const found: VarCalls = { calls: 0, at: [] };
+  return collectVarCalls(parsed, 0, 0, found) ? found : undefined;
 }
 
 /**
@@ -108,10 +153,14 @@ function readVarCalls(value: string): VarCalls | undefined {
  * compiler refuses, and every value it emits is read whole. Past the bound
  * the answer is "not read whole", which {@link referencesCustomProperty}
  * reads as a reference, keeping it fail-closed.
+ *
+ * `base` is where the text `node` was parsed from begins in the whole text,
+ * so a reference inside a fallback's raw text is placed in the whole text.
  */
 function collectVarCalls(
   node: CssNode,
   depth: number,
+  base: number,
   found: VarCalls
 ): boolean {
   if (depth > MAX_VALUE_NESTING) return false;
@@ -120,19 +169,47 @@ function collectVarCalls(
   // walk that only descends `children`. One that does not parse names
   // nothing, as before.
   if (node.type === "Raw") {
-    const inner = parseValue(node.value);
-    return inner === null || collectVarCalls(inner, depth, found);
+    const inner = parseValue(node.value, { positions: node.loc != null });
+    const at = base + (node.loc?.start.offset ?? 0);
+    return inner === null || collectVarCalls(inner, depth, at, found);
   }
-  if (isVarCall(node)) {
-    found.calls += 1;
-    const name = customPropertyNameOf(node);
-    if (name !== undefined) found.names.push(name);
-  }
+  recordNames(node, base, found);
   const inner = opensLevel(node) ? depth + 1 : depth;
   for (const child of childrenOf(node)) {
-    if (!collectVarCalls(child, inner, found)) return false;
+    if (!collectVarCalls(child, inner, base, found)) return false;
   }
   return true;
+}
+
+/**
+ * What THIS node names, if anything: a `var()` call (counted, with the
+ * property it reads) or a custom property's declaration.
+ */
+function recordNames(node: CssNode, base: number, found: VarCalls): void {
+  if (isVarCall(node)) {
+    found.calls += 1;
+    const head = customPropertyHeadOf(node);
+    if (head !== undefined) {
+      found.at.push({
+        kind: "read",
+        name: head.name,
+        start: base + (head.loc?.start.offset ?? 0),
+        end: base + (head.loc?.end.offset ?? 0),
+      });
+    }
+  }
+  // A declaration's name is where it begins, spelled as written.
+  if (node.type === "Declaration" && node.loc != null) {
+    const name = decodeIdentifier(node.property);
+    if (!name.startsWith("--")) return;
+    const start = base + node.loc.start.offset;
+    found.at.push({
+      kind: "declared",
+      name,
+      start,
+      end: start + node.property.length,
+    });
+  }
 }
 
 /** Whether THIS node is the substitution, as CSS reads its name. */
@@ -149,12 +226,17 @@ function opensLevel(node: CssNode): boolean {
   );
 }
 
-/** The decoded custom property a `var()` names, or none where its head is not one. */
-function customPropertyNameOf(node: CssNode): string | undefined {
+/**
+ * The decoded custom property a `var()` names, with where its head was
+ * parsed, or none where its head is not one.
+ */
+function customPropertyHeadOf(
+  node: CssNode
+): { name: string; loc: CssNode["loc"] } | undefined {
   const [head] = childrenOf(node);
   if (head?.type !== "Identifier") return undefined;
   const name = decodeIdentifier(head.name);
-  return name.startsWith("--") ? name : undefined;
+  return name.startsWith("--") ? { name, loc: head.loc } : undefined;
 }
 
 /**
@@ -165,6 +247,13 @@ function customPropertyNameOf(node: CssNode): string | undefined {
  * descend into — which is the same answer as an empty list.
  */
 function childrenOf(node: CssNode): Iterable<CssNode> {
+  // A stylesheet's rule, at-rule and declaration hold their parts as named
+  // properties rather than as children, so a walk of custom CSS reads them.
+  if (node.type === "Rule") return [node.prelude, node.block];
+  if (node.type === "Atrule") {
+    return [node.prelude, node.block].filter(part => part !== null);
+  }
+  if (node.type === "Declaration") return [node.value];
   if (!("children" in node) || node.children === null) return [];
   return node.children;
 }

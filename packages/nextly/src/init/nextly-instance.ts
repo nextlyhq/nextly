@@ -15,6 +15,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { ServiceMap } from "../di/register";
 import type { ContentEventsNamespace } from "../direct-api/namespaces/content-events";
+import type { EmailDeliveriesNamespace } from "../direct-api/namespaces/email";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
 import type { NoticesNamespace } from "../direct-api/namespaces/notices";
@@ -23,6 +24,7 @@ import type {
   ApiKeysNamespace,
 } from "../direct-api/namespaces/rbac";
 import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
+import type { WorkflowsNamespace } from "../direct-api/namespaces/workflows";
 import type {
   AuthResult,
   BulkDeleteArgs,
@@ -48,6 +50,7 @@ import type {
   CreateRoleArgs,
   CreateUserArgs,
   CreateUserFieldArgs,
+  CreateFromSourceArgs,
   RowFromCollectionSlug,
   RowFromSingleSlug,
   DeleteArgs,
@@ -338,6 +341,27 @@ export interface Nextly {
    */
   duplicate: <TSlug extends CollectionSlug>(
     args: DuplicateArgs<TSlug>
+  ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
+
+  /**
+   * @experimental Create a document that copies a stored one: the source is
+   * read as the caller first, and nothing is created where that read is
+   * refused. The new document's field validators are told what it copies.
+   * Intended to become stable, since plugins call it.
+   *
+   * @example
+   * ```typescript
+   * const section = await nextly.createFromSource({
+   *   collection: 'patterns',
+   *   data: { title: 'Hero', content },
+   *   source: { collection: 'pages', id: 'page-1', field: 'content' },
+   *   user: { id: userId },
+   *   overrideAccess: false,
+   * });
+   * ```
+   */
+  createFromSource: <TSlug extends CollectionSlug>(
+    args: CreateFromSourceArgs<TSlug>
   ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
 
   /**
@@ -1084,6 +1108,18 @@ export interface Nextly {
    * ```
    */
   releases: ReleasesNamespace;
+
+  /**
+   * @experimental Review state under a workflow: read it, take steps, assign,
+   * and list what waits, refused exactly where REST would refuse the caller.
+   */
+  workflows: WorkflowsNamespace;
+
+  /**
+   * @experimental The delivery log and queued email, read as the Email hub's
+   * Activity reads them.
+   */
+  emailDeliveries: EmailDeliveriesNamespace;
 
   /**
    * A subject's content events — a document's or a release's — newest first,

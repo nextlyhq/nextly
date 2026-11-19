@@ -181,7 +181,13 @@ function appContributedTables(
  * answer — on every `migrate:create` and every `migrate:check`.
  */
 async function foreignTableBaselines(
-  input: { config: ConfigLike; dialect: SupportedDialect; logger: WarnLogger },
+  input: {
+    config: ConfigLike;
+    dialect: SupportedDialect;
+    logger: WarnLogger;
+    fieldGroupTables?: ReadonlyMap<string, string>;
+    fieldGroupTypeColumns?: ReadonlyMap<string, string>;
+  },
   schema: ExtensionSchema,
   appOwned: ReadonlySet<string>
 ): Promise<Map<string, TableSpec>> {
@@ -194,6 +200,12 @@ async function foreignTableBaselines(
           plugins: input.config.plugins ?? [],
           config: withoutAppExtend(input.config),
           logger: input.logger,
+          ...(input.fieldGroupTables === undefined
+            ? {}
+            : { fieldGroupTables: input.fieldGroupTables }),
+          ...(input.fieldGroupTypeColumns === undefined
+            ? {}
+            : { fieldGroupTypeColumns: input.fieldGroupTypeColumns }),
         });
   const baselines = new Map<string, TableSpec>();
   for (const spec of baselineSchema?.specs ?? []) {
@@ -257,6 +269,10 @@ export async function compileAppStreamTables(input: {
   config: ConfigLike;
   dialect: SupportedDialect;
   logger: WarnLogger;
+  /** The table each field group is stored in, by slug (`compileExtensionSchema`). */
+  fieldGroupTables?: ReadonlyMap<string, string>;
+  /** The discriminator each field group's table holds, by table (`compileExtensionSchema`). */
+  fieldGroupTypeColumns?: ReadonlyMap<string, string>;
 }): Promise<AppStreamTables> {
   // Every path below reads the core schema, which is only the running
   // dialect's once its tables are loaded. `createAdapter` and
@@ -270,6 +286,12 @@ export async function compileAppStreamTables(input: {
     plugins: input.config.plugins ?? [],
     config: input.config,
     logger: input.logger,
+    ...(input.fieldGroupTables === undefined
+      ? {}
+      : { fieldGroupTables: input.fieldGroupTables }),
+    ...(input.fieldGroupTypeColumns === undefined
+      ? {}
+      : { fieldGroupTypeColumns: input.fieldGroupTypeColumns }),
   });
   if (!schema) return uncontributedAppStreamTables(input.dialect);
 

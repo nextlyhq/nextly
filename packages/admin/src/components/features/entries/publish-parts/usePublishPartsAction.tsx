@@ -20,6 +20,7 @@ import { useState } from "react";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
 import { toast } from "@admin/components/ui";
 import type { PartsTarget } from "@admin/hooks/queries/usePublishParts";
+import { useReviewState } from "@admin/hooks/queries/useReviewState";
 import { useCan } from "@admin/hooks/useCan";
 import type { ShownCopy } from "@admin/lib/document-version";
 
@@ -27,7 +28,7 @@ import { useOpenForDocument } from "../../releases/useOpenForDocument";
 import type { LanguageLabel } from "../publishAllOutcomes";
 
 import { defaultPartsChoice, type PartsChoice } from "./publish-parts-choice";
-import { PublishPartsDialog } from "./PublishPartsDialog";
+import { PublishPartsDialog, type PublishReview } from "./PublishPartsDialog";
 
 /** The action's id, for tests and for a plugin replacing it. */
 export const PUBLISH_PARTS_ACTION_ID = "publish-parts";
@@ -70,6 +71,17 @@ export function usePublishPartsAction({
   shown,
 }: PublishPartsActionProps): PublishPartsAction {
   const canPublish = useCan(`publish-${target?.slug ?? ""}`);
+  // The workflow's say, read from the same review state the header reads: what holds each part,
+  // and whether this person may publish past it with a reason, as the server judges it.
+  const reviewDocument =
+    target === undefined
+      ? undefined
+      : {
+          scopeKind: target.kind,
+          scopeSlug: target.slug,
+          entryId: target.kind === "collection" ? target.id : "",
+        };
+  const { data: reviewAnswer } = useReviewState(reviewDocument);
   const documentKey =
     target === undefined
       ? "none"
@@ -112,6 +124,15 @@ export function usePublishPartsAction({
     },
   };
 
+  const review: PublishReview | undefined =
+    reviewAnswer?.attached === true && reviewDocument !== undefined
+      ? {
+          document: reviewDocument,
+          parts: reviewAnswer.review.parts,
+          mayPublishWithoutReview: reviewAnswer.review.mayPublishWithoutReview,
+        }
+      : undefined;
+
   const dialog =
     opening === 0 || initialChoice === null ? null : (
       <PublishPartsDialog
@@ -125,6 +146,7 @@ export function usePublishPartsAction({
         initialChoice={initialChoice}
         shown={shown}
         onDone={summary => toast.success(summary)}
+        {...(review === undefined ? {} : { review })}
       />
     );
 

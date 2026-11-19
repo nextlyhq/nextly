@@ -77,7 +77,6 @@ import { generateRuntimeSchema } from "../../domains/schema/services/runtime-sch
 // The legacy fallback sync path is deleted (dead code post-Option E).
 // addMissingColumnsForFields is extracted to utils/missing-columns.ts.
 import { addMissingColumnsForFields } from "../../domains/schema/utils/missing-columns";
-import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import {
   reconcileSingleTables,
   singleTableSources,
@@ -1306,8 +1305,17 @@ export async function performComponentsAutoSync(
       continue;
     }
 
-    // Canonical resolution: custom dbName verbatim, else comp_ + normalized slug.
-    const tableName = resolveComponentTableName(slug);
+    // The table the group's registry row names after the sync: its own storage, on whichever
+    // naming the site is. Derived again from the slug, it would be the legacy name on a site
+    // whose storage moved to the current names.
+    const tableName = syncResult.tableNames[slug];
+    if (tableName === undefined) {
+      errors.push({
+        slug,
+        error: "Component table name not recorded by the sync",
+      });
+      continue;
+    }
 
     try {
       const tableAlreadyExists = await drizzleAdapter.tableExists(tableName);

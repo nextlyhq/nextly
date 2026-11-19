@@ -71,7 +71,7 @@ MySQL lacks a few features Nextly uses natively in PostgreSQL. The adapter emula
 
 - **`RETURNING` clause:** emulated with an extra `SELECT` after writes.
 - **`ILIKE`:** emulated as `LOWER(...) LIKE LOWER(...)`.
-- **Savepoints:** disabled by the adapter.
+- **Savepoints:** a transaction opened inside another joins it flat, with no savepoint of its own. The transaction context still sets savepoints (`savepoint`, `rollbackToSavepoint`, `releaseSavepoint`).
 - **`JSONB`:** not available; `JSON` columns are used instead.
 
 ## Main exports

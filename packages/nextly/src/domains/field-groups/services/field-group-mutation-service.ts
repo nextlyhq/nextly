@@ -477,11 +477,18 @@ export function instanceWriteOf(
    * its field-group save, so a validator inside the instance is told the
    * caller the entry's own fields are, from the same grants.
    */
-  access?: FieldGroupWriteAccess
+  access?: FieldGroupWriteAccess,
+  /**
+   * The connection the instance is written on: the host write's transaction,
+   * where `caller.can` is answered, or none on a pooled write.
+   */
+  executor?: unknown
 ): EntryWriteContext {
   return {
     ...host,
-    ...(access === undefined ? {} : { caller: fieldWriteCaller(access) }),
+    ...(access === undefined
+      ? {}
+      : { caller: fieldWriteCaller(access, executor) }),
     inFieldGroup: true,
     readStored: (allowedType, target) =>
       ownFields.has(topLevelName(target.field)) && readsTheHost(host, target)
@@ -2390,7 +2397,8 @@ export class FieldGroupMutationService extends BaseService {
                     typeof field.name === "string" ? [field.name] : []
                   )
                 ),
-                writeScope.getStore()?.access
+                writeScope.getStore()?.access,
+                writeScope.getStore()?.executor
               ),
             }),
       }

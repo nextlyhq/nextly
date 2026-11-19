@@ -18,8 +18,12 @@
  * @module tokens-transfer.round-trip.test
  */
 import {
+  classesAcrossFluidRange,
   compileSiteSheet,
+  DEFAULT_FLUID_RANGE,
   emitTokenBlocks,
+  fluidValue,
+  type FluidRangeWidths,
   resolveSiteText,
   resolveSiteTokens,
   SITE_TEXT_ROLES,
@@ -293,5 +297,144 @@ describe("a site's design exported and imported into a fresh site", () => {
       "ts-eyebrow",
       "ts-display",
     ]);
+  });
+});
+
+/** The two sizes a fluid text style's sizes were made from, per device. */
+const MADE_FROM = {
+  base: { small: 28, large: 48 },
+  mobile: { small: 20, large: 30 },
+};
+
+/** A text style made with "Fluid…" across `range`, on two devices. */
+function fluidTitle(range: FluidRangeWidths): NamedClass {
+  return {
+    id: "ts-fluid-title",
+    slug: "fluid-title",
+    label: "Fluid title",
+    // First on the fresh site, which places an added style after its own.
+    orderIndex: 0,
+    role: "text",
+    styles: {
+      base: {
+        base: { fontSize: fluidValue(MADE_FROM.base, range), fontWeight: 700 },
+        mobile: { fontSize: fluidValue(MADE_FROM.mobile, range) },
+      },
+    },
+    fluidSizes: MADE_FROM,
+  };
+}
+
+/** One site's design exported and imported into another, applied whole. */
+function exportedInto(
+  from: { tokens: SiteTokenSet; classes: readonly NamedClass[] },
+  into: SiteTokenSet,
+  breakpoints = BREAKPOINTS
+) {
+  const files = exportDtcgWithTheme(from.tokens, from.classes).map(file => ({
+    name: file.filename,
+    text: file.text,
+  }));
+  const plan = planImport(files, into, {
+    textStyles: [],
+    faces: [],
+    breakpoints,
+  });
+  if (!plan.ok) throw new Error(plan.error);
+  const applied = applyImport(plan, into, new Map());
+  if (!applied.ok) throw new Error(applied.error);
+  const edited = applied.classes?.([]);
+  if (edited === undefined || "reason" in edited) {
+    throw new Error("The text styles were not stored.");
+  }
+  return { tokens: applied.tokens, classes: edited.classes, applied };
+}
+
+/** The imported fluid title's size on each device. */
+function sizesOf(classes: readonly NamedClass[]) {
+  const title = classes.find(entry => entry.id === "ts-fluid-title");
+  return {
+    base: title?.styles.base?.base?.fontSize,
+    mobile: title?.styles.base?.mobile?.fontSize,
+  };
+}
+
+describe("a fluid text style exported and imported into another site", () => {
+  const SITE_RANGE = { min: 320, max: 1440 };
+  const LATER = { min: 400, max: 800 };
+
+  it("keeps its fluid sizes, so its size follows a later change of the site's fluid range", () => {
+    const { tokens, classes } = exportedInto(
+      {
+        tokens: { ...FIRST, fluidRange: SITE_RANGE },
+        classes: [fluidTitle(SITE_RANGE)],
+      },
+      FRESH
+    );
+    expect(tokens.fluidRange).toEqual(SITE_RANGE);
+    expect(classes).toEqual([fluidTitle(SITE_RANGE)]);
+    // The site's range then changes, and the save that changes it remakes
+    // each text style made with "Fluid…" by the engine's one rule.
+    const after = classesAcrossFluidRange(classes, SITE_RANGE, LATER);
+    expect(sizesOf(after)).toEqual({
+      base: fluidValue(MADE_FROM.base, LATER),
+      mobile: fluidValue(MADE_FROM.mobile, LATER),
+    });
+  });
+
+  it("follows the importing site's range when the file states none (the default range)", () => {
+    const { fluidRange: _range, ...onDefault } = FIRST;
+    const own = { min: 400, max: 960 };
+    const { tokens, classes } = exportedInto(
+      { tokens: onDefault, classes: [fluidTitle(DEFAULT_FLUID_RANGE)] },
+      { ...FRESH, fluidRange: own }
+    );
+    expect(tokens.fluidRange).toEqual(own);
+    expect(classes).toEqual([fluidTitle(own)]);
+    const after = classesAcrossFluidRange(classes, own, LATER);
+    expect(sizesOf(after)).toEqual({
+      base: fluidValue(MADE_FROM.base, LATER),
+      mobile: fluidValue(MADE_FROM.mobile, LATER),
+    });
+  });
+
+  it("leaves out the fluid sizes of a breakpoint the importing site doesn't have, with its values", () => {
+    const { classes } = exportedInto(
+      {
+        tokens: { ...FIRST, fluidRange: SITE_RANGE },
+        classes: [fluidTitle(SITE_RANGE)],
+      },
+      FRESH,
+      { viewport: [], container: [] }
+    );
+    expect(sizesOf(classes)).toEqual({
+      base: fluidValue(MADE_FROM.base, SITE_RANGE),
+      mobile: undefined,
+    });
+    expect(classes[0]?.fluidSizes).toEqual({ base: MADE_FROM.base });
+  });
+
+  it("keeps a size whose fluid sizes don't make it as it is, without them, and says so", () => {
+    const typed: NamedClass = {
+      ...fluidTitle(SITE_RANGE),
+      styles: {
+        base: {
+          base: { fontSize: "2.5rem", fontWeight: 700 },
+          mobile: { fontSize: fluidValue(MADE_FROM.mobile, SITE_RANGE) },
+        },
+      },
+    };
+    const { classes, applied } = exportedInto(
+      { tokens: { ...FIRST, fluidRange: SITE_RANGE }, classes: [typed] },
+      FRESH
+    );
+    expect(sizesOf(classes).base).toBe("2.5rem");
+    expect(classes[0]?.fluidSizes).toEqual({ mobile: MADE_FROM.mobile });
+    expect(applied.skipped.join("\n")).toContain(
+      '"Fluid title" keeps its sizes as they are'
+    );
+    // A range change leaves the typed size alone.
+    const after = classesAcrossFluidRange(classes, SITE_RANGE, LATER);
+    expect(sizesOf(after).base).toBe("2.5rem");
   });
 });

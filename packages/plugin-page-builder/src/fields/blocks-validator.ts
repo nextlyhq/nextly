@@ -22,6 +22,7 @@ import type {
   BlockDocument,
   BlockRegistryReader,
   BreakpointSet,
+  DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import {
   DOCUMENT_VERDICT_CODES,
@@ -97,7 +98,15 @@ export function validateBlocksValue(
    * The document's stored forms, whose values a `"contentOnly"` slot lets it
    * keep. Absent for a create and for a value judged on its own.
    */
-  stored?: readonly BlockDocument[]
+  stored?: readonly BlockDocument[],
+  /**
+   * The limits the site's pages are drawn under: its depth, node and byte
+   * caps. A save held to the engine's defaults instead stores a page deeper
+   * than a site that set tighter caps draws, and refuses one a site that set
+   * looser caps draws whole. Absent for a value judged with no site set up,
+   * which is held to the engine's defaults.
+   */
+  limits?: DocumentLimits
 ): Issue[] {
   // An absent document is an empty field. Required-ness is the shared rules'
   // to enforce, exactly as for every other type.
@@ -164,6 +173,7 @@ export function validateBlocksValue(
     // locks, so it refuses nothing, for the reason given for nesting above.
     definitions: blocks.blockSource(),
     ...(stored === undefined ? {} : { stored }),
+    ...(limits === undefined ? {} : { limits }),
   });
   // Errors only, which means the breakpoint set threaded in here decides
   // nothing about a document — and that is the correct behaviour today, not an

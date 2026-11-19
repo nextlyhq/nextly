@@ -40,7 +40,7 @@ import * as React from "react";
 import { useCanvasTokenMode } from "./canvas/prefers-dark";
 import { ChoiceList } from "./choice-list";
 import { familyStack, siteFamilies } from "./font-library";
-import { InheritedValue } from "./inherited-value";
+import { InheritedValue } from "./inspector/style-inspector/inherited-value";
 import { variableFor, type SiteVariable } from "./style-colour";
 import {
   focusAfterUnlink,

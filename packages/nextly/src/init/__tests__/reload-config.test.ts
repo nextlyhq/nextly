@@ -13,7 +13,10 @@ import { readFileSync } from "node:fs";
 
 import { getColumns } from "drizzle-orm";
 
-import { buildDesiredTableFromFields } from "../../domains/schema/pipeline/diff/build-from-fields";
+import {
+  buildDesiredTableFromComponentFields,
+  buildDesiredTableFromFields,
+} from "../../domains/schema/pipeline/diff/build-from-fields";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createLockingAdapter } from "../../domains/field-groups/migration/__tests__/helpers/locking-adapter";
@@ -318,6 +321,13 @@ describe("reloadNextlyConfig", () => {
     tableName: string,
     options: BuildDesiredTableOptions = { builtBy: "codeFirst" }
   ): ColumnSpec[] {
+    // A field group's table from the field-group builder, which the reload's judgement and the
+    // apply both describe it with: its link columns and its own timestamps, not a document's.
+    if (/^(comp_|fg_)/.test(tableName)) {
+      return buildDesiredTableFromComponentFields(tableName, [], "sqlite", {
+        builtBy: options.builtBy,
+      }).columns;
+    }
     return buildDesiredTableFromFields(tableName, [], "sqlite", options)
       .columns;
   }

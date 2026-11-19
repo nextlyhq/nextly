@@ -59,9 +59,14 @@ import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import { assertSaveLeavesNoFieldGroupCycle } from "../field-group-cycles";
+import { typeColumnForNewTable } from "../storage/resolve-storage-names";
 
 import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
+import {
+  fieldGroupTableNameFor,
+  resolveFieldGroupStorageNames,
+} from "./field-group-storage-names";
 import { recordStrandedTransition } from "./record-stranded-transition";
 
 /**
@@ -113,6 +118,18 @@ export type CreateFieldGroupInput = Omit<
   DynamicFieldGroupInsert,
   "migrationStatus"
 >;
+
+/**
+ * A create as a transport asks for it: the table name may be left to the service, which names it
+ * under the naming the site's storage is on (`field-group-storage-names`) inside the create's
+ * exclusion, where no storage migration can move the storage between the naming and the create.
+ */
+export type CreateFieldGroupRequest = Omit<
+  CreateFieldGroupInput,
+  "tableName"
+> & {
+  tableName?: string;
+};
 
 export interface CreateFieldGroupResult {
   record: DynamicFieldGroupRecord;
@@ -195,7 +212,7 @@ export class FieldGroupMetadataService {
    * The caller has already validated the input's shape.
    */
   async createFieldGroup(
-    input: CreateFieldGroupInput
+    request: CreateFieldGroupRequest
   ): Promise<CreateFieldGroupResult> {
     // 🔴 Everything is inside, including the planning, and the reason planning is inside is not the
     // storage migration.
@@ -220,12 +237,30 @@ export class FieldGroupMetadataService {
       {
         adapter: this.adapter,
         logger: this.logger,
-        label: `create field group "${input.slug}"`,
+        label: `create field group "${request.slug}"`,
         migrationsDir: this.builderSave?.migrationsDir,
         issuesDdl: true,
       },
-      () => this.createFieldGroupExcluded(input)
+      async () =>
+        this.createFieldGroupExcluded({
+          ...request,
+          tableName:
+            request.tableName ?? (await this.newTableName(request.slug)),
+        })
     );
+  }
+
+  /**
+   * The table a new field group with `slug` is created under: its slug's name under the naming
+   * this site's storage is on, so a group created after the storage migration, or on a new site,
+   * starts on the current names. Legacy where the service has no database to ask.
+   */
+  private async newTableName(slug: string): Promise<string> {
+    const naming =
+      this.adapter === undefined
+        ? "legacy"
+        : (await resolveFieldGroupStorageNames(this.adapter)).naming;
+    return fieldGroupTableNameFor(naming, slug);
   }
 
   private async createFieldGroupExcluded(
@@ -1204,11 +1239,10 @@ export class FieldGroupMetadataService {
       this.dialect,
       input.tableName,
       input.fields,
-      // The constant, NOT a probe, and this is the one path where that inference is sound: this is
-      // the CREATE path for a new slug, and the statements just executed are the DDL generator's
-      // own, which write this column. A table the storage migration had moved would carry the
-      // migrated prefix and could not be addressed by this name at all.
-      STORAGE_FORMAT.columns.type,
+      // Decided by the name, NOT a probe, and this is the one path where that inference is sound:
+      // this is the CREATE path for a new slug, and the statements just executed are the DDL
+      // generator's own, which write the column this names for the table they created.
+      typeColumnForNewTable(input.tableName),
       storesPerLanguage(input)
     );
   }
@@ -1376,7 +1410,12 @@ export class FieldGroupMetadataService {
           typeof buildDesiredTableFromComponentFields
         >[1],
         dialect,
-        { localized: storesPerLanguage(input), builtBy: "fieldGroup" }
+        {
+          localized: storesPerLanguage(input),
+          builtBy: "fieldGroup",
+          // The discriminator the create's DDL wrote for a table under this name.
+          typeColumn: typeColumnForNewTable(input.tableName),
+        }
       )
     );
     return leftOut.length === 0 ? null : describeColumnsLeftOut(leftOut);

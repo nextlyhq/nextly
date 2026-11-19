@@ -29,7 +29,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
-import { StyleInspectorPanel } from "./style-inspector-panel";
+import { StyleInspectorPanel } from "./inspector/style-inspector/style-inspector-panel";
 
 afterEach(() => {
   cleanup();

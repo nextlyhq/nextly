@@ -215,7 +215,9 @@ function DocumentLink({ document }: { document: NamedDocument }): JSX.Element {
     // Inline, so a long title wraps and reads in full, the icon after its
     // last word.
     <a
-      className="font-medium break-words text-primary underline-offset-4 hover:underline"
+      // In the text colour, underlined: a brand's primary is a fill and
+      // can fall under AA as small text.
+      className="font-medium break-words text-foreground underline underline-offset-2"
       href={documentHref(document)}
       target="_blank"
       rel="noopener noreferrer"

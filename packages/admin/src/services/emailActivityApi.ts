@@ -1,12 +1,13 @@
 /**
- * The Email hub's Activity reads: the delivery log, queued email, and whether
- * queued email is overdue because the jobs trigger is not running.
+ * The Email hub's Activity reads: the merged Activity of queued email and
+ * the deliveries of sends that were not queued, each row's detail, and
+ * whether queued email is overdue because the jobs trigger is not running.
  *
  * Every read needs `read-email-deliveries`; the server refuses without it.
  * Nothing here carries an address, a subject or a body: the server never
  * returns one on these routes, and these types name no field that could.
  *
- * The shapes mirror core's `DeliveryActivity`, `QueuedEmailActivity` and
+ * The shapes mirror core's `ActivityEntry`, its detail reads and
  * `QueuedEmailOverdue` as JSON: the admin is built apart from core and reads
  * them off the wire, so times arrive as ISO strings.
  *
@@ -15,6 +16,26 @@
 
 import { fetcher } from "../lib/api/fetcher";
 import type { ListResponse } from "../lib/api/response-types";
+
+/**
+ * Where a provider came from: a stored one, one set in the app's code, a
+ * stored one deleted since, or not recorded (a record from before origins
+ * were kept).
+ */
+export type ProviderOrigin = "stored" | "code" | "deleted" | "not-recorded";
+
+/** The origins the Activity can be narrowed by; a row not recorded matches none. */
+export type FilterableOrigin = Exclude<ProviderOrigin, "not-recorded">;
+
+/**
+ * The provider that carried a send: the stored one's id only while it
+ * exists, its registered type, which outlives it, and where it came from.
+ */
+export interface ActivityProvider {
+  id: string | null;
+  type: string;
+  origin: ProviderOrigin;
+}
 
 /** What happened to one recipient of one send. */
 export type DeliveryOutcome = "sent" | "failed";
@@ -38,11 +59,7 @@ export interface DeliveryActivity {
   outcome: DeliveryOutcome;
   /** The template it was sent from, or null for a send without one. */
   templateSlug: string | null;
-  /**
-   * The stored provider that carried it, while it is still stored (`id`),
-   * and its registered type, which outlives it.
-   */
-  provider: { id: string | null; type: string };
+  provider: ActivityProvider;
   recipientKind: RecipientKind;
   /** Why it failed, with anything address-shaped removed; null when sent. */
   failureReason: string | null;
@@ -112,7 +129,7 @@ export interface DeliveryAttempt {
   createdAt: string;
   outcome: DeliveryOutcome;
   recipientKind: RecipientKind;
-  provider: { id: string | null; type: string };
+  provider: ActivityProvider;
   failureKind: DeliveryFailureKind | null;
   failureStatus: number | null;
   /** Core's sentence for the failure, with anything address-shaped removed. */
@@ -153,24 +170,43 @@ export interface QueuedEmailOverdue {
   warningAfterMinutes: number;
 }
 
-/** How the delivery log is narrowed. Times are ISO 8601 instants. */
-export interface DeliveryActivityQuery {
-  outcome?: DeliveryOutcome;
-  template?: string;
-  providerId?: string;
-  providerType?: string;
-  from?: string;
-  to?: string;
-  before?: string;
-  limit?: number;
+/**
+ * One row of the merged Activity: a queued email, or a delivery of a send
+ * that was not queued. A queued email's own deliveries are its timeline, in
+ * its detail, not rows of their own.
+ */
+export interface ActivityEntry {
+  kind: "delivery" | "queued";
+  id: string;
+  createdAt: string;
+  /** A delivery's outcome, or where a queued email stands. */
+  status: DeliveryOutcome | QueuedEmailState;
+  /** Its template; `none` for a message without one; `not-recorded` when unknown. */
+  template: { slug: string } | "none" | "not-recorded";
+  /** Its provider; null for a queued email not yet tried. */
+  provider: ActivityProvider | null;
+  /** The kinds of recipient it went to; null when not recorded. */
+  recipientKinds: RecipientKind[] | null;
+  /** Why it (last) failed, with nothing address-shaped in it. */
+  failureReason: string | null;
+  /** A queued email's attempts so far; null for a delivery, or when unknown. */
+  attempts: number | null;
+  /** When a queued email's next attempt is due, while one is to follow. */
+  nextAttemptAt: string | null;
+  /** Whether a delivery's recipient has been erased since. */
+  erased: boolean;
 }
 
-/** How queued email is narrowed. Times are ISO 8601 instants. */
-export interface QueuedEmailActivityQuery {
-  state?: QueuedEmailState;
+/** How the merged Activity is narrowed. Times are ISO 8601 instants. */
+export interface ActivityQuery {
+  status?: DeliveryOutcome | QueuedEmailState;
   template?: string;
+  /** A provider's registered type. */
+  providerType?: string;
+  providerOrigin?: FilterableOrigin;
   from?: string;
   to?: string;
+  /** The `meta.nextBefore` of the page before. */
   before?: string;
   limit?: number;
 }
@@ -185,23 +221,15 @@ function queryString(query: object): string {
   return text ? `?${text}` : "";
 }
 
-/** The delivery log, newest first, a page at a time. */
-export function listDeliveryActivity(
-  query: DeliveryActivityQuery = {}
-): Promise<ListResponse<DeliveryActivity>> {
-  return fetcher<ListResponse<DeliveryActivity>>(
-    `/email-deliveries${queryString(query)}`,
-    {},
-    true
-  );
-}
-
-/** Queued email, newest first, a page at a time. */
-export function listQueuedEmailActivity(
-  query: QueuedEmailActivityQuery = {}
-): Promise<ListResponse<QueuedEmailActivity>> {
-  return fetcher<ListResponse<QueuedEmailActivity>>(
-    `/email-deliveries/queued${queryString(query)}`,
+/**
+ * The merged Activity, newest first, under one cursor and one set of filters,
+ * a page at a time.
+ */
+export function listActivity(
+  query: ActivityQuery = {}
+): Promise<ListResponse<ActivityEntry>> {
+  return fetcher<ListResponse<ActivityEntry>>(
+    `/email-deliveries/activity${queryString(query)}`,
     {},
     true
   );

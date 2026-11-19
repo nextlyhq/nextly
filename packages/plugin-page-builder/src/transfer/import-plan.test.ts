@@ -18,6 +18,7 @@ function site(overrides: Partial<ImportSite> = {}): ImportSite {
     items: { component: none, pattern: none, layout: none },
     classes: [],
     tokens: [],
+    tokenPrefix: "--site-",
     breakpoints: { viewport: [], container: [] },
     media: new Map(),
     isRegistered: () => true,
@@ -234,7 +235,7 @@ describe("planImport", () => {
     expect(plan.classes.create.map(entry => [entry.id, entry.slug])).toEqual([
       ["c2", "hero-2"],
     ]);
-    expect(plan.tokens.map.get("color.b")).toBe("color.b-2");
+    expect(plan.tokens.remap.ids.get("color.b")).toBe("color.b-2");
     expect(plan.tokens.create.map(token => token.name)).toEqual(["color.b-2"]);
   });
 
@@ -262,6 +263,139 @@ describe("planImport", () => {
       "class:c1",
     ]);
     expect(plan.classes.map.get("c1")).toBe("c1");
+  });
+
+  describe("a file from a site with another variable prefix", () => {
+    const shadow = (prefix: string, colour: string) => ({
+      name: "shadow.card",
+      kind: "shadow",
+      values: { light: `0 0 4px var(${prefix}${colour})` },
+    });
+
+    it("reuses a variable whose var() names the same variable under this site's prefix", () => {
+      const plan = planImport(
+        file({
+          tokenPrefix: "--acme-",
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#111111" } },
+            shadow("--acme-", "color-a"),
+          ],
+        }),
+        site({
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#111111" } },
+            shadow("--site-", "color-a"),
+          ],
+        })
+      );
+      expect(plan.preview.conflicts).toEqual([]);
+      expect(
+        plan.preview.reused.map(entry => [entry.fileId, entry.existingId])
+      ).toEqual([
+        ["color.a", "color.a"],
+        ["shadow.card", "shadow.card"],
+      ]);
+    });
+
+    it("doesn't reuse a variable whose var() names one the import renames", () => {
+      const plan = planImport(
+        file({
+          tokenPrefix: "--acme-",
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#111111" } },
+            shadow("--acme-", "color-a"),
+          ],
+        }),
+        site({
+          // Another colour under the same name, and a shadow naming it: the
+          // file's shadow names the file's colour, renamed on the way in.
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#999999" } },
+            shadow("--site-", "color-a"),
+          ],
+        })
+      );
+      expect(plan.preview.reused).toEqual([]);
+      expect(
+        plan.preview.conflicts.map(entry => [entry.key, entry.renamedTo])
+      ).toEqual([
+        ["token:color.a", "color.a-2"],
+        ["token:shadow.card", "shadow.card-2"],
+      ]);
+      expect(
+        plan.tokens.create.map(token => [token.name, token.values.light])
+      ).toEqual([
+        ["color.a-2", "#111111"],
+        ["shadow.card-2", "0 0 4px var(--site-color-a-2)"],
+      ]);
+      // Pointed at this site's colour instead, the shadow is the same one.
+      const pointed = planImport(
+        file({
+          tokenPrefix: "--acme-",
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#111111" } },
+            shadow("--acme-", "color-a"),
+          ],
+        }),
+        site({
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#999999" } },
+            shadow("--site-", "color-a"),
+          ],
+        }),
+        { conflicts: { "token:color.a": "existing" } }
+      );
+      expect(pointed.preview.reused.map(entry => entry.fileId)).toEqual([
+        "shadow.card",
+      ]);
+    });
+
+    it("writes a new variable's var() under this site's prefix, at the id each lands on", () => {
+      const plan = planImport(
+        file({
+          tokenPrefix: "--acme-",
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#111111" } },
+            shadow("--acme-", "color-a"),
+          ],
+        }),
+        site({
+          // Another colour under the same name: the file's is renamed.
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#999999" } },
+          ],
+          tokenPrefix: "--shop-",
+        })
+      );
+      expect(
+        plan.tokens.create.map(token => [token.name, token.values.light])
+      ).toEqual([
+        ["color.a-2", "#111111"],
+        ["shadow.card", "0 0 4px var(--shop-color-a-2)"],
+      ]);
+    });
+
+    it("reads a file that names no prefix as written under the default", () => {
+      const plan = planImport(
+        file({ tokens: [shadow("--site-", "color-a")] }),
+        site({ tokenPrefix: "--shop-" })
+      );
+      expect(plan.tokens.create[0]?.values.light).toBe(
+        "0 0 4px var(--site-color-a)"
+      );
+      const named = planImport(
+        file({
+          tokens: [
+            { name: "color.a", kind: "color", values: { light: "#111111" } },
+            shadow("--site-", "color-a"),
+          ],
+        }),
+        site({ tokenPrefix: "--shop-" })
+      );
+      expect(named.tokens.create[1]?.values.light).toBe(
+        "0 0 4px var(--shop-color-a)"
+      );
+    });
   });
 
   it("reuses an identical media file and settles one with the same name", () => {

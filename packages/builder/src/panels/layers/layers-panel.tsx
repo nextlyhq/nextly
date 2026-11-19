@@ -84,7 +84,9 @@ import {
 import {
   Input,
   TreeView,
+  chordMatches,
   detectApplePlatform,
+  parseKeys,
   type TreeNode,
 } from "@nextlyhq/ui";
 import {
@@ -102,16 +104,17 @@ import { BlockIconMark } from "../../block-icon";
 import { DRAG_SOURCE_ATTRIBUTE } from "../../canvas/canvas";
 import { useHoveredBlockSetter } from "../../canvas/hovered-block";
 import { revealNode } from "../../canvas/reveal-node";
-import { HAS_CUSTOM_CSS } from "../../custom-css";
 import type { EditorState } from "../../editor-state";
 import { EDITOR_WORDS } from "../../editor-words";
+import { FieldsOfDocument, useDraftFieldEdit } from "../../field-edit";
+import { HAS_CUSTOM_CSS } from "../../inspector/custom-css";
 import {
   layersLockChangeable,
   lockOp,
   lockStatusOf,
   lockViewOf,
   renameOp,
-} from "../../inspector";
+} from "../../inspector/inspector";
 import { keyHint } from "../../key-hint";
 import { MOVE_KEYS, type SharedBlockVerbs } from "../../keyboard-actions";
 import type { MoveDirection } from "../../keyboard-move";
@@ -326,6 +329,25 @@ interface RowView {
   readonly hiddenOn: ReadonlyMap<string, string>;
 }
 
+/** The page's save, as the admin binds it, in the shortcut grammar. */
+const SAVE_CHORD = parseKeys("mod+s")[0];
+
+/**
+ * Whether a key press is the save chord, read by the shortcut manager's own
+ * matcher, so Command on an Apple keyboard and Control elsewhere.
+ */
+function isSaveChord(event: React.KeyboardEvent): boolean {
+  return (
+    SAVE_CHORD !== undefined &&
+    chordMatches(
+      SAVE_CHORD,
+      event.key,
+      event.nativeEvent,
+      detectApplePlatform()
+    )
+  );
+}
+
 /**
  * The field a row's name becomes while it is renamed.
  *
@@ -333,6 +355,10 @@ interface RowView {
  * for itself, and a field inside a row would otherwise lose every one of
  * them to the tree. Enter keeps the name and Escape keeps the old one; a
  * blur keeps what was typed, as leaving a field does everywhere else.
+ *
+ * The save chord alone goes on to the editor's shortcuts, so Save pressed
+ * here saves the page; a keystroke begins the field's edit, so that save
+ * writes the name being typed first, through the field's own blur.
  */
 function RenameField({
   id,
@@ -360,6 +386,7 @@ function RenameField({
     onDone(typed === null || typed.trim() === (name ?? "") ? null : typed);
   };
   const stop = (event: React.SyntheticEvent): void => event.stopPropagation();
+  const edit = useDraftFieldEdit();
   return (
     <input
       ref={field}
@@ -377,8 +404,14 @@ function RenameField({
       onPointerDown={stop}
       onClick={stop}
       onDoubleClick={stop}
+      onChange={event => {
+        const typed = event.currentTarget;
+        edit.begin(() => {
+          typed.value = name ?? "";
+        });
+      }}
       onKeyDown={event => {
-        event.stopPropagation();
+        if (!isSaveChord(event)) event.stopPropagation();
         if (event.key === "Enter") {
           event.preventDefault();
           finish(event.currentTarget.value);
@@ -522,12 +555,17 @@ function LayerRow({
     >
       <BlockIconMark icon={markOf(node, view.icons)} size={14} />
       {node.id === view.renamingId ? (
-        <RenameField
-          id={node.id}
-          label={node.label}
-          name={node.name}
-          onDone={name => view.onRenamed(node.id, name)}
-        />
+        // A name typed here is the document's, as a field in the block's
+        // settings is: unsaved work until it is written, and written first
+        // by a save made from the field.
+        <FieldsOfDocument.Provider value={true}>
+          <RenameField
+            id={node.id}
+            label={node.label}
+            name={node.name}
+            onDone={name => view.onRenamed(node.id, name)}
+          />
+        </FieldsOfDocument.Provider>
       ) : (
         /* `data-nx-layer` names the block a row stands for. Labels repeat —
           every paragraph is "Text" — so it is the one stable way to find a

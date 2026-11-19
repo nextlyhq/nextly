@@ -22,7 +22,7 @@ import { AlertCircle, CircleCheck, Split } from "lucide-react";
 import * as React from "react";
 
 import type { Rect } from "../geometry";
-import { LOOK_REACH_ATTRIBUTE } from "../look-reach";
+import { LOOK_REACH_ATTRIBUTE } from "../inspector/style-inspector/look-reach";
 import { UNNAMED_COMPONENT } from "../panels/layers/layers";
 import { deviceLabel } from "../shell/breakpoint-switcher";
 

@@ -2,8 +2,8 @@
  * The same busy database, met by every path that changes a table's structure outside the schema
  * pipeline, gives the same tries and the same stop: `nextly migrate`'s app file, `migrate:down`'s
  * down section, a collection's Builder save, the runner Singles' saves apply through, the runner
- * field groups' saves apply through, a translations table's change in either, and a user field's
- * column.
+ * field groups' saves apply through, a translations table's change in either, a user field's
+ * column, and the taking of the schema lock itself.
  *
  * An integration test, not a unit one: what it compares is each path's own seam reaching the
  * tries against a real held database, which a stand-in for the database could only assume. It runs
@@ -58,6 +58,7 @@ import type { UserFieldDefinitionService } from "../../users/services/user-field
 import { writeCollectionSave } from "../builder-save/collection-save";
 import { busyTableBounds } from "../busy-table/bounds";
 import { plannedTryStarts } from "../busy-table/schedule";
+import { withSchemaLock } from "../pipeline/schema-lock";
 import type { DesiredSchema } from "../pipeline/types";
 import { readIdentifierCaseRules } from "../utils/read-identifier-case";
 import {
@@ -465,6 +466,26 @@ describe("a busy database, met by every path outside the schema pipeline (sqlite
     };
   }, 30_000);
 
+  it("taking the schema lock", async () => {
+    // The lock's tables and row first, so the claim is what meets the holder.
+    await withSchemaLock(
+      { adapter, command: "nextly migrate", whenHeld: "refuse" },
+      async () => undefined
+    );
+    // A command, which waits: it makes every try, as the paths above do.
+    stops.schemaLock = await stopOf(() =>
+      withSchemaLock(
+        {
+          adapter,
+          command: "nextly migrate",
+          whenHeld: "wait",
+          logger: quietSave,
+        },
+        async () => undefined
+      )
+    );
+  }, 30_000);
+
   it("stops every one of them the same way, after the same tries", () => {
     const planned = plannedTryStarts(bounds()).length;
     expect(Object.keys(stops).sort()).toEqual(
@@ -475,6 +496,7 @@ describe("a busy database, met by every path outside the schema pipeline (sqlite
         "fieldGroup",
         "fieldGroupMigration",
         "migrate",
+        "schemaLock",
         "single",
         "startTables",
         "userField",

@@ -12,12 +12,12 @@
  *
  * @module page-checks-provided-route
  */
+import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import type {
   PageCheckFinding,
   PageCheckFix,
   PageCheckProvider,
 } from "@nextlyhq/plugin-sdk/blocks";
-import { NextlyError, type PluginRouteContext } from "@nextlyhq/plugin-sdk";
 import { respondList } from "nextly";
 import { z } from "nextly/zod";
 

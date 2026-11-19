@@ -551,10 +551,14 @@ describe("FieldGroupRegistryService", () => {
       await ctx.service.deleteComponent("seo");
 
       expect(ctx.adapter.transaction).toHaveBeenCalledTimes(1);
-      expect(ctx.adapter.executeQuery).toHaveBeenCalled();
-      const sql = ctx.adapter.executeQuery.mock.calls[0][0];
-      expect(sql).toMatch(/DROP TABLE/i);
-      expect(sql).toMatch(/comp_seo/);
+      const statements = ctx.adapter.executeQuery.mock.calls.map(call =>
+        String(call[0])
+      );
+      // The try's wait for a held table is bounded first, on the transaction, by the default
+      // try bound of 5 seconds.
+      expect(statements[0]).toBe("SET LOCAL lock_timeout = '5000ms'");
+      const drop = statements.find(statement => /DROP TABLE/i.test(statement));
+      expect(drop).toMatch(/comp_seo/);
       expect(ctx.adapter.delete).toHaveBeenCalledWith(
         "dynamic_components",
         expect.anything()

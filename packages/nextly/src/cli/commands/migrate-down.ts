@@ -61,6 +61,7 @@ import {
   failedAttemptMayBePartial,
   isConcurrentRun,
 } from "../../domains/schema/migrate/drift-reconcile";
+import { withEntityCoverage } from "../../domains/schema/migrate/entity-shared-rows";
 import {
   readDeletionFacts,
   runDeletions,
@@ -163,6 +164,39 @@ export async function rollbackDeletions(
     (await readFacts?.(runStatements(lists))) ??
     unreadFacts(planned[0]?.liveColumns);
   return runDeletions(lists, dialect, facts);
+}
+
+/**
+ * What each target of `migrate:down` deletes (`rollbackDeletions`), with each
+ * deletion in a table a collection or Single owns belonging to its main
+ * table, and a target dropping an entity's main table listing the entity's
+ * rows in shared tables, counted (`withEntityCoverage`): what the rollback's
+ * consent judges, and its dry run lists. Those rows are listed only for an
+ * entity the rollback removes, where its bookkeeping says which
+ * (`RollbackBookkeeping.removes`), and for each one it drops otherwise.
+ */
+async function coveredRollbackDeletions(
+  planned: readonly Pick<PlannedDown, "statements" | "liveColumns">[],
+  deps: Pick<
+    MigrateDownCoreDeps,
+    "db" | "dialect" | "adapter" | "readDeletionFacts"
+  >,
+  bookkeeping: RollbackBookkeeping | undefined
+): Promise<Deletion[][]> {
+  const removes = bookkeeping?.removes;
+  return withEntityCoverage(
+    await rollbackDeletions(planned, deps.dialect, deps.readDeletionFacts),
+    {
+      db: deps.db,
+      dialect: deps.dialect,
+      adapter: deps.adapter,
+      ...(removes === undefined
+        ? {}
+        : {
+            retires: entity => removes[entity.kind].has(entity.slug),
+          }),
+    }
+  );
 }
 
 /** The facts of a rollback with no reader: nothing live answered, so each question fails closed. */
@@ -953,11 +987,7 @@ async function planAndGuard(
   // Each deletion keeps the file it comes from, by identity, for the listing
   // and for binding an agreement to the file as it stands.
   const sources = new Map<Deletion, DeletionSource>();
-  const perTarget = await rollbackDeletions(
-    planned,
-    deps.dialect,
-    deps.readDeletionFacts
-  );
+  const perTarget = await coveredRollbackDeletions(planned, deps, bookkeeping);
   planned.forEach((p, at) => {
     const source = deletionSource(p.filename, p.statements.join("\n;\n"));
     for (const deletion of perTarget[at] ?? []) sources.set(deletion, source);
@@ -997,11 +1027,7 @@ async function previewRollback(
       : await eventTriggerNotice(deps.readEventTriggers);
   if (notice !== undefined) deps.logger.info(`  ⚠ ${notice}`);
   // Judged as the real run judges them: every target's DOWN as one run.
-  const perTarget = await rollbackDeletions(
-    planned,
-    deps.dialect,
-    deps.readDeletionFacts
-  );
+  const perTarget = await coveredRollbackDeletions(planned, deps, bookkeeping);
   for (const [at, p] of planned.entries()) {
     deps.logger.info(`  • ${p.filename}`);
     const refusal = refusalOf(p, deps);
@@ -1659,7 +1685,12 @@ export async function runMigrateDown(
       },
       fileExists: () => Promise.resolve(true),
       readDownSql,
-      withLock: withMigrateLock,
+      // The lock with the command's own bounds, for a busy SQLite database met while it is taken.
+      withLock: (lockAdapter, lockDialect, work, lockOptions) =>
+        withMigrateLock(lockAdapter, lockDialect, work, {
+          ...lockOptions,
+          busyBounds: bounds,
+        }),
       ...(plugin === undefined
         ? {
             checkAppHistory: ({ recordChecksums }) =>

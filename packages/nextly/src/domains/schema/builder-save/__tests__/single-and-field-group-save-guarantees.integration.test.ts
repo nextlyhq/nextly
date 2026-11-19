@@ -469,7 +469,8 @@ describe.each(getConfiguredTestDialects())(
           () => setNonInteractive(false)
         );
       });
-      expect(created.code, created.said.join("\n")).toBeUndefined();
+      // It ends as a run with nothing to write ends: exit 0, or no exit at all.
+      expect([undefined, 0], created.said.join("\n")).toContain(created.code);
       // A file written here is a change the save left unrecorded; its text says which.
       const written = migrationFiles().filter(f => !filesBefore.includes(f));
       expect(
@@ -525,8 +526,7 @@ describe.each(getConfiguredTestDialects())(
         await nothingLeftToDo(t);
       }, 60_000);
 
-      // Known gap: after any Builder save, migrate:create writes a permissions-only empty migration.
-      it.skip("leaves nothing for migrate:create to write after its create, change and delete", async () => {
+      it("leaves nothing for migrate:create to write after its create, change and delete", async () => {
         const t = await boot();
 
         await kind.create([text("heading")]);

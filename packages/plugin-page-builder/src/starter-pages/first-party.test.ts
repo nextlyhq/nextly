@@ -10,6 +10,7 @@
  */
 import {
   createBlockRegistry,
+  DEFAULT_LIMITS,
   resolveSiteTokens,
   tokenIdentity,
   walkNodes,
@@ -21,6 +22,7 @@ import { describe, expect, it } from "vitest";
 import { siteBreakpoints } from "../site-style";
 
 import { FIRST_PARTY_STARTER_PAGES } from "./first-party";
+import { BUILT_IN_STARTER_FLOOR, starterFit } from "./starter-fit";
 import { registerStarterPagesAtBoot } from "./starter-pages";
 
 const blocks = createBlockRegistry();
@@ -81,9 +83,63 @@ const SITE_VARIABLES = new Set(
 );
 
 describe("the page builder's own starter pages", () => {
+  it("never stop a site starting, however tight its limits: each it can't hold is kept and named in the log", () => {
+    // A site allowing pages four levels deep. The landing, about, contact
+    // and pricing pages nest deeper; each is kept, listed as unavailable, and
+    // said once in the log with how deep it needs and what the site allows.
+    const lines: string[] = [];
+    const registered = registerStarterPagesAtBoot(
+      {
+        config: { plugins: [] } as never,
+        logger: { info: (line: string) => lines.push(line) } as never,
+      },
+      {},
+      FIRST_PARTY_STARTER_PAGES,
+      {
+        blocks,
+        breakpoints: siteBreakpoints(),
+        limits: { ...DEFAULT_LIMITS, maxDepth: 4 },
+      }
+    );
+    expect(registered.map(entry => entry.starter.id)).toEqual(
+      FIRST_PARTY_STARTER_PAGES.map(starter => starter.id)
+    );
+    expect(lines).toEqual([
+      '[page-builder] The starter page "Landing" isn\'t available on this site. Needs 5 levels of nesting; this site allows 4.',
+      '[page-builder] The starter page "About" isn\'t available on this site. Needs 5 levels of nesting; this site allows 4.',
+      '[page-builder] The starter page "Contact" isn\'t available on this site. Needs 6 levels of nesting; this site allows 4.',
+      '[page-builder] The starter page "Pricing" isn\'t available on this site. Needs 6 levels of nesting; this site allows 4.',
+    ]);
+  });
+
+  it("each fit the documented floor, so a site at or above it offers every one", () => {
+    // A starter that grows past the floor fails here, rather than starting to
+    // show as unavailable on sites that set their limits to it.
+    for (const starter of FIRST_PARTY_STARTER_PAGES) {
+      expect(
+        starterFit(starter, { blocks }, BUILT_IN_STARTER_FLOOR),
+        starter.id
+      ).toBeUndefined();
+    }
+  });
+
+  it("have a floor no higher than the engine's defaults, which they are judged against at start-up", () => {
+    // The start-up check uses the defaults and the floor test uses the floor:
+    // a floor above the defaults would let a starter pass one and fail the
+    // other.
+    for (const limit of ["maxDepth", "maxNodes", "maxBytes"] as const) {
+      expect(BUILT_IN_STARTER_FLOOR[limit], limit).toBeLessThanOrEqual(
+        DEFAULT_LIMITS[limit]
+      );
+    }
+  });
+
   it("are all offered, none left out, judged as a site judges them at start-up", () => {
     const registered = registerStarterPagesAtBoot(
-      { config: { plugins: [] } as never },
+      {
+        config: { plugins: [] } as never,
+        logger: { info: () => undefined } as never,
+      },
       {},
       FIRST_PARTY_STARTER_PAGES,
       { blocks, breakpoints: siteBreakpoints() }

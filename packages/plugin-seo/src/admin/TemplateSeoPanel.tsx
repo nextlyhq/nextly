@@ -51,9 +51,9 @@ import {
 } from "../template/rule-text";
 
 import { Code, inSentence, Note, WidthMeter } from "./parts";
-import { AdminLink } from "./section";
 import { PreviewCard } from "./previews";
 import { Row, RowButton } from "./rows";
+import { AdminLink } from "./section";
 import { useTemplateContext } from "./use-template-context";
 
 /** A design's own metadata, as the Page Builder stores it. */

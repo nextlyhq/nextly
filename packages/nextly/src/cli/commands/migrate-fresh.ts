@@ -357,6 +357,8 @@ export async function runMigrateFresh(
           warn: message => logger.warn(message),
           info: message => logger.info(message),
         },
+        // The command's own bounds, for a busy SQLite database met while the lock is taken.
+        busyBounds: bounds,
       }
     );
     // Only a wait given `isSettled` ends without running, and this one is not.

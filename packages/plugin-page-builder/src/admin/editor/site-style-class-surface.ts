@@ -10,6 +10,7 @@ import {
   withFluidSizesBack,
   withoutStaleFluidSizes,
   type NamedClass,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import {
   sharedStyleNameTaken,
@@ -17,9 +18,21 @@ import {
   type ClassRenameOutcome,
   type SharedStyleChange,
 } from "@nextlyhq/builder/shell";
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
-import { classOverrideOf, resolveSiteStyle } from "../../site-style";
+import {
+  classOverrideOf,
+  configuredClassesAt,
+  resolveSiteStyle,
+  type SiteStyleData,
+} from "../../site-style";
 import { readSiteStyleRecord } from "../../site-style-record";
 import { useSaveSiteStyle, type SiteStyleReplayed } from "../site-style-client";
 
@@ -155,6 +168,11 @@ function classReadFailed(pending: boolean, error: unknown): boolean {
   return !pending && error !== null && error !== undefined;
 }
 
+/** Which absence a library that is not known is in: failed, or not yet read. */
+function classAbsence(failed: boolean): ClassSurface["absence"] {
+  return failed ? "failed" : "pending";
+}
+
 /**
  * The empty library, as ONE value rather than a fresh array each time.
  *
@@ -185,6 +203,38 @@ function readableClassLibrary(
   // `undefined` above and `NO_CLASSES` here stay distinct: the first is a read
   // that has not answered, the second is one that answered with nothing.
   return siteStyle?.classes ?? NO_CLASSES;
+}
+
+/**
+ * The site's code classes as the library holds them: across the range the
+ * merged tokens give, the same derivation the merge makes.
+ *
+ * Every write compares its list with these to store only what differs, and
+ * an undo puts a code style back as these give it. Compared with the code's
+ * own list instead, a code text style the site's range moved would differ
+ * from it, and the first save of any class list would store it as the
+ * site's override, masking the code from then on.
+ *
+ * Kept while the range's two widths are the same, so a fresh read of the
+ * same range does not hand every writer a new list.
+ */
+function useConfiguredClasses(
+  config: Pick<SiteStyleData, "classes" | "tokens"> | undefined,
+  /** The merged style the library is read from, whose tokens hold the range. */
+  merged: { tokens?: SiteTokenSet } | undefined
+): readonly NamedClass[] | undefined {
+  const min = merged?.tokens?.fluidRange?.min;
+  const max = merged?.tokens?.fluidRange?.max;
+  return useMemo(
+    () =>
+      configuredClassesAt(
+        config,
+        min === undefined || max === undefined
+          ? undefined
+          : { fluidRange: { min, max } }
+      ),
+    [config, min, max]
+  );
 }
 
 /** What {@link useClassSurface} returns, and what the editor hands on as its `classes`. */
@@ -228,18 +278,20 @@ export type ClassSurface = {
 };
 
 export function useClassSurface(
-  siteStyle: { classes?: readonly NamedClass[] } | undefined,
+  siteStyle:
+    | { classes?: readonly NamedClass[]; tokens?: SiteTokenSet }
+    | undefined,
   pending: boolean,
   error: unknown,
   /** The site's own config, whose classes storage layers over. */
-  config: { classes?: readonly NamedClass[] } | undefined
+  config: Pick<SiteStyleData, "classes" | "tokens"> | undefined
 ): ClassSurface {
   // Derived outside the hook, so this decides nothing and only distributes what
   // was decided — which is what keeps the component rendering the inspector
   // free of the branch.
   const failed = classReadFailed(pending, error);
   const library = readableClassLibrary(siteStyle, pending, failed);
-  const configured = config?.classes;
+  const configured = useConfiguredClasses(config, siteStyle);
   /*
    * ONE writer for both edits. Creating and renaming are the same
    * read-modify-write over the same list, so two independent queues let a
@@ -313,7 +365,7 @@ export function useClassSurface(
      * finish, and a surface that goes on saying "loading" describes a state
      * the site is not in — the distinction the tokens studio already draws.
      */
-    absence: failed ? ("failed" as const) : ("pending" as const),
+    absence: classAbsence(failed),
     /*
      * Withheld while the library is unknown. A failed read leaves
      * `useSiteStyle` answering with the config defaults alone, so creating

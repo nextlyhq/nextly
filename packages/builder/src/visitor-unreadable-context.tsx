@@ -15,7 +15,7 @@ import type { VisitorUnreadableBinding } from "@nextlyhq/blocks-engine";
 import { EyeOff } from "lucide-react";
 import { createContext, useContext, type ReactNode } from "react";
 
-import type { ContentServices } from "./content-controls";
+import type { ContentServices } from "./inspector/content/content-controls";
 import { VisitorUnreadableLine } from "./visitor-unreadable-badges";
 
 /** The answer before a host gives one: nothing marked. */

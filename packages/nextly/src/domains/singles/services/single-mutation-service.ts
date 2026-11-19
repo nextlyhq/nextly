@@ -20,7 +20,10 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  TransactionContext,
+  TransactionOptions,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import {
   askEachLanguage,
@@ -300,13 +303,16 @@ import {
 import {
   assertVersionNamesEvery,
   certainlyStale,
+  type DecodedVersion,
   type DocumentRevisionState,
   givenOf,
   judgedLanguage,
   judgedLanguageStates,
   languagesJudged,
+  movedSinceJudged,
   type PartState,
   poolRevisionReader,
+  readDocumentRevision,
   refuseIfLanguageMoved,
   refuseIfMainMoved,
   releaseRunExemptFor,
@@ -314,6 +320,7 @@ import {
   staleVersionErrorFor,
   type VersionCheck,
   versionCheckFor,
+  versionOfRevision,
 } from "../../versions/stale-version";
 import {
   resolveComponentFieldMap,
@@ -568,6 +575,45 @@ function fieldsWrittenIn(
     }
   }
   return written;
+}
+
+/**
+ * What a Single save is judged with: its values, the Single's fields, and who
+ * makes it. Kept as one value so the judgement before the transaction and the
+ * one under the row lock are the same call.
+ */
+/**
+ * How many times an overwrite is judged and written while its Single keeps
+ * moving between the two, before it is refused with nothing saved.
+ */
+const OVERWRITE_JUDGEMENT_ATTEMPTS = 3;
+
+/** What an overwrite refused that way is told. */
+const OVERWRITE_KEPT_CHANGING =
+  "Another save kept changing this page while yours was being checked, so nothing was saved. Try again.";
+
+interface SaveJudgement {
+  slug: string;
+  data: Record<string, unknown>;
+  fieldConfigs: DynamicSingleRecord["fields"];
+  localizedFieldNames: ReadonlySet<string>;
+  enforceLocalizedRequired: boolean;
+  /** The Single's stored document id, which a read rule is handed. */
+  entryId: string;
+  /**
+   * The language the save is in, where the Single is kept per language;
+   * validators reading what it already stores read this language's value.
+   */
+  writeLocale: string | undefined;
+  user: UpdateSingleOptions["user"];
+  /** Who the refusal is told to, with the scope a key arrived with. */
+  reader: IssueReader;
+  /**
+   * The paths that hold a value kept from the stored row because a rule
+   * denies it to this writer; the whole-number rule skips them — a legacy
+   * stored fraction under one is the row's own content, not this save's.
+   */
+  storedProvenancePaths?: ReadonlySet<string>;
 }
 
 /**
@@ -2371,30 +2417,13 @@ export class SingleMutationService extends BaseService {
    * semantics, so absent keys stay untouched and provided keys must hold. An
    * issue on a field the caller may not read is told without naming it or
    * its value.
+   *
+   * Judged on the pool, never inside the save's transaction: a field type's
+   * validator may read what another Single defines (the page builder's
+   * shared styles, say), and inside the transaction that read would wait on
+   * the pool for the connection the transaction holds.
    */
-  private async assertSaveValid(args: {
-    slug: string;
-    data: Record<string, unknown>;
-    fieldConfigs: DynamicSingleRecord["fields"];
-    localizedFieldNames: ReadonlySet<string>;
-    enforceLocalizedRequired: boolean;
-    /** The Single's stored document id, which a read rule is handed. */
-    entryId: string;
-    /**
-     * The language the save is in, where the Single is kept per language;
-     * validators reading what it already stores read this language's value.
-     */
-    writeLocale: string | undefined;
-    user: UpdateSingleOptions["user"];
-    /** Who the refusal is told to, with the scope a key arrived with. */
-    reader: IssueReader;
-    /**
-     * The paths that hold a value kept from the stored row because a rule
-     * denies it to this writer; the whole-number rule skips them — a legacy
-     * stored fraction under one is the row's own content, not this save's.
-     */
-    storedProvenancePaths?: ReadonlySet<string>;
-  }): Promise<void> {
+  private async assertSaveValid(args: SaveJudgement): Promise<void> {
     const { slug, fieldConfigs } = args;
     const validationView = relationshipValidationView(args.data, fieldConfigs);
     const judgedIssues = await validateEntryData(
@@ -2407,7 +2436,7 @@ export class SingleMutationService extends BaseService {
           ? { storedProvenancePaths: args.storedProvenancePaths }
           : {}),
         // A component inside a group or repeater is judged here, since no
-        // component write reaches it. On the pool, as this is.
+        // component write reaches it.
         componentFields: await containedComponentResolver(
           fieldConfigs,
           async componentSlug =>
@@ -2417,7 +2446,6 @@ export class SingleMutationService extends BaseService {
         ),
         localizedFieldNames: args.localizedFieldNames,
         enforceLocalizedRequired: args.enforceLocalizedRequired,
-        // Before the transaction opens, so on the pool.
         write: {
           ...storedFieldRead.entryWriteContext({
             kind: "single",
@@ -2455,6 +2483,29 @@ export class SingleMutationService extends BaseService {
     if (validationIssues.length > 0) {
       throw NextlyError.validation({ errors: validationIssues });
     }
+  }
+
+  /**
+   * The Single's version as an overwrite is about to be judged on it, read on
+   * the pool BEFORE the judgement, so a save that lands after the read moves
+   * it: compared under the row lock with the version as committed then
+   * (`staleParts`, as a `_rev` is), a version that moved means the values
+   * were judged against a Single that has since changed. Its own row and the
+   * languages the save is judged on, as `_rev` names them; undefined where
+   * the Single has no row yet.
+   */
+  private async versionJudgedAgainst(row: {
+    readonly table: string;
+    readonly id: string;
+    readonly languages?: { table: string; locales: readonly string[] };
+  }): Promise<DecodedVersion | undefined> {
+    const state = await readDocumentRevision(poolRevisionReader(this.adapter), {
+      dialect: this.adapter.dialect,
+      table: row.table,
+      id: row.id,
+      ...(row.languages ? { languages: row.languages } : {}),
+    });
+    return state === undefined ? undefined : versionOfRevision(state);
   }
 
   /**
@@ -3173,9 +3224,14 @@ export class SingleMutationService extends BaseService {
       // 6.2. Enforce the schema's declared rules on the server — the same
       // gate the collection write paths run. Singles updates are PATCH
       // semantics: absent keys stay untouched, provided keys must hold.
-      await this.assertSaveValid({
+      // Kept, so an overwrite whose Single moved before its write can be
+      // judged again (see the transaction below). The values judged are a
+      // copy: the write changes its own data in place before then (a
+      // password hashed, components extracted), and a judgement again is of
+      // the values as sent, as the first was.
+      const saveJudgement: SaveJudgement = {
         slug,
-        data: currentData,
+        data: detachData(currentData),
         fieldConfigs,
         localizedFieldNames,
         enforceLocalizedRequired,
@@ -3191,7 +3247,30 @@ export class SingleMutationService extends BaseService {
           authenticatedScope: options.authenticatedScope,
           grants: writeGrants,
         },
-      });
+      };
+      // An overwrite carries no version of its own to be refused by, so the
+      // version it is judged against is read here, before the judgement, and
+      // compared under the row lock: one that moved means another save landed
+      // after these values were judged, and they are judged again rather
+      // than written over a Single they were never judged against.
+      // Its own row, and the language it writes even where it carries no
+      // `_rev` to name one: a save of that language's translated values
+      // moves only that language's version, not the row's.
+      const overwriteLanguages =
+        judgedLanguages ??
+        (companion && companionPhysicallyExists && writeLocale !== undefined
+          ? { table: companion.companionTableName, locales: [writeLocale] }
+          : undefined);
+      const judgedRow = {
+        table: singleMeta.tableName,
+        id: String(documentId),
+        ...(overwriteLanguages ? { languages: overwriteLanguages } : {}),
+      };
+      let judgedVersion =
+        versionCheck.kind === "overwrite"
+          ? await this.versionJudgedAgainst(judgedRow)
+          : undefined;
+      await this.assertSaveValid(saveJudgement);
 
       // 6.3. A publish promotes the held pending change, and that content has
       // been judged only once, when it was SAVED. The gate that judges it
@@ -3667,6 +3746,49 @@ export class SingleMutationService extends BaseService {
         this.hookRegistry,
         hookCollection
       );
+      // Set by an attempt whose overwrite found its Single moved since the
+      // values were judged (see the check after the row lock).
+      let judgedVersionMoved = false;
+      // The save's transaction, run again for an overwrite whose Single moved
+      // after its values were judged: judged again, on the pool, against the
+      // Single as it is now, then written in a new attempt; at most
+      // OVERWRITE_JUDGEMENT_ATTEMPTS times, then refused with nothing saved.
+      // Only the judgement and the transaction run again: the hooks before
+      // them ran once and are not repeated, and nothing after the commit runs
+      // until one attempt commits.
+      const transact = async <T>(
+        work: (tx: TransactionContext) => Promise<T>,
+        retries: TransactionOptions
+      ): Promise<T> => {
+        for (let attempt = 1; ; attempt += 1) {
+          judgedVersionMoved = false;
+          try {
+            return await this.adapter.transaction(work, retries);
+          } catch (error) {
+            if (!judgedVersionMoved) throw error;
+            if (attempt >= OVERWRITE_JUDGEMENT_ATTEMPTS) {
+              throw NextlyError.conflict({
+                message: OVERWRITE_KEPT_CHANGING,
+                logContext: {
+                  slug,
+                  reason: "overwrite-kept-changing",
+                  attempt,
+                },
+              });
+            }
+          }
+          // By the Single's row as the attempt found it: a first save judged
+          // a document it had built but not yet stored, and another request's
+          // insert, which it adopted, holds the Single under that row's id.
+          const row = existingDoc?.id ?? judgedRow.id;
+          judgedVersion = await this.versionJudgedAgainst({
+            ...judgedRow,
+            id: String(row),
+          });
+          saveJudgement.entryId = String(row);
+          await this.assertSaveValid(saveJudgement);
+        }
+      };
       try {
         // Retry the whole update+capture transaction on a version_no allocation
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
@@ -3677,7 +3799,7 @@ export class SingleMutationService extends BaseService {
         // phase. Its branching is that pipeline's own; it comes down by moving
         // phases into units of their own, as `assemblesSaveDocuments` is.
         // fallow-ignore-next-line complexity
-        updatedRows = await this.adapter.transaction(async tx => {
+        updatedRows = await transact(async tx => {
           // This attempt's component values. A publish merges the held
           // draft's into them, and a retry after a lost race must start again
           // from the caller's own values: the draft may have moved on since.
@@ -3910,6 +4032,39 @@ export class SingleMutationService extends BaseService {
             },
             staleWrite
           );
+          // An overwrite's values were judged on the pool against the Single
+          // as it stood then. Another save in between (a manager's page code,
+          // say) would otherwise be replaced by values judged against what it
+          // replaced, its permission never asked. So the version they were
+          // judged against is compared with the Single as committed now, as a
+          // `_rev` is; one that moved ends this attempt, and the save is
+          // judged again on the pool (see the loop below). A row this save
+          // inserted moved for no one else.
+          if (
+            versionCheck.kind === "overwrite" &&
+            !insertedHere &&
+            movedSinceJudged(
+              judgedVersion,
+              // The same languages it was judged on: the write's own, read
+              // here where `_rev` named none for the read above.
+              overwriteLanguages === judgedLanguages
+                ? mainBefore
+                : await readDocumentRevision(tx, {
+                    dialect: this.adapter.dialect,
+                    table: singleMeta.tableName,
+                    id: existingDoc.id,
+                    ...(overwriteLanguages
+                      ? { languages: overwriteLanguages }
+                      : {}),
+                  })
+            )
+          ) {
+            judgedVersionMoved = true;
+            throw NextlyError.conflict({
+              message: OVERWRITE_KEPT_CHANGING,
+              logContext: { slug, reason: "overwrite-judged-version-moved" },
+            });
+          }
           // A conditional write is judged here, under the lock, against the
           // value as committed now (a row it inserted, as absent); a refused
           // one writes nothing. Thrown as is, and unwrapped below.

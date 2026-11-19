@@ -10,7 +10,7 @@ import type { VisitorUnreadableBinding } from "@nextlyhq/blocks-engine";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { MediaSummary } from "./content-controls";
+import type { MediaSummary } from "./inspector/content/content-controls";
 import {
   VisitorUnreadableLine,
   tipRunsFromStart,

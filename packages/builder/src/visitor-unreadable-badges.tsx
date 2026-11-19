@@ -82,9 +82,12 @@ import {
   overlaySpaceOf,
   type OverlaySpace,
 } from "./canvas/geometry-dom";
-import { useMediaSummary, type MediaSummary } from "./content-controls";
 import { isHTMLElement } from "./dom-kind";
 import type { Rect } from "./geometry";
+import {
+  useMediaSummary,
+  type MediaSummary,
+} from "./inspector/content/content-controls";
 
 /** The badge's words: what the author needs to know, at a glance. */
 const VISITOR_UNREADABLE_WORDS = "Visitors won't see this";
