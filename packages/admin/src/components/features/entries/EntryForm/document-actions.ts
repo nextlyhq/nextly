@@ -684,6 +684,15 @@ function needsApprovalReason(review: ReviewActionState): string {
 }
 
 /**
+ * Whether Publish is held for an approval, as opposed to held while the
+ * review state is not known (`publishReason`): only the first opens "Choose
+ * what to publish…", which lists what an approval waits on.
+ */
+function awaitsApproval(review: ReviewActionState): boolean {
+  return review.publishReason === undefined;
+}
+
+/**
  * What leads where a workflow holds publishing, or undefined to leave the
  * choice to the rules every document follows:
  *
@@ -719,7 +728,9 @@ function reviewPrimary(state: DocumentActionState):
       id: "publish",
       label: publishLabel(state),
       reason: needsApprovalReason(state.review),
-      heldForReview: true,
+      // Held for an approval only once the review state is read: while it is
+      // being read, or could not be, the hold is no approval's to explain.
+      heldForReview: awaitsApproval(state.review),
     };
   }
   return undefined;
@@ -764,8 +775,11 @@ function reviewActions(
           id: "publish",
           label: publishLabel(state),
           placement: "toolbar",
-          // The review's hold, unless a past version holds it first.
-          ...(blocked === undefined ? { heldForReview: true as const } : {}),
+          // The review's hold, unless a past version holds it first, or the
+          // review state is not read yet.
+          ...(blocked === undefined && awaitsApproval(review)
+            ? { heldForReview: true as const }
+            : {}),
         },
         blocked ?? needsApprovalReason(review)
       )
