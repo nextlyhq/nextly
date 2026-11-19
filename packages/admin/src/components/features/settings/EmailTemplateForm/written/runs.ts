@@ -124,11 +124,6 @@ export class ChipNode extends DecoratorNode<ReactNode> {
     return true;
   }
 
-  /** Set the text it shows when its variable has no value, or none. */
-  setFallback(fallback: string | undefined): void {
-    this.getWritable().__fallback = fallback;
-  }
-
   /** Its friendly name and mark, and its fallback dialog. */
   decorate(editor: LexicalEditor): ReactNode {
     // By key, not by this node: the editor clones nodes as it edits, and the
@@ -140,7 +135,9 @@ export class ChipNode extends DecoratorNode<ReactNode> {
       onFallback: fallback =>
         editor.update(() => {
           const node = $getNodeByKey(key);
-          if (node instanceof ChipNode) node.setFallback(fallback);
+          // The text it shows when its variable has no value, or none.
+          if (node instanceof ChipNode)
+            node.getWritable().__fallback = fallback;
         }),
     });
   }
