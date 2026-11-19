@@ -24,9 +24,6 @@ export interface PartPair {
   isError: boolean;
 }
 
-/** The server baseline a part with no approval is compared with. */
-const PUBLISHED_BASELINE = "published";
-
 /**
  * Why the server has nothing to compare a baseline with, in its words: a
  * refusal it names on `baseline`. Undefined for any other failure.
@@ -38,10 +35,10 @@ function baselineRefusalOf(error: unknown): string | undefined {
 
 /**
  * The pair a part is reviewed by. The version under review is the part's
- * newest, read from its own rows of its versions (a language's, or, for the
- * shared part, the document's); it is compared with the part's approval, or
- * else with what the server resolves as published in that part. Nothing is
- * read while `enabled` is false.
+ * newest (a language's own, or for the shared part the document's newest in
+ * any language, as `reviewPlan` reads it); it is compared with the part's
+ * approval, or else with what the server resolves as published, the server
+ * pairing within one language. Nothing is read while `enabled` is false.
  */
 export function usePartPair(
   scope: VersionScope,
@@ -59,11 +56,11 @@ export function usePartPair(
     listed === undefined || part === undefined
       ? undefined
       : reviewPlan(listed, part.part, part.approval?.versionNo ?? null);
-  const published = plan?.kind === "published" ? plan : undefined;
+  const server = plan?.kind === "server" ? plan : undefined;
   const baseline = useBaselineDiff({
     scope,
-    baseline: published === undefined ? null : PUBLISHED_BASELINE,
-    ...(published?.to === undefined ? {} : { to: published.to }),
+    baseline: server === undefined ? null : server.baseline,
+    ...(server?.to === undefined ? {} : { to: server.to }),
     ...(locale === undefined ? {} : { locale }),
     enabled,
   });
@@ -89,17 +86,17 @@ function pairOf(
     case "unchanged":
     case "none":
       return plan;
-    case "published":
+    case "server":
       if (answer !== undefined) {
         return {
           kind: "pair",
           from: answer.from,
           to: answer.to,
-          since: "published",
-          seededBy: PUBLISHED_BASELINE,
+          since: plan.since,
+          seededBy: plan.baseline,
         };
       }
-      // Refused: nothing published in the part to compare with.
+      // Refused: nothing published or approved in the part to compare with.
       if (refusal === undefined) return undefined;
       return plan.to === undefined
         ? { kind: "none" }

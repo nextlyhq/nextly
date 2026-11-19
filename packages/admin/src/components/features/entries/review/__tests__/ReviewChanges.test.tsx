@@ -103,7 +103,7 @@ let published: Record<string, number> = {};
 
 beforeEach(() => {
   vi.clearAllMocks();
-  published = { en: 5, "": 2 };
+  published = { en: 5, es: 6, "": 2 };
   // The server's `published` baseline, in the part the request names.
   baselineSpy.mockImplementation(
     (
@@ -111,7 +111,12 @@ beforeEach(() => {
       baseline: string,
       opts: { to?: number; locale?: string }
     ) => {
-      const from = published[opts.locale ?? ""];
+      // A named version carries its own language, as the server takes it:
+      // version 8 is a Spanish save.
+      const from =
+        opts.locale === undefined && opts.to === 8
+          ? published.es
+          : published[opts.locale ?? ""];
       if (baseline !== "published" || from === undefined) {
         return Promise.reject(
           Object.assign(new Error("Validation failed."), {
@@ -293,6 +298,26 @@ describe("ReviewChanges", () => {
     await waitFor(() =>
       expect(baselineSpy).toHaveBeenCalledWith(SCOPE, "published", { to: 4 })
     );
+  });
+
+  it("reviews the shared fields in the document's newest version, in any language", async () => {
+    // A Spanish save newer than any shared-only row carries the shared
+    // fields too: it is the shared part's version under review.
+    listing([
+      version(8, "draft", "es"),
+      version(4, "draft", null),
+      version(2, "published", null),
+    ]);
+
+    render(
+      <ReviewChanges
+        scope={SCOPE}
+        parts={[inReview({ part: null, version: "s8" })]}
+      />
+    );
+
+    expect(await screen.findByText("comparing 6 with 8")).toBeInTheDocument();
+    expect(baselineSpy).toHaveBeenCalledWith(SCOPE, "published", { to: 8 });
   });
 
   it("offers no approval of every language where only one part waits", () => {
