@@ -143,20 +143,30 @@ function partsOf(localized: boolean, locales: readonly string[]) {
   return [null, ...(localized ? locales : [])] as (string | null)[];
 }
 
-/** The unmoved parts of one collection past `after`, at most `limit`, in its order. */
-async function readScope(
+/** What reading one collection's unmoved parts needs, settled once per read. */
+interface ScopeReading {
+  dialect: SupportedDialect;
+  /** The collection's main table, and its id, creation and status columns on it. */
+  main: SQL;
+  columns: { id: SQL; createdAt: SQL; status: SQL };
+  /** Each part of a document, in the list's order, and the condition it is unmoved by. */
+  parts: (string | null)[];
+  unmoved: SQL[];
+}
+
+/**
+ * How to read `scope`'s unmoved parts, or null where it has none: a collection gone from the
+ * registry holds nothing, and one without the draft/published lifecycle has every part live.
+ */
+async function scopeReading(
   adapter: DrizzleAdapter,
-  scope: UnmovedScope,
-  limit: number,
-  after: WaitingPosition | undefined
-): Promise<Omit<UnmovedPart, "seq">[]> {
+  scope: UnmovedScope
+): Promise<ScopeReading | null> {
   const entity = await entityOf({
     scopeKind: "collection",
     scopeSlug: scope.slug,
   });
-  // A collection gone from the registry holds nothing; one without the draft/published lifecycle
-  // has every part live, so none stands unmoved.
-  if (!entity || entity.status !== true) return [];
+  if (!entity || entity.status !== true) return null;
   const dialect = adapter.dialect;
   const localization = appLocalization();
   const locales = (localization?.locales ?? []).map(locale => locale.code);
@@ -184,53 +194,89 @@ async function readScope(
       part,
     })
   );
-  const past = pastCondition(dialect, scope.slug, columns, after);
+  return { dialect, main, columns, parts, unmoved };
+}
+
+/**
+ * The documents with an unmoved part past `past`, in the collection's order: one more than `limit`,
+ * since the position's own document may have every part behind it and each other holds at least
+ * one. Each row names its id, the millisecond it was created in, and which parts are unmoved.
+ */
+function readScopeRows(
+  adapter: DrizzleAdapter,
+  reading: ScopeReading,
+  limit: number,
+  past: SQL | undefined
+): Promise<Record<string, unknown>[]> {
+  const { dialect, main, columns, unmoved } = reading;
   const where = sql.join(
-    [
-      sql`(${sql.join(unmoved, sql` OR `)})`,
-      ...(past.where ? [past.where] : []),
-    ],
+    [sql`(${sql.join(unmoved, sql` OR `)})`, ...(past ? [past] : [])],
     sql` AND `
   );
   const bucket = createdBucket(dialect, columns.createdAt);
-  // One document more than the parts asked for: the position's own document may have every part
-  // behind it, and each other document holds at least one.
-  const rows = await adapter.queryStatement<Record<string, unknown>>(
-    sql`SELECT ${columns.id} AS ${sql.identifier("id")}, ${bucket} AS ${sql.identifier("created_at")}, ${sql.join(
-      unmoved.map(
-        (condition, index) =>
-          sql`CASE WHEN ${condition} THEN 1 ELSE 0 END AS ${sql.identifier(`unmoved_${index}`)}`
-      ),
-      sql`, `
-    )} FROM ${main} WHERE ${where} ORDER BY ${bucket} ASC, ${columns.id} ASC LIMIT ${limit + 1}`
+  const flags = sql.join(
+    unmoved.map(
+      (condition, index) =>
+        sql`CASE WHEN ${condition} THEN 1 ELSE 0 END AS ${sql.identifier(`unmoved_${index}`)}`
+    ),
+    sql`, `
   );
-  const behind =
-    after?.source === "unmoved" ? parts.indexOf(after.part) : undefined;
-  const found: Omit<UnmovedPart, "seq">[] = [];
-  for (const row of rows) {
-    const entryId = String(row.id);
-    const createdAt = createdAtOf(dialect, row.created_at);
-    if (createdAt === undefined) continue;
-    for (const [index, part] of parts.entries()) {
-      if (Number(row[`unmoved_${index}`]) !== 1) continue;
-      // The position's document: only its parts after the position's part.
-      if (
-        entryId === past.boundary &&
-        behind !== undefined &&
-        index <= behind
-      ) {
-        continue;
-      }
-      found.push({
-        scopeSlug: scope.slug,
-        entryId,
-        part,
-        stage: scope.stage,
-        createdAt,
-      });
-    }
-  }
-  return found.slice(0, limit);
+  return adapter.queryStatement<Record<string, unknown>>(
+    sql`SELECT ${columns.id} AS ${sql.identifier("id")}, ${bucket} AS ${sql.identifier("created_at")}, ${flags} FROM ${main} WHERE ${where} ORDER BY ${bucket} ASC, ${columns.id} ASC LIMIT ${limit + 1}`
+  );
+}
+
+/**
+ * The unmoved parts one read row names, in the list's order. On the position's own document
+ * (`boundary`), only the parts after the position's part (`behind`, its place among the parts).
+ */
+function partsOfRow(
+  row: Record<string, unknown>,
+  reading: ScopeReading,
+  scope: UnmovedScope,
+  boundary: { entryId: string; behind: number } | undefined
+): Omit<UnmovedPart, "seq">[] {
+  const entryId = String(row.id);
+  const createdAt = createdAtOf(reading.dialect, row.created_at);
+  if (createdAt === undefined) return [];
+  const after = boundary?.entryId === entryId ? boundary.behind : -1;
+  return reading.parts
+    .map((part, index) => ({ part, index }))
+    .filter(
+      ({ index }) => index > after && Number(row[`unmoved_${index}`]) === 1
+    )
+    .map(({ part }) => ({
+      scopeSlug: scope.slug,
+      entryId,
+      part,
+      stage: scope.stage,
+      createdAt,
+    }));
+}
+
+/** The unmoved parts of one collection past `after`, at most `limit`, in its order. */
+async function readScope(
+  adapter: DrizzleAdapter,
+  scope: UnmovedScope,
+  limit: number,
+  after: WaitingPosition | undefined
+): Promise<Omit<UnmovedPart, "seq">[]> {
+  const reading = await scopeReading(adapter, scope);
+  if (reading === null) return [];
+  const past = pastCondition(
+    reading.dialect,
+    scope.slug,
+    reading.columns,
+    after
+  );
+  const rows = await readScopeRows(adapter, reading, limit, past.where);
+  const boundary =
+    past.boundary !== undefined && after?.source === "unmoved"
+      ? { entryId: past.boundary, behind: reading.parts.indexOf(after.part) }
+      : undefined;
+  return rows
+    .flatMap(row => partsOfRow(row, reading, scope, boundary))
+    .slice(0, limit);
 }
 
 /**

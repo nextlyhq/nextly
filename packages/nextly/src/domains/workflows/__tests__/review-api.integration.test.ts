@@ -2412,6 +2412,85 @@ describe.each(getConfiguredTestDialects())(
         ]);
       });
 
+      it("walks one document's unmoved parts across pages, from the part it stopped at", async () => {
+        // An unmoved Minute waits in its shared part, English and Arabic (Spanish is unreadable).
+        // Walked two at a time, the second page goes on from the document's English part: Arabic
+        // alone, neither part of the first page again.
+        current = await bootSteps(dialect, undefined, {
+          collections: [minutes],
+          perLanguageStorage: true,
+        });
+        await person(app(), "pia", [
+          ["read", MINUTES],
+          ["publish", MINUTES],
+        ]);
+        const PIA: Who = { kind: "person", id: "pia" };
+        const id = await entry(app(), MINUTES);
+        const partsOfPage = (page: { items: Doc[] }) =>
+          page.items.map(item => ({
+            entryId: (item.document as Doc).entryId,
+            part: item.part,
+          }));
+
+        const first = await door.waiting(PIA, { limit: 2, page: 1 });
+        const second = await door.waiting(PIA, {
+          limit: 2,
+          before: String(first.meta.nextBefore),
+        });
+
+        expect(partsOfPage(first)).toEqual([
+          { entryId: id, part: null },
+          { entryId: id, part: "en" },
+        ]);
+        expect(partsOfPage(second)).toEqual([{ entryId: id, part: "ar" }]);
+        expect(second.meta.nextBefore).toBeUndefined();
+      });
+
+      it("walks unmoved parts of two collections created in one second, each once", async () => {
+        // Two Briefs and a Minute created in the same second, in collections that both start in
+        // Draft: tied on time, they are ordered by collection, then document, then part. Walked
+        // one at a time, every part comes once and the walk is the whole list.
+        current = await bootSteps(dialect, undefined, {
+          collections: [briefs, minutes],
+          perLanguageStorage: true,
+        });
+        await person(app(), "pia", [
+          ["read", BRIEFS],
+          ["publish", BRIEFS],
+          ["read", MINUTES],
+          ["publish", MINUTES],
+        ]);
+        const PIA: Who = { kind: "person", id: "pia" };
+        const moment = new Date(Date.UTC(2026, 10, 1, 10, 0, 0));
+        const briefIds = [
+          await entry(app(), BRIEFS),
+          await entry(app(), BRIEFS),
+        ];
+        const minute = await entry(app(), MINUTES);
+        await createdAtOf(app(), BRIEFS, briefIds, moment);
+        await createdAtOf(app(), MINUTES, [minute], moment);
+        const keysOf = (page: { items: Doc[] }) =>
+          page.items.map(
+            item => `${(item.document as Doc).entryId}:${String(item.part)}`
+          );
+
+        let page = await door.waiting(PIA, { limit: 1, page: 1 });
+        const walked = keysOf(page);
+        for (let pages = 1; page.meta.nextBefore !== undefined; pages += 1) {
+          expect(pages, "the walk ends").toBeLessThan(10);
+          page = await door.waiting(PIA, {
+            limit: 1,
+            before: String(page.meta.nextBefore),
+          });
+          walked.push(...keysOf(page));
+        }
+
+        const whole = await door.waiting(PIA, { page: 1, limit: 50 });
+        expect(new Set(walked).size, "no part comes twice").toBe(walked.length);
+        expect(walked).toEqual(keysOf(whole));
+        expect(walked).toHaveLength(5);
+      });
+
       it("names a part's last move: its latest step, by whom, from where to where, with the comment", async () => {
         current = await bootSteps(dialect);
         await people();

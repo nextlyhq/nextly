@@ -35,26 +35,52 @@ export function rowsByRequestedId<Row>(
   idOf: (row: Row) => string,
   foldsCase: boolean
 ): Map<string, Row[]> {
-  const exact = new Map<string, Row[]>();
-  for (const row of rows) {
-    const id = idOf(row);
-    const own = exact.get(id);
-    if (own) own.push(row);
-    else exact.set(id, [row]);
-  }
-  // The one stored id each case-folded spelling names, or null where two stored ids share it.
-  const folded = new Map<string, string | null>();
-  if (foldsCase) {
-    for (const id of exact.keys()) {
-      const key = id.toLowerCase();
-      folded.set(key, folded.has(key) ? null : id);
-    }
-  }
+  const byStoredId = groupedByStoredId(rows, idOf);
+  const folded = foldsCase
+    ? storedIdsByFoldedCase(byStoredId.keys())
+    : new Map<string, string | null>();
   const found = new Map<string, Row[]>();
   for (const id of new Set(requested)) {
-    const stored = exact.has(id) ? id : folded.get(id.toLowerCase());
-    const own = typeof stored === "string" ? exact.get(stored) : undefined;
+    const stored = storedIdNamed(id, byStoredId, folded);
+    const own = stored === undefined ? undefined : byStoredId.get(stored);
     if (own) found.set(id, own);
   }
   return found;
+}
+
+/** `rows` by their stored id, a row returned more than once kept under its one id. */
+function groupedByStoredId<Row>(
+  rows: readonly Row[],
+  idOf: (row: Row) => string
+): Map<string, Row[]> {
+  const grouped = new Map<string, Row[]>();
+  for (const row of rows) {
+    const id = idOf(row);
+    const own = grouped.get(id);
+    if (own) own.push(row);
+    else grouped.set(id, [row]);
+  }
+  return grouped;
+}
+
+/** The one stored id each case-folded spelling names, or null where two stored ids share it. */
+function storedIdsByFoldedCase(
+  storedIds: Iterable<string>
+): Map<string, string | null> {
+  const folded = new Map<string, string | null>();
+  for (const id of storedIds) {
+    const key = id.toLowerCase();
+    folded.set(key, folded.has(key) ? null : id);
+  }
+  return folded;
+}
+
+/** The stored id `id` names: itself where stored, else the one stored id of its folded case. */
+function storedIdNamed(
+  id: string,
+  byStoredId: ReadonlyMap<string, unknown>,
+  folded: ReadonlyMap<string, string | null>
+): string | undefined {
+  if (byStoredId.has(id)) return id;
+  return folded.get(id.toLowerCase()) ?? undefined;
 }
