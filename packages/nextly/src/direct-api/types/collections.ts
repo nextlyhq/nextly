@@ -24,7 +24,9 @@ import type {
 /**
  * What a row of a list read carries beside its fields when the read asks for its review state
  * (`reviewState: true`): each part where it stands in the collection's workflow. Absent where the
- * read did not ask, for a visitor, and for a collection no workflow holds.
+ * read did not ask, for a visitor, and for a collection no workflow holds. `find`'s row type is
+ * left as it is, so existing callers keep compiling; a caller that asks for the review state
+ * intersects its rows with this (`RowFromCollectionSlug<"posts"> & RowReviewState`).
  *
  * @experimental
  */

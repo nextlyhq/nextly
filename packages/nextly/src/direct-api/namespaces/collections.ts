@@ -35,7 +35,6 @@ import type {
   DeleteResult,
   DuplicateArgs,
   FindArgs,
-  RowReviewState,
   FindByIDArgs,
   ListResult,
   MutationResult,
@@ -72,7 +71,7 @@ import { hiddenFieldRead } from "./hidden-fields";
 export async function find<TSlug extends CollectionSlug>(
   ctx: NextlyContext,
   args: FindArgs<TSlug>
-): Promise<ListResult<RowFromCollectionSlug<TSlug> & RowReviewState>> {
+): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
   const config = mergeConfig(ctx.defaultConfig, args);
   // One per call: the refusal and every row returned read each source's
   // declarations once.
