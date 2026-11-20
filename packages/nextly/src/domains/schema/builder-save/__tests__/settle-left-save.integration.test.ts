@@ -53,6 +53,7 @@ import { recordAlreadyApplied } from "../../migrate/drift-reconcile";
 import { WRITER_LOCK_FILE } from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { SCHEMA_LOCK_TABLE } from "../../pipeline/schema-lock";
+import { writeCollectionSave, type BuilderSaveSetup } from "../collection-save";
 import {
   settleBeforeBuilderSave,
   settleLeftSaves,
@@ -113,7 +114,11 @@ vi.mock("../../pipeline/locks", async original => {
  * The folder the development start's migrate step reads, where a case sets it: the step reads the
  * process's own config, whose folder is not the one these saves write to.
  */
-const bootFolder = vi.hoisted(() => ({ dir: undefined as string | undefined }));
+const bootFolder = vi.hoisted(() => ({
+  dir: undefined as string | undefined,
+  /** A folder no configuration loads from, as a `basePath` holding no configuration file. */
+  noConfigAt: undefined as string | undefined,
+}));
 
 vi.mock("../../../../cli/utils/config-loader", async original => {
   const actual =
@@ -121,6 +126,12 @@ vi.mock("../../../../cli/utils/config-loader", async original => {
   return {
     ...actual,
     loadConfig: (async (...args: Parameters<typeof actual.loadConfig>) => {
+      if (
+        bootFolder.noConfigAt !== undefined &&
+        args[0]?.cwd === bootFolder.noConfigAt
+      ) {
+        throw new Error(`no configuration file in ${bootFolder.noConfigAt}`);
+      }
       const loaded = await actual.loadConfig(...args);
       if (bootFolder.dir === undefined) return loaded;
       return {
@@ -293,6 +304,7 @@ beforeEach(() => {
 afterEach(async () => {
   lockPassesThrough.on = false;
   bootFolder.dir = undefined;
+  bootFolder.noConfigAt = undefined;
   migrateStep.watch = false;
   migrateStep.runs = 0;
   migrateStep.registrations = 0;
@@ -2122,6 +2134,86 @@ describe.each(getConfiguredTestDialects())(
         "no record of the refused save"
       ).toBe(false);
     }, 300_000);
+
+    // A save beside another entity's left save is refused before anything is written, the work its
+    // caller does first included (`beforeWrite`: a field leaving translation's archive, say): a
+    // save refused as not started has changed nothing.
+    it("refuses a save beside another entity's left save before the work its caller does first", async () => {
+      const t = await boot();
+      await anotherHostsRecord(t, true);
+      const { container } = await import("../../../../di/container");
+      const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
+      let wroteFirst = 0;
+
+      const answer = await answerOf(
+        writeCollectionSave(
+          {
+            ...setup,
+            adapter: t.adapter,
+            applies: true,
+            logger: {
+              info: () => undefined,
+              warn: () => undefined,
+              error: () => undefined,
+            },
+          },
+          {
+            slug: "settle_notes",
+            previous: null,
+            entity: {
+              slug: "settle_notes",
+              labels: { singular: "Note", plural: "Notes" },
+              fields: [text("title")],
+            } as never,
+            change: "create",
+          },
+          {
+            beforeWrite: async () => {
+              wroteFirst += 1;
+            },
+          }
+        )
+      );
+
+      expect(answer).toContain("another-host");
+      expect(wroteFirst, "the work the caller does first ran").toBe(0);
+    }, 300_000);
+
+    // The start reads its configuration as it always has, from the process's own folder: an app
+    // that hands its configuration to `getNextly` may give a `basePath` holding no configuration
+    // file, and a pending save there still has its files run.
+    it.skipIf(dialect === "mysql")(
+      "runs a pending save's files where the app's base path holds no configuration file",
+      async () => {
+        const t = await boot();
+        await created(t);
+        const filesBefore = sqlFiles();
+        await stopSave(
+          t,
+          [text("heading", { localized: true })],
+          point => point.startsWith("unit:") && point.includes("localization"),
+          true
+        );
+        const written = sqlFiles().filter(f => !filesBefore.includes(f));
+        await firstFileAlone(t, written);
+        lockPassesThrough.on = true;
+        migrateStep.watch = true;
+        migrateStep.byFiles = true;
+        bootFolder.noConfigAt = basePath;
+
+        await runBootTimeApplyIfDev({ caller: "settle test" });
+
+        const repo = new SchemaEventsRepository(
+          t.adapter.getDrizzle(),
+          t.adapter.dialect
+        );
+        for (const file of written) {
+          expect(await repo.isFileApplied(file), file).toBe(true);
+        }
+        expect(await recordRow(t), "the record clears").toBeUndefined();
+      },
+      300_000
+    );
 
     // The start's migrate step reads the folder the app's saves write to, as its settle does, not
     // the process's own: a save left pending under the app's base path has its files run there.

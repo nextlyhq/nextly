@@ -208,6 +208,7 @@ import { nextSteps, partlyAppliedChange } from "./landing-push";
 import {
   openSaveRecords,
   recordSaveStarted,
+  refuseBesideLeftSaves,
   withSaveRecords,
   type StartedSave,
 } from "./save-in-progress";
@@ -1208,6 +1209,15 @@ async function writeSave(
   started: StartedSave;
 }> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
+  // Another entity's save left part-way refuses this one before anything is written, the work the
+  // caller does first (`beforeWrite`) included: a save refused as not started has written nothing.
+  await refuseBesideLeftSaves({
+    adapter: deps.adapter,
+    projectRoot: deps.projectRoot,
+    kind: kindOf(save).kind,
+    slug: save.slug,
+    notify: line => deps.logger.warn(line),
+  });
   const plan = await planSave(deps, save);
   // Each field whose type the save changes is judged over the values its column holds, before any
   // file is written: a blocked change, or a lossy one not consented to, refuses the save.

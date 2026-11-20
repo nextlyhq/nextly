@@ -383,8 +383,10 @@ async function startProject(): Promise<{
 }
 
 /**
- * The app's configuration, read from the project's root as `nextly migrate` reads it, with the
- * project's migration folder (`startProject`).
+ * The app's configuration, read as a start has always read it, from the process's own directory,
+ * with the project's root and migration folder (`startProject`). Not read from the project's
+ * root: an app may hand its configuration to `getNextly` and give a `basePath` that holds no
+ * configuration file, and a start that could not read one there would apply no pending migration.
  */
 async function bootMigrateConfig(): Promise<{
   configResult: LoadConfigResult;
@@ -393,7 +395,7 @@ async function bootMigrateConfig(): Promise<{
 }> {
   const { loadConfig } = await import("../cli/utils/config-loader");
   const project = await startProject();
-  const configResult = await loadConfig({ cwd: project.root });
+  const configResult = await loadConfig({ cwd: process.cwd() });
   return {
     configResult,
     root: project.root,

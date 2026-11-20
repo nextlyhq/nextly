@@ -374,8 +374,6 @@ export async function recordSaveStarted(args: {
     ...(args.filesAt === undefined ? {} : { filesAt: args.filesAt }),
     ...(args.applies === undefined ? {} : { applies: args.applies }),
   };
-  // Before anything of the save is written: another entity's save left part-way refuses it.
-  await refuseBesideLeftSaves(args, made);
   const meta = new MetaService(args.adapter, consoleLogger);
   const key = saveInProgressKey(args.kind, args.slug);
   // Read before anything of the save: its registry write, once it commits, moves the count.
@@ -428,8 +426,9 @@ export async function recordSaveStarted(args: {
 }
 
 /**
- * Refuse a save while a save of another entity stands left part-way: one this host's settle, run
- * before the save, could not settle; one whose record cannot be read; or another host's that
+ * Refuse a save while a save of another entity stands left part-way, asked by the writer before
+ * anything of the save is written, the work its caller does first included: one this host's
+ * settle, run before the save, could not settle; one whose record cannot be read; or another host's that
  * applied its own files, and may have changed this database part-way. This save would otherwise
  * write its files and snapshot over a state no file finishes describing. A save made outside
  * development changed no table, its files left for `nextly migrate`, so a save goes on beside it,
@@ -438,18 +437,16 @@ export async function recordSaveStarted(args: {
  *
  * @throws NextlyError `CONFLICT` naming each save left and the step that settles it
  */
-async function refuseBesideLeftSaves(
-  args: {
-    adapter: DrizzleAdapter;
-    projectRoot: string;
-    kind: SaveInProgressKind;
-    slug: string;
-    notify: (line: string) => void;
-  },
-  made: readonly MadeRecord[]
-): Promise<void> {
+export async function refuseBesideLeftSaves(args: {
+  adapter: DrizzleAdapter;
+  projectRoot: string;
+  kind: SaveInProgressKind;
+  slug: string;
+  notify: (line: string) => void;
+}): Promise<void> {
   const own = saveInProgressKey(args.kind, args.slug);
-  const ours = new Set(made.map(entry => entry.record.id));
+  // The records this save's own scope made (an earlier step of the same save) are its own.
+  const ours = new Set((scopes.getStore() ?? []).map(entry => entry.record.id));
   const here = hostname();
   // Each save named, then a way out that works for each, as sentences of their own so the
   // command line's reading of the refusal keeps them whole: this host's start settles what it
