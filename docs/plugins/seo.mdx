@@ -1384,8 +1384,9 @@ A detail can also be read from one of the dates every entry holds by itself: `cr
 map `datePublished` to either, in its options or under **SEO › Content types**, which offers them
 as Created and First published for the date published and a video's upload date. Until a new
 page is saved (or, for `firstPublishedAt`, first published), its SEO tab says when the date will be
-set rather than asking for it. `updatedAt` is never read for `dateModified`, even when mapped, for
-the reason above.
+set rather than asking for it. A `dateModified` mapped to `updatedAt` is not read from it either,
+for the reason above: the page keeps the date its content last changed, which falls back to the row's
+`updatedAt` only where no such date is kept.
 
 Structured data states only what the route
 read for the page, so a relationship names someone only where the route read the entry it holds:

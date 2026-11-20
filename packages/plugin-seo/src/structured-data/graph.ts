@@ -32,6 +32,7 @@ import { TITLE_FIELDS } from "../settings/patterns";
 
 import {
   DETAIL_LABELS,
+  ENTRY_DATE_DETAILS,
   isSaveStamp,
   isStructuredDataTypeKey,
   REVIEWED_ITEM_TYPES,
@@ -531,7 +532,12 @@ async function fixFor(
 ): Promise<StructuredDataProblem["fix"]> {
   if (read.field === undefined)
     return detail === "image" ? "content" : "mapping";
-  if (isEntryDate(facts.input, read.field)) return "save";
+  // One of the entry's own dates: saving or publishing fills it, but only a detail such a date
+  // stands for is then supplied; any other detail mapped to one is a mapping to change.
+  if (isEntryDate(facts.input, read.field)) {
+    const unset = read.value === undefined || read.value === null;
+    return unset && ENTRY_DATE_DETAILS.has(detail) ? "save" : "mapping";
+  }
   return (await heldUnread(facts.ctx, facts.input, read)) ? "route" : "content";
 }
 
