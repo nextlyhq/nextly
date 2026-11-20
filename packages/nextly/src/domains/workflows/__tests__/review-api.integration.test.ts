@@ -2235,7 +2235,13 @@ describe.each(getConfiguredTestDialects())(
           partsOf(
             await door.reviewState(PIA, { collection: BRIEFS, id: unmoved })
           )
-        ).toEqual([expect.objectContaining({ stage: "draft", mayTake: true })]);
+        ).toEqual([
+          expect.objectContaining({
+            stage: "draft",
+            enteredAt: null,
+            steps: [expect.objectContaining({ name: "finish", mayTake: true })],
+          }),
+        ]);
 
         const waiting = await door.waiting(PIA, { page: 1, limit: 10 });
         expect(
