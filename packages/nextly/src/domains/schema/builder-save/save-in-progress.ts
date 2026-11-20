@@ -474,7 +474,6 @@ async function leftBeside(args: {
 }): Promise<LeftBeside> {
   const own = saveInProgressKey(args.kind, args.slug);
   const ours = new Set((scopes.getStore() ?? []).map(entry => entry.record.id));
-  const here = hostname();
   const left: LeftBeside = {
     named: [],
     byHand: [],
@@ -484,29 +483,37 @@ async function leftBeside(args: {
   for (const row of await readSavesInProgress(args.adapter)) {
     if (row.key === own) {
       if (!("record" in row) || !ours.has(row.record.id)) left.own = row;
-      continue;
-    }
-    if (!("record" in row)) {
+    } else if (!("record" in row)) {
       left.named.push(`the record ${row.key}, which could not be read`);
       left.unreadable.push(unreadableRecordStep(row.key));
-      continue;
-    }
-    const { record } = row;
-    if (ours.has(record.id)) continue;
-    if (record.applies === false) {
-      args.notify(
-        `${described(record)} was made outside development and is recorded as left part-way; this save goes on beside it.`
-      );
-      continue;
-    }
-    left.named.push(described(record));
-    if (record.host === here) {
-      left.byHand.push(clearByHand(args.projectRoot, record));
-    } else {
-      left.elsewhere.add(record.host);
+    } else if (!ours.has(row.record.id)) {
+      addLeftRecord(left, row.record, args);
     }
   }
   return left;
+}
+
+/**
+ * Add another entity's readable record to what stands beside a save (`leftBeside`): named, with
+ * the way out that works for it, or, for a save made outside development, given a notice instead.
+ */
+function addLeftRecord(
+  left: LeftBeside,
+  record: SaveInProgress,
+  args: { projectRoot: string; notify: (line: string) => void }
+): void {
+  if (record.applies === false) {
+    args.notify(
+      `${described(record)} was made outside development and is recorded as left part-way; this save goes on beside it.`
+    );
+    return;
+  }
+  left.named.push(described(record));
+  if (record.host === hostname()) {
+    left.byHand.push(clearByHand(args.projectRoot, record));
+  } else {
+    left.elsewhere.add(record.host);
+  }
 }
 
 /** What `leftBeside` finds standing beside a save. */
