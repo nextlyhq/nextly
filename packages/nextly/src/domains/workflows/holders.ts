@@ -23,6 +23,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { decideHolderPermission } from "../../auth/access/decide";
 import {
   RETIRED_MANAGE_PLAIN_ACTIONS,
   isRetiredManage,
@@ -201,8 +202,10 @@ export async function holderAnswers(
 }
 
 /**
- * Each person's answer, by id. A retired `manage-` permission is held as the plain four it stood
- * for are, each as stored, as `decidePermission` answers a person.
+ * Each person's answer, by id, decided as `decidePermission` decides a person
+ * ({@link decideHolderPermission}): from the roles in force each person holds
+ * and the roles holding each action the decision may ask, read once for all
+ * of them. A retired `manage-` permission asks the plain four it stood for.
  */
 async function peopleAnswers(
   adapter: DrizzleAdapter,
@@ -210,43 +213,25 @@ async function peopleAnswers(
   action: string,
   resource: string
 ): Promise<Map<string, HolderAnswer>> {
-  if (isRetiredManage(action, resource)) {
-    return retiredManageAnswers(adapter, userIds, resource);
-  }
   const people = await readPersons(adapter, userIds);
   const assigned = await rolesInForceOf(
     [...people.values()].filter(person => person.active)
   );
-  const holding = new Set(await rolesHolding(adapter, action, resource));
+  const asked = isRetiredManage(action, resource)
+    ? RETIRED_MANAGE_PLAIN_ACTIONS
+    : [action];
+  const holding = new Map<string, ReadonlySet<string>>();
+  for (const each of asked) {
+    holding.set(each, new Set(await rolesHolding(adapter, each, resource)));
+  }
   const answers = new Map<string, HolderAnswer>();
   for (const id of new Set(userIds)) {
-    answers.set(id, personAnswer(people.get(id), assigned, holding));
+    answers.set(
+      id,
+      personAnswer(people.get(id), assigned, holding, action, resource)
+    );
   }
   return answers;
-}
-
-/**
- * Each person's answer for a retired `manage-` permission: held where each of the plain four it
- * stood for is held, else the first answer that is not "holds".
- */
-async function retiredManageAnswers(
-  adapter: DrizzleAdapter,
-  userIds: readonly string[],
-  resource: string
-): Promise<Map<string, HolderAnswer>> {
-  // Each plain action's answers, by person.
-  const each: Map<string, HolderAnswer>[] = [];
-  for (const plain of RETIRED_MANAGE_PLAIN_ACTIONS) {
-    each.push(await peopleAnswers(adapter, userIds, plain, resource));
-  }
-  return new Map(
-    [...new Set(userIds)].map(id => [
-      id,
-      each
-        .map(answers => answers.get(id) ?? "not-found")
-        .find(answer => answer !== "holds") ?? "holds",
-    ])
-  );
 }
 
 /** The roles assigned to each of `people` and in force now, by their stored id, a read per 500. */
@@ -262,16 +247,28 @@ async function rolesInForceOf(
   return assigned;
 }
 
-/** One person's answer: missing, deactivated, or whether a role of theirs in force holds it. */
+/**
+ * One person's answer: missing, deactivated, or the permission decision on
+ * the roles of theirs in force. Super-admin authority is among the holders
+ * already, since each walk counts the super-admin role and every role
+ * inheriting it ({@link rolesHolding}), so the decision is handed none apart.
+ */
 function personAnswer(
   person: PersonRow | undefined,
   assigned: ReadonlyMap<string, ReadonlySet<string>>,
-  holding: ReadonlySet<string>
+  holding: ReadonlyMap<string, ReadonlySet<string>>,
+  action: string,
+  resource: string
 ): HolderAnswer {
   if (!person) return "not-found";
   if (!person.active) return "deactivated";
-  const roles = assigned.get(person.id) ?? new Set<string>();
-  return [...roles].some(roleId => holding.has(roleId)) ? "holds" : "lacks";
+  const roles = [...(assigned.get(person.id) ?? [])];
+  const holds = (each: string): boolean =>
+    roles.some(roleId => holding.get(each)?.has(roleId) === true);
+  return decideHolderPermission({ superAdmin: false, holds }, action, resource)
+    .allowed
+    ? "holds"
+    : "lacks";
 }
 
 /**
