@@ -240,11 +240,14 @@ async function settleThenMigrate(
     return { registeredByMigrate: 0, held: true };
   }
   const registeredByMigrate = await applyPendingMigrations(label);
-  if (settled.pending.length === 0) return { registeredByMigrate, held: false };
+  const rerun = [...settled.pending, ...settled.rowless];
+  if (rerun.length === 0) return { registeredByMigrate, held: false };
   // A save left pending, settled again now its remaining files have had their run: recorded
   // applied, it is whole and its record clears; still pending (the files this start ran are not
-  // the ones it wrote), the record stays, refusing a Builder save until they run.
-  const again = await settleLeftSavesAtStart(label, settled.pending);
+  // the ones it wrote), the record stays, refusing a Builder save until they run. A save that
+  // applied whole with no registry row is settled again too: the migrate step adds the row from
+  // the newest applied snapshot, which the settle then brings to the saved shape.
+  const again = await settleLeftSavesAtStart(label, rerun);
   if (again.pending.length > 0) {
     consoleLogger.warn(
       `${label} A Builder save stopped between its migration files, and the rest of them did not run at this start, so its record stays. Run \`nextly migrate\` from the project's base path, then start again.`
@@ -271,8 +274,8 @@ async function settleThenMigrate(
 async function settleLeftSavesAtStart(
   label: string,
   only?: readonly string[]
-): Promise<{ unsettled: boolean; pending: string[] }> {
-  const none = { unsettled: false, pending: [] };
+): Promise<{ unsettled: boolean; pending: string[]; rowless: string[] }> {
+  const none = { unsettled: false, pending: [], rowless: [] };
   try {
     const { container } = await import("../di/container");
     const adapter = container.get<DrizzleAdapter | undefined>("adapter");
@@ -316,23 +319,29 @@ async function settleLeftSavesAtStart(
       }
     );
     // A settle that never ran (the lock not had) says nothing of what stands: taken as unsettled.
-    if (!outcome.ran) return { unsettled: true, pending: [] };
+    if (!outcome.ran) return { unsettled: true, pending: [], rowless: [] };
     return {
       // A save that applied whole whose record stays over a saved definition it cannot read holds
       // the start back as a left one does: its registry row may stand stale, and the start's
       // registration from snapshots inserts only absent rows, so nothing here would correct it.
       unsettled: outcome.value.some(
-        settled => settled.outcome === "left" || settled.rowMayBeStale === true
+        settled =>
+          settled.outcome === "left" || settled.keptFor === "saved-definition"
       ),
       pending: outcome.value
         .filter(settled => settled.outcome === "pending")
+        .map(settled => settled.id),
+      // One with no registry row to bring up does not: the migrate step adds the row from the
+      // newest applied snapshot, and the record is settled again after it (`settleThenMigrate`).
+      rowless: outcome.value
+        .filter(settled => settled.keptFor === "registry-row")
         .map(settled => settled.id),
     };
   } catch (error) {
     consoleLogger.warn(
       `${label} A Builder save left part-way could not be settled (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start tries again.`
     );
-    return { unsettled: true, pending: [] };
+    return { unsettled: true, pending: [], rowless: [] };
   }
 }
 

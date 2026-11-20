@@ -441,6 +441,7 @@ export async function recordSaveStarted(args: {
 async function refuseBesideLeftSaves(
   args: {
     adapter: DrizzleAdapter;
+    projectRoot: string;
     kind: SaveInProgressKind;
     slug: string;
     notify: (line: string) => void;
@@ -467,16 +468,19 @@ async function refuseBesideLeftSaves(
       );
       continue;
     }
+    // Each named with a way out that works for it: this host's start settles what it can, and
+    // names in its log one it leaves; that one is cleared by hand. Another host's start settles
+    // its own.
     left.push(
       record.host === here
-        ? described(record)
-        : `${described(record)}, which a development start on ${record.host} settles`
+        ? `${described(record)} (${SETTLES}. If the start leaves it, as its log then says: ${clearByHand(args.projectRoot, record)})`
+        : `${described(record)} (a development start on ${record.host} settles it)`
     );
   }
   if (left.length === 0) return;
   throw NextlyError.conflict({
     reason: "state",
-    message: `An earlier Builder save was left part-way and is not settled, so this save was not started: ${left.join("; ")}. To settle it, ${SETTLES}.`,
+    message: `An earlier Builder save was left part-way and is not settled, so this save was not started: ${left.join("; ")}.`,
     logContext: {
       reason: "builder-save-left-elsewhere",
       saves: left,

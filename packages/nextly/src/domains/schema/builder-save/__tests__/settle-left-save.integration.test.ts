@@ -1952,9 +1952,9 @@ describe.each(getConfiguredTestDialects())(
         "alpha",
       ]);
       expect(
-        await new MetaService(t.adapter, consoleLogger).get(key),
+        (await new MetaService(t.adapter, consoleLogger).getEntry(key)).present,
         "the record clears"
-      ).toBeUndefined();
+      ).toBe(false);
     }, 300_000);
 
     /** A record of a save of another Single, as another machine's process left it. */
@@ -2026,6 +2026,57 @@ describe.each(getConfiguredTestDialects())(
       ).toBeDefined();
     }, 300_000);
 
+    // A create that applied whole and stopped before its registry row was written keeps its record:
+    // the settle makes no row. While it stands, a save of any other entity is refused, naming the
+    // way out: a development start, whose migrate step adds the row from the newest applied
+    // snapshot and whose settle then brings it up and clears the record. After that start, the
+    // other save goes through.
+    it("refuses other saves over a create stopped before its row until a start clears it", async () => {
+      const t = await boot();
+      await created(t);
+      await stoppedAtClear(t, [text("heading"), text("alpha")]);
+      const left = await recordRow(t);
+      // The stopped process ends as a killed one does: its record stays, its registry row is
+      // missing, and nothing it held is still held.
+      kill.release?.();
+      kill.release = undefined;
+      await stopped;
+      stopped = undefined;
+      await new MetaService(t.adapter, consoleLogger).set(RECORD_KEY, left);
+      await t.adapter.delete("dynamic_singles", {
+        and: [{ column: "slug", op: "=", value: SLUG }],
+      });
+      await clearStoppedHolds(t);
+      const other = () =>
+        answerOf(
+          dispatchSingles(
+            "createSingle",
+            {},
+            {
+              slug: "settle_other",
+              label: "settle_other",
+              fields: [text("title")],
+            }
+          )
+        );
+
+      const refused = await other();
+      expect(refused).toContain(`"${SLUG}"`);
+      expect(refused).toContain("start the app in development");
+
+      // The way out it names: a development start, its migrate step run for real.
+      migrateStep.watch = true;
+      reloads.stub = true;
+      await runBootTimeApplyIfDev({ caller: "settle test" });
+
+      expect(await recordRow(t), "the record clears").toBeUndefined();
+      expect(await registryFieldNames(t), "the registry row").toEqual([
+        "heading",
+        "alpha",
+      ]);
+      expect(await other(), "the other save after the start").toBe("saved");
+    }, 300_000);
+
     // A save of this host left as nothing could settle it refuses a save of any other entity too:
     // that save would write its files and snapshot over a state no file finishes describing.
     it("refuses a save of another entity while this host's save is left", async () => {
@@ -2063,11 +2114,13 @@ describe.each(getConfiguredTestDialects())(
       expect(answer).toContain(`"${SLUG}"`);
       expect(answer).toContain("left part-way");
       expect(
-        await new MetaService(t.adapter, consoleLogger).get(
-          "builder-save-in-progress:single:settle_other"
-        ),
+        (
+          await new MetaService(t.adapter, consoleLogger).getEntry(
+            "builder-save-in-progress:single:settle_other"
+          )
+        ).present,
         "no record of the refused save"
-      ).toBeUndefined();
+      ).toBe(false);
     }, 300_000);
 
     // The start's migrate step reads the folder the app's saves write to, as its settle does, not
