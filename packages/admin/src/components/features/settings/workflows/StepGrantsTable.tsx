@@ -2,8 +2,10 @@
 
 /**
  * Who takes each step: for every step, where it moves a document from and to,
- * the permission it needs, and the roles holding that permission on every
- * collection and Single the workflow is attached to. A step with a permission
+ * the permission it needs, and the roles granted that permission directly on
+ * every collection and Single the workflow is attached to. A role inheriting
+ * from one of those holds the step too without being listed, which the table
+ * says rather than leave the list to read as everyone who may take the step. A step with a permission
  * of its own has "Change", which opens the roles dialog, for a reader who may
  * change grants; any other step needs the collections' own update or publish,
  * named here and granted on each role, and has nothing to change here.
@@ -47,7 +49,7 @@ export function StepGrantsTable({
 }: StepGrantsTableProps): React.JSX.Element {
   const labelOf = (stage: string) => stageLabel(workflow, settings, stage);
   return (
-    <div className="overflow-x-auto">
+    <div className="space-y-2 overflow-x-auto">
       <table className="w-full text-left text-sm">
         <thead>
           <tr className="border-b border-border text-muted-foreground">
@@ -58,7 +60,7 @@ export function StepGrantsTable({
               Permission
             </th>
             <th scope="col" className="py-2 font-medium">
-              Roles
+              Granted directly to
             </th>
           </tr>
         </thead>
@@ -137,6 +139,10 @@ export function StepGrantsTable({
           })}
         </tbody>
       </table>
+      <p className="text-xs text-muted-foreground">
+        A role that inherits from one listed holds its step too, without being
+        listed.
+      </p>
     </div>
   );
 }

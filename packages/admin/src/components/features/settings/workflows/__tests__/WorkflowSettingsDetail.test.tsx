@@ -153,6 +153,30 @@ describe("a workflow in Settings", () => {
     ).toBeNull();
   });
 
+  it("names the roles listed for a step as granted it directly, and says roles inheriting from them hold it too", async () => {
+    const user = userEvent.setup();
+    await open();
+
+    const table = within(section("Who takes each step"));
+    expect(
+      table.getByRole("columnheader", { name: "Granted directly to" })
+    ).toBeTruthy();
+    expect(
+      table.getByText(
+        "A role that inherits from one listed holds its step too, without being listed."
+      )
+    ).toBeTruthy();
+
+    await user.click(
+      screen.getByRole("button", { name: "Change who takes Clear" })
+    );
+    expect(
+      within(await screen.findByRole("dialog")).getByText(
+        /Roles inheriting from a role ticked hold it too/
+      )
+    ).toBeTruthy();
+  });
+
   it("gives a reader without update-settings no control but Copy path", async () => {
     await open(settingsOf(), ["read-settings"]);
 
