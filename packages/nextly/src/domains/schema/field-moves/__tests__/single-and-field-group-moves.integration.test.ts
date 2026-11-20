@@ -430,6 +430,82 @@ describe.each(getConfiguredTestDialects())(
       });
       const box = (fields: Field[]) =>
         group("box", fields, { localized: false });
+      // Required: a Required field leaving translation is one only the push carries
+      // (`pushCarriesValues`), which adds its shared column first and makes it required after.
+      const notes = (localized: boolean): Field => ({
+        name: "notes",
+        type: "text",
+        localized,
+        required: true,
+      });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "sgm_doc",
+          label: "Doc",
+          localized: true,
+          fields: [shared("summary"), notes(true), box([shared("note")])],
+        }
+      );
+      for (const [locale, text] of [
+        ["en", "English notes"],
+        ["es", "Notas"],
+      ] as const) {
+        await t.nextly.updateSingle({
+          slug: "sgm_doc" as never,
+          data: { notes: text, summary: "S", _overwrite: true },
+          locale,
+          overrideAccess: true,
+        });
+      }
+      const archived = async (): Promise<number> => {
+        try {
+          const [row] = await run<{ count: number | string }>(
+            t,
+            "SELECT COUNT(*) AS count FROM nextly_i18n_archive"
+          );
+          return Number(row?.count ?? 0);
+        } catch {
+          return 0;
+        }
+      };
+      const before = await archived();
+
+      // `notes`, required, leaves translation, which only the push carries, in the same save as a move.
+      await expect(
+        saveSingle(
+          t,
+          "sgm_doc",
+          [notes(false), box([shared("note"), shared("summary")])],
+          [{ from: ["summary"], to: ["box", "summary"] }]
+        )
+      ).rejects.toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringContaining("Save the move on its own"),
+              }),
+            ],
+          },
+        })
+      );
+      // Nothing archived on the way to the refusal.
+      expect(await archived()).toBe(before);
+      expect((await readSingle(t, "sgm_doc", "es")).notes).toBe("Notas");
+    });
+
+    it("moves a field by the file in a save where an optional field leaves translation", async () => {
+      const t = await boot(dialect);
+      const shared = (name: string): Field => ({
+        name,
+        type: "text",
+        localized: false,
+      });
+      const box = (fields: Field[]) =>
+        group("box", fields, { localized: false });
       const notes = (localized: boolean): Field => ({
         name: "notes",
         type: "text",
@@ -467,31 +543,18 @@ describe.each(getConfiguredTestDialects())(
           return 0;
         }
       };
-      const before = await archived();
-
-      // `notes` leaves translation, which only the push carries, in the same save as a move.
-      await expect(
-        saveSingle(
-          t,
-          "sgm_doc",
-          [notes(false), box([shared("note"), shared("summary")])],
-          [{ from: ["summary"], to: ["box", "summary"] }]
-        )
-      ).rejects.toThrow(
-        expect.objectContaining({
-          publicData: {
-            errors: [
-              expect.objectContaining({
-                code: "FIELD_MOVE_REFUSED",
-                message: expect.stringContaining("Save the move on its own"),
-              }),
-            ],
-          },
-        })
+      // An optional field leaving translation goes by the file, which carries the move with it.
+      await saveSingle(
+        t,
+        "sgm_doc",
+        [notes(false), box([shared("note"), shared("summary")])],
+        [{ from: ["summary"], to: ["box", "summary"] }]
       );
-      // Nothing archived on the way to the refusal.
-      expect(await archived()).toBe(before);
-      expect((await readSingle(t, "sgm_doc", "es")).notes).toBe("Notas");
+      const read = await readSingle(t, "sgm_doc", "en");
+      expect((read.box as { summary?: unknown } | undefined)?.summary).toBe(
+        "S"
+      );
+      expect(read.notes).toBe("English notes");
     });
 
     // Outside development the dialog applies a Single's change with its push once the file is

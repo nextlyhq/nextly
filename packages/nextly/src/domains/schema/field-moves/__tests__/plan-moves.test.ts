@@ -663,6 +663,33 @@ describe("planEntityMoves", () => {
     }
   });
 
+  it("asks a field group's table nothing of title or slug, which are its fields' to take there", () => {
+    // A field group's table keeps its own columns (`_parent_id`, `_order`...), none named so.
+    const outOnto = (builtBy: "fieldGroup" | "collection") => () =>
+      planEntityMoves({
+        ...base,
+        builtBy,
+        before: [group("meta", [text("title")])],
+        after: [text("title"), group("meta", [])],
+        moves: [{ from: ["meta", "title"], to: ["title"] }],
+      });
+    expect(outOnto("fieldGroup")).not.toThrow();
+    // A Single's or a collection's table keeps its own title while no field takes it.
+    expect(outOnto("collection")).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringContaining(
+                "Every entry already keeps its own title"
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
   it("refuses a move out of a group onto the title or slug every entry keeps while no field takes it", () => {
     // With no top-level field of the name, the table keeps its own `title` and `slug` columns.
     for (const name of ["title", "slug"]) {
