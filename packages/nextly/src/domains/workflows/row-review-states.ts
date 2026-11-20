@@ -228,6 +228,20 @@ function partVersion(
   );
 }
 
+/** What a part's review state says of it, or a part with none: never entered, never moved. */
+function stateFields(
+  state: ReviewState | null
+): Pick<RowPartReview, "enteredAt" | "assignee" | "dueAt" | "revision"> {
+  return state === null
+    ? { enteredAt: null, assignee: null, dueAt: null, revision: 0 }
+    : {
+        enteredAt: state.enteredAt,
+        assignee: state.assignee,
+        dueAt: state.dueAt,
+        revision: state.revision,
+      };
+}
+
 /** One part where it stands, its waiting still to be named. */
 function partReview(
   workflow: Workflow,
@@ -237,17 +251,16 @@ function partReview(
   state: ReviewState | null,
   version: string
 ): RowPartReview {
+  // The stage as every surface shows it, asked once.
+  const presented = stage === null ? null : shown(stage);
   return {
     part,
     stage,
-    stageLabel: stage === null ? null : shown(stage).label,
-    stageColour: stage === null ? null : shown(stage).colour,
+    stageLabel: presented?.label ?? null,
+    stageColour: presented?.colour ?? null,
     publishable: stage !== null && allowsPublish(workflow, stage),
-    enteredAt: state?.enteredAt ?? null,
-    assignee: state?.assignee ?? null,
-    dueAt: state?.dueAt ?? null,
+    ...stateFields(state),
     waitingFor: null,
-    revision: state?.revision ?? 0,
     version,
   };
 }
