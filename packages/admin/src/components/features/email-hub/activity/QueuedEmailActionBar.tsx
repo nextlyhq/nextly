@@ -105,33 +105,58 @@ export function QueuedEmailActionBar({
           <AlertDescription>{refused}</AlertDescription>
         </Alert>
       )}
-      <AlertDialog open={confirming} onOpenChange={setConfirming}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Cancel this email?</AlertDialogTitle>
-            <AlertDialogDescription>
-              {email.state === "sending"
-                ? "It’s with the provider now: it’s cancelled only if this attempt fails, and sent if it succeeds."
-                : "It won’t be sent, and a cancelled email can’t be tried again."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={action.isPending}>
-              Keep it
-            </AlertDialogCancel>
-            <AlertDialogAction
-              // Kept open until the cancel settles, so its pending state shows.
-              onClick={event => {
-                event.preventDefault();
-                run("cancel");
-              }}
-              disabled={action.isPending}
-            >
-              Cancel email
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <CancelEmailDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        sending={email.state === "sending"}
+        pending={action.isPending}
+        onConfirm={() => run("cancel")}
+      />
     </div>
+  );
+}
+
+/**
+ * Cancel's confirmation: what cancelling does now, which while an attempt is with the provider
+ * holds only if that attempt fails. Kept open until the cancel settles, so its pending state shows.
+ */
+function CancelEmailDialog({
+  open,
+  onOpenChange,
+  sending,
+  pending,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  sending: boolean;
+  pending: boolean;
+  onConfirm: () => void;
+}): JSX.Element {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Cancel this email?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {sending
+              ? "It’s with the provider now: it’s cancelled only if this attempt fails, and sent if it succeeds."
+              : "It won’t be sent, and a cancelled email can’t be tried again."}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Keep it</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={event => {
+              event.preventDefault();
+              onConfirm();
+            }}
+            disabled={pending}
+          >
+            Cancel email
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
