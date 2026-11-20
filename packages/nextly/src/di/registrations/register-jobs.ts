@@ -208,6 +208,9 @@ export function registerJobServices(ctx: RegistrationContext): void {
     // different people fails only the member whose author is gone. Passing a
     // principal here instead would turn "schedule this" into a privilege
     // escalation with a delay on it.
+    // Built with this registration, as the rest of the registry is, so a pass started under one
+    // install never flushes through another's revalidator after a re-registration.
+    const releasesRepository = wiredReleasesRepository(adapter);
     registry.register(
       createReleasesDrainJob({
         db: adapter,
@@ -217,7 +220,7 @@ export function registerJobServices(ctx: RegistrationContext): void {
         runAs: databaseRunAs(adapter),
         onOutcome: result => reportReleasesOutcome(logger, result),
         // The install's repository, whose flush reaches the pages readers are served.
-        repository: () => wiredReleasesRepository(adapter),
+        repository: () => releasesRepository,
       })
     );
     // What a notice's email job reads and sends through, resolved on each run so
