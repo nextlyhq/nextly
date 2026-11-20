@@ -43,7 +43,7 @@ import type {
 import { migrationDriftError, type DriftItem } from "./drift-error";
 
 /** A migration file as the run lists it. */
-export interface CompanionFileRef {
+interface CompanionFileRef {
   /** Its name without `.sql`. */
   name: string;
   filePath: string;
