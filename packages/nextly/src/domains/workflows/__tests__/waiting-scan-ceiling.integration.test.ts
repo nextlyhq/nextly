@@ -115,5 +115,41 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(second).toMatchObject({ totalCapped: false, next: null });
     });
+
+    it("reads no more than its ceiling when its own work and the rest both fill it", async () => {
+      t = await bootSteps(dialect);
+      await person(t, "sam", [
+        ["read", "posts"],
+        ["sign-off", "posts"],
+      ]);
+      // 15 parts assigned to Sam and 15 to someone who does not exist (so each waits for every
+      // holder), entering Legal check in turn: both shares fit one window, interleaved.
+      for (let n = 0; n < 15; n += 1) {
+        for (const id of ["sam", "ghost"]) {
+          await seedState(t, partOf("posts", randomUUID(), null), "legal", {
+            definitionHash: HASH,
+            enteredAt: new Date(Date.UTC(2026, 0, 1, 0, n)),
+            assignee: { kind: "user", id },
+          });
+        }
+      }
+      let decided = 0;
+      const capped = await waitingFor(t.adapter, {
+        caller: { kind: "user", userId: "sam" },
+        limit: 5,
+        offset: 0,
+        readsEntity: () => Promise.resolve(true),
+        readable: items => {
+          decided += items.length;
+          return Promise.resolve(items.map(() => false));
+        },
+        scanCeiling: 20,
+      });
+      expect(
+        decided,
+        "review states the request read and decided"
+      ).toBeLessThanOrEqual(20);
+      expect(capped.totalCapped).toBe(true);
+    });
   }
 );
