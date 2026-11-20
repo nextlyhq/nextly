@@ -61,6 +61,11 @@ export function bootSteps(
     collections?: NonNullable<CreateTestNextlyOptions["collections"]>;
     /** Seed the Public role, for a case a visitor reads in. */
     seedPublic?: boolean;
+    /**
+     * Keep translatable fields per language, as every installation does, for a case about a
+     * language's part; the others run on the layout this file's suites were written for.
+     */
+    perLanguageStorage?: boolean;
   } = {}
 ): Promise<TestNextly> {
   const table = (slug: string) =>
@@ -72,6 +77,9 @@ export function bootSteps(
     // Only when given, so every other case boots exactly as before.
     ...(plugins === undefined ? {} : { plugins }),
     ...(options.seedPublic === true ? { seedPublic: true } : {}),
+    ...(options.perLanguageStorage === true
+      ? { perLanguageStorage: true }
+      : {}),
     localization: { locales: ["en", "es", "ar"], defaultLocale: "en" },
     collections: [
       defineCollection({

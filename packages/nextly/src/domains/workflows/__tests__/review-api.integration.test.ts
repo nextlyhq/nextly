@@ -2385,8 +2385,10 @@ describe.each(getConfiguredTestDialects())(
       it("lists a document's unmoved parts in each language its reader may read, and no other", async () => {
         // Minutes start in Draft and are read in every language but Spanish: an unmoved Minute
         // waits for Pia in its shared part, English and Arabic, never in Spanish.
+        // Per language, as every installation keeps a localized collection's translatable fields.
         current = await bootSteps(dialect, undefined, {
           collections: [minutes],
+          perLanguageStorage: true,
         });
         await person(app(), "pia", [
           ["read", MINUTES],
