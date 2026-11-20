@@ -19,6 +19,7 @@ import {
 
 import { useAuthSession } from "@admin/hooks/queries/useAuthSession";
 import { reviewKeys } from "@admin/hooks/queries/useReviewState";
+import { workflowKeys } from "@admin/hooks/queries/workflow-keys";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import {
   getWorkflowSettings,
@@ -30,13 +31,6 @@ import type {
   WorkflowSettingsView,
   WorkflowSummary,
 } from "@admin/types/workflows";
-
-const workflowKeys = {
-  all: () => ["workflows"] as const,
-  list: () => [...workflowKeys.all(), "list"] as const,
-  settings: (slug: string) =>
-    [...workflowKeys.all(), "settings", slug] as const,
-};
 
 /**
  * Every registered workflow. Asked only of a signed-in session, as the general
@@ -52,6 +46,10 @@ export function useWorkflows(): UseQueryResult<
     queryKey: workflowKeys.list(),
     queryFn: listWorkflows,
     enabled: session?.isAuthenticated === true,
+    // Read again each time the list is opened: its counts per stage move with
+    // saves, publishes and other people's steps, none of which pass through
+    // this cache.
+    refetchOnMount: "always",
   });
 }
 
@@ -72,7 +70,10 @@ export function useWorkflowSettings(
  * read, so it replaces the cached settings at once, with no second read. A
  * change of a stage's label or colour is shown wherever the stage is, so it
  * also marks the workflows list and every document's review state stale: the
- * list, the editor's review card and its status line read the stage again.
+ * list, the editor's review card and its status line read the stage again. A
+ * change of a default reviewer or of who takes a step changes who each part
+ * waits for and which steps a reader may take, so it marks every review state
+ * stale; the list shows neither and is kept.
  */
 export function useUpdateWorkflowSettings(
   slug: string
@@ -82,10 +83,18 @@ export function useUpdateWorkflowSettings(
     mutationFn: change => updateWorkflowSettings(slug, change),
     onSuccess: async (settings, change) => {
       queryClient.setQueryData(workflowKeys.settings(slug), settings);
-      if (change.labels === undefined) return;
+      const shown = change.labels !== undefined;
+      const reviewed =
+        shown ||
+        change.defaultReviewers !== undefined ||
+        change.grants !== undefined;
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: workflowKeys.list() }),
-        queryClient.invalidateQueries({ queryKey: reviewKeys.all() }),
+        ...(shown
+          ? [queryClient.invalidateQueries({ queryKey: workflowKeys.list() })]
+          : []),
+        ...(reviewed
+          ? [queryClient.invalidateQueries({ queryKey: reviewKeys.all() })]
+          : []),
       ]);
     },
   });

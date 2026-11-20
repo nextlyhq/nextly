@@ -258,3 +258,35 @@ export function diagramSentences(
     `Once published, the next draft starts at ${labelOf(workflow.afterPublish)}.`,
   ];
 }
+
+/** How the page names a role by its id, and a default reviewer, person or role. */
+export interface AssigneeNames {
+  roleName: (id: string) => string;
+  nameOf: (assignee: WorkflowAssignee) => string;
+}
+
+/**
+ * Names from the roles and people the page has read: a role not among them by
+ * the name the settings give a partial holder, else by its id; a person not
+ * among them by their id.
+ */
+export function assigneeNames(
+  roles: readonly Role[],
+  users: readonly UserApiResponse[],
+  settings: WorkflowSettingsView | undefined
+): AssigneeNames {
+  const roleName = (id: string): string => {
+    const role = roles.find(each => each.id === id);
+    if (role) return role.roleName || role.name;
+    const partial = Object.values(settings?.grantableSteps ?? {})
+      .flatMap(step => step.partialRoles)
+      .find(each => each.id === id);
+    return partial?.name ?? `Role ${id}`;
+  };
+  const nameOf = (assignee: WorkflowAssignee): string => {
+    if (assignee.kind === "role") return `${roleName(assignee.id)} (role)`;
+    const user = users.find(each => each.id === assignee.id);
+    return user ? user.name || user.email : `Person ${assignee.id}`;
+  };
+  return { roleName, nameOf };
+}
