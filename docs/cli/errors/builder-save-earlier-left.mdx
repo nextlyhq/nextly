@@ -7,13 +7,15 @@ description: "A Builder save was refused, because an earlier Builder save was le
 
 A Builder save was refused, because an earlier Builder save was left part-way and is not settled.
 
-A Schema Builder save records that it is in progress until its outcome is recorded. When a save stops part-way, the next start of the app in development settles it: it works out how far the save got and finishes or undoes the rest. A save of the same collection, Single or field group made before that earlier save is settled would start from a state nothing has finished, so it refuses. That is the case when the earlier save stopped between its migration files and the rest of them have not run, and when the settle could not finish the earlier save.
+A Schema Builder save records that it is in progress until its outcome is recorded. When a save stops part-way, the next start of the app in development settles it: it works out how far the save got and finishes or undoes the rest. Any Builder save made before that earlier save is settled would start from a state nothing has finished, so it refuses, whichever collection, Single or field group it saves. That is the case when the earlier save stopped between its migration files and the rest of them have not run, and when the settle could not finish the earlier save. An earlier save on another machine that applied its own changes to this database refuses a save here too, until that machine settles it. An earlier save made outside development changed no table, so a save goes on beside it.
 
 ## Fix
 
 Start the app in development (`next dev`) on this project: its start settles the earlier save. Then save again.
 
-If the message says the earlier save could not be settled, check that the save finished and that no Builder save is running. Then remove the row and the file the message names, and save again.
+If the message says the earlier save could not be settled, or the start's log says it left the save as it was, check that the save finished and that no Builder save is running. Then remove the row and the file the message names, and save again.
+
+If the earlier save was left on another machine, start the app in development on that machine: its start settles the save.
 
 ## Example
 

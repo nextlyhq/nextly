@@ -446,6 +446,12 @@ export const SCHEMA_CODES = defineCodes({
         reason: "builder-save-pending-files",
         describe: earlierSaveLeft,
       },
+      // A save of another entity, refused while a save of any entity stands left part-way.
+      {
+        code: "CONFLICT",
+        reason: "builder-save-left-elsewhere",
+        describe: earlierSaveLeft,
+      },
     ],
   },
   NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED: {
