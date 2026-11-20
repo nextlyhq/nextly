@@ -1859,7 +1859,13 @@ function validateBootContributions(
   // site serving one is told of each problem, with where and what to do, and starts as it did;
   // every command refuses it. A plugin's contributions keep the checks of their own type below.
   const problems = configurationProblems(declaredConfig, transformedConfig);
-  if (problems.some(problem => problem.declaredByDefine)) {
+  // Refused for an entity declared through `define*`, and for any rule across entities, which
+  // `defineConfig` refused at import before.
+  if (
+    problems.some(
+      problem => problem.declaredByDefine || problem.crossEntity === true
+    )
+  ) {
     throw NextlyError.validation({
       errors: problems.map(({ path, code, message }) => ({
         path,
@@ -2312,7 +2318,9 @@ async function reconcileBuilderTargets<T>(
   });
   // A field extended onto a Builder entity joins that entity's fields, so a pair it would make
   // with one already there is judged against the entity's registry row, before anything below
-  // writes.
+  // writes. A pair sharing a stored value is refused even where the row already holds it: the start
+  // stops, and the way out is to rename one of the two in the Builder's definition file, then
+  // `nextly migrate:create` and `nextly migrate`.
   await assertConfiguredSiblingFields(
     {
       collections: entities.collections,

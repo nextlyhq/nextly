@@ -508,6 +508,13 @@ function isDuplicateColumn(error: unknown, dialect: MigrationDialect): boolean {
   return false;
 }
 
+type BusyStep = <R>(step: () => Promise<R>) => Promise<R>;
+
+/** The caller's wait for a busy database, or each step run as it is. */
+function busyStepOf(whileBusy: BusyStep | undefined): BusyStep {
+  return whileBusy ?? (step => step());
+}
+
 /**
  * Hold the migration lock for the duration of `fn`.
  *
@@ -585,10 +592,17 @@ export async function withMigrationSession<T>(
      * migration's transaction on a small pool is not, by itself, a lost claim.
      */
     renewal?: "self" | "caller";
+    /**
+     * Runs the session's claim and its release at the end: the schema lock hands in its wait
+     * for a busy SQLite database, so a busy answer there is waited for rather than failing the
+     * claim or stranding it. The row's seeding is not covered. Absent, each runs as it is.
+     */
+    whileBusy?: <R>(step: () => Promise<R>) => Promise<R>;
   },
   fn: (session: MigrationSession) => Promise<T>
 ): Promise<T> {
   const { adapter, dialect, label, mode = "claim" } = args;
+  const whileBusy = busyStepOf(args.whileBusy);
   const timings = timingsFor(args.leaseSeconds);
 
   if (label.length === 0) {
@@ -760,7 +774,7 @@ export async function withMigrationSession<T>(
         // Assigned BEFORE it is awaited, so an interrupt landing mid-commit has something to wait
         // for. Awaiting it here is also what observes a rejection, so the handler's `allSettled`
         // never leaves one unhandled.
-        pendingAcquisition = acquireOwnerOnly(adapter, claim);
+        pendingAcquisition = whileBusy(() => acquireOwnerOnly(adapter, claim));
         const legacy = (await pendingAcquisition) as Acquisition;
         if (!legacy.ok) {
           // Refused for the same reason the expiry-aware path refuses, and it is a REFUSAL rather
@@ -870,8 +884,13 @@ export async function withMigrationSession<T>(
   // begins when the database runs the statement, so dating it from here can only understate what is
   // left. Reading the clock after `acquire` resolves would credit the claim with time it spent
   // waiting for a connection or for this process to be scheduled again.
-  const claimStartedAt = performance.now();
-  const acquired = await acquire(adapter, dialect, claim, timings);
+  // Stamped at the try that takes the claim: a wait for a busy database before it is not time
+  // the claim has been held.
+  let claimStartedAt = performance.now();
+  const acquired = await whileBusy(() => {
+    claimStartedAt = performance.now();
+    return acquire(adapter, dialect, claim, timings);
+  });
   if (!acquired.ok) {
     // Raised outside the transaction on purpose: the adapters route every error
     // escaping a transaction callback through `classifyError`, which rewraps
@@ -1173,7 +1192,9 @@ export async function withMigrationSession<T>(
         settleWithin(outstandingRenewal, leaseRemainingMs())
       );
       if (confirmed) {
-        heldToTheEnd = await release(adapter, dialect, claim, !callerRenews);
+        heldToTheEnd = await whileBusy(() =>
+          release(adapter, dialect, claim, !callerRenews)
+        );
       } else {
         heldToTheEnd = false;
         clearWhenQuiet();

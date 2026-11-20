@@ -259,3 +259,45 @@ describe("a define* collection with no fields, whose fields a plugin's setup cop
     );
   });
 });
+
+describe("a define* collection with no fields of its own, whose address is its system slug", () => {
+  // The address rule wraps the system `slug` it names; the wrapped field is still the one the
+  // call added, so the collection still declares no field of its own.
+  it("is still reported as declaring no field of its own", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [],
+          publicAddressField: "slug",
+        }),
+      ],
+    };
+
+    expect(configurationProblems(declared)).toContainEqual(
+      expect.objectContaining({
+        path: "collections[0].fields",
+        code: "FIELDS_EMPTY",
+      })
+    );
+  });
+});
+
+describe("two collections with one slug, judged where nothing transformed them", () => {
+  // Each is judged as itself: the second's own problem is reported beside the duplicate slug.
+  it("reports the second one's own problem too", () => {
+    const declared = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+        { slug: "notes", fields: [{ name: "select", type: "text" }] },
+      ],
+    };
+
+    const paths = configurationProblems(declared, declared).map(
+      problem => problem.path
+    );
+
+    expect(paths).toContain("collections[1].fields[0].name");
+    expect(paths).toContain("collections[1].slug");
+  });
+});

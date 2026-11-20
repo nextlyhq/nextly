@@ -7,19 +7,30 @@
  * to case, so only a rule that compares all three refuses every clash before a
  * statement runs rather than at it.
  *
- * Only a NEW pair is refused: one the definition the entity last had, where the
- * pair is judged, does not hold. An entity that already holds such a pair keeps
- * working, since its two fields read and write one stored value and refusing it
- * would stop a site that works today; the migrate check warns about it instead.
- * Each road decides what the previous definition is, since only the road knows:
- * the registry row for a save or a start, the latest snapshot for the migrate
+ * A pair whose two fields share one stored value, the column both become at the
+ * top level or the key both are inside a group or a repeater, is refused
+ * wherever it is found, an entity that already holds one included: two fields
+ * reading and writing one value is never a definition to keep. A pair that
+ * shares no stored value (two names that differ only in case inside a group,
+ * two keys of its value; a pair without a column at the top level) is refused
+ * only where it is new, one the definition the entity last had does not hold;
+ * one already held keeps working, and the migrate check warns about it. Each
+ * road decides what the previous definition is, since only the road knows: the
+ * registry row for a save or a start, the latest snapshot for the migrate
  * commands, none for an entity the change creates.
  *
  * @module domains/schema/sibling-fields
  */
 
 import { NextlyError } from "../../errors/nextly-error";
-import { configuredTable } from "../../shared/address-rule";
+import {
+  configuredBesideRows,
+  configuredTable,
+} from "../../shared/address-rule";
+import {
+  fieldGroupSlugList,
+  isFieldGroupFieldType,
+} from "../field-groups/storage/field-group-field-type";
 
 import { siblingNameClash, type SiblingClashKind } from "./field-rules";
 import {
@@ -43,10 +54,14 @@ export interface SiblingClash {
   kind: SiblingClashKind;
   /**
    * The stored value both fields read and write, where they share one: at the
-   * top level the column both become (both must have a column), inside a group
-   * or a repeater the key of its value, which only one exact name shares.
+   * top level the column both become (both must have a column), or, for two
+   * field-group references of a field group in common, the instance rows both
+   * are stored as in its table, which are keyed by the field's name
+   * (`_parent_field`, compared without regard to case as MySQL compares it);
+   * inside a group or a repeater the key of its value, which only one exact
+   * name shares.
    */
-  shared: { column: string } | { key: string } | null;
+  shared: { column: string } | { key: string } | { parentField: string } | null;
 }
 
 /** The entity kinds whose fields the rule judges. */
@@ -109,11 +124,39 @@ function sharedValue(
 ): SiblingClash["shared"] {
   if (!topLevel) return a.name === b.name ? { key: a.name } : null;
   const column = toSnakeCase(a.name);
-  return column === toSnakeCase(b.name) &&
+  if (
+    column === toSnakeCase(b.name) &&
     fieldProducesColumn(a) &&
     fieldProducesColumn(b)
-    ? { column }
+  ) {
+    return { column };
+  }
+  return sharedInstanceRows(a, b);
+}
+
+/**
+ * The instance rows two top-level field-group references share, if any. Two references of one
+ * field group store their instances in that group's table, each row keyed by the field's name,
+ * which MySQL compares without regard to case: two names equal ignoring case that reference a
+ * group in common share rows. References to different groups keep theirs in different tables.
+ */
+function sharedInstanceRows(
+  a: NamedField,
+  b: NamedField
+): { parentField: string } | null {
+  const parentField = a.name.toLowerCase();
+  return isFieldGroupFieldType(a.type) &&
+    isFieldGroupFieldType(b.type) &&
+    parentField === b.name.toLowerCase() &&
+    referenceAGroupInCommon(a, b)
+    ? { parentField }
     : null;
+}
+
+/** Whether two field-group references name a field group in common (`fieldGroupSlugList`). */
+function referenceAGroupInCommon(a: NamedField, b: NamedField): boolean {
+  const groups = new Set(fieldGroupSlugList(a));
+  return fieldGroupSlugList(b).some(slug => groups.has(slug));
 }
 
 /**
@@ -191,15 +234,15 @@ export function siblingClashes(fields: unknown): SiblingClash[] {
   return out;
 }
 
+/** Whether two stored values are the same one: the same column, or the same key. */
+function sameShared(a: SiblingClash["shared"], b: SiblingClash["shared"]) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /** A pair's identity: its container and its two names, in either order. */
 function pairKey(clash: SiblingClash): string {
   const names = [clash.first, clash.second].sort();
   return JSON.stringify([clash.path, names]);
-}
-
-/** Whether two stored values are the same one: the same column, or the same key. */
-function sameShared(a: SiblingClash["shared"], b: SiblingClash["shared"]) {
-  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function isSystemFieldStandingAside(
@@ -227,15 +270,14 @@ export interface SiblingJudgeOptions {
 
 /**
  * Judges the pairs of `next` against the definition the entity last had:
- * `refused`, the pairs `previous` does not hold in the same container, which a
- * change creates whether a field was added, renamed, moved or copied into one;
- * `existing`, the pairs it already held. `previous` is `null` for an entity the
- * change creates, so every pair in it is new.
+ * `refused`, every pair that shares a stored value, held or not, and the pairs
+ * `previous` does not hold in the same container, which a change creates
+ * whether a field was added, renamed, moved or copied into one; `existing`, the
+ * pairs sharing no stored value that it already held. `previous` is `null` for
+ * an entity the change creates, so every pair in it is new.
  *
  * A held pair stays existing only as often as `previous` held it (a third copy
- * of a name already held twice makes new pairs) and only while it shares no
- * stored value it did not share before: a pair whose type change makes both
- * fields one column is new, since that column is what the database refuses.
+ * of a name already held twice makes new pairs).
  * With `options.definedInCode` (only for `define*` output), a system field
  * standing aside for a sibling is not judged.
  */
@@ -247,7 +289,9 @@ export function judgeSiblingFields(
   const clashes = siblingClashes(next).filter(
     clash => !isSystemFieldStandingAside(options.definedInCode, clash)
   );
-  if (previous === null) return { refused: clashes, existing: [] };
+  if (previous === null) {
+    return { refused: clashes, existing: [] };
+  }
   const held = new Map<string, SiblingClash[]>();
   for (const clash of siblingClashes(previous)) {
     const key = pairKey(clash);
@@ -256,15 +300,24 @@ export function judgeSiblingFields(
   const refused: SiblingClash[] = [];
   const existing: SiblingClash[] = [];
   for (const clash of clashes) {
+    // Held as often as the previous definition held it, whatever the pair stored there.
     const candidates = held.get(pairKey(clash)) ?? [];
-    const match = candidates.findIndex(
-      before => clash.shared === null || sameShared(before.shared, clash.shared)
-    );
-    if (match === -1) {
+    // Two fields that share one column or key are never kept, however long they have. One the
+    // previous definition held sharing the same value still uses up that held pair, so another
+    // pair of the same two names is not taken as held in its place.
+    if (clash.shared !== null) {
+      refused.push(clash);
+      const same = candidates.findIndex(before =>
+        sameShared(before.shared, clash.shared)
+      );
+      if (same !== -1) candidates.splice(same, 1);
+      continue;
+    }
+    if (candidates.length === 0) {
       refused.push(clash);
       continue;
     }
-    candidates.splice(match, 1);
+    candidates.shift();
     existing.push(clash);
   }
   return { refused, existing };
@@ -281,33 +334,25 @@ export function newSiblingClashes(
 
 /**
  * Whether configuration in code accepted the pair before this rule, so an
- * entity configured with it may already exist. It refused two names at one
- * level that differ only in case, and two fields with a column at a
- * collection's or a Single's top level that become one column.
+ * entity configured with it may already exist and is judged where its previous
+ * definition is known: two names that become one column but share no stored
+ * value (keys of a group's value, or fields without a column). Configuration
+ * refused two names at one level that differ only in case, and a pair sharing
+ * a stored value is refused wherever it is found.
  */
-function mayAlreadyExist(
-  kind: SiblingEntityKind,
-  clash: SiblingClash
-): boolean {
-  if (clash.kind !== "same-column") return false;
-  return !(
-    kind !== "fieldGroup" &&
-    clash.shared !== null &&
-    "column" in clash.shared
-  );
+function mayAlreadyExist(clash: SiblingClash): boolean {
+  return clash.kind === "same-column" && clash.shared === null;
 }
 
 /**
  * The pairs a `define*` call refuses, where nothing says whether the entity
- * already exists: those configuration refused before this rule, which no
- * existing entity can hold. The rest are judged at start and by the migrate
- * commands, which know the previous definition.
+ * already exists: every pair that shares a stored value, and those
+ * configuration refused before this rule, which no existing entity can hold.
+ * The rest are judged at start and by the migrate commands, which know the
+ * previous definition.
  */
-export function configuredSiblingClashes(
-  kind: SiblingEntityKind,
-  fields: unknown
-): SiblingClash[] {
-  return siblingClashes(fields).filter(clash => !mayAlreadyExist(kind, clash));
+export function configuredSiblingClashes(fields: unknown): SiblingClash[] {
+  return siblingClashes(fields).filter(clash => !mayAlreadyExist(clash));
 }
 
 function pairPhrase(entity: SiblingEntity, clash: SiblingClash): string {
@@ -326,11 +371,33 @@ const REFUSAL_REASONS: Record<
     `would both become the column '${toSnakeCase(clash.first)}'`,
 };
 
-/** The sentence a refusal of one new pair says. */
+/** The stored value a pair shares, as a sentence names it, and what each field needs its own of. */
+function sharedPhrase(shared: NonNullable<SiblingClash["shared"]>): {
+  value: string;
+  own: string;
+} {
+  if ("column" in shared) {
+    return { value: `the column '${shared.column}'`, own: "column" };
+  }
+  if ("key" in shared) return { value: `the key '${shared.key}'`, own: "key" };
+  return {
+    value: `the field group rows stored under '${shared.parentField}'`,
+    own: "field group rows",
+  };
+}
+
+/**
+ * The sentence a refusal of one pair says: for two fields sharing a stored value, the value they
+ * share and that each needs its own; for any other pair, why the two clash.
+ */
 export function siblingClashMessage(
   entity: SiblingEntity,
   clash: SiblingClash
 ): string {
+  if (clash.shared !== null) {
+    const { value, own } = sharedPhrase(clash.shared);
+    return `${pairPhrase(entity, clash)} share ${value}. Rename one of them so each has its own ${own}.`;
+  }
   return `${pairPhrase(entity, clash)} ${REFUSAL_REASONS[clash.kind](clash)}. Rename one of them.`;
 }
 
@@ -370,23 +437,14 @@ export function siblingClashesErrorFor(
 }
 
 /**
- * The warning for a pair an entity already holds: it keeps working, and the
- * warning names the stored value the two share, where they share one, and says
- * to rename one.
+ * The warning for a pair an entity already holds that shares no stored value: it keeps working,
+ * and the warning says to rename one. A held pair that shares one is refused, never warned about.
  */
 export function siblingClashWarning(
   entity: SiblingEntity,
   clash: SiblingClash
 ): string {
-  const phrase = pairPhrase(entity, clash);
-  if (clash.shared === null) {
-    return `${phrase} ${REFUSAL_REASONS[clash.kind](clash)}. They keep working; rename one of them.`;
-  }
-  const value =
-    "column" in clash.shared
-      ? `the column '${clash.shared.column}'`
-      : `the key '${clash.shared.key}'`;
-  return `${phrase} already share ${value}. They keep working; rename one of them so each keeps its own value.`;
+  return `${pairPhrase(entity, clash)} ${REFUSAL_REASONS[clash.kind](clash)}. They keep working; rename one of them.`;
 }
 
 /** Throws the refusal of the pairs `next` creates against `previous` (`null` for a new entity). */
@@ -418,12 +476,14 @@ type Registered = ReadonlyArray<{
  * configuration leaves the registries and tables as they were.
  *
  * The registry row of an entity is the definition it last had, so a pair the
- * row holds already exists and keeps working. An entity no row holds is new,
- * and so is every pair in it, unless its table already exists and no registry
- * row owns it: then an earlier start or `nextly migrate` made it (a new
- * environment migrated before its first start, or a row that could not be
- * read), and it is taken as it is. The tables are asked about only for an
- * entity that has a new pair.
+ * row holds that shares no stored value already exists and keeps working. An
+ * entity no row holds is new, and so is every pair in it, unless its table
+ * already exists and no registry row owns it: then an earlier start or
+ * `nextly migrate` made it (a new environment migrated before its first start,
+ * or a row that could not be read), and its pairs are taken as held. A pair
+ * sharing a stored value is refused either way, the Builder's own entities
+ * included, whose fields a start reads from their rows. The tables are asked
+ * about only for an entity that has a new pair.
  */
 export async function refusedConfiguredSiblingFields(
   config: {
@@ -438,36 +498,46 @@ export async function refusedConfiguredSiblingFields(
   },
   tableExists: (table: string) => Promise<boolean>
 ): Promise<EntitySiblingClash[]> {
-  const configured: Array<[SiblingEntityKind, Configured, Registered]> = [
-    ["collection", config.collections ?? [], registered.collections],
-    ["single", config.singles ?? [], registered.singles],
-    ["fieldGroup", config.fieldGroups ?? [], registered.components],
-  ];
-  const ownedTables = new Set(
-    configured.flatMap(([, , rows]) =>
-      rows.flatMap(row => (row.tableName === undefined ? [] : [row.tableName]))
-    )
-  );
+  const { configured, ownedTables } = configuredBesideRows(config, registered);
+  // A table no registry row owns that an earlier start or migrate already made.
+  const isUnownedTable = async (table: string): Promise<boolean> =>
+    !ownedTables.has(table) && (await tableExists(table));
   const refused: EntitySiblingClash[] = [];
   for (const [kind, declared, rows] of configured) {
     const bySlug = new Map(rows.map(row => [row.slug, row]));
     for (const entry of declared) {
-      const row = bySlug.get(entry.slug);
-      const clashes = newSiblingClashes(
-        entry.fields ?? [],
-        row?.fields ?? null,
-        { definedInCode: kind }
+      const judged = await judgeConfiguredEntry(
+        kind,
+        entry,
+        bySlug.get(entry.slug),
+        isUnownedTable
       );
-      if (clashes.length === 0) continue;
-      if (row === undefined) {
-        const table = configuredTable(kind, entry);
-        if (!ownedTables.has(table) && (await tableExists(table))) continue;
-      }
       const entity = { kind, slug: entry.slug };
-      for (const clash of clashes) refused.push({ entity, clash });
+      for (const clash of judged.refused) refused.push({ entity, clash });
     }
   }
   return refused;
+}
+
+/**
+ * One configured entity judged against its registry row (`row`), or, with no row, as held where its
+ * table already stands (`isUnownedTable`), or as new.
+ */
+async function judgeConfiguredEntry(
+  kind: SiblingEntityKind,
+  entry: Configured[number],
+  row: Registered[number] | undefined,
+  isUnownedTable: (table: string) => Promise<boolean>
+): Promise<ReturnType<typeof judgeSiblingFields>> {
+  const fields = entry.fields ?? [];
+  const options = { definedInCode: kind };
+  const judged = judgeSiblingFields(fields, row?.fields ?? null, options);
+  if (judged.refused.length === 0 || row !== undefined) return judged;
+  // Made by an earlier start or migrate: its pairs are held, and only those sharing a stored value
+  // are refused. The table is asked about only for an entity with a pair to judge.
+  return (await isUnownedTable(configuredTable(kind, entry)))
+    ? judgeSiblingFields(fields, fields, options)
+    : judged;
 }
 
 /**
