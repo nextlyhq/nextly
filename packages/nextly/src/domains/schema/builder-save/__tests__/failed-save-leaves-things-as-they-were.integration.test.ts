@@ -153,10 +153,10 @@ const PATHS: readonly SavePath[] = [
     table: "dc_fbs_posts",
     registry: "dynamic_collections",
     translatable: false,
-    pushRoad: true,
-    // Its ledger writes and its registry write run together after the push's own transaction has
-    // committed, so a failure there keeps the change and answers part way.
-    notKeptYet: ["registry", "ledger"],
+    // Adding a field to an untranslated collection runs its own file, whose ledger and registry
+    // writes join the file's transaction, so every step is taken and each failure leaves it as it
+    // was.
+    pushRoad: false,
     create: collectionCreate("fbs_posts"),
     save: (_t, fields) =>
       dispatchCollections(
