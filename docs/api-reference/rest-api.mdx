@@ -1196,6 +1196,24 @@ Two reserved conditions keep a collection's entries by where they stand in publi
 - Any other value is refused with `FILTER_INVALID_OPERAND`: `false`, an empty object, an extra key, or a time without a zone.
 - `_inRelease` needs the right to read content releases as well as the collection. A caller without it is refused exactly as if the condition did not exist (`FILTER_UNKNOWN_FIELD`), so the filter says nothing about what releases hold. A bulk update or delete selected by `_inRelease` is refused the same way, before any entry is written.
 
+#### Entries in review (experimental)
+
+On a collection a workflow holds, four more reserved conditions keep entries by where their parts stand in review. Like the ones above, each is accepted only at the top level of a filter, and a collection no workflow holds keeps no entry for any of them (no refusal).
+
+| Condition                     | Keeps                                                                                                                                                     | Query string example             |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `_stage: "<stage>"`           | Entries with a part in that stage, each part's stage read as a step reads it (a part with no review state stands where its content puts it).               | `where[_stage]=legal`            |
+| `_assignedToMe: true`         | Entries with a part assigned to the reader or to one of their roles. An API key stands for its own roles alone.                                            | `where[_assignedToMe]=true`      |
+| `_waitingForMe: true`         | Entries with a part waiting for the reader's review, by the waiting list's own read (`GET /workflows/waiting`). An API key is judged by its own scope.     | `where[_waitingForMe]=true`      |
+| `_changedSinceApproved: true` | Entries with a part saved again since its last approval (the version the "Since approved" comparison reads; a publish closes the cycle).                  | `where[_changedSinceApproved]=true` |
+
+- Only the parts the read may see count: the shared part, and the languages the read is judged for.
+- `_waitingForMe` reads at most 1,000 waiting parts for one list. Where more wait, the list keeps the documents of those it read and its `meta.totalCapped` is `true`: the total is a floor.
+
+#### Each row's review state (experimental)
+
+`?reviewState=true` (the Direct API's `reviewState: true`) gives each row of a collection a workflow holds its review state under `_review`: `{ parts: [...] }`, each part with its `stage`, `stageLabel`, `stageColour`, `publishable`, `enteredAt`, `assignee`, `dueAt`, `waitingFor`, and the `revision` and `version` a step names as `seen`. Each part is placed as `GET /workflows/review-state` places it, read for the whole page at once, among the parts the read may see. A visitor's rows, and the rows of a collection no workflow holds, carry no `_review` key.
+
 ### sort
 
 Field name; prefix with `-` for descending. Separate several keys with commas; each sorts in turn, and entries still tied come back in id order.
