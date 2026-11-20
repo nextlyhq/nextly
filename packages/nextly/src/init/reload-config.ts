@@ -803,7 +803,9 @@ function publishScopeRecording(
     webhooks?: CollectionDef["webhooks"];
   }>,
   pluginSlugs: Set<string>,
-  synced: boolean
+  synced: boolean,
+  /** Whether an entity keeps its prior policy: still present, so never pruned, and given no opt-in. */
+  keepsPrior: (slug: string) => boolean = () => false
 ): void {
   // Provenance comes from the plugin contribution list, not `admin.isPlugin`:
   // a plugin's opt-out must be tagged `plugin` so the prune below never removes
@@ -832,7 +834,7 @@ function publishScopeRecording(
   }
   pruneRemovedCodeFirstRecording(scope, present);
   for (const e of entities) {
-    if (!e.slug) continue;
+    if (!e.slug || keepsPrior(e.slug)) continue;
     const resolved = resolveWebhookRecording(e.webhooks);
     if (resolved.record === true) {
       setWebhookRecording(scope, e.slug, true, sourceOf(e.slug), resolved.emit);
@@ -876,7 +878,13 @@ function republishRecordingPolicies(
     singles?: SingleDef[];
     plugins?: unknown[];
   },
-  scopes: { collections: boolean; singles: boolean }
+  scopes: { collections: boolean; singles: boolean },
+  /**
+   * Entities deferred this reload, as `<kind>:<slug>`: their table and registry row keep the
+   * stored shape, so they keep the recording policy published for it and gain no opt-in or `emit`
+   * the new configuration adds, whose stripping would read fields they do not have yet.
+   */
+  deferred: ReadonlySet<string> = new Set()
 ): void {
   const pluginCollections = collectPluginContributedSlugs(
     newConfig.plugins,
@@ -890,13 +898,15 @@ function republishRecordingPolicies(
     "collection",
     newConfig.collections ?? [],
     pluginCollections,
-    scopes.collections
+    scopes.collections,
+    slug => deferred.has(`collection:${slug}`)
   );
   publishScopeRecording(
     "single",
     newConfig.singles ?? [],
     pluginSingles,
-    scopes.singles
+    scopes.singles,
+    slug => deferred.has(`single:${slug}`)
   );
 }
 
@@ -2926,20 +2936,32 @@ async function applyReloadHolding(
   // by the judge db:sync asks (`typeChangesHeldBack`). An entity whose change is blocked, would
   // clear a value no consent naming its column covers, or has no conversion Nextly runs is held
   // back whole, as a change needing review is: deferred, so its translations table's work waits
-  // too, and handed to the apply with its fields as its registry records them, so the apply
-  // changes nothing of it while every other entity's change still applies.
-  const heldBack = await typeChangesHeldBack({
-    db,
-    dialect,
-    live: liveSnapshot,
-    schema: {
-      collections: desiredCollections,
-      singles: desiredSingles,
-      components: desiredComponents,
-    },
-    entities: typeChanged,
-    env: process.env,
-  });
+  // too, and left out of the apply, so nothing of it changes while every other entity's change
+  // still applies. A judgement that cannot read the rows (a lost connection) applies nothing this
+  // cycle, as an introspection that fails does.
+  let heldBack: Awaited<ReturnType<typeof typeChangesHeldBack>>;
+  try {
+    heldBack = await typeChangesHeldBack({
+      db,
+      dialect,
+      live: liveSnapshot,
+      schema: {
+        collections: desiredCollections,
+        singles: desiredSingles,
+        components: desiredComponents,
+      },
+      entities: typeChanged,
+      env: process.env,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not judge the type changes against the stored values: ${msg}. ` +
+        `No code-first schema changes were applied this cycle.`
+    );
+    undoOptimisticReloadWork();
+    return;
+  }
   for (const { kind, slug, reasons } of heldBack) {
     logger?.warn(
       `[Nextly HMR] Code-first change for ${KIND_NOUN[kind]}'${slug}' was not applied: ${reasons.join(" ")}`
@@ -2950,6 +2972,12 @@ async function applyReloadHolding(
   const heldWhole = new Set(
     heldBack.map(({ kind, slug }) => `${kind}:${slug}`)
   );
+  // A development start synced the registry from the configuration before this reload, so a held
+  // entity's row already records its new fields: written back to the fields the start found, so
+  // the next start or reload judges the same change again over the same values.
+  if (heldWhole.size > 0 && held.atStart !== undefined) {
+    await restoreHeldRows(heldWhole, held.atStart, newConfig, resolve, logger);
+  }
   // Held whole: left out of the apply, which then never names its tables, so nothing of it changes
   // (the drop guard keeps a table outside the desired schema as it is), and out of the registry
   // syncs after it, so its row keeps recording it as it was and the next reload judges the same
@@ -3572,7 +3600,13 @@ async function applyReloadHolding(
       // the new config; a single whose sync failed keeps its prior snapshot so
       // its new fields never pair with stale serialized metadata.
       singleReg.setCodeFirstSingles?.(newConfig.singles ?? [], {
-        keepPriorFor: failedSlugs,
+        // A held single keeps its prior snapshot too: its table and row keep the stored shape.
+        keepPriorFor: new Set([
+          ...failedSlugs,
+          ...(newConfig.singles ?? [])
+            .filter(single => !notHeld("single")(single))
+            .map(single => String(single.slug)),
+        ]),
       });
     } catch {
       // Non-fatal: same reasoning as collection metadata sync above, and the
@@ -3628,10 +3662,14 @@ async function applyReloadHolding(
     // (webhookFieldTree / expandComponentFields), so a failed component sync
     // holds both scopes' new decisions back; but a singles-only sync failure no
     // longer blocks the committed collections' decisions (and vice versa).
-    republishRecordingPolicies(newConfig, {
-      collections: collectionSynced && componentSynced,
-      singles: singleSynced && componentSynced,
-    });
+    republishRecordingPolicies(
+      newConfig,
+      {
+        collections: collectionSynced && componentSynced,
+        singles: singleSynced && componentSynced,
+      },
+      deferredEntities
+    );
 
     // Pre-compute fresh Drizzle table objects for all affected collections,
     // singles, and components. Synchronous (schema generation, no DB I/O).
@@ -3968,6 +4006,80 @@ async function recordRegistryHistory(args: {
   );
   // What a start held, for a refused apply to hold again.
   return atStart;
+}
+
+/**
+ * Writes each held entity's registry row back to the fields a development start found in it
+ * (`held.atStart`), through the same code-first syncs, so the row keeps describing its table until
+ * the held change lands. A row that cannot be written back is reported: the next start would then
+ * find the new fields recorded and no change to judge.
+ */
+async function restoreHeldRows(
+  heldWhole: ReadonlySet<string>,
+  atStart: RecordedAtStart,
+  newConfig: {
+    collections?: CollectionDef[];
+    singles?: SingleDef[];
+    fieldGroups?: ComponentDef[];
+  },
+  resolve: ServiceResolver,
+  logger: LoggerLike | undefined
+): Promise<void> {
+  const startFields = (
+    rows: readonly { slug?: unknown; fields?: unknown }[],
+    slug: string | undefined
+  ) => rows.find(row => row.slug === slug)?.fields;
+  const restored = <T extends { slug?: string; fields?: unknown }>(
+    kind: string,
+    defs: readonly T[] | undefined,
+    rows: readonly { slug?: unknown; fields?: unknown }[]
+  ): T[] =>
+    (defs ?? []).flatMap(def => {
+      const fields = startFields(rows, def.slug);
+      return heldWhole.has(`${kind}:${def.slug}`) && Array.isArray(fields)
+        ? [{ ...def, fields }]
+        : [];
+    });
+  try {
+    const collections = restored(
+      "collection",
+      newConfig.collections,
+      atStart.collections
+    );
+    if (collections.length > 0) {
+      await (
+        (await resolve(
+          "collectionRegistryService"
+        )) as CollectionRegistrySurface
+      ).syncCodeFirstCollections(buildCollectionSyncPayload(collections), {
+        seedPermissions: false,
+      });
+    }
+    const singles = restored("single", newConfig.singles, atStart.singles);
+    if (singles.length > 0) {
+      await (
+        (await resolve("singleRegistryService")) as SingleRegistrySurface
+      ).syncCodeFirstSingles(buildSingleSyncPayload(singles), {
+        seedPermissions: false,
+      });
+    }
+    const groups = restored(
+      "fieldGroup",
+      newConfig.fieldGroups,
+      atStart.components
+    );
+    if (groups.length > 0) {
+      await (
+        (await resolve("fieldGroupRegistryService")) as ComponentRegistrySurface
+      ).syncCodeFirstComponents(buildComponentSyncPayload(groups));
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logger?.error(
+      `[Nextly HMR] Could not keep the registry row of a held change as the start found it: ${msg}. ` +
+        `The next start may not find the change to judge again.`
+    );
+  }
 }
 
 /** How a reload's notice names each kind of entity before its slug. */

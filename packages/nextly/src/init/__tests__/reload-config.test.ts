@@ -1723,6 +1723,133 @@ describe("reloadNextlyConfig", () => {
     ).toBeUndefined();
   });
 
+  it("applies nothing, and says why, where the type-change judgement cannot read the rows", async () => {
+    heldBackSpy.mockRejectedValueOnce(new Error("connection lost"));
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      liveSnapshot("dc_posts", [
+        ...reservedColumns("dc_posts"),
+        { name: "active", type: "text", nullable: true },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await expect(
+      reloadNextlyConfig({ resolver: buildResolver() })
+    ).resolves.not.toThrow();
+
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(
+      errorSpy.mock.calls
+        .map(c => String(c[0]))
+        .find(line =>
+          line.includes(
+            "Could not judge the type changes against the stored values: connection lost"
+          )
+        )
+    ).toBeDefined();
+  });
+
+  it("keeps a held collection's recording policy, giving it no curated event its new config names", async () => {
+    const { resetWebhookRecordingPolicy, getWebhookEmitSpec } = await import(
+      "../../domains/webhooks/recording-policy"
+    );
+    resetWebhookRecordingPolicy();
+    heldBackSpy.mockResolvedValueOnce([
+      { kind: "collection", slug: "posts", reasons: ["held."] },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "active", type: "checkbox" }],
+            webhooks: {
+              record: false,
+              emit: { event: "form.submission.created", fields: ["active"] },
+            },
+          },
+          // APPLIED: additive, so the reload reaches the post-DDL republish.
+          {
+            slug: "notes",
+            tableName: "dc_notes",
+            fields: [{ name: "body", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_posts",
+          columns: [
+            ...reservedColumns("dc_posts"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "dc_notes", columns: reservedColumns("dc_notes") },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(getWebhookEmitSpec("collection", "posts")).toBeUndefined();
+    resetWebhookRecordingPolicy();
+  });
+
+  it("keeps a held single's prior default snapshot", async () => {
+    heldBackSpy.mockResolvedValueOnce([
+      { kind: "single", slug: "settings", reasons: ["held."] },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // APPLIED: additive, so the reload reaches the post-DDL commit.
+          { slug: "theme", fields: [{ name: "accent", type: "text" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "single_settings",
+          columns: [
+            ...reservedColumns("single_settings"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "single_theme", columns: reservedColumns("single_theme") },
+      ])
+    );
+
+    const resolver = buildResolver({
+      singleSyncResult: { created: [], updated: ["theme"], unchanged: [] },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    const [, options] = resolver.setCodeFirstSinglesSpy.mock.calls.at(-1) as [
+      unknown,
+      { keepPriorFor?: ReadonlySet<string> },
+    ];
+    expect(options.keepPriorFor?.has("settings")).toBe(true);
+  });
+
   it("holds back an entity whose type change the judgement holds back, saying why", async () => {
     heldBackSpy.mockResolvedValueOnce([
       {

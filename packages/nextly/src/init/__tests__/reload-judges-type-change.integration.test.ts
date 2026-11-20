@@ -6,13 +6,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig } from "../../config";
+import { clearServices } from "../../di/register";
 import { getService } from "../../di/service-access";
+import { takeRecordedAtStart } from "../../domains/schema/pipeline/recorded-fields";
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../plugins/test-nextly";
+import { runBootTimeApplyIfDev } from "../boot-apply";
 import { reloadNextlyConfig } from "../reload-config";
+import { clearCachedSnapshot } from "../schema-snapshot-cache";
 
 const loaded = vi.hoisted(() => ({
   config: undefined as unknown,
@@ -389,5 +393,64 @@ describe.each(getConfiguredTestDialects())(
       expect(asked).toEqual([]);
       expect(await stored()).toEqual({ a: "12", b: "abc" });
     });
+
+    /** The type the database gives `v`'s column on the collection's own table. */
+    async function columnType(): Promise<string> {
+      const [row] = (await handle!.adapter.executeQuery(
+        dialect === "sqlite"
+          ? `SELECT type AS type FROM pragma_table_info('${TABLE}') WHERE name = 'v'`
+          : dialect === "mysql"
+            ? `SELECT DATA_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${TABLE}' AND COLUMN_NAME = 'v'`
+            : `SELECT data_type AS type FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${TABLE}' AND column_name = 'v'`
+      )) as Array<{ type: string }>;
+      return String(row?.type ?? "").toLowerCase();
+    }
+
+    // A development start syncs the registry from the configuration before its apply, so the row
+    // records the new field by then: a change held at one start is judged again at the next, over
+    // the same values, rather than found already recorded.
+    // Not on MySQL: a start's services there open the case's own database by its name, which a
+    // second start in one case cannot reach; MySQL has no conversion for this pair either, so it
+    // is held there by the column alone, whatever the registry records, as on PostgreSQL.
+    it.skipIf(dialect === "mysql")(
+      "judges a change held at a development start again at the next start",
+      async () => {
+        handle = await createTestNextly(
+          dialect === "sqlite" ? {} : { dialect }
+        );
+        const adapter = handle.adapter;
+        vi.stubEnv("NODE_ENV", "development");
+        takeRecordedAtStart();
+        /** A start of the server with `v` as `field`: its registry sync, then its apply. */
+        const start = async (field: Record<string, unknown>) => {
+          clearServices();
+          clearCachedSnapshot();
+          const config = configWith(field);
+          loaded.config = config;
+          await createTestNextly({
+            adapter: adapter as never,
+            collections: config.collections as never,
+          });
+          await runBootTimeApplyIfDev({ caller: "test" });
+        };
+        await start({ type: "text" });
+        for (const [id, v] of Object.entries({ a: "maybe" })) {
+          await adapter.executeQuery(
+            `INSERT INTO ${q(TABLE)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("v")}) VALUES ('${id}', '${id}', '${id}', '${v}')`
+          );
+        }
+        const typeBefore = await columnType();
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        // On SQLite a checkbox's column keeps "maybe" as it is, so only the field's reading of it,
+        // judged from the row the start found, refuses the change.
+        await start({ type: "checkbox" });
+        await start({ type: "checkbox" });
+
+        expect(await columnType()).toBe(typeBefore);
+        expect(await stored()).toEqual({ a: "maybe" });
+      }
+    );
   }
 );
