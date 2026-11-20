@@ -1,3 +1,4 @@
+import { useWaitingScope } from "@admin/hooks/queries/useWaitingForMe";
 import { useCan } from "@admin/hooks/useCan";
 
 import type { CollectionForColumns } from "./EntryTableColumns";
@@ -7,6 +8,12 @@ export interface EntryBulkActions {
   delete: boolean;
   publish: boolean;
   unpublish: boolean;
+  /**
+   * Whether the workflow's moves (Submit for review, Assign…, Send back…) are offered: on a
+   * collection a workflow holds, to a reader who may edit its entries or may take some review
+   * step. Which move each document takes is the server's to judge, each refusal named.
+   */
+  workflowMoves: boolean;
   /**
    * Whether any of them is offered, and so whether rows can be selected at
    * all: a selection with nothing to do with it is a control that leads
@@ -30,7 +37,7 @@ export function useEntryBulkActions(
   collection:
     | Pick<
         CollectionForColumns,
-        "slug" | "status" | "removedFromCode" | "disableDelete"
+        "slug" | "status" | "removedFromCode" | "disableDelete" | "workflow"
       >
     | undefined
 ): EntryBulkActions {
@@ -42,6 +49,9 @@ export function useEntryBulkActions(
   const canDelete = useCan(`delete-${slug}`);
   const canPublish = useCan(`publish-${slug}`);
   const canUnpublish = useCan(`unpublish-${slug}`);
+  const canUpdate = useCan(`update-${slug}`);
+  // Whether the reader may take any review step at all: one who reviews but does not edit.
+  const reviews = useWaitingScope().data?.reviews === true;
 
   // A collection deleted through an action of its own (a plugin's) is offered
   // no Delete here: the server would refuse it, and that action is offered
@@ -52,9 +62,18 @@ export function useEntryBulkActions(
     delete: writable && deletable && slug !== "" && canDelete,
     publish: writable && hasStatus && canPublish,
     unpublish: writable && hasStatus && canUnpublish,
+    workflowMoves:
+      writable &&
+      slug !== "" &&
+      Boolean(collection?.workflow) &&
+      (canUpdate || reviews),
   };
   return {
     ...offered,
-    any: offered.delete || offered.publish || offered.unpublish,
+    any:
+      offered.delete ||
+      offered.publish ||
+      offered.unpublish ||
+      offered.workflowMoves,
   };
 }

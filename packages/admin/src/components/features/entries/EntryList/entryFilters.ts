@@ -139,21 +139,33 @@ export function buildEntryWhereFilter({
   const linked = linkedFilter(whereParam);
   const createdRange = buildDateRangeFilter(createdFrom, createdTo);
   const updatedRange = buildDateRangeFilter(updatedFrom, updatedTo);
+  // A chosen filter's top-level-only keys (the workflow filters' `_stage`,
+  // `_waitingForMe`, ...) are lifted out as a link's are, so they reach the
+  // server at the top level rather than inside the `and` it refuses them in.
+  const chosen = pluginWheres.map(splitTopLevelKeys);
   const filters = [
     linked.rest,
     status !== "all" ? { status: { equals: status } } : undefined,
     createdRange ? { createdAt: createdRange } : undefined,
     updatedRange ? { updatedAt: updatedRange } : undefined,
-    ...pluginWheres,
+    ...chosen.map(each => each.rest),
   ].filter((f): f is Record<string, unknown> => f !== undefined);
 
   // The top-level-only keys go back at the TOP level, never nested inside
-  // `and`.
-  const topLevel = topLevelKeys(
-    linked.topLevel,
-    translated,
-    readsTranslationState
-  );
+  // `and`; a chosen filter's after a link's, so the toolbar's choice wins.
+  const topLevel = {
+    ...topLevelKeys(linked.topLevel, translated, readsTranslationState),
+    // Held to the same rule as a link's: no language filter for a user who
+    // may not read every language's translation state.
+    ...topLevelKeys(
+      Object.assign({}, ...chosen.map(each => each.topLevel)) as Record<
+        string,
+        unknown
+      >,
+      null,
+      readsTranslationState
+    ),
+  };
   const result = joinedFilters(filters);
   if (Object.keys(topLevel).length === 0) return result;
   return { ...(result ?? {}), ...topLevel };
