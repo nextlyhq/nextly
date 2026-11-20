@@ -161,6 +161,39 @@ export interface DeletionHold {
   readonly checkIn: (
     changed: readonly string[]
   ) => ((db: unknown) => Promise<void>) | undefined;
+  /**
+   * `compare` for a try that resumes past statements that committed (MySQL's schema statements),
+   * for the removed fields stored in `changed` (every one where absent) whose column the database
+   * still holds: a field an earlier try's statements dropped was counted under that try's hold, and
+   * its values are gone with its column. A column that cannot be looked up is counted, so a count
+   * that cannot be taken refuses as it does before the first statement.
+   */
+  readonly standingIn: (
+    changed?: readonly string[]
+  ) => (db: unknown) => Promise<void>;
+}
+
+/**
+ * Whether `table` still has `column`, read through `db` on MySQL, the one database whose saves
+ * resume past statements that committed; elsewhere, and where the lookup fails, it is taken to
+ * stand, so it is counted.
+ */
+async function columnStands(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  column: string
+): Promise<boolean> {
+  if (dialect !== "mysql") return true;
+  try {
+    const result = await (db as Executes).execute(
+      sql`SELECT COUNT(*) AS ${sql.identifier("count")} FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${table} AND COLUMN_NAME = ${column}`
+    );
+    const [rows] = result as [Array<{ count: unknown }>];
+    return Number(rows[0]?.count) > 0;
+  } catch {
+    return true;
+  }
 }
 
 /** The handle a statement is run through, as Drizzle gives it on PostgreSQL. */
@@ -292,10 +325,28 @@ export function deletionHoldOf(args: {
       }
       await compareOf(fields)(db);
     };
+  // The removed fields stored in `changed`, every one where absent.
+  const removedIn = (changed: readonly string[] | undefined) => {
+    if (changed === undefined) return removed;
+    const inThem = new Set(changed.map(table => table.toLowerCase()));
+    return removed.filter(field =>
+      inThem.has(valuesTableOf(tableName, localized, field).toLowerCase())
+    );
+  };
   return {
     tables,
     compare: compareOf(removed),
     check: checkOf(removed, tables),
+    standingIn: changed => async db => {
+      const standing: FieldDefinition[] = [];
+      for (const field of removedIn(changed)) {
+        const table = valuesTableOf(tableName, localized, field);
+        if (await columnStands(db, dialect, table, columnOf(field.name))) {
+          standing.push(field);
+        }
+      }
+      if (standing.length > 0) await compareOf(standing)(db);
+    },
     checkIn(changed) {
       const inThem = new Set(changed.map(table => table.toLowerCase()));
       const fields = removed.filter(field =>

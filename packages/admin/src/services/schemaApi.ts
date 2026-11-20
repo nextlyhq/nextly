@@ -1,6 +1,7 @@
 // API service for schema preview/apply endpoints.
 // Used by the visual schema builder save flow.
 import { protectedApi } from "@admin/lib/api/protectedApi";
+import { changedRowDeletesData } from "@admin/lib/builder/review-deletes-data";
 
 import type { ActionResponse } from "../lib/api/response-types";
 
@@ -148,17 +149,18 @@ export interface ConfirmedDeletion {
 }
 
 /**
- * The values each field the reviewed preview removes holds, as it counted them: what the review's
- * Save confirms deleting. The server deletes only where each count still holds when it deletes,
- * and refuses, naming the new count, where one changed.
+ * The values each field the reviewed preview removes, or changes so it loses them
+ * (`changedRowDeletesData`), holds, as it counted them: what the review's Save confirms deleting. The
+ * server deletes only where each count still holds when it deletes, and refuses, naming the new
+ * count, where one changed; a confirmed field whose column stays is not compared.
  */
 export function confirmedDeletionsOf(
   preview: Pick<SchemaPreviewResponse, "changes">
 ): ConfirmedDeletion[] {
-  return preview.changes.removed.map(field => ({
-    field: field.name,
-    count: field.rowCount,
-  }));
+  return [
+    ...preview.changes.removed,
+    ...preview.changes.changed.filter(changedRowDeletesData),
+  ].map(field => ({ field: field.name, count: field.rowCount }));
 }
 
 /** The apply body's confirmed counts, left out where the save removes no field. */

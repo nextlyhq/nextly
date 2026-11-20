@@ -81,15 +81,23 @@ export interface BusyTableRun {
    * connection, such as a MySQL named lock, it is let go there. Absent, nothing runs.
    */
   readonly settled?: (db: unknown) => Promise<void>;
+  /**
+   * Run on a try that resumes past statements an earlier try made durable, in `before`'s place
+   * (`StatementTryBound.beforeResume`). Absent, a resumed try runs as it always has.
+   */
+  readonly beforeResume?: (db: unknown) => Promise<void>;
 }
 
-/** The run's `before` and `settled` that it gives, for each try's bound (`StatementTryBound`). */
+/** The run's `before`, `settled` and `beforeResume` that it gives, for each try's bound. */
 function tryHoldOf(
   run: BusyTableRun
-): Pick<BusyTableRun, "before" | "settled"> {
+): Pick<BusyTableRun, "before" | "settled" | "beforeResume"> {
   return {
     ...(run.before === undefined ? {} : { before: run.before }),
     ...(run.settled === undefined ? {} : { settled: run.settled }),
+    ...(run.beforeResume === undefined
+      ? {}
+      : { beforeResume: run.beforeResume }),
   };
 }
 

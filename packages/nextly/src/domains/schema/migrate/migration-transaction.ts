@@ -94,6 +94,15 @@ export interface StatementTryBound {
    * that did not run `before`, nothing runs.
    */
   readonly settled?: (db: unknown) => Promise<void>;
+  /**
+   * Run on a try that resumes past statements an earlier try made durable (`from` above 0), in
+   * `before`'s place and as `before` runs: before the try's first statement, with the handle its
+   * statements run on, under the try's bounds, and followed by `settled` however the try ends.
+   * What `before` took on an earlier try was let go when that try ended, so a caller whose hold
+   * must cover the statements still to run takes it again here. Absent, a resumed try runs as it
+   * always has.
+   */
+  readonly beforeResume?: (db: unknown) => Promise<void>;
   /** Told the id of the connection the unit's statements run on, once it is known. */
   readonly onSession?: (session: string) => void;
   /**
@@ -795,9 +804,9 @@ export async function boundSessionTry<T>(
 }
 
 /**
- * One try's `before` and `settled` (`StatementTryBound`): `bound` is `given` with its `before`
- * noting the handle it ran on, and `around` runs `settled` on that same handle once the try's work
- * has ended, however it ended, where `before` ran.
+ * One try's `before` (or `beforeResume`) and `settled` (`StatementTryBound`): `bound` is `given`
+ * with each noting the handle it ran on, and `around` runs `settled` on that same handle once the
+ * try's work has ended, however it ended, where either ran.
  */
 function heldTry(given: StatementTryBound | undefined): {
   bound: StatementTryBound | undefined;
@@ -819,17 +828,24 @@ function heldTry(given: StatementTryBound | undefined): {
     if (failed) await settling.catch(() => undefined);
     else await settling;
   };
-  const before = given?.before;
+  // `before` and `beforeResume`, each noting the handle it ran on.
+  const noting = (hook: ((db: unknown) => Promise<void>) | undefined) =>
+    hook === undefined
+      ? undefined
+      : async (db: unknown) => {
+          heldOn = { db };
+          await hook(db);
+        };
+  const before = noting(given?.before);
+  const beforeResume = noting(given?.beforeResume);
   return {
     bound:
-      given === undefined || before === undefined
+      given === undefined
         ? given
         : {
             ...given,
-            before: async db => {
-              heldOn = { db };
-              await before(db);
-            },
+            ...(before === undefined ? {} : { before }),
+            ...(beforeResume === undefined ? {} : { beforeResume }),
           },
     async around(work) {
       let failed = false;
@@ -912,6 +928,7 @@ async function runUnitStatements(
         for (const setting of settingsBefore) await tx.execute(sent(setting));
         // Inside the transaction, before the first statement, on every try that starts there: a
         // MySQL try resumed after statements that committed on their own skips it, as below.
+        if (from > 0) await bound?.beforeResume?.(tx.db);
         if (from === 0) await bound?.before?.(tx.db);
         // Whether the ledger write is left outside the unit's transaction (MySQL only).
         let outside = await commitBeforeLedgerOnlyTry(
@@ -987,6 +1004,7 @@ async function runUnitStatements(
     // Before the first statement, on the session the statements run on, on every try that starts
     // there. A try resumed past statements that committed as they ran skips it: what it read is
     // already changed by them, and a refusal now would undo none of them.
+    if (from > 0) await bound?.beforeResume?.(checkpointDb);
     if (from === 0) await bound?.before?.(checkpointDb);
     for (const [offset, statement] of statements.slice(from).entries()) {
       const index = from + offset;

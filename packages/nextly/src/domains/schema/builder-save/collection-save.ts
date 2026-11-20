@@ -3711,28 +3711,24 @@ async function runWritten(
   ) =>
     // In each file that deletes removed fields' values, for the values in the tables it is the
     // last to change: before its first statement and inside its transaction, on every try.
-    runHeld(
-      deps,
-      hold,
-      () => holdIn.get(unit.source),
-      held =>
-        runUnitInTries(
-          deps.adapter,
-          splitSqlStatements(sql, dialect, unit),
-          unit,
-          inLastTransaction !== undefined && running === ordered.at(-1)
-            ? async (handle: unknown, statementsExecuted: number) => {
-                await after(handle, statementsExecuted);
-                await inLastTransaction();
-              }
-            : after,
-          {
-            bounds,
-            notify: line => deps.logger.warn(line),
-            appliedBefore: () => [...applied],
-            ...held,
-          }
-        )
+    runHeld(deps, hold, holdIn.get(unit.source), held =>
+      runUnitInTries(
+        deps.adapter,
+        splitSqlStatements(sql, dialect, unit),
+        unit,
+        inLastTransaction !== undefined && running === ordered.at(-1)
+          ? async (handle: unknown, statementsExecuted: number) => {
+              await after(handle, statementsExecuted);
+              await inLastTransaction();
+            }
+          : after,
+        {
+          bounds,
+          notify: line => deps.logger.warn(line),
+          appliedBefore: () => [...applied],
+          ...held,
+        }
+      )
     );
   const ordered =
     files.change.length === 0 && files.adopt !== undefined
@@ -3747,7 +3743,7 @@ async function runWritten(
   // until the values are gone.
   const holdIn =
     hold === undefined
-      ? new Map<string, (db: unknown) => Promise<void>>()
+      ? new Map<string, readonly string[]>()
       : await deletingFilesOf(deps, ordered, hold);
   let before = await scopedSnapshotBefore(deps, ordered[0], table);
   if (await ranAsOneUnit()) return;
@@ -3826,43 +3822,39 @@ async function runWritten(
     const adoption = pendingAdoption;
     try {
       // Every file runs in this one transaction, the deleting one among them.
-      await runHeld(
-        deps,
-        hold,
-        whole => whole.check,
-        held =>
-          runUnitInTries(
-            deps.adapter,
-            parts.flatMap(part => part.statements),
-            { source: ordered.join(", "), transaction: true },
-            async handle => {
-              for (const [index, part] of parts.entries()) {
-                await recordRunInTransaction(
-                  {
-                    file: part.unit,
-                    dialect,
-                    repo,
-                    ...(index === adoptedWith && adoption !== undefined
-                      ? {
-                          recordApplied: (held: unknown) =>
-                            recordAlreadyApplied(adoption, repo.boundTo(held)),
-                        }
-                      : {}),
-                  },
-                  handle,
-                  part.statements.length,
-                  undefined
-                );
-              }
-              await inLastTransaction?.();
-            },
-            {
-              bounds,
-              notify: line => deps.logger.warn(line),
-              appliedBefore: () => [],
-              ...held,
+      await runHeld(deps, hold, "whole", held =>
+        runUnitInTries(
+          deps.adapter,
+          parts.flatMap(part => part.statements),
+          { source: ordered.join(", "), transaction: true },
+          async handle => {
+            for (const [index, part] of parts.entries()) {
+              await recordRunInTransaction(
+                {
+                  file: part.unit,
+                  dialect,
+                  repo,
+                  ...(index === adoptedWith && adoption !== undefined
+                    ? {
+                        recordApplied: (held: unknown) =>
+                          recordAlreadyApplied(adoption, repo.boundTo(held)),
+                      }
+                    : {}),
+                },
+                handle,
+                part.statements.length,
+                undefined
+              );
             }
-          )
+            await inLastTransaction?.();
+          },
+          {
+            bounds,
+            notify: line => deps.logger.warn(line),
+            appliedBefore: () => [],
+            ...held,
+          }
+        )
       );
     } catch (error) {
       // A lost race, a busy table's stop, and a count that changed are thrown as they are, as a
@@ -4267,8 +4259,8 @@ async function recordUnits(
 }
 
 /**
- * The run's `before` and `settled` for the count `checkOf` picks from a save's deletion hold
- * (`hold`), or neither without one.
+ * The run's `before`, `beforeResume` and `settled` for a save's deletion hold (`hold`), counting
+ * the removed fields stored in `tables` (every one where `"whole"`), or none without one.
  *
  * On PostgreSQL and SQLite the count holds the tables itself (`deletionHoldOf`). On MySQL, whose
  * schema statements commit on their own, the collection is held instead, on the try's own
@@ -4276,32 +4268,43 @@ async function recordUnits(
  * the collection's registry row commits first and is counted, and one that starts after waits at
  * the collection's named locks until the try is over, then meets the new shape. The locks belong
  * to the connection, so `settled` lets them go there, however the try ends.
+ *
+ * A MySQL try that ends waiting after statements that committed is resumed past them, and its hold
+ * ended with it, so a resumed try takes the hold again and counts again before its statements
+ * (`beforeResume`): the removed fields whose column still stands, a field an earlier try dropped
+ * having been counted under that try's hold.
  */
 function triedHoldOf(
   deps: CollectionSaveDeps,
   hold: SaveDeletionHold | undefined,
-  /** The count this run takes: the whole hold's, or one file's (`DeletionHold.checkIn`). */
-  checkOf: (
-    hold: SaveDeletionHold
-  ) => ((db: unknown) => Promise<void>) | undefined,
+  /** The tables this run's files change, whose removed fields it counts; `"whole"`, every one. */
+  tables: readonly string[] | "whole" | undefined,
   /** Told the connection a release failed on, to close once the try's transaction has ended. */
   leftHeld: (connection: string) => void
 ): {
   before?: (db: unknown) => Promise<void>;
+  beforeResume?: (db: unknown) => Promise<void>;
   settled?: (db: unknown) => Promise<void>;
 } {
-  const check = hold === undefined ? undefined : checkOf(hold);
-  if (hold === undefined || check === undefined) return {};
+  if (hold === undefined || tables === undefined) return {};
+  const scope = tables === "whole" ? undefined : tables;
+  const check = scope === undefined ? hold.check : hold.checkIn(scope);
+  if (check === undefined) return {};
   if (deps.adapter.getCapabilities().dialect !== "mysql") {
     return { before: check };
   }
   const { slug } = hold;
-  // This try's hold: `before` and `settled` run in turn, one pair per try.
+  const standing = hold.standingIn(scope);
+  // This try's hold: `before` (or `beforeResume`) and `settled` run in turn, one pair per try.
   let held: Awaited<ReturnType<typeof holdCollectionOnConnection>> | undefined;
   return {
     before: async db => {
       held = await holdCollectionOnConnection(deps.adapter, db, slug);
       await check(db);
+    },
+    beforeResume: async db => {
+      held = await holdCollectionOnConnection(deps.adapter, db, slug);
+      await standing(db);
     },
     settled: async () => {
       const releasing = held;
@@ -4320,20 +4323,20 @@ function triedHoldOf(
 }
 
 /**
- * `run`, a unit run in tries, given the hold's `before` and `settled` for the count `checkOf` picks
+ * `run`, a unit run in tries, given the hold's hooks for the removed fields stored in `tables`
  * (`triedHoldOf`); once it has ended, however it ended, each connection a release failed on is
  * closed (`closeHoldingConnection`), its transaction over by then.
  */
 async function runHeld<T>(
   deps: CollectionSaveDeps,
   hold: SaveDeletionHold | undefined,
-  checkOf: Parameters<typeof triedHoldOf>[2],
+  tables: Parameters<typeof triedHoldOf>[2],
   run: (hooks: ReturnType<typeof triedHoldOf>) => Promise<T>
 ): Promise<T> {
   const leftHeld: string[] = [];
   try {
     return await run(
-      triedHoldOf(deps, hold, checkOf, connection => {
+      triedHoldOf(deps, hold, tables, connection => {
         leftHeld.push(connection);
       })
     );
@@ -4462,26 +4465,25 @@ interface SaveDeletionHold extends DeletionHold {
 }
 
 /**
- * Where a file-by-file run of `ordered` counts what `hold` deletes, by file: each held table in the
- * last file whose statements change it (`fileDeletingFrom`), which deletes its values after any
- * file that converts it.
+ * Where a file-by-file run of `ordered` counts what `hold` deletes: the held tables each file counts,
+ * each in the last file whose statements change it (`fileDeletingFrom`), which deletes its values
+ * after any file that converts it. A file whose tables hold no removed field's values is left out.
  */
 async function deletingFilesOf(
   deps: CollectionSaveDeps,
   ordered: readonly string[],
   hold: DeletionHold
-): Promise<Map<string, (db: unknown) => Promise<void>>> {
+): Promise<Map<string, readonly string[]>> {
   const deleting = await fileDeletingFrom(deps, ordered, hold.tables);
   const tablesByFile = new Map<string, string[]>();
   for (const [table, filename] of deleting) {
     tablesByFile.set(filename, [...(tablesByFile.get(filename) ?? []), table]);
   }
-  const checks = new Map<string, (db: unknown) => Promise<void>>();
+  // A file whose tables hold no removed field's values counts nothing.
   for (const [filename, tables] of tablesByFile) {
-    const check = hold.checkIn(tables);
-    if (check !== undefined) checks.set(filename, check);
+    if (hold.checkIn(tables) === undefined) tablesByFile.delete(filename);
   }
-  return checks;
+  return tablesByFile;
 }
 
 /**

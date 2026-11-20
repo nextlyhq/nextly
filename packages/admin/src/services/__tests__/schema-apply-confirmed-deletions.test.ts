@@ -50,6 +50,39 @@ describe("a collection's apply", () => {
 });
 
 describe("confirmedDeletionsOf", () => {
+  // A relationship made many-to-many keeps its name but its column goes, with every value in it:
+  // the preview lists it as changed and destructive, and the Save confirms its count too. A change
+  // that keeps the field's values confirms none.
+  it("reads the count of a changed field that loses its values, and of no other", () => {
+    expect(
+      confirmedDeletionsOf({
+        changes: {
+          added: [],
+          removed: [],
+          changed: [
+            {
+              name: "author",
+              from: "relationship",
+              to: "relationship",
+              rowCount: 2,
+              classification: "destructive",
+              reason: "type_changed",
+            },
+            {
+              name: "title",
+              from: "text",
+              to: "text",
+              rowCount: 5,
+              classification: "safe",
+              reason: "constraint_changed",
+            },
+          ],
+          unchanged: [],
+        },
+      })
+    ).toEqual([{ field: "author", count: 2 }]);
+  });
+
   it("reads each removed field's count from the reviewed preview, an empty one included", () => {
     expect(
       confirmedDeletionsOf({

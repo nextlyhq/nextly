@@ -68,6 +68,28 @@ vi.mock("../migrate/required-column-guard", async importOriginal => {
 // release then runs on too. `refused` counts the releases refused.
 const tryRelease = vi.hoisted(() => ({ fails: false, refused: 0 }));
 
+// A switch that puts a statement on a table of its own before each migration file's statements,
+// so a MySQL file commits a statement before the one that deletes, and a try that ends waiting at
+// that one resumes past it.
+const resumable = vi.hoisted(() => ({ on: false }));
+vi.mock("../migrate/split-sql", async importOriginal => {
+  const real = await importOriginal<typeof import("../migrate/split-sql")>();
+  return {
+    ...real,
+    splitSqlStatements: (
+      ...args: Parameters<typeof real.splitSqlStatements>
+    ) => {
+      const statements = real.splitSqlStatements(...args);
+      return resumable.on
+        ? [
+            "CREATE TABLE IF NOT EXISTS dh_resumed_past (id integer)",
+            ...statements,
+          ]
+        : statements;
+    },
+  };
+});
+
 // A gate just after the save's count, inside the file's transaction, with the table held.
 const afterCount = vi.hoisted(() => ({
   armed: false,
@@ -152,6 +174,7 @@ afterEach(async () => {
   releaseFails.on = false;
   tryRelease.fails = false;
   tryRelease.refused = 0;
+  resumable.on = false;
   releaseFails.holds = 0;
   releaseFails.refused = 0;
   fileStart.armed = false;
@@ -747,6 +770,65 @@ describe.each(getConfiguredTestDialects())(
         await expect(
           t.nextly.create({ collection: SLUG, data: { label: "after" } })
         ).resolves.toBeDefined();
+      },
+      60_000
+    );
+
+    // A MySQL try that ends waiting after a statement that committed resumes past it, its hold let
+    // go with the try that ended. The resumed try takes the hold again and counts again before the
+    // statement that deletes, so a write made between the tries is counted, not dropped.
+    it.runIf(dialect === "mysql")(
+      "counts again on a try resumed past a statement that committed, and refuses a write made between the tries",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        // One try waits a second; the first statement commits, and the delete waits past it.
+        vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+        vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "30");
+        resumable.on = true;
+        const { paused, release } = gated(afterCount);
+        const applying = apply(t, 3).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached || (await applying)).toBe(true);
+
+        // Another session reading the table, which keeps its definition from changing: the first
+        // try's delete waits for it and the try ends.
+        let letGo: () => void = () => undefined;
+        const goes = new Promise<void>(resolve => {
+          letGo = resolve;
+        });
+        let reading: () => void = () => undefined;
+        const isReading = new Promise<void>(resolve => {
+          reading = resolve;
+        });
+        const reader = t.adapter.transaction(async tx => {
+          await tx.execute(`SELECT 1 FROM ${q(TABLE)} LIMIT 1`);
+          reading();
+          await goes;
+        });
+        await isReading;
+        // An entry write, sent while the first try holds the collection: it goes ahead once that
+        // try has let go, between the tries.
+        const between = t.nextly.create({
+          collection: SLUG,
+          data: { label: "between", note: "written between the tries" },
+        });
+        release();
+        await between;
+        // The table is free once the write is in.
+        letGo();
+        await reader;
+
+        const outcome = await applying;
+        expect(JSON.stringify(outcome)).toContain("DELETION_COUNT_CHANGED");
+        expect(await hasNoteColumn(t)).toBe(true);
+        expect(await notesHeld(t)).toBe(4);
       },
       60_000
     );
