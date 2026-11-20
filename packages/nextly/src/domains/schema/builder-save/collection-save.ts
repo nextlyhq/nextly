@@ -47,9 +47,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { serializeUiSchema } from "../../../cli/utils/ui-schema-writer";
 import { NextlyError } from "../../../errors/nextly-error";
-import type {
-  UiSchemaEntity,
-  UiSchemaManifest,
+import {
+  type UiSchemaEntity,
+  type UiSchemaManifest,
+  uiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
@@ -909,6 +910,17 @@ async function judgedStop(
     ...entity,
     fields: appliedFieldsOf(previous.fields, entity.fields, report),
   };
+  // The definition with what landed must still be one the manifest schema accepts: a setting the
+  // save asked for that names a field that did not land (the title it uses, say) would write a
+  // definition no later load reads. Such a stop is left as it stopped (`uiSchemaManifest`, the
+  // same reference checks every load runs).
+  if (
+    !uiSchemaManifest.safeParse(
+      withEntity(current, kindOf(save), save.slug, applied)
+    ).success
+  ) {
+    return undefined;
+  }
   // The whole table proven, not only the parts each change reaches.
   if (!standsAs(live, await desired(applied.fields))) return undefined;
   return { report, applied };
