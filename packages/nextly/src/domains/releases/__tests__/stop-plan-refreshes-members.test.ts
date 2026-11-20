@@ -71,39 +71,47 @@ describe("stopOnHardProblems over a release that changes between its walks", () 
             on("c", "x"),
           ];
     const blocked: string[][] = [];
-    const repository = {
-      scheduledMembersFor: vi.fn(
-        async (target: {
-          documents?: readonly { entryId: string }[];
-        }): Promise<{ release: ReleaseRow; members: ReleaseMemberRow[] }[]> => {
-          if (!("documents" in target) || target.documents === undefined) {
-            // The event: a's member on p, and b's on q.
-            const all = membersOf();
-            return [
-              {
-                release: releases().a,
-                members: all.filter(m => m.id === "a-p"),
-              },
-              {
-                release: releases().b,
-                members: all.filter(m => m.id === "b-q"),
-              },
-            ];
-          }
-          const asked = new Set(target.documents.map(d => d.entryId));
-          // The second walk starts from q: a has moved by then.
-          if (asked.has("q")) moved = true;
+    const scheduledMembersFor = vi.fn(
+      async (target: {
+        documents?: readonly { entryId: string }[];
+      }): Promise<{ release: ReleaseRow; members: ReleaseMemberRow[] }[]> => {
+        if (!("documents" in target) || target.documents === undefined) {
+          // The event: a's member on p, and b's on q.
           const all = membersOf();
-          const now = releases();
-          return (["a", "b", "c"] as const).flatMap(id => {
-            const naming = all.filter(
-              m => m.releaseId === id && asked.has(m.entryId)
-            );
-            return naming.length === 0
-              ? []
-              : [{ release: now[id], members: naming }];
-          });
+          return [
+            {
+              release: releases().a,
+              members: all.filter(m => m.id === "a-p"),
+            },
+            {
+              release: releases().b,
+              members: all.filter(m => m.id === "b-q"),
+            },
+          ];
         }
+        const asked = new Set(target.documents.map(d => d.entryId));
+        // The second walk starts from q: a has moved by then.
+        if (asked.has("q")) moved = true;
+        const all = membersOf();
+        const now = releases();
+        return (["a", "b", "c"] as const).flatMap(id => {
+          const naming = all.filter(
+            m => m.releaseId === id && asked.has(m.entryId)
+          );
+          return naming.length === 0
+            ? []
+            : [{ release: now[id], members: naming }];
+        });
+      }
+    );
+    const repository = {
+      scheduledMembersFor,
+      // The walk's read: every release named here is due, and no document is past the bound.
+      dueHoldersOf: vi.fn(
+        async (documents: readonly { entryId: string }[]) => ({
+          holding: await scheduledMembersFor({ documents }),
+          overflow: [],
+        })
       ),
       listMembersOf: vi.fn(async (ids: string[]) =>
         membersOf().filter(m => ids.includes(m.releaseId))

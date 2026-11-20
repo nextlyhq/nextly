@@ -83,13 +83,9 @@ import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-t
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
-  archiveCollectionFieldsLeavingTranslation,
-  checkCollectionTranslationChange,
-  collectionChangeCarriesValues,
+  collectionFileRoad,
   fieldsAsStored,
-  reconcileCollectionCompanionAfterFile,
   recordedFieldsOf,
-  refuseCollectionIndexNamesTaken,
   refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
 import { getColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
@@ -114,10 +110,7 @@ import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlis
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
-import {
-  afterEnclosingCommit,
-  registryInFileTransaction,
-} from "../helpers/applied-fields-row";
+import { afterEnclosingCommit } from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -1280,17 +1273,14 @@ const COLLECTIONS_METHODS: Record<
               await applyCollectionSchemaChange({ ...change, onLanded })
             ).summary;
           });
-          // The checks the change makes over its translations, asked once, where the save runs in
-          // development: the push asks them again itself; the file road asks them here, before
-          // anything is written. The rename they answer carries the companion's values on either.
-          let translationChecked:
-            | ReturnType<typeof checkCollectionTranslationChange>
-            | undefined;
-          const companionRename = () =>
-            (translationChecked ??= checkCollectionTranslationChange(change));
-          // Asked before the writer plans anything, as the push asks them before it plans its
-          // change, so a refusal of a translated field's change is the one either road gives.
-          await companionRename();
+          // Which road the change takes, and what it does around its own file, as a collection
+          // update asks it too (`collectionFileRoad`).
+          const road = collectionFileRoad(change);
+          // The checks the change makes over its translations, asked once, before the writer plans
+          // anything, as the push asks them before it plans its change, so a refusal of a
+          // translated field's change is the one either road gives. The push asks them again
+          // itself; the file road takes them from here.
+          await road.companionRename();
           const newSchemaVersion = currentVersion + 1;
           // The registry's row of the save: the fields as stored, the advanced schema version and
           // the translation state this apply ran with, written with the stored version in one
@@ -1417,10 +1407,7 @@ const COLLECTIONS_METHODS: Record<
             // failed write leaves the save as it was and is answered as the failure it is. Not where
             // the translations table is brought in step after the file: the row would then record
             // the change before that step holds it, so it is written after it, as a Single's is.
-            ...(registryInFileTransaction({
-              wasStored: storesPerLanguage({ localized: wasLocalized }),
-              isStored: isStoredPerLanguage,
-            })
+            ...(road.registryInFile
               ? {
                   registry: (stored: FieldDefinition[]) =>
                     writeRow(stored, false),
@@ -1471,31 +1458,14 @@ const COLLECTIONS_METHODS: Record<
             // migration once the push has run: where it carries values across the change, as a
             // Single's and a field group's saves ask it (`pushCarriesValues`). Any other change,
             // a translated collection's included, runs its own file.
-            pushWhen: async () =>
-              collectionChangeCarriesValues(change, await companionRename()),
-            // A field leaving translation archived before the file runs, and the translations
-            // table brought in step with the main table the file left.
+            pushWhen: road.pushCarriesValues,
+            // The push's preconditions judged first, a field leaving translation archived before
+            // the file runs, and what the file does not reach brought in step once it has
+            // (`CollectionFileRoad`).
             fileRoad: {
-              // The preconditions the push asks before it changes anything: an index name the
-              // change declares that another index holds, and a field leaving translation's.
-              judge: async () => {
-                await refuseCollectionIndexNamesTaken(change);
-                await archiveCollectionFieldsLeavingTranslation(
-                  change,
-                  await companionRename(),
-                  { judgeOnly: true }
-                );
-              },
-              before: async () =>
-                archiveCollectionFieldsLeavingTranslation(
-                  change,
-                  await companionRename()
-                ),
-              after: async () =>
-                reconcileCollectionCompanionAfterFile(
-                  change,
-                  await companionRename()
-                ),
+              judge: road.judge,
+              before: road.before,
+              after: road.after,
             },
             slug: p.collectionName,
             collection: writerRowOf(collection),

@@ -113,7 +113,49 @@ async function scopeContent(
   const ids = [...new Set(entryIds)];
   // Each read below binds the ids in runs (`perIdBatch`): a component of several releases can
   // name more documents of one scope than SQLite binds in a statement.
-  const mainStatus = await perIdBatch(ids, async batch => {
+  const mainStatus = await mainStatusesOf(adapter, entity, ids);
+  const { perLanguage, ownStatuses } = await languageStatusesOf(
+    adapter,
+    entity,
+    localization,
+    ids
+  );
+  const versions = new VersionsRepository(adapter);
+  const pendingByEntry = await perIdBatch(ids, batch =>
+    versions.findPendingChangeLocales(scope.scopeKind, scope.scopeSlug, batch)
+  );
+  // Read for the whole batch rather than per document, as the reads above are.
+  const statesByEntry = await perIdBatch(ids, batch =>
+    readScopeReviewStates(adapter, scope, batch)
+  );
+  const stored: StoredParts = {
+    hasStatus: entity.status === true,
+    mainStatus,
+    ownStatuses,
+    pendingByEntry,
+    perLanguage,
+    defaultLocale: localization?.defaultLocale ?? null,
+  };
+  return {
+    table: scope.scopeKind === "single" ? await documentTableOn(scope) : null,
+    languages: perLanguage
+      ? (localization?.locales.map(locale => locale.code) ?? [])
+      : [],
+    statesOf: entryId => statesByEntry.get(entryId) ?? [],
+    of: (entryId, part) => partContentOf(stored, entryId, part),
+  };
+}
+
+/** The collection or Single a scope names, as `entityOf` finds it. */
+type ScopeEntity = NonNullable<Awaited<ReturnType<typeof entityOf>>>;
+
+/** Each document's stored main-row status, by id, read in runs of ids. */
+function mainStatusesOf(
+  adapter: DrizzleAdapter,
+  entity: ScopeEntity,
+  ids: readonly string[]
+): Promise<Map<string, unknown>> {
+  return perIdBatch(ids, async batch => {
     const rows = await adapter.select<{ id: unknown; status?: unknown }>(
       entity.tableName,
       {
@@ -123,8 +165,22 @@ async function scopeContent(
     );
     return new Map(rows.map(row => [String(row.id), row.status]));
   });
-  // Languages move one by one only where the entity keeps a status per language, as a
-  // document-wide publish asks the publish gate about them.
+}
+
+/**
+ * Whether the scope keeps a status per language, and each document's language statuses when it
+ * does. Languages move one by one only where the entity keeps a status per language, as a
+ * document-wide publish asks the publish gate about them.
+ */
+async function languageStatusesOf(
+  adapter: DrizzleAdapter,
+  entity: ScopeEntity,
+  localization: ReturnType<typeof appLocalization>,
+  ids: readonly string[]
+): Promise<{
+  perLanguage: boolean;
+  ownStatuses: Map<string, Map<string, string | null>>;
+}> {
   const companion =
     entity.localized === true && localization
       ? buildCompanionSchema({
@@ -135,58 +191,60 @@ async function scopeContent(
           status: true,
         })
       : null;
-  const perLanguage = companion?.hasStatus === true;
-  let ownStatuses = new Map<string, Map<string, string | null>>();
-  if (companion !== null && perLanguage) {
-    const readiness = await resolveCompanionReadiness(adapter, {
-      companionTableName: companion.companionTableName,
-      mainTableName: entity.tableName,
-      localizedColumns: companion.localizedFields.map(field => field.column),
-    });
-    const db =
-      adapter.getDrizzle<
-        Parameters<typeof readCompanionLocaleStatusAllOf>[0]
-      >();
-    ownStatuses = await perIdBatch(ids, batch =>
-      readCompanionLocaleStatusAllOf(db, companion.table, batch, readiness)
-    );
+  if (companion === null || companion.hasStatus !== true) {
+    return { perLanguage: false, ownStatuses: new Map() };
   }
-  const versions = new VersionsRepository(adapter);
-  const pendingByEntry = await perIdBatch(ids, batch =>
-    versions.findPendingChangeLocales(scope.scopeKind, scope.scopeSlug, batch)
-  );
-  // Read for the whole batch rather than per document, as the reads above are.
-  const statesByEntry = await perIdBatch(ids, batch =>
-    readScopeReviewStates(adapter, scope, batch)
-  );
+  const readiness = await resolveCompanionReadiness(adapter, {
+    companionTableName: companion.companionTableName,
+    mainTableName: entity.tableName,
+    localizedColumns: companion.localizedFields.map(field => field.column),
+  });
+  const db =
+    adapter.getDrizzle<Parameters<typeof readCompanionLocaleStatusAllOf>[0]>();
   return {
-    table: scope.scopeKind === "single" ? await documentTableOn(scope) : null,
-    languages: perLanguage
-      ? (localization?.locales.map(locale => locale.code) ?? [])
-      : [],
-    statesOf: entryId => statesByEntry.get(entryId) ?? [],
-    of(entryId, part) {
-      const pending = pendingByEntry.get(entryId) ?? new Set<string | null>();
-      const pendingOn = pendingPartsOf(pending);
-      const own = ownStatuses.get(entryId);
-      if (part !== null && own?.has(part) !== true && !pending.has(part)) {
-        return null;
-      }
-      // The decision every path reads liveness by, over the statuses as stored.
-      const live =
-        entity.status !== true ||
-        languageIsLive({
-          mainStatus: mainStatus.get(entryId),
-          ownStatus: part === null ? null : (own?.get(part) ?? null),
-          locale: part,
-          defaultLocale: localization?.defaultLocale ?? null,
-          perLanguageStatus: perLanguage,
-        });
-      // Pending as the publish gate reads the same drafts (`pendingPartsOf`): the shared part
-      // only where a draft's slot holds it, which a language's draft kept by part does not.
-      return { live, pending: pendingOn(part) };
-    },
+    perLanguage: true,
+    ownStatuses: await perIdBatch(ids, batch =>
+      readCompanionLocaleStatusAllOf(db, companion.table, batch, readiness)
+    ),
   };
+}
+
+/** One scope's stored statuses and pending drafts, as `partContentOf` reads them. */
+interface StoredParts {
+  /** Whether the scope has a draft/published lifecycle at all. */
+  hasStatus: boolean;
+  mainStatus: ReadonlyMap<string, unknown>;
+  ownStatuses: ReadonlyMap<string, ReadonlyMap<string, string | null>>;
+  pendingByEntry: ReadonlyMap<string, ReadonlySet<string | null>>;
+  perLanguage: boolean;
+  defaultLocale: string | null;
+}
+
+/** What one part of a document holds, or null for a language with nothing stored or pending. */
+function partContentOf(
+  stored: StoredParts,
+  entryId: string,
+  part: string | null
+): PartContent | null {
+  const pending =
+    stored.pendingByEntry.get(entryId) ?? new Set<string | null>();
+  const own = stored.ownStatuses.get(entryId);
+  if (part !== null && own?.has(part) !== true && !pending.has(part)) {
+    return null;
+  }
+  // The decision every path reads liveness by, over the statuses as stored.
+  const live =
+    !stored.hasStatus ||
+    languageIsLive({
+      mainStatus: stored.mainStatus.get(entryId),
+      ownStatus: part === null ? null : (own?.get(part) ?? null),
+      locale: part,
+      defaultLocale: stored.defaultLocale,
+      perLanguageStatus: stored.perLanguage,
+    });
+  // Pending as the publish gate reads the same drafts (`pendingPartsOf`): the shared part only
+  // where a draft's slot holds it, which a language's draft kept by part does not.
+  return { live, pending: pendingPartsOf(pending)(part) };
 }
 
 /**

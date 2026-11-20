@@ -29,6 +29,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { underNaming } from "../../field-groups/services/field-group-storage-names";
 import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
@@ -1488,7 +1489,10 @@ export async function generateMigration(
       ),
       entities: coveredEntitiesOf(
         args,
-        previous === null ? undefined : previous.data.entities
+        previous === null ? undefined : previous.data.entities,
+        previous === null
+          ? undefined
+          : new Set(previous.data.snapshot.tables.map(table => table.name))
       ),
       translationMoves: [
         ...(args.valueMoves ?? []),
@@ -4129,7 +4133,8 @@ function provenanceOf(entry: RecordedEntitySettings): string {
  */
 export function coveredEntitiesOf(
   args: GenerateArgs,
-  recorded: EntitySettingsRecord | undefined
+  recorded: EntitySettingsRecord | undefined,
+  recordedTables?: ReadonlySet<string>
 ): CoveredEntity[] {
   const of = (
     kind: CoveredEntity["kind"],
@@ -4187,6 +4192,25 @@ export function coveredEntitiesOf(
     ),
     ...of("single", args.singles, recorded?.singles, (slug, dbName) =>
       resolveSingleTableName({ slug, dbName })
+    ),
+    // A field group's table is the one its record names (an earlier release let it choose one),
+    // else the one its slug gives, under the naming the last snapshot records it by: after the
+    // field-group storage migration, `fg_` in place of `comp_`.
+    ...of(
+      "fieldGroup",
+      args.components,
+      recorded?.fieldGroups,
+      (slug, dbName) => {
+        // A table an earlier release let the field group name keeps that name through the
+        // storage migration.
+        if (dbName !== undefined) return dbName;
+        const legacy = resolveComponentTableName(slug);
+        const current = underNaming("current", legacy);
+        return recordedTables?.has(legacy) !== true &&
+          recordedTables?.has(current) === true
+          ? current
+          : legacy;
+      }
     ),
   ];
 }

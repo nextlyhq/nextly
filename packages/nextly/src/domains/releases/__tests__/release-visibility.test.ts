@@ -14,8 +14,13 @@ import { NO_DECISIONS } from "../release-scope";
 import {
   NO_RELEASE_VISIBILITY,
   createReleaseVisibility,
+  type RevealSource,
 } from "../release-visibility";
-import type { DrainMemberRow, ReleaseRow } from "../releases-repository";
+import type {
+  DrainMemberRow,
+  ReleaseMemberRow,
+  ReleaseRow,
+} from "../releases-repository";
 
 const QUERY = {
   scopeKind: "collection" as const,
@@ -71,9 +76,24 @@ function documentsOf(
   return "documents" in target ? target.documents : [];
 }
 
+/**
+ * A walk's read of due holders over a fake answering by recheck target, as the repository answers
+ * it: every release the fake names is due, and no document is past the bound.
+ */
+function holdersFrom(
+  answer: (
+    target: ReleaseRecheckTarget
+  ) => Promise<{ release: ReleaseRow; members: ReleaseMemberRow[] }[]>
+): RevealSource["dueHoldersOf"] {
+  return async documents => ({
+    holding: await answer({ documents }),
+    overflow: [],
+  });
+}
+
 /** Nothing due to plan: what the first cases' reads never reach. */
 const NOTHING_DUE = {
-  scheduledMembersFor: async () => [],
+  dueHoldersOf: holdersFrom(async () => []),
   listMembersOf: async () => [],
 };
 
@@ -83,10 +103,10 @@ const NOTHING_DUE = {
  */
 const TWO_RELEASES = {
   findDueDecisions: async () => ({ reveal: ["e1", "e2"], hide: ["e3"] }),
-  scheduledMembersFor: async () => [
+  dueHoldersOf: holdersFrom(async () => [
     { release: release("r1"), members: [] },
     { release: release("r2"), members: [] },
-  ],
+  ]),
   listMembersOf: async () => [
     member("r1", "e1", "publish"),
     member("r2", "e2", "publish"),
@@ -124,7 +144,7 @@ describe("createReleaseVisibility", () => {
       repository: {
         findDueDecisions,
         // The releases those decisions come from, still due when they are planned.
-        scheduledMembersFor: TWO_RELEASES.scheduledMembersFor,
+        dueHoldersOf: TWO_RELEASES.dueHoldersOf,
         listMembersOf: TWO_RELEASES.listMembersOf,
       },
     });
@@ -202,7 +222,7 @@ describe("createReleaseVisibility with a hold on going live", () => {
       cache: { mayHaveDue: async () => true },
       repository: {
         findDueDecisions: async () => ({ reveal: ["e1"], hide: [] }),
-        scheduledMembersFor,
+        dueHoldersOf: holdersFrom(scheduledMembersFor),
         listMembersOf: async (ids: string[]) =>
           ids.flatMap(id => [
             member(id, `e${indexOf(id)}`, "publish"),
@@ -253,14 +273,15 @@ describe("createReleaseVisibility with a hold on going live", () => {
           reveal: [...singles, "p1", "p2", "h"],
           hide: [],
         }),
-        scheduledMembersFor: async (target: ReleaseRecheckTarget) =>
+        dueHoldersOf: holdersFrom(async (target: ReleaseRecheckTarget) =>
           [
             ...new Set(
               documentsOf(target).flatMap(
                 document => holders.get(document.entryId) ?? []
               )
             ),
-          ].map(id => ({ release: release(id), members: [] })),
+          ].map(id => ({ release: release(id), members: [] }))
+        ),
         listMembersOf: async (ids: string[]) =>
           ids.flatMap(id =>
             (holds.get(id) ?? []).map(entryId => member(id, entryId, "publish"))
@@ -296,7 +317,7 @@ describe("createReleaseVisibility with a hold on going live", () => {
       repository: {
         findDueDecisions: async () => ({ reveal: ["h", "p", "s"], hide: [] }),
         // Each release with the members naming the documents asked, as the repository answers.
-        scheduledMembersFor: async (target: ReleaseRecheckTarget) => {
+        dueHoldersOf: holdersFrom(async (target: ReleaseRecheckTarget) => {
           const asked = new Set(
             documentsOf(target).map(document => document.entryId)
           );
@@ -313,7 +334,7 @@ describe("createReleaseVisibility with a hold on going live", () => {
                   },
                 ];
           });
-        },
+        }),
         listMembersOf: async (ids: string[]) =>
           ids.flatMap(id =>
             (holds.get(id) ?? []).map(entryId => member(id, entryId, "publish"))
@@ -334,9 +355,9 @@ describe("createReleaseVisibility with a hold on going live", () => {
       cache: { mayHaveDue: async () => true },
       repository: {
         findDueDecisions: async () => ({ reveal: [], hide: ["e3"] }),
-        scheduledMembersFor: async () => [
+        dueHoldersOf: holdersFrom(async () => [
           { release: release("r2"), members: [] },
-        ],
+        ]),
         listMembersOf: async () => [member("r2", "e3", "unpublish")],
       },
       hold: () => ({ held }),
@@ -362,14 +383,14 @@ describe("createReleaseVisibility over a schedule that moves between its reads",
       cache: { mayHaveDue: async () => true },
       repository: {
         findDueDecisions: async () => ({ reveal: ["e1", "e2"], hide: ["e3"] }),
-        scheduledMembersFor: async (target: ReleaseRecheckTarget) => {
+        dueHoldersOf: holdersFrom(async (target: ReleaseRecheckTarget) => {
           const asked = new Set(
             documentsOf(target).map(document => document.entryId)
           );
           return [...holds]
             .filter(([, members]) => members.some(m => asked.has(m.entryId)))
             .map(([id]) => ({ release: release(id), members: [] }));
-        },
+        }),
         listMembersOf: async (ids: string[]) =>
           ids.flatMap(id => holds.get(id) ?? []),
       },
@@ -392,11 +413,11 @@ describe("createReleaseVisibility over a schedule that moves between its reads",
           reveal: ["e1", "e2"],
           hide: ["e3", "e4"],
         }),
-        scheduledMembersFor: async () => [
+        dueHoldersOf: holdersFrom(async () => [
           { release: release("r1"), members: [] },
           { release: release("r2"), members: [] },
           { release: release("r3"), members: [] },
-        ],
+        ]),
         listMembersOf: async () => [
           member("r1", "e1", "publish"),
           member("r2", "e2", "publish"),
