@@ -174,6 +174,10 @@ import { consoleLogger } from "../shared/types";
 import type { SanitizedNextlyConfig } from "../shared/types/config";
 import type { SingleHooks } from "../singles/config/types";
 
+import {
+  type TypeChangedEntity,
+  typeChangesHeldBack,
+} from "./code-first-type-changes";
 import { planFieldGroupReload } from "./field-group-reload-plan";
 import { clearLiveSnapshots, setLiveSnapshot } from "./schema-snapshot-cache";
 import { bootSeedingFollows } from "./seed-permissions";
@@ -1700,8 +1704,12 @@ function terminalPromptDispatcher(): PromptDispatcher {
       loaded ??= import(
         "../domains/schema/pipeline/prompt-dispatcher/clack-terminal"
       ).then(
+        // A reload runs inside the development server: a lossy type change clears its values only
+        // under the consent naming its column, never on a question.
         ({ ClackTerminalPromptDispatcher }) =>
-          new ClackTerminalPromptDispatcher()
+          new ClackTerminalPromptDispatcher(undefined, {
+            asksAboutTypeChanges: false,
+          })
       );
       return (await loaded).dispatch(args);
     },
@@ -2689,6 +2697,13 @@ async function applyReloadHolding(
     [...skippedComponentSlugs].map(slug => `fieldGroup:${slug}`)
   );
 
+  // Each entity whose diff the reload applies, as `<kind>:<slug>`, and those whose diff changes a
+  // column's type, which are judged once every entity carries its recorded fields
+  // (`typeChangesHeldBack`, below).
+  const startedAsChange = hasChanges;
+  const changedEntities = new Set<string>();
+  const typeChanged: TypeChangedEntity[] = [];
+
   const desiredCollections: Record<string, DesiredCollection> = {};
   for (const target of targets) {
     // Always register the entry so drizzle-kit's schema stays complete.
@@ -2741,6 +2756,13 @@ async function applyReloadHolding(
         continue;
       }
       hasChanges = true;
+      changedEntities.add(`collection:${target.slug}`);
+      typeChanged.push({
+        kind: "collection",
+        slug: target.slug,
+        table: desiredTable,
+        operations,
+      });
       desiredCollections[target.slug] = entry;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2800,6 +2822,13 @@ async function applyReloadHolding(
         continue;
       }
       hasChanges = true;
+      changedEntities.add(`single:${target.slug}`);
+      typeChanged.push({
+        kind: "single",
+        slug: target.slug,
+        table: desiredTable,
+        operations,
+      });
       desiredSingles[target.slug] = entry;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2865,6 +2894,13 @@ async function applyReloadHolding(
         continue;
       }
       hasChanges = true;
+      changedEntities.add(`fieldGroup:${target.slug}`);
+      typeChanged.push({
+        kind: "fieldGroup",
+        slug: target.slug,
+        table: desiredTable,
+        operations,
+      });
       desiredComponents[target.slug] = entry;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2885,6 +2921,46 @@ async function applyReloadHolding(
     resolve,
     adapter,
   });
+
+  // Each field type change, judged now that every code-first entity carries its recorded fields,
+  // by the judge db:sync asks (`typeChangesHeldBack`). An entity whose change is blocked, would
+  // clear a value no consent naming its column covers, or has no conversion Nextly runs is held
+  // back whole, as a change needing review is: deferred, so its translations table's work waits
+  // too, and handed to the apply with its fields as its registry records them, so the apply
+  // changes nothing of it while every other entity's change still applies.
+  const heldBack = await typeChangesHeldBack({
+    db,
+    dialect,
+    live: liveSnapshot,
+    schema: {
+      collections: desiredCollections,
+      singles: desiredSingles,
+      components: desiredComponents,
+    },
+    entities: typeChanged,
+    env: process.env,
+  });
+  for (const { kind, slug, reasons } of heldBack) {
+    logger?.warn(
+      `[Nextly HMR] Code-first change for ${KIND_NOUN[kind]}'${slug}' was not applied: ${reasons.join(" ")}`
+    );
+    deferredSchemaChange = true;
+    deferredEntities.add(`${kind}:${slug}`);
+    withholdChange(
+      kind === "collection"
+        ? desiredCollections
+        : kind === "single"
+          ? desiredSingles
+          : desiredComponents,
+      slug
+    );
+  }
+  // The reload has a change to apply only where an entity it does not hold back has one.
+  if (heldBack.length > 0) {
+    hasChanges =
+      startedAsChange ||
+      [...changedEntities].some(key => !deferredEntities.has(key));
+  }
 
   // A type switched off or on for a plugin's scope since its runtime tables
   // were built: in the configuration or made in the Schema Builder, whose
@@ -3869,6 +3945,29 @@ async function recordRegistryHistory(args: {
   );
   // What a start held, for a refused apply to hold again.
   return atStart;
+}
+
+/** How a reload's notice names each kind of entity before its slug. */
+const KIND_NOUN = {
+  collection: "",
+  single: "single ",
+  fieldGroup: "component ",
+} as const;
+
+/**
+ * Hands the apply `slug`'s fields as its registry row records them from before the reload, so the
+ * apply finds nothing of it to change: a change held back is not pushed beside the ones that go on.
+ */
+function withholdChange(
+  entries: Record<
+    string,
+    { fields: unknown; recordedFields?: readonly unknown[] }
+  >,
+  slug: string
+): void {
+  const entry = entries[slug];
+  if (entry?.recordedFields === undefined) return;
+  entries[slug] = { ...entry, fields: entry.recordedFields };
 }
 
 // Decides whether a collection's ops can be auto-applied from code-first.

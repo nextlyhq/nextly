@@ -29,11 +29,20 @@ vi.mock("../../cli/utils/config-loader", async importOriginal => ({
 
 const SLUG = "rljtc";
 const TABLE = `dc_${SLUG}`;
+/** A second collection, changed in the same reload. */
+const OTHER = "rljtc_other";
 
-/** The collection as code declares it, `v` given as `field`. */
+/**
+ * The collection as code declares it, `v` given as `field`, with `beside` after it; and `other`,
+ * where given, as a second collection's fields.
+ */
 const configWith = (
   field: Record<string, unknown>,
-  options: { localized?: boolean } = {}
+  options: {
+    localized?: boolean;
+    beside?: Record<string, unknown>[];
+    other?: Record<string, unknown>[];
+  } = {}
 ) =>
   defineConfig({
     ...(options.localized === true
@@ -43,8 +52,11 @@ const configWith = (
       defineCollection({
         slug: SLUG,
         ...(options.localized === true ? { localized: true } : {}),
-        fields: [{ name: "v", ...field }] as never,
+        fields: [{ name: "v", ...field }, ...(options.beside ?? [])] as never,
       }),
+      ...(options.other === undefined
+        ? []
+        : [defineCollection({ slug: OTHER, fields: options.other as never })]),
     ],
   });
 
@@ -70,7 +82,7 @@ describe.each(getConfiguredTestDialects())(
     async function withValues(
       from: Record<string, unknown>,
       values: Record<string, string>,
-      options: { localized?: boolean } = {}
+      options: Parameters<typeof configWith>[1] = {}
     ): Promise<TestNextly> {
       handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
       // The reload runs its schema work only under next dev.
@@ -97,7 +109,9 @@ describe.each(getConfiguredTestDialects())(
     /** The reload of `to`, and everything it said. */
     async function reloadTo(
       to: Record<string, unknown>,
-      options: { localized?: boolean } = {}
+      options: Parameters<typeof configWith>[1] = {},
+      /** The reload's prompt dispatcher, where the case stands one in for the terminal's. */
+      dispatcher?: unknown
     ): Promise<{ said: string; threw: unknown }> {
       const lines: string[] = [];
       const note = (line: unknown) => {
@@ -114,6 +128,9 @@ describe.each(getConfiguredTestDialects())(
       loaded.config = configWith(to, options);
       let threw: unknown;
       const outcome = await reloadNextlyConfig({
+        ...(dispatcher === undefined
+          ? {}
+          : { dispatcher: dispatcher as never }),
         resolver: name =>
           name === "logger"
             ? logger
@@ -126,6 +143,21 @@ describe.each(getConfiguredTestDialects())(
       return { said: lines.join(" | "), threw };
     }
 
+    async function columnsOf(table: string): Promise<string[]> {
+      const rows = (await handle!.adapter.executeQuery(
+        dialect === "sqlite"
+          ? `SELECT name AS name FROM pragma_table_info('${table}')`
+          : dialect === "mysql"
+            ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}'`
+            : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'`
+      )) as { name: string }[];
+      return rows.map(row => row.name);
+    }
+
+    async function tableExists(table: string): Promise<boolean> {
+      return (await columnsOf(table)).length > 0;
+    }
+
     async function stored(): Promise<Record<string, unknown>> {
       const rows = (await handle!.adapter.executeQuery(
         `SELECT ${q("id")} AS id, ${q("v")} AS v FROM ${q(TABLE)} ORDER BY ${q("id")}`
@@ -134,15 +166,18 @@ describe.each(getConfiguredTestDialects())(
     }
 
     // SQLite converts a text column into a number by its rebuild; PostgreSQL and MySQL have no
-    // conversion Nextly runs for the pair, so it is offered to a person, who is asked at a
-    // terminal (`db:sync`): a reload, where nobody can be asked, holds it and says so.
+    // conversion Nextly runs for the pair, so it is confirmed by a person at a terminal
+    // (`db:sync`): a reload, where nobody is asked, holds the collection back and says so.
     const converts = dialect === "sqlite";
 
     /** What a reload that holds the change for a person says: the column and where to answer. */
     const heldForConfirmation = (said: string) => {
-      expect(said).toMatch(/needs your confirmation/);
-      expect(said).toMatch(new RegExp(`type change on ${TABLE}\\.v`));
-      expect(said).toMatch(/nextly db:sync/);
+      expect(said).toMatch(new RegExp(`'${SLUG}' was not applied`));
+      expect(said).toMatch(
+        new RegExp(
+          `${TABLE}\\.v: .* no conversion for, so it is confirmed at a terminal: run nextly db:sync`
+        )
+      );
     };
 
     it("applies a text holding whole numbers becoming a number, where the database converts it", async () => {
@@ -228,6 +263,74 @@ describe.each(getConfiguredTestDialects())(
         `SELECT ${q("v")} AS v FROM ${q(`${TABLE}_locales`)}`
       )) as Array<{ v: unknown }>;
       expect(companion).toEqual([{ v: "12" }]);
+    });
+
+    // A collection held back is held back alone: the reload applies every other entity's change,
+    // and gives the held one's apply nothing to change.
+    it("applies another collection's change in the same reload while it holds one back", async () => {
+      await withValues(
+        { type: "text" },
+        { a: "12", b: "abc" },
+        { other: [{ name: "w", type: "text" }] }
+      );
+
+      const { said } = await reloadTo(
+        { type: "number" },
+        {
+          other: [
+            { name: "w", type: "text" },
+            { name: "x", type: "text" },
+          ],
+        }
+      );
+
+      expect(said).toMatch(new RegExp(`'${SLUG}' was not applied`));
+      expect(await columnsOf(`dc_${OTHER}`)).toContain("x");
+      expect(await stored()).toEqual({ a: "12", b: "abc" });
+    });
+
+    // A collection held back keeps its translations table's work back with it: a field it starts
+    // translating gets no translations table while the change beside it waits.
+    it("creates no translations table for a collection whose type change it holds back", async () => {
+      await withValues(
+        { type: "text" },
+        { a: "12", b: "abc" },
+        { beside: [{ name: "w", type: "text" }] }
+      );
+
+      const { said } = await reloadTo(
+        { type: "number", localized: false },
+        {
+          localized: true,
+          beside: [{ name: "w", type: "text", localized: true }],
+        }
+      );
+
+      expect(said).toMatch(new RegExp(`'${SLUG}' was not applied`));
+      expect(await tableExists(`${TABLE}_locales`)).toBe(false);
+      expect(await stored()).toEqual({ a: "12", b: "abc" });
+    });
+
+    // A reload runs inside the development server: a value is cleared only under the consent
+    // naming its column, never on a question, even where a terminal could ask one.
+    it("asks no question about a type change, even of a dispatcher that would answer it", async () => {
+      await withValues({ type: "text" }, { a: "12", b: "abc" });
+      const asked: unknown[] = [];
+      const answering = {
+        dispatch: (question: unknown) => {
+          asked.push(question);
+          return Promise.resolve({
+            confirmedRenames: [],
+            resolutions: [],
+            proceed: true,
+          });
+        },
+      };
+
+      await reloadTo({ type: "number" }, {}, answering);
+
+      expect(asked).toEqual([]);
+      expect(await stored()).toEqual({ a: "12", b: "abc" });
     });
   }
 );

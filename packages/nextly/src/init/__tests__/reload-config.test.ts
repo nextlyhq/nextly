@@ -103,6 +103,15 @@ const setDeferredEntitiesSpy = vi.fn();
 // The reload PUBLISHES which entities it refused, per kind, and the widget
 // source refresh is the consumer. Mocked here so this file can assert the
 // call without pulling the DI container in through the widgets domain.
+// The judgement of each entity's type changes reads the rows its columns hold, which these cases'
+// stand-in database has none of: it holds nothing back unless a case says what it holds.
+const { heldBackSpy } = vi.hoisted(() => ({
+  heldBackSpy: vi.fn(async () => [] as unknown[]),
+}));
+vi.mock("../code-first-type-changes", () => ({
+  typeChangesHeldBack: heldBackSpy,
+}));
+
 vi.mock("../../domains/widgets/deferred-entities", () => ({
   setDeferredEntities: (kind: string, slugs: readonly string[]) =>
     setDeferredEntitiesSpy(kind, slugs),
@@ -1712,6 +1721,49 @@ describe("reloadNextlyConfig", () => {
         .map(c => String(c[0]))
         .find(s => s.includes("needs review"))
     ).toBeUndefined();
+  });
+
+  it("holds back an entity whose type change the judgement holds back, saying why", async () => {
+    heldBackSpy.mockResolvedValueOnce([
+      {
+        kind: "collection",
+        slug: "posts",
+        reasons: ["dc_posts.active: why it waits."],
+      },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            // `checkbox` is the field type that classifies as a boolean
+            // column, which renders as the SQLite `integer` token and so
+            // differs from the live `text` -> change_column_type op.
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      liveSnapshot("dc_posts", [
+        ...reservedColumns("dc_posts"),
+        { name: "active", type: "text", nullable: true },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    // Its only change was held back, so nothing is applied, and the reload says why.
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls
+        .map(c => String(c[0]))
+        .find(s =>
+          s.includes("'posts' was not applied: dc_posts.active: why it waits.")
+        )
+    ).toBeDefined();
   });
 
   it("passes a 3-drop / 1-add asymmetric change through to the pipeline", async () => {

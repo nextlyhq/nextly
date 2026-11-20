@@ -194,11 +194,15 @@ async function answeredOrClosed<T>(answer: T | symbol): Promise<T> {
 
 export class ClackTerminalPromptDispatcher implements PromptDispatcher {
   /**
-   * `print` writes the data-loss listing and notices; a test collects them.
+   * `print` writes the data-loss listing and notices; a test collects them. `asksAboutTypeChanges`
+   * false never asks about clearing a lossy type change's values, even at a terminal: only the
+   * consent naming the column clears them, and one it does not cover is refused. A config reload
+   * runs inside the development server, where the question is not the place to give it.
    */
   constructor(
     private readonly print: (line: string) => void = line =>
-      consoleLogger.warn(line)
+      consoleLogger.warn(line),
+    private readonly options: { asksAboutTypeChanges?: boolean } = {}
   ) {}
 
   /** Whether this dispatch has printed its consent notices yet. */
@@ -513,7 +517,10 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     clack.intro("Schema change requires confirmation");
 
     // Lossy type changes first, each cleared only under the consent naming it or a yes here.
-    const clearing = await this.judgeLossyTypeChanges(others, true);
+    const clearing = await this.judgeLossyTypeChanges(
+      others,
+      this.options.asksAboutTypeChanges !== false
+    );
     if (clearing === null) return { resolutions, proceed: false };
 
     // A lossy type change was decided above, by its consent or its own question.
