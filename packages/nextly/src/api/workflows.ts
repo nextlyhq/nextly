@@ -494,6 +494,59 @@ async function readableAttached(asker: WaitingAsker): Promise<Set<string>> {
 }
 
 /**
+ * The waiting list's read for `asker`: what waits for them among the collections and Singles they
+ * may read (only `collection`, when one is named), each item in a language they may read it in.
+ * The one read the waiting list, its count and a collection list's `_waitingForMe` filter make.
+ */
+async function waitingItemsFor(
+  asker: WaitingAsker,
+  query: { limit: number; offset: number; collection?: string }
+) {
+  const readable = await readableAttached(asker);
+  return waitingFor(adapter(), {
+    caller: asker.caller,
+    limit: query.limit,
+    offset: query.offset,
+    readsEntity: (kind, slug) =>
+      Promise.resolve(
+        readable.has(slug) &&
+          (query.collection === undefined ||
+            (kind === "collection" && slug === query.collection))
+      ),
+    // Each item in the language its part names: an item about a language the caller may not
+    // read the document in is left out, as a read of that language would be refused.
+    readable: items => readableAmong(asker, items),
+  });
+}
+
+/**
+ * The documents of `collection` with a part waiting for `asker`, by the waiting list's own read,
+ * no more than `cap` waiting parts' worth: a collection list's `_waitingForMe` filter keeps these.
+ * `capped` says more may wait than were read, so the list's total is a floor.
+ *
+ * @experimental
+ */
+export async function waitingEntryIds(
+  asker: WaitingAsker,
+  collection: string,
+  cap: number
+): Promise<{ ids: string[]; capped: boolean }> {
+  const { items, total, totalCapped } = await waitingItemsFor(asker, {
+    limit: cap,
+    offset: 0,
+    collection,
+  });
+  const ids = [
+    ...new Set(
+      items
+        .filter(item => item.document.scopeKind === "collection")
+        .map(item => item.document.entryId)
+    ),
+  ];
+  return { ids, capped: totalCapped === true || total > items.length };
+}
+
+/**
  * What waits for `asker`, a page at a time: the waiting list's own answer, which its route and the
  * dashboard's Needs attention count both read, so the two never disagree.
  *
@@ -503,15 +556,9 @@ export async function waitingPage(
   asker: WaitingAsker,
   query: { page: number; limit: number }
 ) {
-  const readable = await readableAttached(asker);
-  const { items, total, totalCapped } = await waitingFor(adapter(), {
-    caller: asker.caller,
+  const { items, total, totalCapped } = await waitingItemsFor(asker, {
     limit: query.limit,
     offset: (query.page - 1) * query.limit,
-    readsEntity: (_kind, slug) => Promise.resolve(readable.has(slug)),
-    // Each item in the language its part names: an item about a language the caller may not
-    // read the document in is left out, as a read of that language would be refused.
-    readable: items => readableAmong(asker, items),
   });
   // Each item's document named by its title as the caller reads it: the dashboard's heading read,
   // one read per collection and language for the page, never a title the caller may not read.

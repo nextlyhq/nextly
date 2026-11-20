@@ -53,6 +53,12 @@ export const CHANGED_SINCE_APPROVED_KEY = "_changedSinceApproved";
 export const STAGE_KEY = "_stage";
 
 /**
+ * The reserved key keeping entries with a part waiting for the reader's review.
+ * @experimental
+ */
+export const WAITING_FOR_ME_KEY = "_waitingForMe";
+
+/**
  * Every key a filter may carry only at its top level.
  *
  * @experimental
@@ -65,6 +71,7 @@ export const RESERVED_TOP_LEVEL_KEYS = [
   ASSIGNED_TO_ME_KEY,
   CHANGED_SINCE_APPROVED_KEY,
   STAGE_KEY,
+  WAITING_FOR_ME_KEY,
 ] as const;
 
 /** @experimental */

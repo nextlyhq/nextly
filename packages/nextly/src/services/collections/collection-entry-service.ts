@@ -365,6 +365,8 @@ export class CollectionEntryService extends BaseService {
       routeAuthorized?: boolean;
       /** Caller's authenticated scope; a scoped key is judged on its read grant. */
       authenticatedScope?: AuthenticatedScope;
+      /** The API key behind `authenticatedScope`, by id, passed through for `_waitingForMe`. */
+      apiKeyId?: string;
       /** A grant waiving the collection's read hooks, honoured by the query service. */
       hookExemptRead?: HookExemptRead;
     } /** The sort, offset and hidden fields, as the query service reads them. */ & Pick<
@@ -418,6 +420,8 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
+    /** The API key behind `authenticatedScope`, by id, passed through for `_waitingForMe`. */
+    apiKeyId?: string;
     /**
      * Draft/Published filter override (only effective when the collection has
      * the status lifecycle). Declared rather than merely forwarded: `params`

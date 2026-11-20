@@ -865,6 +865,8 @@ export class CollectionsHandler {
      * super-admin-owned key gets no session bypass.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** The API key behind `authenticatedScope`, by id, passed through for `_waitingForMe`. */
+    apiKeyId?: string;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Public callers default to 'published'; trusted callers can
@@ -1092,6 +1094,8 @@ export class CollectionsHandler {
      * count matches the rows it can list.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** The API key behind `authenticatedScope`, by id, passed through for `_waitingForMe`. */
+    apiKeyId?: string;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Same semantics as listEntries.

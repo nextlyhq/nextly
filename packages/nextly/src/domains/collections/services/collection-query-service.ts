@@ -289,6 +289,7 @@ import {
   PENDING_CHANGE_KEY,
   STAGE_KEY,
   STRANDED_STAGE_KEY,
+  WAITING_FOR_ME_KEY,
   type WorkflowFilter,
 } from "../query/workflow-filter";
 
@@ -663,6 +664,29 @@ type SettledRead = { readonly denied: null; readonly filter?: RuleFilter };
  */
 const SETTLED_ACCESS = Symbol("settled read access");
 
+/**
+ * How many waiting parts `_waitingForMe` reads at most for one list. More
+ * than this and the list keeps the documents of those it read, its total
+ * marked a floor (`totalCapped`), as the waiting list's own is.
+ */
+const WAITING_FILTER_CAP = 1000;
+
+/**
+ * Ids bound per `IN` list: SQLite allows 999 bound values in a statement, the
+ * lowest of the supported dialects, so a longer list is split.
+ */
+const IDS_PER_IN = 500;
+
+/** The condition keeping the rows whose id is one of `ids`; none for no ids. */
+function idsCondition(idColumn: SQLWrapper, ids: readonly string[]): SQL {
+  if (ids.length === 0) return sql`1 = 0`;
+  const chunks: string[][] = [];
+  for (let at = 0; at < ids.length; at += IDS_PER_IN) {
+    chunks.push(ids.slice(at, at + IDS_PER_IN));
+  }
+  return or(...chunks.map(chunk => inArray(idColumn, chunk))) ?? sql`1 = 0`;
+}
+
 /** A list's settled access, as only this module can hand it to a count. */
 interface SettledAccessToken {
   readonly [SETTLED_ACCESS]: SettledRead;
@@ -779,6 +803,12 @@ interface FilteredReadParams {
    * counts exactly the rows it can list.
    */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The API key behind `authenticatedScope`, by id: what the waiting list
+   * names a key's caller by. Passed through only to build that caller for
+   * `_waitingForMe`; a scope with no key id keeps nothing there.
+   */
+  apiKeyId?: string;
   /**
    * Draft/Published filter override (only effective when collection.status === true).
    * See listEntries for full semantics.
@@ -1177,6 +1207,11 @@ function readCallerOf(params: {
 }
 
 export class CollectionQueryService extends BaseService {
+  /** Each `_waitingForMe` filter's waiting read, so a list and its count read it once. */
+  private readonly waitingReads = new WeakMap<
+    WorkflowFilter,
+    Promise<{ ids: string[]; capped: boolean }>
+  >();
   /** The site's languages as they are now: the source may be the language registry. */
   private get localization(): SanitizedLocalizationConfig | undefined {
     return localizationNow(this.localizationSource);
@@ -2565,6 +2600,8 @@ export class CollectionQueryService extends BaseService {
      */
     user?: UserContext;
     authenticatedScope?: AuthenticatedScope;
+    /** The key behind `authenticatedScope`, for `_waitingForMe` alone. */
+    apiKeyId?: string;
     schema: DynamicSchema;
     companion: CompanionSchema | null;
     localeChain: string[] | null;
@@ -2735,6 +2772,7 @@ export class CollectionQueryService extends BaseService {
           overrideAccess: params.overrideAccess,
           accessUser: params.accessUser,
           authenticatedScope: params.authenticatedScope,
+          apiKeyId: params.apiKeyId,
         }))
       );
     }
@@ -2802,6 +2840,7 @@ export class CollectionQueryService extends BaseService {
     overrideAccess?: boolean;
     accessUser?: UserContext;
     authenticatedScope?: AuthenticatedScope;
+    apiKeyId?: string;
   }): Promise<SQL[]> {
     const { filter, idColumn } = params;
     if (filter.inRelease !== null) {
@@ -2861,6 +2900,16 @@ export class CollectionQueryService extends BaseService {
         })
       );
     }
+    if (filter.waitingForMe === true) {
+      const waiting = await this.waitingFor(filter, {
+        collectionName: params.collectionName,
+        overrideAccess: params.overrideAccess,
+        accessUser: params.accessUser,
+        authenticatedScope: params.authenticatedScope,
+        apiKeyId: params.apiKeyId,
+      });
+      conditions.push(idsCondition(idColumn, waiting.ids));
+    }
     if (filter.stage !== undefined) {
       conditions.push(
         await this.stageFilterCondition({
@@ -2896,6 +2945,69 @@ export class CollectionQueryService extends BaseService {
       );
     }
     return conditions;
+  }
+
+  /**
+   * The documents of a collection with a part waiting for this read's caller,
+   * by the waiting list's own read (`waitingEntryIds`), read once per filter:
+   * a list's rows and the count beside them carry the same filter object, so
+   * both keep the same documents. A trusted read stands for no one, and a
+   * key's scope that names no key builds no caller: both keep nothing.
+   */
+  private waitingFor(
+    filter: WorkflowFilter,
+    params: {
+      collectionName: string;
+      overrideAccess?: boolean;
+      accessUser?: UserContext;
+      authenticatedScope?: AuthenticatedScope;
+      apiKeyId?: string;
+    }
+  ): Promise<{ ids: string[]; capped: boolean }> {
+    const known = this.waitingReads.get(filter);
+    if (known) return known;
+    const read = (async () => {
+      const user = params.accessUser;
+      const userId = user?.id;
+      if (
+        params.overrideAccess === true ||
+        !user ||
+        typeof userId !== "string" ||
+        userId === ""
+      ) {
+        return { ids: [], capped: false };
+      }
+      const scope = params.authenticatedScope;
+      const keyId = params.apiKeyId;
+      if (scope !== undefined && !keyId) {
+        return { ids: [], capped: false };
+      }
+      // Loaded when asked: the workflows API reaches the services this module is read by.
+      const { waitingEntryIds } = await import("../../../api/workflows");
+      return waitingEntryIds(
+        {
+          user,
+          scope,
+          caller:
+            scope === undefined || !keyId
+              ? { kind: "user", userId }
+              : { kind: "key", keyId, userId, scope },
+        },
+        params.collectionName,
+        WAITING_FILTER_CAP
+      );
+    })();
+    this.waitingReads.set(filter, read);
+    return read;
+  }
+
+  /**
+   * Whether the waiting read behind `filter`, if it carries `_waitingForMe`,
+   * stopped before reading everything, so a list's total is a floor.
+   */
+  private async waitingCapped(filter: WorkflowFilter | null): Promise<boolean> {
+    if (filter?.waitingForMe !== true) return false;
+    return (await this.waitingReads.get(filter))?.capped === true;
   }
 
   /**
@@ -3028,6 +3140,7 @@ export class CollectionQueryService extends BaseService {
       ASSIGNED_TO_ME_KEY,
       CHANGED_SINCE_APPROVED_KEY,
       STAGE_KEY,
+      WAITING_FOR_ME_KEY,
     ].find(key => Object.prototype.hasOwnProperty.call(where, key));
     if (used === undefined) return;
     const denied = await this.denyCollectionRead({
@@ -3970,6 +4083,12 @@ export class CollectionQueryService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
     /**
+     * The API key behind `authenticatedScope`, by id: what the waiting list
+     * names a key's caller by. Passed through only to build that caller for
+     * `_waitingForMe`; a scope with no key id keeps nothing there.
+     */
+    apiKeyId?: string;
+    /**
      * Draft/Published filter override. Only takes effect when the collection
      * has Draft/Published enabled (collection.status === true).
      * - 'published' (default for public callers): only published rows
@@ -4228,6 +4347,7 @@ export class CollectionQueryService extends BaseService {
         accessUser,
         user: params.fieldAccessUser ?? params.user,
         authenticatedScope: params.authenticatedScope,
+        apiKeyId: params.apiKeyId,
         schema,
         companion,
         localeChain,
@@ -4737,6 +4857,11 @@ export class CollectionQueryService extends BaseService {
         paginatedResponse.totalDocs = cappedAt;
         paginatedResponse.totalCapped = true;
       }
+      // A `_waitingForMe` read that stopped before reading everything keeps
+      // the documents it read: more may wait, so the total is a floor.
+      if (await this.waitingCapped(workflowFilter)) {
+        paginatedResponse.totalCapped = true;
+      }
 
       return {
         success: true,
@@ -5111,6 +5236,7 @@ export class CollectionQueryService extends BaseService {
       accessUser,
       user: params.fieldAccessUser ?? params.user,
       authenticatedScope: params.authenticatedScope,
+      apiKeyId: params.apiKeyId,
       schema,
       companion,
       localeChain,
