@@ -179,59 +179,63 @@ test("a reviewer finds the notes waiting for review from the Content panel", asy
   }
 });
 
-// The list's bulk moves are wired in a later change: this runs once they are.
-// TODO: the row selection's accessible names and the summary's container,
-// once the wiring lands.
-test.fixme(
-  "an editor submits notes in bulk from the list, each refusal named",
-  async ({ page, browser, baseURL }) => {
-    test.setTimeout(120_000);
-    const tag = uniqueTag();
-    const fresh = [`Bulk note A ${tag}`, `Bulk note B ${tag}`];
-    const already = `Bulk note in review ${tag}`;
-    for (const title of fresh) await note(page.request, title);
-    // Already in review, so submitting it again is refused, by name.
-    await submitted(page.request, await note(page.request, already));
+test("an editor submits notes in bulk from the list, each refusal named", async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  test.setTimeout(120_000);
+  const tag = uniqueTag();
+  const fresh = [`Bulk note A ${tag}`, `Bulk note B ${tag}`];
+  const already = `Bulk note in review ${tag}`;
+  const freshIds: string[] = [];
+  for (const title of fresh) freshIds.push(await note(page.request, title));
+  // Already in review, so submitting it again is refused, by name.
+  await submitted(page.request, await note(page.request, already));
 
-    const reviewer = await signInWithRoles(
-      browser,
-      page.request,
-      baseURL ?? "",
-      [EDITOR]
-    );
-    try {
-      const list = await reviewer.context.newPage();
-      await list.setViewportSize({ width: 1440, height: 900 });
-      await gotoAdmin(list, "/collections/reviewed-notes");
-      for (const title of [...fresh, already]) {
-        await list
-          .getByRole("row")
-          .filter({ hasText: title })
-          .getByRole("checkbox")
-          .check();
-      }
-      const bulk = list.getByRole("region", { name: "Bulk actions" });
-      await expect(
-        bulk.getByRole("button", { name: "Submit for review" })
-      ).toBeVisible();
-      await expect(bulk.getByRole("button", { name: "Assign…" })).toBeVisible();
-      await expect(
-        bulk.getByRole("button", { name: "Send back…" })
-      ).toBeVisible();
-      // Approving is a reviewer's own act on each document, never a bulk one.
-      await expect(
-        bulk.getByText("Approve from each document's review.")
-      ).toBeVisible();
-      await expect(bulk.getByRole("button", { name: /^Approve/ })).toHaveCount(
-        0
-      );
-
-      await bulk.getByRole("button", { name: "Submit for review" }).click();
-      // TODO: scope these to the summary's container once its selector lands.
-      await expect(list.getByText("2 moved; 1 refused.")).toBeVisible();
-      await expect(list.getByText(new RegExp(`^${already}: `))).toBeVisible();
-    } finally {
-      await reviewer.context.close();
+  const editor = await signInWithRoles(browser, page.request, baseURL ?? "", [
+    EDITOR,
+  ]);
+  try {
+    const list = await editor.context.newPage();
+    await list.setViewportSize({ width: 1440, height: 900 });
+    await gotoAdmin(list, "/collections/reviewed-notes");
+    const entries = list.getByRole("table", { name: "Entries table" });
+    for (const title of [...fresh, already]) {
+      await entries
+        .getByRole("row")
+        .filter({ hasText: title })
+        .getByRole("checkbox")
+        .check();
     }
+    const bulk = list.getByRole("region", { name: "Bulk actions" });
+    await expect(
+      bulk.getByRole("button", { name: "Submit for review" })
+    ).toBeVisible();
+    await expect(bulk.getByRole("button", { name: "Assign…" })).toBeVisible();
+    await expect(
+      bulk.getByRole("button", { name: "Send back…" })
+    ).toBeVisible();
+    // Approving is a reviewer's own act on each document, never a bulk one.
+    await expect(
+      bulk.getByText("Approve from each document's review.")
+    ).toBeVisible();
+    await expect(bulk.getByRole("button", { name: /^Approve/ })).toHaveCount(0);
+
+    await bulk.getByRole("button", { name: "Submit for review" }).click();
+    // The result says how many moved and names each refusal, by the note's title.
+    const result = list.getByRole("status", { name: "Bulk move result" });
+    await expect(result).toContainText("2 moved; 1 refused.");
+    const refusals = result.getByRole("listitem");
+    await expect(refusals).toHaveCount(1);
+    await expect(refusals.first()).toHaveText(
+      new RegExp(`^${already}: .+\\.$`)
+    );
+    // What it says moved did move: both fresh notes are in review now.
+    for (const id of freshIds) {
+      expect((await sharedPartOf(page.request, id)).stage).toBe("inReview");
+    }
+  } finally {
+    await editor.context.close();
   }
-);
+});
