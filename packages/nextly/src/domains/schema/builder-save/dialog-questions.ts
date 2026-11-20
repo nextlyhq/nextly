@@ -29,6 +29,11 @@ import { pushQuestionSet } from "../pipeline/pushschema-pipeline";
 import type { Resolution } from "../pipeline/resolution/types";
 import type { DesiredSchema } from "../pipeline/types";
 import {
+  columnsNotDescribed,
+  leftoverColumns,
+} from "../services/collection-schema-apply";
+import {
+  fieldsStoredOnRow,
   toSnakeCase,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
@@ -67,6 +72,12 @@ export async function refuseUnansweredDialogQuestions(args: {
    * but not planned as a move is still asked about.
    */
   moved?: readonly string[];
+  /**
+   * Set by a collection's dialog: a column of its own table that no field describes, left
+   * unanswered by the request, is refused as the push refuses it (`columnsNotDescribed`), rather
+   * than as cancelled.
+   */
+  collection?: { slug: string };
 }): Promise<void> {
   const preview = await previewDesiredSchema({
     desired: args.desired,
@@ -172,7 +183,30 @@ export async function refuseUnansweredDialogQuestions(args: {
     classification: preview.classification,
     channel: "browser",
   });
-  if (!answer.proceed) throw cancelled(args.tableName, []);
+  if (answer.proceed) return;
+  // What the dispatch left unanswered on the collection's own table, by the push's own decision
+  // once the answers are applied (`leftoverColumns`): a column of it that no field describes,
+  // before or after the change, is one the Builder never made, and the save is refused naming it,
+  // as the push refuses it. One the request answers, as a rename onto a field it adds or a drop it
+  // confirms, is not left over. Any other unanswered question is the cancellation it is.
+  if (args.collection !== undefined) {
+    const described = new Set(
+      [
+        ...fieldsStoredOnRow(args.oldFields),
+        ...fieldsStoredOnRow(args.newFields),
+      ].map(field => toSnakeCase(field.name))
+    );
+    const leftover = leftoverColumns(
+      args.tableName,
+      { candidates, events },
+      answer,
+      args.renameResolutions
+    ).filter(column => !described.has(column));
+    if (leftover.length > 0) {
+      throw columnsNotDescribed(args.collection.slug, args.tableName, leftover);
+    }
+  }
+  throw cancelled(args.tableName, []);
 }
 
 /**

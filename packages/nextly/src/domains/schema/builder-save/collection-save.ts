@@ -48,9 +48,10 @@ import { sql } from "drizzle-orm";
 
 import { serializeUiSchema } from "../../../cli/utils/ui-schema-writer";
 import { NextlyError } from "../../../errors/nextly-error";
-import type {
-  UiSchemaEntity,
-  UiSchemaManifest,
+import {
+  type UiSchemaEntity,
+  type UiSchemaManifest,
+  uiSchemaManifest,
 } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
@@ -187,6 +188,7 @@ import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
 import {
   entityLabel,
   fieldTypeChangesOf,
+  perLanguageAfter,
   perLanguageBefore,
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
@@ -924,6 +926,17 @@ async function judgedStop(
     ...entity,
     fields: appliedFieldsOf(previous.fields, entity.fields, report),
   };
+  // The definition with what landed must still be one the manifest schema accepts: a setting the
+  // save asked for that names a field that did not land (the title it uses, say) would write a
+  // definition no later load reads. Such a stop is left as it stopped (`uiSchemaManifest`, the
+  // same reference checks every load runs).
+  if (
+    !uiSchemaManifest.safeParse(
+      withEntity(current, kindOf(save), save.slug, applied)
+    ).success
+  ) {
+    return undefined;
+  }
   // The whole table proven, not only the parts each change reaches.
   if (!standsAs(live, await desired(applied.fields))) return undefined;
   return { report, applied };
@@ -969,8 +982,9 @@ function carriesItsOwnRows(save: CollectionSave): boolean {
 }
 
 /**
- * Whether a save reaches past what the judgement reads of the entity's main table: a translated
- * entity's translations table, or the fields a field with no name keeps on the row.
+ * Whether a save reaches past what the judgement reads of the entity's main table: an entity's
+ * translations table, where it keeps translatable values, or the fields a field with no name keeps
+ * on the row.
  */
 function pastItsTable(
   previous: UiSchemaEntity,
@@ -978,9 +992,12 @@ function pastItsTable(
 ): boolean {
   const unnamed = (e: UiSchemaEntity) =>
     JSON.stringify(e.fields.filter(f => f.name === undefined));
+  // Asked of where the entity keeps its translatable values (`storesPerLanguage`), not of its
+  // translation switch alone: with values kept per language, an entity not translated still keeps
+  // its translatable fields' columns in its translations table.
   return (
-    previous.localized === true ||
-    entity.localized === true ||
+    storesPerLanguage(previous) ||
+    storesPerLanguage(entity) ||
     unnamed(previous) !== unnamed(entity)
   );
 }
@@ -1381,6 +1398,7 @@ async function refuseSaveTypeChanges(
     label: entityLabel(kind.kind, save.slug),
     table,
     ...perLanguageBefore(save.previous, table, previous),
+    ...perLanguageAfter(save.entity, next),
     previous,
     next,
     renamed,

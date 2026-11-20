@@ -1961,6 +1961,7 @@ export class SingleMetadataService {
           previousFields: startingFields,
           fields,
           wasLocalized,
+          isLocalized,
           migrationStatus: existing.migrationStatus,
         },
         schemaService
@@ -1987,6 +1988,7 @@ export class SingleMetadataService {
       previousFields: FieldDefinition[];
       fields: FieldDefinition[];
       wasLocalized: boolean;
+      isLocalized: boolean;
       migrationStatus: string | null | undefined;
     },
     schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
@@ -1994,7 +1996,12 @@ export class SingleMetadataService {
     const adapter = this.adapter;
     if (!adapter) return [];
     const [
-      { entityLabel, fieldTypeChangeRefusals, perLanguageBefore },
+      {
+        entityLabel,
+        fieldTypeChangeRefusals,
+        perLanguageAfter,
+        perLanguageBefore,
+      },
       { builtByFor },
     ] = await Promise.all([
       import("../../schema/value-conversion/type-change/field-type-changes"),
@@ -2012,6 +2019,7 @@ export class SingleMetadataService {
         tableName,
         change.previousFields
       ),
+      ...perLanguageAfter({ localized: change.isLocalized }, change.fields),
       previous: change.previousFields,
       next: change.fields,
       ...(rename !== null
@@ -2036,6 +2044,7 @@ export class SingleMetadataService {
       previousFields: FieldDefinition[];
       fields: FieldDefinition[];
       wasLocalized: boolean;
+      isLocalized: boolean;
       migrationStatus: string | null | undefined;
     },
     schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
