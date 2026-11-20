@@ -25,9 +25,8 @@ describe("the history's field-group naming", () => {
     expect(historyFieldGroupNaming(LEGACY, "current")).toBe("legacy");
   });
 
-  // A new project's history starts on the current names, as a new site's storage does.
-  it("is the caller's, else the current names, for a project with no history yet", () => {
-    expect(historyFieldGroupNaming(null, undefined)).toBe("current");
+  it("is the caller's, else legacy, for a project with no history yet", () => {
+    expect(historyFieldGroupNaming(null, undefined)).toBe("legacy");
     expect(historyFieldGroupNaming(null, "current")).toBe("current");
   });
 

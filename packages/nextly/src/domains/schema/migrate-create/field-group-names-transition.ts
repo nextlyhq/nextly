@@ -39,15 +39,14 @@ const ACROSS_NAMINGS =
 /**
  * The naming a run writes its file under: the newest snapshot's, so a history never changes
  * naming by accident. A project with no history yet takes the naming its caller resolved the
- * field groups under, else the current names: a new project starts its history on them, as a new
- * site starts its storage on them. An existing database adopts migrations through
- * `migrate:baseline`, which records the names that database holds.
+ * field groups under (`migrate:create` passes the current names for a new project, from
+ * `appMigrationInputs`), else legacy, which every caller that names its tables itself means.
  */
 export function historyFieldGroupNaming(
   latest: Pick<SnapshotFile, "fieldGroupStorage"> | null,
   requested: FieldGroupNaming | undefined
 ): FieldGroupNaming {
-  if (latest === null) return requested ?? "current";
+  if (latest === null) return requested ?? "legacy";
   return snapshotFieldGroupNaming(latest);
 }
 

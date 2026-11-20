@@ -55,12 +55,6 @@ import { buildExtensionSchema } from "../../domains/schema/extension/build-exten
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
-  blankLineHeader,
-  blankLineIn,
-  nothingToRecordNotice,
-  refuseUnrecordableMerge,
-} from "../../domains/schema/migrate/history-line";
-import {
   consentCovers,
   consentToCover,
   countDeletions,
@@ -70,6 +64,12 @@ import {
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { countEntityRows } from "../../domains/schema/migrate/entity-shared-rows";
+import {
+  blankLineHeader,
+  blankLineIn,
+  nothingToRecordNotice,
+  refuseUnrecordableMerge,
+} from "../../domains/schema/migrate/history-line";
 import {
   orderedMigrations,
   type PluginMigration,
@@ -859,6 +859,9 @@ export async function runMigrateCreate(
         components,
         // The starting point the inputs were checked against, read once.
         previous: inputs.latest,
+        // The names the inputs resolved field groups under: the history's, or the current names
+        // for a new project, whose history starts on them.
+        fieldGroupNaming: inputs.fieldGroupNaming,
         metadataUpserts,
         previousMetadataUpserts,
         permissions,
