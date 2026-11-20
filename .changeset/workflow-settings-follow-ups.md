@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Settings › Workflows keeps what it shows in step with what was saved: a saved default reviewer or grant refreshes each document's review, as a label does, and a role or people list that fails to load is said so with a Retry rather than shown as an empty choice.
+Settings › Workflows keeps what it shows in step with what was saved: a saved default reviewer or grant refreshes each document's review, as a label does, and a role or people list that fails to load is said so with a Retry rather than shown as an empty choice. The Workflows list reads its counts per stage again after a step and each time it is opened, and the experimental workflows list counts every workflow's stages in one grouped read rather than one query per stage. The roles listed for a step are named as granted it directly, since a role inheriting from one also holds it.
