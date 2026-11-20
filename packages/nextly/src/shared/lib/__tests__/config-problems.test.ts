@@ -301,3 +301,23 @@ describe("two collections with one slug, judged where nothing transformed them",
     expect(paths).toContain("collections[1].slug");
   });
 });
+
+describe("a define* collection whose own field of a system field's name takes no column", () => {
+  // A column-less `Title` leaves the `title` column free, so `defineCollection` adds its system
+  // `title` beside it: the two do not declare one column twice, and the collection is valid.
+  it("has no problem", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [
+            { name: "headline", type: "text" },
+            { name: "Title", type: "text", virtual: true } as never,
+          ],
+        }),
+      ],
+    };
+
+    expect(configurationProblems(declared)).toEqual([]);
+  });
+});
