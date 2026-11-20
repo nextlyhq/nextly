@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { TemplateFormVariable } from "../../schema";
-import { chipNamer, itemPaths, listPaths } from "../chip-names";
+import { chipNamer, itemPaths, listPaths, variablePaths } from "../chip-names";
 
 const variables: TemplateFormVariable[] = [
   {
@@ -141,6 +141,25 @@ describe("a chip's friendly name", () => {
       "order",
       "item",
       "resetUrl",
+    ]);
+  });
+
+  it("offers every declared path for a link or a condition, the item's first inside a list", () => {
+    const everywhere = [
+      "customer",
+      "customer.firstName",
+      "customer.email",
+      "order",
+      // A list field is offered itself, not what its items hold.
+      "order.lines",
+      "item",
+      "resetUrl",
+    ];
+    expect(variablePaths(variables)).toEqual(everywhere);
+    expect(variablePaths(variables, "order.lines")).toEqual([
+      "item.title",
+      "item.qty",
+      ...everywhere,
     ]);
   });
 });

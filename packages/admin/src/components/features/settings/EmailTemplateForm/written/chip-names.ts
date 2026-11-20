@@ -153,6 +153,37 @@ function fieldPaths(
 }
 
 /**
+ * Every path a value can be read from here, for a link's address or a
+ * block's condition: inside a list its item's paths first, then each
+ * declared variable and every field inside it. A list field is offered
+ * itself (whether it has items), not what its items hold, which only a list
+ * block repeating over it can reach.
+ */
+export function variablePaths(
+  variables: readonly TemplateFormVariable[],
+  list?: string
+): string[] {
+  const inside = (
+    fields: readonly EmailTemplateVariableField[],
+    prefix: string
+  ): string[] =>
+    fields.flatMap(field => {
+      const path = `${prefix}.${field.name}`;
+      if (field.type === "list" || !field.fields) return [path];
+      return [path, ...inside(field.fields, path)];
+    });
+  return [
+    ...(list === undefined ? [] : itemPaths(variables, list)),
+    ...variables
+      .filter(variable => variable.name)
+      .flatMap(variable => [
+        variable.name,
+        ...inside(variable.presentation?.fields ?? [], variable.name),
+      ]),
+  ];
+}
+
+/**
  * The paths a list's current item offers as chips: `item.<field>`, or `item`
  * itself for a list of plain values, which has no fields to offer.
  */
