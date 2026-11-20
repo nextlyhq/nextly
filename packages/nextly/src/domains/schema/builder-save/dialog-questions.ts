@@ -61,6 +61,12 @@ export async function refuseUnansweredDialogQuestions(args: {
   renameResolutions: readonly BrowserRenameResolution[];
   eventResolutions: readonly Resolution[];
   legacy?: LegacyResolutionsBundle;
+  /**
+   * The row columns the save's planned moves carry into a group (`planEntityMoves`), whose values
+   * its file copies before the column goes. Never the request's hints alone: a column named there
+   * but not planned as a move is still asked about.
+   */
+  moved?: readonly string[];
 }): Promise<void> {
   const preview = await previewDesiredSchema({
     desired: args.desired,
@@ -84,8 +90,13 @@ export async function refuseUnansweredDialogQuestions(args: {
     dialect: args.dialect,
     builtBy: args.builtBy,
   });
+  // A column a move carries into a group is not a drop: the save's file copies its values before
+  // the column goes, so it is asked nothing (`moved`, from the save's planned moves).
+  const moved = new Set(args.moved ?? []);
   const removed = new Set(
-    [...removedFields, ...losingColumn].map(field => toSnakeCase(field.name))
+    [...removedFields, ...losingColumn]
+      .map(field => toSnakeCase(field.name))
+      .filter(column => !moved.has(column))
   );
   // A removed field kept per language, or one kept by name that loses its column, has its values
   // in the translations table, which the preview does not read: its drop is confirmed by the

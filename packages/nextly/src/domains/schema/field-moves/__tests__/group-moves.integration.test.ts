@@ -412,6 +412,86 @@ describe.each(getConfiguredTestDialects())(
       await expectEachOutOfTheGroup(t, before);
     });
 
+    it("never sends a move to the push: one in a save another field's column change sends there is refused, else carried by the file", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      const headline = (maxLength: number): Field => ({
+        name: "headline",
+        type: "text",
+        options: { variant: "short" },
+        validation: { maxLength },
+      });
+      await createPosts(t, SLUG, {
+        fields: [summary, headline(40), group("meta", [NOTE])],
+      });
+      for (const [title, text] of [
+        ["One", "First"],
+        ["Two", "Second"],
+      ] as const) {
+        await t.nextly.create({
+          collection: SLUG,
+          data: { title, slug: title.toLowerCase(), summary: text },
+        });
+      }
+      // The short text widened in the same save: varchar(40) to varchar(80) on PostgreSQL and
+      // MySQL, a change only the push applies there; SQLite keeps both as text.
+      const fields = [headline(80), group("meta", [NOTE, summary])];
+      const moves = [{ from: ["summary"], to: ["meta", "summary"] }];
+      if (dialect === "sqlite") {
+        await save(t, fields, moves);
+        const moved = await readAll(t);
+        expect(
+          ["one", "two"].map(
+            slug => (moved.get(slug)?.meta as { summary?: unknown })?.summary
+          )
+        ).toEqual(["First", "Second"]);
+        return;
+      }
+      const before = await readAll(t);
+      const columns = (await columnsOf(t)).sort();
+      await expect(save(t, fields, moves)).rejects.toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringContaining("Save the move on its own."),
+              }),
+            ],
+          },
+        })
+      );
+      expect(await readAll(t)).toEqual(before);
+      expect((await columnsOf(t)).sort()).toEqual(columns);
+    });
+
+    it("asks the drop of a removed field a hint names but no move carries, with only the moved column exempt", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      const extra: Field = { name: "extra", type: "text" };
+      await createPosts(t, SLUG, {
+        fields: [summary, extra, group("meta", [NOTE])],
+      });
+      await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one", summary: "First", extra: "Kept" },
+      });
+      const before = await readAll(t);
+      // `summary` moves; `extra` is removed, and the hint naming it moves nothing (its path is the
+      // same), so its drop is still the dialog's question, which this save leaves unanswered.
+      await expect(
+        save(
+          t,
+          [group("meta", [NOTE, summary])],
+          [
+            { from: ["summary"], to: ["meta", "summary"] },
+            { from: ["extra"], to: ["extra"] },
+          ]
+        )
+      ).rejects.toThrow(/cancelled/);
+      expect(await readAll(t)).toEqual(before);
+    });
+
     it("undoes a required field's move with nextly migrate:down, its column required again with every value", async () => {
       const t = await boot(dialect);
       const summary: Field = { name: "summary", type: "text", required: true };

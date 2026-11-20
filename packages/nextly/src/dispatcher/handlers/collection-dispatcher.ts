@@ -70,7 +70,6 @@ import {
   type PushReason,
 } from "../../domains/schema/field-moves/moves-road";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
-import { getColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
 import type {
   BrowserRenameResolution,
   LegacyResolutionsBundle,
@@ -92,6 +91,7 @@ import {
   recordedFieldsOf,
   refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
+import { getColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -1436,7 +1436,7 @@ const COLLECTIONS_METHODS: Record<
             // Where the file carries the change, the push's questions are asked of it first: a
             // rename the request does not answer, or a drop it does not confirm, refuses the save
             // before anything is written, as the push refuses it.
-            questions: async () =>
+            questions: async moved =>
               refuseUnansweredDialogQuestions({
                 desired: await dialogDesiredSchema({
                   slug: p.collectionName,
@@ -1461,6 +1461,7 @@ const COLLECTIONS_METHODS: Record<
                   resolutions,
                   confirmedDeletions
                 ),
+                moved,
               }),
             // Whether the push applies the change in development, the writer recording its
             // migration once the push has run: where it carries values across the change, as a
@@ -2458,7 +2459,7 @@ async function saveThroughWriter(
      * than the push carries the change, before anything is written: a dialog's request that leaves
      * one unanswered is refused as the push refuses it (`refuseUnansweredDialogQuestions`).
      */
-    questions?: () => Promise<void>;
+    questions?: (moved: readonly string[]) => Promise<void>;
   }
 ): Promise<
   | {
@@ -2484,15 +2485,21 @@ async function saveThroughWriter(
   // refused by any of them leaves no archive rows behind (`beforeWrite`).
   const runsFile = prepared.deps.applies && !viaPush;
   if (runsFile) await change.fileRoad?.judge?.();
-  if (!viaPush) await change.questions?.();
-  const archiving = runsFile ? change.fileRoad?.before : undefined;
-  const beforeWrite = archiving === undefined ? {} : { beforeWrite: archiving };
   // Loaded here, where a save runs: the writer brings the migration generator
   // and runner, which a request that writes no field change never needs.
-  const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([
-    import("../../domains/schema/builder-save/collection-save"),
-    import("../../domains/schema/builder-save/stopped-save"),
-  ]);
+  const [{ writeCollectionSave, movedColumnsOf }, { appliedFieldsOf }] =
+    await Promise.all([
+      import("../../domains/schema/builder-save/collection-save"),
+      import("../../domains/schema/builder-save/stopped-save"),
+    ]);
+  // The columns the save's planned moves carry, which its questions do not ask to drop.
+  if (!viaPush && change.questions !== undefined) {
+    await change.questions(
+      movedColumnsOf(prepared.deps, prepared.save, change.collection.tableName)
+    );
+  }
+  const archiving = runsFile ? change.fileRoad?.before : undefined;
+  const beforeWrite = archiving === undefined ? {} : { beforeWrite: archiving };
   const registry = change.registry;
   const inFile = prepared.deps.applies && !viaPush && registry !== undefined;
   const result = await writeCollectionSave(

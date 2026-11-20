@@ -3141,6 +3141,21 @@ function moveSentencesOf(
  * refusal of the first that cannot keep its values. A save that creates or deletes the entity
  * moves nothing.
  */
+/**
+ * The row columns a save's moves carry into a group, as the save plans them (`plannedMovesOf`):
+ * their values are copied by its file before the column goes, so they are not drops. A move the
+ * planner refuses is refused here, before anything is written.
+ */
+export function movedColumnsOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): string[] {
+  return plannedMovesOf(deps, save, table).movedColumns.map(
+    moved => moved.column
+  );
+}
+
 function plannedMovesOf(
   deps: CollectionSaveDeps,
   save: CollectionSave,
