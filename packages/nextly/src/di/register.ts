@@ -2318,9 +2318,9 @@ async function reconcileBuilderTargets<T>(
   });
   // A field extended onto a Builder entity joins that entity's fields, so a pair it would make
   // with one already there is judged against the entity's registry row, before anything below
-  // writes. A pair sharing a stored value that the row already holds is logged, not refused: the
-  // start goes on so the Builder can rename one of the two, and every save of the entity's
-  // definition refuses it until then.
+  // writes. A pair sharing a stored value is refused even where the row already holds it: the start
+  // stops, and the way out is to rename one of the two in the Builder's definition file, then
+  // `nextly migrate:create` and `nextly migrate`.
   await assertConfiguredSiblingFields(
     {
       collections: entities.collections,
@@ -2328,8 +2328,7 @@ async function reconcileBuilderTargets<T>(
       fieldGroups: entities.components,
     },
     builderEntities,
-    table => adapter.tableExists(table),
-    { heldSharing: "report", report: message => logger.error?.(message) }
+    table => adapter.tableExists(table)
   );
   // Field groups placed in a cycle, judged over code and the Builder's field groups as this start
   // reconciled them, plugin extensions included, before anything below writes.

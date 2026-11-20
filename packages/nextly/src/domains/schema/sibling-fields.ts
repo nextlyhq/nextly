@@ -274,8 +274,7 @@ export interface SiblingJudgeOptions {
  * `previous` does not hold in the same container, which a change creates
  * whether a field was added, renamed, moved or copied into one; `existing`, the
  * pairs sharing no stored value that it already held. `previous` is `null` for
- * an entity the change creates, so every pair in it is new. `heldSharing` names, among `refused`,
- * the pairs sharing a stored value that `previous` already held.
+ * an entity the change creates, so every pair in it is new.
  *
  * A held pair stays existing only as often as `previous` held it (a third copy
  * of a name already held twice makes new pairs).
@@ -286,16 +285,12 @@ export function judgeSiblingFields(
   next: unknown,
   previous: unknown,
   options: SiblingJudgeOptions = {}
-): {
-  refused: SiblingClash[];
-  existing: SiblingClash[];
-  heldSharing: SiblingClash[];
-} {
+): { refused: SiblingClash[]; existing: SiblingClash[] } {
   const clashes = siblingClashes(next).filter(
     clash => !isSystemFieldStandingAside(options.definedInCode, clash)
   );
   if (previous === null) {
-    return { refused: clashes, existing: [], heldSharing: [] };
+    return { refused: clashes, existing: [] };
   }
   const held = new Map<string, SiblingClash[]>();
   for (const clash of siblingClashes(previous)) {
@@ -304,22 +299,18 @@ export function judgeSiblingFields(
   }
   const refused: SiblingClash[] = [];
   const existing: SiblingClash[] = [];
-  const heldSharing: SiblingClash[] = [];
   for (const clash of clashes) {
     // Held as often as the previous definition held it, whatever the pair stored there.
     const candidates = held.get(pairKey(clash)) ?? [];
     // Two fields that share one column or key are never kept, however long they have. One the
-    // previous definition held sharing the same value is told apart (`heldSharing`) for the road
-    // that reports it; a pair that shared nothing, or another value, before shares this one anew.
+    // previous definition held sharing the same value still uses up that held pair, so another
+    // pair of the same two names is not taken as held in its place.
     if (clash.shared !== null) {
       refused.push(clash);
       const same = candidates.findIndex(before =>
         sameShared(before.shared, clash.shared)
       );
-      if (same !== -1) {
-        candidates.splice(same, 1);
-        heldSharing.push(clash);
-      }
+      if (same !== -1) candidates.splice(same, 1);
       continue;
     }
     if (candidates.length === 0) {
@@ -329,7 +320,7 @@ export function judgeSiblingFields(
     candidates.shift();
     existing.push(clash);
   }
-  return { refused, existing, heldSharing };
+  return { refused, existing };
 }
 
 /** The pairs a change creates: {@link judgeSiblingFields}'s `refused`. */
@@ -479,17 +470,6 @@ type Registered = ReadonlyArray<{
   fields: readonly unknown[];
 }>;
 
-/** How a start judges the entities it reads against their registry rows. */
-export interface ConfiguredSiblingOptions {
-  /**
-   * What a pair sharing a stored value that the registry row already holds gets: refused, the
-   * default, or reported. A start reports it for the Builder's own entities, whose fields it reads
-   * from their rows, so the Builder stays open to rename one of the two, and every save of the
-   * entity refuses it until then; configuration in code is refused, since its file is the fix.
-   */
-  heldSharing?: "refuse" | "report";
-}
-
 /**
  * The new pairs in configuration in code, as a start or a configuration
  * reload judges them, before either writes anything, so a refused
@@ -501,10 +481,11 @@ export interface ConfiguredSiblingOptions {
  * already exists and no registry row owns it: then an earlier start or
  * `nextly migrate` made it (a new environment migrated before its first start,
  * or a row that could not be read), and its pairs are taken as held. A pair
- * sharing a stored value is refused either way. The tables are asked about only
- * for an entity that has a new pair.
+ * sharing a stored value is refused either way, the Builder's own entities
+ * included, whose fields a start reads from their rows. The tables are asked
+ * about only for an entity that has a new pair.
  */
-export async function judgeConfiguredSiblingFields(
+export async function refusedConfiguredSiblingFields(
   config: {
     collections?: Configured;
     singles?: Configured;
@@ -515,18 +496,13 @@ export async function judgeConfiguredSiblingFields(
     singles: Registered;
     components: Registered;
   },
-  tableExists: (table: string) => Promise<boolean>,
-  options: ConfiguredSiblingOptions = {}
-): Promise<{
-  refused: EntitySiblingClash[];
-  reported: EntitySiblingClash[];
-}> {
+  tableExists: (table: string) => Promise<boolean>
+): Promise<EntitySiblingClash[]> {
   const { configured, ownedTables } = configuredBesideRows(config, registered);
   // A table no registry row owns that an earlier start or migrate already made.
   const isUnownedTable = async (table: string): Promise<boolean> =>
     !ownedTables.has(table) && (await tableExists(table));
   const refused: EntitySiblingClash[] = [];
-  const reported: EntitySiblingClash[] = [];
   for (const [kind, declared, rows] of configured) {
     const bySlug = new Map(rows.map(row => [row.slug, row]));
     for (const entry of declared) {
@@ -537,15 +513,10 @@ export async function judgeConfiguredSiblingFields(
         isUnownedTable
       );
       const entity = { kind, slug: entry.slug };
-      for (const clash of judged.refused) {
-        const report =
-          options.heldSharing === "report" &&
-          judged.heldSharing.includes(clash);
-        (report ? reported : refused).push({ entity, clash });
-      }
+      for (const clash of judged.refused) refused.push({ entity, clash });
     }
   }
-  return { refused, reported };
+  return refused;
 }
 
 /**
@@ -569,50 +540,13 @@ async function judgeConfiguredEntry(
     : judged;
 }
 
-/** The pairs {@link judgeConfiguredSiblingFields} refuses, each pair sharing a stored value included. */
-export async function refusedConfiguredSiblingFields(
-  config: Parameters<typeof judgeConfiguredSiblingFields>[0],
-  registered: Parameters<typeof judgeConfiguredSiblingFields>[1],
-  tableExists: (table: string) => Promise<boolean>
-): Promise<EntitySiblingClash[]> {
-  return (await judgeConfiguredSiblingFields(config, registered, tableExists))
-    .refused;
-}
-
 /**
- * The start's check: throws the refusals {@link judgeConfiguredSiblingFields}
- * finds, one validation error naming each pair, and tells `report` each pair
- * it reports instead (`options.heldSharing`), saying where to rename one.
+ * The start's check: throws the refusals {@link refusedConfiguredSiblingFields}
+ * finds, one validation error naming each pair.
  */
 export async function assertConfiguredSiblingFields(
-  config: Parameters<typeof judgeConfiguredSiblingFields>[0],
-  registered: Parameters<typeof judgeConfiguredSiblingFields>[1],
-  tableExists: (table: string) => Promise<boolean>,
-  options: ConfiguredSiblingOptions & {
-    report?: (message: string) => void;
-  } = {}
+  ...args: Parameters<typeof refusedConfiguredSiblingFields>
 ): Promise<void> {
-  const { refused, reported } = await judgeConfiguredSiblingFields(
-    config,
-    registered,
-    tableExists,
-    options
-  );
-  for (const { entity, clash } of reported) {
-    options.report?.(siblingClashHeldMessage(entity, clash));
-  }
+  const refused = await refusedConfiguredSiblingFields(...args);
   if (refused.length > 0) throw siblingClashesErrorFor(refused);
-}
-
-/**
- * The line a start logs for a stored pair sharing a stored value that it reports rather than
- * refuses: the pair, what it shares, and how to end it.
- */
-export function siblingClashHeldMessage(
-  entity: SiblingEntity,
-  clash: SiblingClash
-): string {
-  const shared =
-    clash.shared === null ? "" : ` share ${sharedPhrase(clash.shared).value}`;
-  return `${pairPhrase(entity, clash)}${shared}. Rename one field in the Builder (or your configuration) and save; until then no save of its definition is accepted.`;
 }

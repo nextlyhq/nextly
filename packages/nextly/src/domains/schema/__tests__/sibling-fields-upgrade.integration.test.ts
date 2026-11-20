@@ -10,24 +10,32 @@
  *
  * Two fields sharing one stored value are refused however long they have: `migrate:check` refuses
  * `articles`, naming each pair and the column or key it shares, while `guides` keeps working with
- * a warning. The upgraded start goes on, so the Builder can open, and logs each of `articles`'
- * pairs with what to rename; every save of `articles`' definition is refused until one field of
- * each pair is renamed, and the same save with them renamed goes through. Then each entity is
- * written and read, and `migrate:check` passes with only `guides`' warning.
+ * a warning, and the upgraded start is refused with the same two pairs. Once `articles`' row holds
+ * one field of each pair, the start goes on, each entity is written and read, and `migrate:check`
+ * passes with only `guides`' warning.
+ *
+ * The way out the guide documents is walked too, with the commands themselves: a Builder
+ * collection made in development, left holding two pairs, refuses the start; one field of each is
+ * renamed in the Builder's definition file, `nextly migrate:create` writes the migration and
+ * `nextly migrate` applies it, and the start goes on, the renamed fields written and read.
  *
  * Each case owns its database: a throwaway database on PostgreSQL and MySQL, a temporary file on
  * SQLite.
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { runMigrate } from "../../../cli/commands/migrate";
 import { runChecks } from "../../../cli/commands/migrate-check";
-import { defineCollection, group, text } from "../../../config";
+import { runMigrateCreate } from "../../../cli/commands/migrate-create";
+import type { CommandContext } from "../../../cli/program";
+import { createLogger } from "../../../cli/utils/logger";
+import { defineCollection, defineConfig, group, text } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import {
   createDatabaseStatement,
@@ -46,7 +54,17 @@ import type { ServiceContainer } from "../../../services";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import { consoleLogger } from "../../../shared/types";
 import { DynamicCollectionRegistryService } from "../../dynamic-collections/services/dynamic-collection-registry-service";
+import { setNonInteractive } from "../migrate/can-prompt";
 import { writeSnapshot } from "../migrate-create/snapshot-io";
+
+/** The configuration the commands load. */
+const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
+vi.mock("../../../cli/utils/config-loader", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../cli/utils/config-loader")
+  >()),
+  loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
+}));
 
 const SERVER_URL_ENV = {
   postgresql: "TEST_POSTGRES_URL",
@@ -65,10 +83,14 @@ async function openDatabase(dialect: TestDialect): Promise<CaseDatabase> {
     vi.stubEnv("DB_DIALECT", "sqlite");
     _resetEnvCache();
     const dir = await mkdtemp(join(tmpdir(), "nextly-sibling-upgrade-"));
+    // The commands reach the case's database through `DATABASE_URL`, as an app's do.
+    const fileUrl = `file:${join(dir, "test.db")}`;
+    vi.stubEnv("DATABASE_URL", fileUrl);
+    _resetEnvCache();
     const connect = async () =>
       (await createAdapter({
         type: "sqlite",
-        url: `file:${join(dir, "test.db")}`,
+        url: fileUrl,
       } as Parameters<typeof createAdapter>[0])) as unknown as DrizzleAdapter;
     const database: CaseDatabase = {
       adapter: await connect(),
@@ -203,6 +225,8 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     afterEach(async () => {
+      setNonInteractive(false);
+      await current?.destroy().catch(() => {});
       clearServices();
       current = undefined;
       await database.close();
@@ -287,7 +311,19 @@ for (const dialect of getConfiguredTestDialects()) {
       return outcome;
     }
 
-    it("refuses an entity holding two fields that share a column or a key until one of each is renamed, starting so the Builder can rename them", async () => {
+    /** The refusal a start or a save gives for `articles`' two pairs. */
+    const refusedWithArticlesPairs = {
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: ARTICLES_REFUSALS.map(message => ({
+          path: "fields",
+          code: "FIELD_NAME_DUPLICATE",
+          message,
+        })),
+      },
+    };
+
+    it("refuses an entity holding two fields that share a column or a key, at migrate:check and at the start, until one of each is renamed", async () => {
       // The database as an earlier version left it. The tables come from the production DDL, which
       // makes one column per name, and the registry rows hold the pairs, as the earlier version's
       // saves left them.
@@ -326,58 +362,21 @@ for (const dialect of getConfiguredTestDialects()) {
         passed: false,
       });
 
-      // The upgraded start goes on, so the Builder can open, and says what to rename.
-      const startLogger = makeLogger();
-      const t = await boot({
-        collections: [guides],
-        logger: startLogger as never,
-      });
-      const logged = startLogger.error.mock.calls.map(([line]) => String(line));
-      for (const pair of [
-        "fields 'summary' and 'summary' at the top level share the column 'summary'",
-        "fields 'headline' and 'headline' in group 'seo' share the key 'headline'",
-      ]) {
-        expect(logged).toContainEqual(
-          expect.stringContaining(
-            `${pair}. Rename one field in the Builder (or your configuration) and save`
-          )
-        );
-      }
+      // The upgraded start is refused, naming the same two pairs.
+      await expect(boot({ collections: [guides] })).rejects.toMatchObject(
+        refusedWithArticlesPairs
+      );
 
-      // Every save of its definition is refused until one of each pair is renamed, an unrelated
-      // edit included; the same edit with them renamed goes through.
-      const save = async (fields: unknown[]) => {
-        const { schemaVersion } = (await new DynamicCollectionRegistryService(
-          t.adapter as never,
-          consoleLogger
-        ).getCollection("articles")) as { schemaVersion?: number };
-        const nodeEnv = process.env.NODE_ENV;
-        vi.stubEnv("NODE_ENV", "development");
-        try {
-          return await dispatchCollections(
-            {} as ServiceContainer,
-            "applySchemaChanges",
-            { collectionName: "articles" },
-            { fields, confirmed: true, schemaVersion: schemaVersion ?? 1 }
-          );
-        } finally {
-          vi.stubEnv("NODE_ENV", nodeEnv);
-        }
-      };
-      const subtitle = { name: "subtitle", type: "text" };
-      await expect(save([...ARTICLES_FIELDS, subtitle])).rejects.toMatchObject({
-        code: "VALIDATION_ERROR",
-        publicData: {
-          errors: ARTICLES_REFUSALS.map(message => ({
-            path: "fields",
-            code: "FIELD_NAME_DUPLICATE",
-            message,
-          })),
-        },
+      // One field of each pair renamed, as the migration that renames them leaves the row: the
+      // start goes on.
+      await database.reopen();
+      await new DynamicCollectionRegistryService(
+        database.adapter,
+        consoleLogger
+      ).updateCollectionMetadata("articles", {
+        fields: ARTICLES_RENAMED as never,
       });
-      await expect(
-        save([...ARTICLES_RENAMED, subtitle])
-      ).resolves.toBeDefined();
+      const t = await boot({ collections: [guides] });
 
       // Each entity is written and read.
       const article = await t.nextly.create({
@@ -407,6 +406,162 @@ for (const dialect of getConfiguredTestDialects()) {
         warnings: [GUIDES_WARNING],
         exited: false,
         passed: true,
+      });
+    });
+
+    /** A command's context, its logger's lines kept. */
+    function command(): { context: CommandContext; said: string[] } {
+      const said: string[] = [];
+      const base = createLogger({ quiet: true });
+      const capture = (message: string) => {
+        said.push(message);
+      };
+      return {
+        context: {
+          logger: {
+            ...base,
+            info: capture,
+            warn: capture,
+            success: capture,
+            error: capture,
+          },
+          options: {},
+          cwd: projectRoot,
+        } as CommandContext,
+        said,
+      };
+    }
+
+    /** Run `fn`, turning `process.exit` into a thrown `exit <code>`. */
+    async function exiting(
+      fn: () => Promise<void>
+    ): Promise<number | undefined> {
+      const exit = vi.spyOn(process, "exit").mockImplementation(code => {
+        throw new Error(`exit ${String(code)}`);
+      });
+      try {
+        await fn();
+        return undefined;
+      } catch (error) {
+        const match = /^exit (\d+)$/.exec((error as Error).message);
+        if (match) return Number(match[1]);
+        throw error;
+      } finally {
+        exit.mockRestore();
+      }
+    }
+
+    it("starts again once one field of each pair is renamed in the definition file, then migrate:create and migrate are run", async () => {
+      const db = {
+        migrationsDir: "./migrations",
+        uiSchemaFile: "./ui-schema.json",
+      };
+      const definitionFile = join(projectRoot, "ui-schema.json");
+
+      // In development `articles` is made in the Builder, which leaves its definition file, its
+      // migration and its registry row.
+      vi.stubEnv("NODE_ENV", "development");
+      _resetEnvCache();
+      await boot({ basePath: projectRoot, collections: [], db } as never);
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "articles",
+          label: "Articles",
+          fields: [
+            { name: "summary", type: "text" },
+            {
+              name: "seo",
+              type: "group",
+              fields: [{ name: "headline", type: "text" }],
+            },
+          ],
+        }
+      );
+      await current?.destroy();
+      current = undefined;
+      vi.stubEnv("NODE_ENV", "test");
+      _resetEnvCache();
+
+      // An earlier version's save left the definition file and the registry row holding a second
+      // `summary` and a second `seo.headline`: one column and one key, each shared.
+      type Manifest = {
+        collections: Array<{ slug: string; fields: unknown[] }>;
+      };
+      const manifest = JSON.parse(
+        await readFile(definitionFile, "utf-8")
+      ) as Manifest;
+      const articles = manifest.collections.find(c => c.slug === "articles");
+      if (articles === undefined) throw new Error("articles is not defined");
+      articles.fields = ARTICLES_FIELDS;
+      await writeFile(definitionFile, JSON.stringify(manifest, null, 2));
+      await database.reopen();
+      await new DynamicCollectionRegistryService(
+        database.adapter,
+        consoleLogger
+      ).updateCollectionMetadata("articles", {
+        fields: ARTICLES_FIELDS as never,
+      });
+
+      // The start is refused, naming both pairs.
+      await expect(boot()).rejects.toMatchObject(refusedWithArticlesPairs);
+      await database.reopen();
+
+      // The way out: one field of each pair renamed in the definition file, then
+      // `nextly migrate:create` and `nextly migrate`.
+      articles.fields = [
+        { name: "summary", type: "text" },
+        { name: "teaser", type: "text" },
+        {
+          name: "seo",
+          type: "group",
+          fields: [
+            { name: "headline", type: "text" },
+            { name: "subhead", type: "text" },
+          ],
+        },
+      ];
+      await writeFile(definitionFile, JSON.stringify(manifest, null, 2));
+      loaded.config = defineConfig({ collections: [], db } as never);
+      setNonInteractive(true);
+      const created = command();
+      expect(
+        await exiting(() =>
+          runMigrateCreate("rename", { cwd: projectRoot }, created.context)
+        ).finally(() => setNonInteractive(false)),
+        created.said.join("\n")
+      ).toBeUndefined();
+      const applied = command();
+      expect(
+        await exiting(() => runMigrate({ cwd: projectRoot }, applied.context)),
+        applied.said.join("\n")
+      ).toBeUndefined();
+
+      // The start goes on, and the renamed fields are written and read.
+      const t = await boot();
+      const article = await t.nextly.create({
+        collection: "articles",
+        data: {
+          title: "Renamed",
+          summary: "short",
+          teaser: "longer",
+          seo: { headline: "h", subhead: "s" },
+        },
+      });
+      const read = (await t.nextly.findByID({
+        collection: "articles",
+        id: (article.item as { id: string }).id,
+      })) as {
+        summary?: string;
+        teaser?: string;
+        seo?: { headline?: string; subhead?: string };
+      } | null;
+      expect(read).toMatchObject({
+        summary: "short",
+        teaser: "longer",
+        seo: { headline: "h", subhead: "s" },
       });
     });
   });

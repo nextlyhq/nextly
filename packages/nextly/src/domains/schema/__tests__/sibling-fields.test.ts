@@ -12,14 +12,12 @@ import { judgeMigrationSiblingFields } from "../migrate-create/sibling-fields";
 import {
   assertNoNewSiblingClashes,
   configuredSiblingClashes,
-  judgeConfiguredSiblingFields,
   judgeSiblingFields,
   newSiblingClashes,
   refusedConfiguredSiblingFields,
   type SiblingClash,
   siblingClashes,
   siblingClashesError,
-  siblingClashHeldMessage,
   siblingClashWarning,
 } from "../sibling-fields";
 
@@ -278,7 +276,6 @@ describe("judgeSiblingFields", () => {
     expect(judgeSiblingFields(pair, pair)).toEqual({
       refused: [],
       existing: siblingClashes(pair),
-      heldSharing: [],
     });
   });
 
@@ -291,9 +288,9 @@ describe("judgeSiblingFields", () => {
     ]) {
       const [clash] = siblingClashes(held);
       expect(clash.shared).toEqual({ parentField: "seo" });
-      expect(judgeSiblingFields(held, held)).toMatchObject({
+      expect(judgeSiblingFields(held, held)).toEqual({
         refused: siblingClashes(held),
-        heldSharing: siblingClashes(held),
+        existing: [],
       });
     }
     expect(
@@ -323,7 +320,6 @@ describe("judgeSiblingFields", () => {
     expect(judgeSiblingFields(held, held)).toEqual({
       refused: siblingClashes(held),
       existing: [],
-      heldSharing: siblingClashes(held),
     });
   });
 
@@ -338,7 +334,6 @@ describe("judgeSiblingFields", () => {
     expect(judgeSiblingFields(before, after)).toEqual({
       refused: [],
       existing: siblingClashes(before),
-      heldSharing: [],
     });
   });
 
@@ -359,7 +354,6 @@ describe("judgeSiblingFields", () => {
       ).toEqual({
         refused: [],
         existing: [],
-        heldSharing: [],
       });
       expect(
         judgeSiblingFields(spelled, null, { definedInCode: kind }).refused
@@ -415,7 +409,7 @@ describe("judgeSiblingFields", () => {
         judgeSiblingFields([text("title"), component("title")], null, {
           definedInCode: kind,
         })
-      ).toEqual({ refused: [], existing: [], heldSharing: [] });
+      ).toEqual({ refused: [], existing: [] });
     }
     // Written by the author, `define*` still refuses it.
     expect(configuredSiblingClashes(declared)).toHaveLength(1);
@@ -542,10 +536,9 @@ describe("refusedConfiguredSiblingFields, for an entity with no row whose table 
   });
 });
 
-// A start reads the Builder's own entities from their registry rows, so a pair sharing a stored
-// value that a row holds would keep the Builder, where it is renamed, from opening. That start
-// reports it; every other road, and a pair the row does not hold, refuses.
-describe("judgeConfiguredSiblingFields, reporting a pair the row already holds", () => {
+// A start reads the Builder's own entities from their registry rows. A pair sharing a stored value
+// that a row holds is refused there too: the start stops until one of the two is renamed.
+describe("refusedConfiguredSiblingFields, for a pair the registry row holds", () => {
   const held = [text("Title"), text("title")];
   const rows = {
     collections: [{ slug: "posts", tableName: "dc_posts", fields: held }],
@@ -556,57 +549,8 @@ describe("judgeConfiguredSiblingFields, reporting a pair the row already holds",
   const pairs = (list: { clash: SiblingClash }[]) =>
     list.map(({ clash }) => `${clash.first}/${clash.second}`);
 
-  it("reports a held pair sharing a column when asked, and refuses it by default", async () => {
-    const config = { collections: [{ slug: "posts", fields: held }] };
-    const reporting = await judgeConfiguredSiblingFields(
-      config,
-      rows,
-      tableThere,
-      { heldSharing: "report" }
-    );
-    expect({
-      refused: pairs(reporting.refused),
-      reported: pairs(reporting.reported),
-    }).toEqual({ refused: [], reported: ["Title/title"] });
-    const refusing = await judgeConfiguredSiblingFields(
-      config,
-      rows,
-      tableThere
-    );
-    expect({
-      refused: pairs(refusing.refused),
-      reported: pairs(refusing.reported),
-    }).toEqual({ refused: ["Title/title"], reported: [] });
-  });
-
-  // A row holding the pair while it shared nothing (a column-less `Title` beside `title`): a change
-  // that gives both one column makes a pair sharing it anew, refused, not reported.
-  it("refuses a held pair that a change makes share a column, rather than reporting it", async () => {
-    const before = [component("Title"), text("title")];
-    const after = [text("Title"), text("title")];
-    expect(siblingClashes(before)[0].shared).toBeNull();
-    expect(judgeSiblingFields(after, before)).toMatchObject({
-      refused: siblingClashes(after),
-      heldSharing: [],
-    });
-    const judged = await judgeConfiguredSiblingFields(
-      { collections: [{ slug: "posts", fields: after }] },
-      {
-        collections: [{ slug: "posts", tableName: "dc_posts", fields: before }],
-        singles: [],
-        components: [],
-      },
-      tableThere,
-      { heldSharing: "report" }
-    );
-    expect({
-      refused: pairs(judged.refused),
-      reported: pairs(judged.reported),
-    }).toEqual({ refused: ["Title/title"], reported: [] });
-  });
-
-  it("refuses a pair the row does not hold, though held ones are reported", async () => {
-    const judged = await judgeConfiguredSiblingFields(
+  it("refuses a held pair sharing a column, beside a new one", async () => {
+    const refused = await refusedConfiguredSiblingFields(
       {
         collections: [
           {
@@ -616,22 +560,24 @@ describe("judgeConfiguredSiblingFields, reporting a pair the row already holds",
         ],
       },
       rows,
-      tableThere,
-      { heldSharing: "report" }
+      tableThere
     );
-    expect({
-      refused: pairs(judged.refused),
-      reported: pairs(judged.reported),
-    }).toEqual({ refused: ["fooBar/foo_bar"], reported: ["Title/title"] });
+    expect(pairs(refused)).toEqual(["Title/title", "fooBar/foo_bar"]);
   });
 
-  it("says what a reported pair shares and how to end it", () => {
-    const [clash] = siblingClashes(held);
+  it("keeps a held pair sharing no stored value", async () => {
+    const seo = [group("seo", [text("Ab"), text("aB")])];
     expect(
-      siblingClashHeldMessage({ kind: "collection", slug: "posts" }, clash)
-    ).toBe(
-      "Collection 'posts': fields 'Title' and 'title' at the top level share the column 'title'. Rename one field in the Builder (or your configuration) and save; until then no save of its definition is accepted."
-    );
+      await refusedConfiguredSiblingFields(
+        { collections: [{ slug: "posts", fields: seo }] },
+        {
+          collections: [{ slug: "posts", tableName: "dc_posts", fields: seo }],
+          singles: [],
+          components: [],
+        },
+        tableThere
+      )
+    ).toEqual([]);
   });
 });
 

@@ -47,15 +47,7 @@ function slugOf(entity: unknown): string | undefined {
  */
 export function mutateManifest(
   current: UiSchemaManifest,
-  mutation: ManifestMutation,
-  options: {
-    /**
-     * Whether the entity's sibling fields are judged (the default). Off only for a manifest that
-     * describes a definition already stored, such as the entity before a save, which is read, not
-     * written: its pairs are judged where a definition is written.
-     */
-    judgeSiblings?: boolean;
-  } = {}
+  mutation: ManifestMutation
 ): UiSchemaManifest {
   const draft: Record<string, unknown> = {
     $schema: current.$schema,
@@ -78,14 +70,13 @@ export function mutateManifest(
     // Structurally-partial entities (missing slug/fields) are already
     // rejected by the Zod re-validation below (NEXTLY_UI_SCHEMA_INVALID).
     // The manifest is this road's record of the entity, so a pair of sibling fields its stored
-    // entry already holds keeps working and only a pair this write creates is refused.
-    if (options.judgeSiblings !== false) {
-      assertNoNewSiblingClashes(
-        { kind: SIBLING_KIND[mutation.kind], slug: slug ?? "" },
-        (mutation.entity as { fields?: unknown }).fields ?? [],
-        idx >= 0 ? ((list[idx] as { fields?: unknown }).fields ?? []) : null
-      );
-    }
+    // entry already holds keeps working and only a pair this write creates is refused, except a
+    // pair sharing a stored value, which is refused held or not.
+    assertNoNewSiblingClashes(
+      { kind: SIBLING_KIND[mutation.kind], slug: slug ?? "" },
+      (mutation.entity as { fields?: unknown }).fields ?? [],
+      idx >= 0 ? ((list[idx] as { fields?: unknown }).fields ?? []) : null
+    );
     if (idx >= 0) list[idx] = mutation.entity;
     else list.push(mutation.entity);
   } else {

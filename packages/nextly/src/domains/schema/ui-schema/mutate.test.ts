@@ -223,24 +223,6 @@ describe("mutateManifest and sibling fields", () => {
     );
   });
 
-  // A manifest that describes a definition already stored (the entity before a save) is read, not
-  // written: its pairs are judged where a definition is written.
-  it("describes a stored definition holding a pair when asked not to judge it", () => {
-    const next = mutateManifest(
-      withPair,
-      {
-        type: "upsert",
-        kind: "collections",
-        entity: withPair.collections[0],
-      },
-      { judgeSiblings: false }
-    );
-    expect(next.collections[0].fields.map(f => f.name)).toEqual([
-      "title",
-      "title",
-    ]);
-  });
-
   // Two names that differ only in case inside a group share no stored value: held, they stay.
   it("keeps a pair sharing no stored value that the stored entry already holds", () => {
     const seo = {
