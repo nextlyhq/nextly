@@ -476,6 +476,27 @@ describe.each(getConfiguredTestDialects())(
       expect(overview.es.stale).toBe(true);
     });
 
+    // A field the language never translated holds no value of its own: it is missing, not out of
+    // date, so a change at its source says nothing of the language. Only a value the language
+    // holds without a record (made before origins were recorded) is judged by the stamp.
+    it("never marks a language out of date for a field it never translated", async () => {
+      await boot(dialect);
+      const created = (await t!.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: { title: "Hi", summary: "Short" },
+      })) as unknown as { item: { id: string } };
+      const id = created.item.id;
+      // Spanish translates the title only.
+      await save(id, "es", { title: "Hola" });
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      await save(id, "en", { summary: "Shorter" });
+
+      const overview = await overviewOf(id);
+      expect(overview.es.fields?.title).toMatchObject({ outOfDate: false });
+      expect(overview.es.stale).toBeUndefined();
+    });
+
     it("judges a copy by the stamp of the language it was copied from, not the default's", async () => {
       await boot(dialect);
       const created = (await t!.nextly.create({

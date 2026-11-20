@@ -3,7 +3,12 @@ import { beforeAll, afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { loadDialectTables } from "../database/dialect-tables";
 import { describeAbortedTransactions } from "../plugins/aborted-transaction-sightings";
 
-import { layoutForBoot, startTest, startTestFile } from "./storage-layout";
+import {
+  layoutForBoot,
+  migrateDataStepsView,
+  startTest,
+  startTestFile,
+} from "./storage-layout";
 import {
   describeTransactionEscapes,
   installTransactionEscapeObserver,
@@ -24,6 +29,23 @@ import {
 // before each test, so a test that moved the hook never decides the next one's layout.
 startTestFile();
 beforeEach(() => startTest());
+// And after each test, after the file's own hooks: a file whose tests move the hook ends as it
+// began, so the shared-module guard finds the singleton as the file found it, and the next file
+// in a shared worker starts from the setup's layout rather than the last test's.
+afterEach(() => startTest());
+// An older suite's `nextly migrate` runs without the localisation data steps on the earlier
+// layout, as it ran on dev before they existed (`migrateDataStepsView`).
+vi.mock("../cli/commands/upgrade-steps", async importActual => {
+  const actual =
+    await importActual<typeof import("../cli/commands/upgrade-steps")>();
+  return {
+    ...actual,
+    MIGRATE_DATA_STEPS: migrateDataStepsView(
+      actual.MIGRATE_DATA_STEPS,
+      actual.LOCALISATION_DATA_STEPS
+    ),
+  };
+});
 vi.mock("../plugins/test-nextly", async importActual => {
   const actual = await importActual<typeof import("../plugins/test-nextly")>();
   return {

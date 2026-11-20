@@ -24,6 +24,7 @@ import {
   type ProvenanceOrigin,
   type ProvenanceScopeKind,
 } from "../../../schemas/translation-provenance";
+import { toSnakeCase } from "../../schema/services/field-column-descriptor";
 
 /** Where one field's value in one language came from, and whether its source moved since. */
 export interface FieldProvenance {
@@ -123,15 +124,23 @@ function sourceUnknownSql(alias: Alias): SQL {
 function fieldUnrecordedSql(
   scope: ProvenanceScope,
   entryId: SQL,
-  locale: SQL
+  locale: SQL,
+  /** The language's own row, whose columns hold its values. */
+  row: SQL
 ): SQL {
   if (scope.fields.length === 0) return sql`1=0`;
-  return sql`(SELECT COUNT(DISTINCT ${column(COVERED, "field_path")}) FROM ${PROVENANCE} ${COVERED}
-    WHERE ${liveRowsOfSql(COVERED, scope, entryId, locale)}
-    AND ${column(COVERED, "field_path")} IN (${sql.join(
-      scope.fields.map(field => sql`${field}`),
-      sql`, `
-    )})) < ${scope.fields.length}`;
+  // A field counts only where the language holds a value of it: one made before origins were
+  // recorded. A field the language never translated holds none; it is missing, not out of date,
+  // so a change at its source says nothing of the language.
+  return sql`(${sql.join(
+    scope.fields.map(
+      field => sql`(${row}.${sql.identifier(toSnakeCase(field))} IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM ${PROVENANCE} ${COVERED}
+      WHERE ${liveRowsOfSql(COVERED, scope, entryId, locale)}
+      AND ${column(COVERED, "field_path")} = ${field}))`
+    ),
+    sql` OR `
+  )})`;
 }
 
 /**
@@ -164,6 +173,8 @@ export function languageOutOfDateSql(args: {
   entryId: SQL;
   /** The language, as the enclosing query has it. */
   locale: SQL;
+  /** The language's own translation row, as the enclosing query has it. */
+  row: SQL;
   byStamp: SQL;
 }): SQL {
   const { scope, entryId, locale } = args;
@@ -174,7 +185,7 @@ export function languageOutOfDateSql(args: {
   ) OR (${args.byStamp} AND (NOT EXISTS (
     SELECT 1 FROM ${PROVENANCE} ${RECORDED}
     WHERE ${liveRowsOfSql(RECORDED, scope, entryId, locale)}
-  ) OR ${fieldUnrecordedSql(scope, entryId, locale)} OR EXISTS (
+  ) OR ${fieldUnrecordedSql(scope, entryId, locale, args.row)} OR EXISTS (
     SELECT 1 FROM ${PROVENANCE} ${UNKNOWN}
     WHERE ${liveRowsOfSql(UNKNOWN, scope, entryId, locale)}
     AND ${sourceUnknownSql(UNKNOWN)}

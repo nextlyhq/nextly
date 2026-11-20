@@ -12,11 +12,12 @@
  * `perLanguageStorageSuite()` once at its top: it runs on per-language storage, as production does,
  * and the setting it may pass is ignored, as production ignores it.
  *
- * `setup.ts` applies this at the start of every test file and before each test. A follow-up moves
- * the older suites to per-language storage and removes the hook with the earlier layout's code.
+ * `setup.ts` applies this at the start of every test file, before each test and after it.
  *
  * @module __tests__/storage-layout
  */
+import { pathToFileURL } from "node:url";
+
 import {
   _resetPerLanguageStorage,
   setPerLanguageStorage,
@@ -71,4 +72,44 @@ export function layoutForBoot(perLanguageStorage: unknown): void {
   if (harness.__nextly_testPerLanguageSuite === true) return;
   if (perLanguageStorage === true) useLayout(true);
   else if (perLanguageStorage === false) useLayout(false);
+}
+
+/** The preload that puts a CLI child on the earlier layout (`earlier-layout-preload.ts`). */
+const EARLIER_LAYOUT_PRELOAD = pathToFileURL(
+  new URL("./earlier-layout-preload.ts", import.meta.url).pathname
+).href;
+
+/**
+ * The Node arguments that start a CLI child a test runs on its file's layout: the earlier
+ * layout's preload where the file runs on it, and nothing for a file on per-language storage, whose
+ * child runs as every installation does. Placed after the TypeScript loader and before the CLI.
+ */
+export function childLayoutArgs(): string[] {
+  return harness.__nextly_testLayoutPerLanguage === true
+    ? []
+    : ["--import", EARLIER_LAYOUT_PRELOAD];
+}
+
+/**
+ * `nextly migrate`'s data steps as an older suite sees them: without the localisation steps while
+ * its file (or its latest boot) runs on the earlier layout, as such a suite ran on dev before those
+ * steps existed, and with them on per-language storage, as every installation runs them. Read
+ * through, never copied or changed: `setup.ts` hands it out for `MIGRATE_DATA_STEPS`, so whichever
+ * file reads it next sees its own layout's steps and nothing is left behind.
+ */
+export function migrateDataStepsView<T>(
+  all: readonly T[],
+  localisation: readonly T[]
+): readonly T[] {
+  const view = (): readonly T[] =>
+    harness.__nextly_testLayoutPerLanguage === true
+      ? all
+      : all.filter(step => !localisation.includes(step));
+  return new Proxy(all, {
+    get: (_target, property) => Reflect.get(view(), property),
+    has: (_target, property) => Reflect.has(view(), property),
+    ownKeys: () => Reflect.ownKeys(view()),
+    getOwnPropertyDescriptor: (_target, property) =>
+      Reflect.getOwnPropertyDescriptor(view(), property),
+  });
 }
