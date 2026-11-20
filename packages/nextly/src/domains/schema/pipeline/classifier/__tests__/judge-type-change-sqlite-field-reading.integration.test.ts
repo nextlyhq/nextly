@@ -315,8 +315,9 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
       .run();
 
     const event = lossyEventOf(change);
-    // The apply cannot undo the rebuild, so it clears what was consented to and then fails,
-    // saying what landed and naming the row written since.
+    // It fails naming the row written since, and says the change was not made: the apply runs in
+    // one transaction, which this failure rolls back whole. (Called here outside one, the clearing
+    // it ran before failing stays, as the rows below show.)
     await expect(
       clearConsentedValues({
         tx: db,
@@ -331,7 +332,7 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
             path: `schema.${TABLE}.value`,
             code: "CONVERSION_LEFT_A_LATER_VALUE",
             message: expect.stringMatching(
-              /was made, and the values consented to were cleared\. One row holds a value written after the column was checked.*r3/
+              /was not made\. One row holds a value written after the column was checked.*r3\. The whole change was rolled back, and nothing of it was applied/
             ) as unknown,
           },
         ],

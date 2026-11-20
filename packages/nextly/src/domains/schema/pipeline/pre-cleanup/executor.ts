@@ -399,8 +399,9 @@ const rowName = (key: RowKey) =>
 
 /**
  * The failure of a SQLite apply that converted a column and then found values written after the
- * column was judged. It says what landed, since nothing can be undone there: the column has its
- * new type, the consented values were cleared, and the named rows still hold what they held.
+ * column was judged. The apply runs in one transaction, which this failure rolls back whole: the
+ * column keeps its type, no consented value is cleared, and the message says so, naming the rows
+ * written since.
  */
 function lateValuesLeft(
   event: {
@@ -417,7 +418,7 @@ function lateValuesLeft(
       {
         path: `schema.${column}`,
         code: "CONVERSION_LEFT_A_LATER_VALUE",
-        message: `${column}: ${event.fromType} -> ${event.toType} was made, and the values consented to were cleared. ${late.length === 1 ? "One row holds" : `${String(late.length)} rows hold`} a value written after the column was checked, which the new field cannot read: ${late.map(rowName).join(", ")}. Correct or clear ${late.length === 1 ? "that value" : "those values"}.`,
+        message: `${column}: ${event.fromType} -> ${event.toType} was not made. ${late.length === 1 ? "One row holds" : `${String(late.length)} rows hold`} a value written after the column was checked, which the new field cannot read: ${late.map(rowName).join(", ")}. The whole change was rolled back, and nothing of it was applied: correct or clear ${late.length === 1 ? "that value" : "those values"}, then save again.`,
       },
     ],
     logContext: { column, late: late.map(rowKeyText) },
@@ -680,8 +681,9 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
       await runRecorded(args, stmt, false);
     }
     // A lossy type change consented to, cleared ahead of the conversion (`clearConsentedValues`).
-    // SQLite applies without a transaction, so there the clearing waits until its rebuild has
-    // succeeded: a rebuild that fails then leaves every value as it was.
+    // On SQLite the clearing waits until its rebuild has run instead: the rebuild copies every
+    // value into the new column, and a value cleared first could not be told from one written
+    // since. The apply's one transaction takes both back where either fails.
     if (args.dialect !== "sqlite") await clearConsentedValues(args);
     // make_optional is handled via snapshot patching below.
 

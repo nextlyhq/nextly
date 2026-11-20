@@ -25,6 +25,7 @@ import { DynamicCollectionSchemaService } from "../../../dynamic-collections/ser
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 import { freshPushSchema } from "../fresh-push";
 import { PushSchemaPipeline } from "../pushschema-pipeline";
+import { PromptCancelledError } from "../prompt-dispatcher/errors";
 import {
   assertSchemaLockHeld,
   readSchemaLockState,
@@ -543,6 +544,46 @@ describe("PushSchemaPipeline — a SQLite push and another flow's transaction", 
       )
     ).map(column => column.name);
     expect(columns).not.toContain("alpha");
+  }, 60_000);
+
+  // The adapter's transaction wraps what its work throws in an error of its own. A cancellation
+  // thrown inside the apply (pre-cleanup's answer to an abort) is still reported as one, as on the
+  // dialects whose apply the adapter does not wrap.
+  it("reports a cancellation inside the apply's transaction as declined", async () => {
+    const db = adapter.getDrizzle();
+    let insideTransaction: boolean | undefined;
+    const applied = await new PushSchemaPipeline({
+      executor: new DrizzleStatementExecutor("sqlite", db),
+      renameDetector: noopRenameDetector,
+      classifier: noopClassifier,
+      promptDispatcher: noopPromptDispatcher,
+      preRenameExecutor: noopPreRenameExecutor,
+      preCleanupExecutor: {
+        execute: () => {
+          insideTransaction = adapter.transactionOpenInFlow();
+          return Promise.reject(new PromptCancelledError());
+        },
+      },
+      migrationJournal: noopMigrationJournal,
+      notifier: noopNotifier,
+      adapter,
+    }).apply({
+      desired: desiredWith([
+        { name: "heading", type: "text" },
+        { name: "alpha", type: "text" },
+      ]),
+      db,
+      dialect: "sqlite",
+      source: "code",
+      promptChannel: "terminal",
+    });
+
+    expect(
+      insideTransaction,
+      "pre-cleanup did not run inside the adapter's transaction"
+    ).toBe(true);
+    expect(applied.success).toBe(false);
+    expect(applied.error?.code).toBe("CONFIRMATION_DECLINED");
   }, 60_000);
 });
 
