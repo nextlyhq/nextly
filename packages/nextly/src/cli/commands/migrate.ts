@@ -36,7 +36,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
-import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
+import {
+  storageNamesFor,
+  type FieldGroupNaming,
+} from "../../domains/field-groups/services/field-group-storage-names";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   isLocalizationIntentRefusal,
@@ -232,6 +235,8 @@ import {
 import {
   EMPTY_SNAPSHOT,
   isOlderFormatSnapshot,
+  historyFieldGroupNamingIn,
+  newestSnapshotName,
   parseSnapshotFile,
   snapshotFieldGroupNaming,
   type SnapshotFile,
@@ -3039,10 +3044,17 @@ export async function migrateCore(
       // core schema is a desired shape, so naming a registry the database does
       // not have is an instruction to create it — and an empty legacy registry
       // beside a populated migrated one is preferred by every reader.
-      const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
-        dialect: deps.dialect,
-        getDrizzle: <T>() => deps.db as T,
-      });
+      // A database this run sets up for the first time starts its field groups on the names its
+      // history keeps them under (`newDatabaseFieldGroupNaming`); every other keeps the registry
+      // it holds.
+      const newSiteNaming = await newDatabaseFieldGroupNaming(deps);
+      const fieldGroupRegistryTable =
+        newSiteNaming === undefined
+          ? await resolveRegistryNameFromCatalog({
+              dialect: deps.dialect,
+              getDrizzle: <T>() => deps.db as T,
+            })
+          : storageNamesFor(newSiteNaming).registryTable;
       // DETECTED rather than asserted: a caller of this seam may hand an
       // adapter without these operations, and a cast to a shape with
       // `tableExists` would then call `undefined`, a TypeError that skips the
@@ -3118,6 +3130,17 @@ export async function migrateCore(
         ensureLedger: deps.ensureLedger,
       });
       coreChanged = r.changed;
+      // A new database on the current names records that its field groups are settled there, as a
+      // first start records it, so `migrate:field-groups` finds nothing to do.
+      if (newSiteNaming === "current") {
+        const { recordNewSiteOnCurrentNames } = await import(
+          "../../domains/field-groups/services/field-group-new-site"
+        );
+        await recordNewSiteOnCurrentNames(
+          deps.adapter as unknown as DrizzleAdapter,
+          serviceLoggerOf(deps.logger)
+        );
+      }
       // With the run's first write behind it, and every refusal it makes
       // before writing passed, the marks it owes.
       await (deps.markOldBuilderFilesFn ?? markOldBuilderFiles)(deps);
@@ -3424,6 +3447,29 @@ async function missingFromAppStream(
   // files then, so nothing is named rather than a table or column it removed on purpose.
   if (appliedInOrder.at(-1) !== snapshots.at(-1)?.migration) return [];
   return missingFromStream(deps, compared);
+}
+
+/**
+ * The field-group names a database this run sets up for the first time starts on, or undefined
+ * for one already set up. "New" is the probe a first start makes (`ensureFirstRunSetup`): the
+ * migration ledger is absent, and this run creates it only after the core schema. Never decided
+ * from the registry alone, since a catalog listing filtered by privileges reads as holding no
+ * registry, and a second registry beside a live one would hide every group.
+ *
+ * A new database takes the names its history keeps field groups under, and the current names
+ * where the project has no history yet, as a new project's first migration records them.
+ */
+async function newDatabaseFieldGroupNaming(
+  deps: MigrateCoreDeps
+): Promise<FieldGroupNaming | undefined> {
+  const probe = deps.adapter as unknown as {
+    tableExists?: (table: string) => Promise<boolean>;
+  };
+  if (typeof probe.tableExists !== "function") return undefined;
+  if (await probe.tableExists("nextly_schema_events")) return undefined;
+  const metaDir = resolve(deps.migrationsDir, "meta");
+  if ((await newestSnapshotName(metaDir)) === undefined) return "current";
+  return historyFieldGroupNamingIn(metaDir);
 }
 
 /**

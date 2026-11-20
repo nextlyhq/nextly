@@ -1212,10 +1212,10 @@ async function registerServicesOnce(
           createMissingCompanions: !structure.productionStart,
           completeness,
           // A production start sets a new database up only to run the
-          // migrations at start, and their history names the legacy field-group
-          // storage; every other start begins a new site on the current names.
+          // migrations at start, so it takes the names their history keeps field
+          // groups under; every other start begins a new site on the current names.
           newSiteFieldGroupNaming: structure.productionStart
-            ? "legacy"
+            ? await historyNamingAtStart(resolvedBasePath, transformedConfig)
             : "current",
         }
       );
@@ -3824,6 +3824,25 @@ export async function createSchemaRegistry(
     // executeQuery for basic operations.
     return undefined;
   }
+}
+
+/**
+ * The field-group names the project's migration history keeps groups under, which a production
+ * start sets a new database up on before its migrations run: legacy where the configuration names
+ * no migrations folder, the folder has no snapshot, or it cannot be read (the migrations at start
+ * report a folder they cannot read).
+ */
+async function historyNamingAtStart(
+  projectRoot: string,
+  config: { db?: { migrationsDir?: string } }
+): Promise<"legacy" | "current"> {
+  const { fieldGroupNamingOfHistory } = await import(
+    "../domains/schema/migrate/resolved-schema"
+  );
+  return fieldGroupNamingOfHistory({
+    projectRoot,
+    config: { db: { migrationsDir: config.db?.migrationsDir } },
+  }).catch(() => "legacy" as const);
 }
 
 /**

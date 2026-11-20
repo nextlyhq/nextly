@@ -540,14 +540,15 @@ function builderEntriesOf(record: EntitySettingsRecord | undefined): {
 
 /**
  * The names `appMigrationInputs` resolves field groups under: the caller's, else the latest
- * snapshot's (the history's), else legacy where the folder has none.
+ * snapshot's (the history's), else the current names where the folder has none, which a new
+ * project's history starts on (`historyFieldGroupNaming`).
  */
 function namingOfInputs(
   requested: FieldGroupNaming | undefined,
   latest: LatestSnapshot | null
 ): FieldGroupNaming {
   if (requested !== undefined) return requested;
-  return latest === null ? "legacy" : snapshotFieldGroupNaming(latest.data);
+  return latest === null ? "current" : snapshotFieldGroupNaming(latest.data);
 }
 
 /**
