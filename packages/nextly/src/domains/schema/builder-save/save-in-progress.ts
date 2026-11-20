@@ -451,13 +451,19 @@ async function refuseBesideLeftSaves(
   const own = saveInProgressKey(args.kind, args.slug);
   const ours = new Set(made.map(entry => entry.record.id));
   const here = hostname();
-  const left: string[] = [];
+  // Each save named, then a way out that works for each, as sentences of their own so the
+  // command line's reading of the refusal keeps them whole: this host's start settles what it
+  // can and names in its log one it leaves, which is cleared by hand; another host's start
+  // settles its own; a record that cannot be read is removed by hand.
+  const named: string[] = [];
+  const byHand: string[] = [];
+  const elsewhere = new Set<string>();
+  const unreadable: string[] = [];
   for (const row of await readSavesInProgress(args.adapter)) {
     if (row.key === own) continue;
     if (!("record" in row)) {
-      left.push(
-        `the record ${row.key}, which could not be read (${unreadableRecordStep(row.key)})`
-      );
+      named.push(`the record ${row.key}, which could not be read`);
+      unreadable.push(unreadableRecordStep(row.key));
       continue;
     }
     const { record } = row;
@@ -468,22 +474,34 @@ async function refuseBesideLeftSaves(
       );
       continue;
     }
-    // Each named with a way out that works for it: this host's start settles what it can, and
-    // names in its log one it leaves; that one is cleared by hand. Another host's start settles
-    // its own.
-    left.push(
-      record.host === here
-        ? `${described(record)} (${SETTLES}. If the start leaves it, as its log then says: ${clearByHand(args.projectRoot, record)})`
-        : `${described(record)} (a development start on ${record.host} settles it)`
-    );
+    named.push(described(record));
+    if (record.host === here) {
+      byHand.push(clearByHand(args.projectRoot, record));
+    } else {
+      elsewhere.add(record.host);
+    }
   }
-  if (left.length === 0) return;
+  if (named.length === 0) return;
+  const ways = [
+    ...(byHand.length > 0
+      ? [
+          `To settle it, ${SETTLES}.`,
+          `If the start leaves it, as its log then says: ${byHand.join(" ")}`,
+        ]
+      : []),
+    ...(elsewhere.size > 0
+      ? [
+          `One left on another machine is settled by a development start on that machine (${[...elsewhere].join(", ")}).`,
+        ]
+      : []),
+    ...unreadable,
+  ];
   throw NextlyError.conflict({
     reason: "state",
-    message: `An earlier Builder save was left part-way and is not settled, so this save was not started: ${left.join("; ")}.`,
+    message: `An earlier Builder save was left part-way and is not settled, so this save was not started: ${named.join("; ")}. ${ways.join(" ")}`,
     logContext: {
       reason: "builder-save-left-elsewhere",
-      saves: left,
+      saves: named,
     },
   });
 }
