@@ -1,11 +1,12 @@
 /**
- * A Schema Builder save that changes a field's type, on SQLite, PostgreSQL and MySQL, goes ahead
- * only where the migration that deploys it to every other database reaches the same values: where
- * the database's cast reads each stored value as its rule does. Anything else is refused, saying
- * it can't be deployed yet, and changes nothing: a value the cast would not rewrite (a list's one
- * item), one it would not clear (a text that is no number), and any change of a translated field,
- * kept in a translations table whose column a type change does not convert. Values are read back through the
- * Direct API, as the app reads them.
+ * A Schema Builder save that changes a field's type, on SQLite, PostgreSQL and MySQL, converts each
+ * stored value as the new type reads it: a list's one item becomes that item, a whole number held
+ * as text becomes a number, and a value that cannot convert is cleared only where the person
+ * confirmed the count the review showed, else the change is refused and nothing changes. Its
+ * migration file carries the same conversion, so every database it deploys to converts its own
+ * values alike. A change of a translated field, kept in a translations table whose column a type
+ * change does not yet convert, is refused, saying it can't be deployed yet. Values are read back
+ * through the Direct API, as the app reads them.
  *
  * What separates the right answer from plausible wrong ones:
  * - a save that judges the entity's own table alone lets a translated change through, leaving
@@ -30,22 +31,6 @@ import type { ServiceContainer } from "../../../services";
 const SLUG = "tcc_posts";
 
 let instance: TestNextly | undefined;
-
-/** A type change's refusal, wherever its path names the field, saying why it can't be deployed yet. */
-function refusedWith(why: string) {
-  return {
-    code: "VALIDATION_ERROR",
-    publicData: {
-      errors: [
-        expect.objectContaining({
-          message: expect.stringMatching(
-            new RegExp(`${why}.*can't be deployed yet`)
-          ),
-        }),
-      ],
-    },
-  };
-}
 
 /** A refusal of field `v`'s type change, coded `code`, saying why it can't be deployed yet. */
 function refusedAs(code: string, why: string) {
@@ -203,18 +188,17 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v")).toEqual({ a: 12 });
     });
 
-    // A list's one item is its reading as a text, but a list is stored as JSON, which the
-    // database's cast in the deploying migration would keep as it is: the change can't be deployed.
-    it("refuses a list becoming a text, saying it can't be deployed yet, and changes nothing", async () => {
+    // A list's one item is its reading as a text. The cast would keep the list's JSON, so the save
+    // writes each value as the text reads it, and its migration file carries the same conversion
+    // for every database it deploys to.
+    it("converts a list of one item into that item, and an empty list into no value", async () => {
       const t = await boot([{ name: "v", type: "chips" }]);
       await write(t, "one", { v: ["a"] });
       await write(t, "none", { v: [] });
 
-      expect(await save(t, [{ name: "v", type: "text" }])).toMatchObject(
-        refusedAs("TYPE_CHANGE_BLOCKED", "Rewriting values")
-      );
+      expect(await save(t, [{ name: "v", type: "text" }])).toBeUndefined();
 
-      expect(await read(t, "v")).toEqual({ one: ["a"], none: [] });
+      expect(await read(t, "v")).toEqual({ one: "a", none: null });
     });
 
     // Every language's value is kept in the translations table, which no type change's migration
@@ -402,18 +386,93 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v")).toEqual(before);
     });
 
-    // The deploying migration's cast would fail on, or keep, a value that cannot convert, so no
-    // save clears one yet: the change is refused, saying so.
-    it("refuses a change that would lose a value, saying clearing it can't be deployed yet, and changes nothing", async () => {
+    // A value that cannot convert is cleared only with the person's consent, for the count the
+    // review showed: without it the change is refused, and nothing changes.
+    it("refuses a change that would lose a value when no clear is confirmed, and changes nothing", async () => {
       const t = await boot([{ name: "v", type: "text" }]);
       await write(t, "kept", { v: "12" });
       await write(t, "lost", { v: "abc" });
 
-      expect(await save(t, [{ name: "v", type: "number" }])).toMatchObject(
-        refusedAs("TYPE_CHANGE_LOSES_VALUES", "Clearing the values")
-      );
+      const refused = await save(t, [{ name: "v", type: "number" }]);
+      expect(refused).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.v",
+              code: "TYPE_CHANGE_LOSES_VALUES",
+            }),
+          ],
+        },
+      });
+      expect(JSON.stringify(refused)).not.toContain("can't be deployed yet");
 
       expect(await read(t, "v")).toEqual({ kept: "12", lost: "abc" });
+    });
+
+    // The count the person confirms is the review's, judged as the save judges it.
+    it("reviews the values a change would clear, by field, for the person to confirm", async () => {
+      const t = await boot([{ name: "v", type: "text" }]);
+      await write(t, "kept", { v: "12" });
+      await write(t, "lost", { v: "abc" });
+
+      const answer = (await dispatchCollections(
+        {} as ServiceContainer,
+        "previewSchemaChanges",
+        { collectionName: SLUG },
+        { fields: [{ name: "v", type: "number" }] }
+      )) as Response | Record<string, unknown>;
+      const json = (
+        answer instanceof Response ? await answer.json() : answer
+      ) as Record<string, unknown>;
+      const review = (json.data ?? json) as { clears?: unknown };
+
+      expect(review.clears).toEqual([{ field: "v", count: 1 }]);
+    });
+
+    it("clears only the values that cannot convert when the clear is confirmed with its count, and converts the rest", async () => {
+      const t = await boot([{ name: "v", type: "text" }]);
+      await write(t, "kept", { v: "12" });
+      await write(t, "lost", { v: "abc" });
+
+      expect(
+        await save(t, [{ name: "v", type: "number" }], {
+          confirmedClears: [{ field: "v", count: 1 }],
+        })
+      ).toBeUndefined();
+
+      expect(await read(t, "v")).toEqual({ kept: 12, lost: null });
+    });
+
+    it("refuses a confirmed clear whose count no longer holds, naming the new count, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "text" }]);
+      await write(t, "kept", { v: "12" });
+      await write(t, "lost", { v: "abc" });
+      // Written after the review counted one value to clear.
+      await write(t, "late", { v: "xyz" });
+
+      expect(
+        await save(t, [{ name: "v", type: "number" }], {
+          confirmedClears: [{ field: "v", count: 1 }],
+        })
+      ).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.v",
+              code: "TYPE_CHANGE_CLEAR_COUNT_CHANGED",
+              message: expect.stringContaining("2"),
+            }),
+          ],
+        },
+      });
+
+      expect(await read(t, "v")).toEqual({
+        kept: "12",
+        lost: "abc",
+        late: "xyz",
+      });
     });
   }
 );
@@ -452,8 +511,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     // A Single answers a pair as a collection does: its own check before the save asks the same
-    // judgement, and says the same of why.
-    it("refuses a Single's list becoming a text, saying it can't be deployed yet", async () => {
+    // judgement, and its row is converted the same way.
+    it("converts a Single's list of one item into that item", async () => {
       vi.stubEnv("NODE_ENV", "development");
       const t = await createTestNextly({ dialect });
       instance = t;
@@ -480,11 +539,11 @@ describe.each(getConfiguredTestDialects())(
         (error: unknown) => error
       );
 
-      expect(refused).toMatchObject(refusedWith("Rewriting values"));
+      expect(refused).toBeUndefined();
       const read = (await t.nextly.findSingle({
         slug: "tcc_hero",
       } as never)) as { v?: unknown; item?: { v?: unknown } } | undefined;
-      expect(read?.item?.v ?? read?.v).toEqual(["a"]);
+      expect(read?.item?.v ?? read?.v).toBe("a");
     });
   }
 );
@@ -493,8 +552,8 @@ describe.each(getConfiguredTestDialects())(
   "a Builder save of a field group changes a field's type only where its migration deploys it alike (%s)",
   dialect => {
     // A field group answers a pair as a collection does, its values kept on the rows the entries
-    // that embed it write, and says the same of why.
-    it("refuses a field group's list becoming a text, saying it can't be deployed yet", async () => {
+    // that embed it write, each converted the same way.
+    it("converts a field group's list of one item into that item", async () => {
       vi.stubEnv("NODE_ENV", "development");
       const t = await createTestNextly({ dialect });
       instance = t;
@@ -532,8 +591,6 @@ describe.each(getConfiguredTestDialects())(
         };
         return (read.item ?? read).box?.v;
       };
-      // As the app reads it before the save: the refusal leaves it as it was.
-      const before = await boxValue();
 
       const stored = (await t
         .getService("fieldGroupRegistryService")
@@ -551,9 +608,9 @@ describe.each(getConfiguredTestDialects())(
         (error: unknown) => error
       );
 
-      expect(refused).toMatchObject(refusedWith("Rewriting values"));
+      expect(refused).toBeUndefined();
 
-      expect(await boxValue()).toEqual(before);
+      expect(await boxValue()).toBe("a");
     });
   }
 );
