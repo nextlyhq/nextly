@@ -84,6 +84,25 @@ export interface PartReview {
   lastMove: ReviewLastMove | null;
 }
 
+/**
+ * One part of a listed document, where it stands, as a list read gives it under each row's
+ * `_review` (`reviewState`): what the Review column shows and a bulk move names as seen.
+ */
+export type RowPartReview = Pick<
+  PartReview,
+  | "part"
+  | "stage"
+  | "stageLabel"
+  | "stageColour"
+  | "publishable"
+  | "enteredAt"
+  | "assignee"
+  | "dueAt"
+  | "waitingFor"
+  | "revision"
+  | "version"
+>;
+
 /** A document's review state, part by part. */
 export interface DocumentReview {
   /** Null where no workflow is attached; there are then no parts. */
@@ -127,6 +146,55 @@ export interface AssignmentPayload {
   revision: number;
   assignee: ReviewAssignee | null;
   dueAt?: string | null;
+}
+
+/** A part waiting for the caller, as `GET /api/workflows/waiting` names it. @experimental */
+export interface WaitingItem {
+  document: {
+    scopeKind: "collection" | "single";
+    scopeSlug: string;
+    entryId: string;
+  };
+  part: string | null;
+  stage: string;
+  stageLabel: string;
+  /** The stage's colour as saved in Settings, a hex value; null where none is. */
+  stageColour: string | null;
+  /** Who it is assigned to; null for unassigned work, which waits for every holder. */
+  assignee: ReviewAssignee | null;
+  /** Whom it waits for, named as the document's own review read names it. */
+  waitingFor: ReviewWaitingFor | null;
+  /** The document's title as the caller reads it; null where they may not read its title. */
+  title: string | null;
+  enteredAt: string;
+  dueAt: string | null;
+}
+
+/** One document of `POST /api/workflows/steps/bulk`, with the parts it moves as the caller saw them. */
+export interface StepManyDocument {
+  document: WorkflowDocumentRef;
+  parts: "all" | (string | null)[];
+  seen: TakeStepPayload["seen"];
+}
+
+/** `POST /api/workflows/steps/bulk`: one step over several documents. Never an approval. */
+export interface StepManyPayload {
+  step: string;
+  comment?: string | null;
+  documents: StepManyDocument[];
+}
+
+/** One refusal of a move over several documents: the document by id, or a Single by slug. */
+export type BulkMoveRefusal = ({ id: string } | { single: string }) & {
+  code: string;
+  message: string;
+};
+
+/** A move over several documents answered: what moved, and each refusal with its reason. */
+export interface BulkMoveAnswer {
+  message?: string;
+  items: unknown[];
+  errors: BulkMoveRefusal[];
 }
 
 /** A stage of a registered workflow. */

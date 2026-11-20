@@ -11,8 +11,11 @@ const { fetcherSpy } = vi.hoisted(() => ({ fetcherSpy: vi.fn() }));
 vi.mock("../../lib/api/fetcher", () => ({ fetcher: fetcherSpy }));
 
 import {
+  assignManyWorkflowParts,
   assignWorkflowParts,
   fetchReviewState,
+  fetchWaitingForMe,
+  stepManyWorkflowDocuments,
   takeWorkflowStep,
   workflowDocument,
 } from "../workflowApi";
@@ -125,6 +128,56 @@ describe("workflowApi", () => {
         method: "POST",
         body: JSON.stringify({ assignments: [assignment] }),
       },
+      true
+    );
+  });
+
+  it("reads a page of what waits for the caller", async () => {
+    const page = { items: [], meta: { total: 0, page: 2, limit: 20 } };
+    fetcherSpy.mockResolvedValue(page);
+    const answer = await fetchWaitingForMe({ page: 2, limit: 20 });
+    expect(fetcherSpy).toHaveBeenCalledWith(
+      "/workflows/waiting?page=2&limit=20",
+      {},
+      true
+    );
+    expect(answer).toEqual(page);
+  });
+
+  it("takes one step on several documents through the bulk route", async () => {
+    fetcherSpy.mockResolvedValue({ items: [], errors: [] });
+    const body = {
+      step: "submit",
+      documents: [
+        {
+          document: { collection: "posts", id: "e1" },
+          parts: "all" as const,
+          seen: [],
+        },
+      ],
+    };
+    await stepManyWorkflowDocuments(body);
+    expect(fetcherSpy).toHaveBeenCalledWith(
+      "/workflows/steps/bulk",
+      { method: "POST", body: JSON.stringify(body) },
+      true
+    );
+  });
+
+  it("assigns several documents' parts through the bulk route", async () => {
+    fetcherSpy.mockResolvedValue({ items: [], errors: [] });
+    const assignments = [
+      {
+        document: { collection: "posts", id: "e1" },
+        part: null,
+        revision: 1,
+        assignee: { kind: "user" as const, id: "sam" },
+      },
+    ];
+    await assignManyWorkflowParts(assignments);
+    expect(fetcherSpy).toHaveBeenCalledWith(
+      "/workflows/assignments/bulk",
+      { method: "POST", body: JSON.stringify({ assignments }) },
       true
     );
   });
