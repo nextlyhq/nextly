@@ -1802,6 +1802,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             builderSchemaPush({
               dialect,
               db,
+              adapter,
               databaseName,
               slug,
               kind: "single",

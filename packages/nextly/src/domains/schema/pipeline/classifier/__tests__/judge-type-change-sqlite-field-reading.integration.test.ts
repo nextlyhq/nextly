@@ -98,6 +98,7 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
       preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     });
 
   const applyCodeFirst = (classifier: Classifier, desired: DesiredSchema) =>

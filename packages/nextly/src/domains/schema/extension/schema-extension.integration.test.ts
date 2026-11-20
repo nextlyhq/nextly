@@ -755,6 +755,7 @@ async function applyConfirmingDrops(
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   });
   const databaseName =
     dialect === "mysql"

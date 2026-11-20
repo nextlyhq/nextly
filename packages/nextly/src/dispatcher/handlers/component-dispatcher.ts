@@ -907,6 +907,7 @@ export const COMPONENTS_METHODS: Record<
             builderSchemaPush({
               dialect,
               db,
+              adapter,
               databaseName,
               slug,
               kind: "component",

@@ -114,6 +114,7 @@ function pipelineFailingAt(
       preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     }),
     sent: () => sent,
   };
@@ -164,6 +165,7 @@ function fillingPipeline(
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   });
 }
 
@@ -286,6 +288,7 @@ function classifyingPipeline(db: unknown): PushSchemaPipeline {
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
+    adapter: undefined,
   });
 }
 

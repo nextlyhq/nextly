@@ -265,7 +265,10 @@ class AnsweringDispatcher implements PromptDispatcher {
  */
 export function leftoverColumns(
   ownTable: string,
-  args: Pick<Parameters<PromptDispatcher["dispatch"]>[0], "candidates" | "events">,
+  args: Pick<
+    Parameters<PromptDispatcher["dispatch"]>[0],
+    "candidates" | "events"
+  >,
   result: Awaited<ReturnType<PromptDispatcher["dispatch"]>>,
   resolutions: readonly BrowserRenameResolution[]
 ): string[] {
@@ -670,6 +673,8 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         // The real journal from DI, with a noop fallback for callers that bypass DI.
         migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
         notifier: getProductionNotifier(),
+        // The adapter `db` belongs to: a SQLite push runs in its transaction.
+        adapter,
       });
       const result = await pipeline.apply({
         desired: desiredArg,
@@ -1410,7 +1415,10 @@ export function collectionFileRoad(
       );
     },
     before: async () =>
-      archiveCollectionFieldsLeavingTranslation(change, await companionRename()),
+      archiveCollectionFieldsLeavingTranslation(
+        change,
+        await companionRename()
+      ),
     after: async () =>
       reconcileCollectionCompanionAfterFile(change, await companionRename()),
   };

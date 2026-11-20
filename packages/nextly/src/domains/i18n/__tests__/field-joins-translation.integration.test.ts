@@ -720,6 +720,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       preCleanupExecutor: new RealPreCleanupExecutor(),
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     });
     const databaseName =
       dialect === "mysql"

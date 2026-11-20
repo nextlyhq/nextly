@@ -55,6 +55,8 @@ import { getMigrationJournalFromDI } from "./di";
 export function builderSchemaPush(args: {
   dialect: SupportedDialect;
   db: unknown;
+  /** The adapter `db` belongs to, whose transaction a SQLite push takes. */
+  adapter: DrizzleAdapter;
   databaseName: string | undefined;
   slug: string;
   /** Recorded on the journal row, so the entity's history finds it under its own kind. */
@@ -74,6 +76,7 @@ export function builderSchemaPush(args: {
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
     notifier: getProductionNotifier(),
+    adapter: args.adapter,
   });
   return desired =>
     pipeline.apply({

@@ -113,6 +113,7 @@ async function plannedOps(
       preCleanupExecutor: noopPreCleanupExecutor,
       migrationJournal: noopMigrationJournal,
       notifier: noopNotifier,
+      adapter: undefined,
     },
     {
       _kitOverride: {

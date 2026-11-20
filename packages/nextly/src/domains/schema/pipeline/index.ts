@@ -120,6 +120,8 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
         migrationJournal,
         // F10 PR 3: terminal box + NDJSON log line on every apply.
         notifier: getProductionNotifier(),
+        // The adapter `db` belongs to: a SQLite push runs in its transaction.
+        adapter,
       });
 
       // drizzle-kit's MySQL pushSchema needs the database name as its own

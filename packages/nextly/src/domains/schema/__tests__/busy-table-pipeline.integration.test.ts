@@ -198,6 +198,7 @@ describe.each(DIALECTS)(
         preCleanupExecutor: new RealPreCleanupExecutor(),
         migrationJournal: options.journal ?? recordingJournal(),
         notifier: noopNotifier,
+        adapter,
       });
       return pipeline.apply({
         desired: desiredWith(fields),
@@ -395,6 +396,7 @@ describe.each(DIALECTS)(
             preCleanupExecutor: new RealPreCleanupExecutor(),
             migrationJournal: recordingJournal(),
             notifier: noopNotifier,
+            adapter,
           });
           const applied = await pipeline.apply({
             desired: desiredWith(EARLY_AND_LATE),
@@ -462,6 +464,7 @@ describe.each(DIALECTS)(
           preCleanupExecutor: new RealPreCleanupExecutor(),
           migrationJournal: recordingJournal(),
           notifier: noopNotifier,
+          adapter,
         });
         const applied = await pipeline.apply({
           desired: desiredWith(EARLY_AND_TWO_MORE),
