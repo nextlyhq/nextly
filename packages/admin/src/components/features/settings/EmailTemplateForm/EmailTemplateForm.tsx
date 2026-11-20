@@ -33,7 +33,6 @@ import {
 } from "./schema";
 import { SendTestDialog } from "./SendTestDialog";
 import { PreviewPane } from "./TemplatePreview";
-import { useConvertToCode } from "./useConvertToCode";
 import { useDerivedTemplateState } from "./useDerivedTemplateState";
 import { useOwnershipActs, type OwnershipActs } from "./useOwnershipActs";
 import { useTemplateVariables } from "./useTemplateVariables";
@@ -47,7 +46,6 @@ import {
   type RevealRequest,
   type SheetPanel,
 } from "./WorkbenchLayout";
-import { ConvertToCodeDialog } from "./written/ConvertToCodeDialog";
 import { WrittenBody, type InsertVariable } from "./written/WrittenBody";
 
 // ============================================================
@@ -226,7 +224,6 @@ export function EmailTemplateForm({
     isDirty: form.formState.isDirty,
     listHref,
   });
-  const convert = useConvertToCode(template?.id);
 
   const [
     htmlContent,
@@ -405,14 +402,7 @@ export function EmailTemplateForm({
               }
               onSendTest={openSendTest}
               onOverride={openOverride}
-              menu={{
-                ...acts.menu,
-                // A saved written email the site owns can become code.
-                onConvert:
-                  isEdit && owns && template?.format === "written"
-                    ? () => convert.setOpen(true)
-                    : undefined,
-              }}
+              menu={acts.menu}
             />
           )}
           content={
@@ -517,13 +507,6 @@ export function EmailTemplateForm({
           onDiscardEdits={() => form.reset(templateToFormValues(template))}
         />
       ) : null}
-      <ConvertToCodeDialog
-        open={convert.open}
-        onOpenChange={convert.setOpen}
-        dirty={form.formState.isDirty}
-        isPending={convert.isPending}
-        onConvert={convert.convert}
-      />
     </Form>
   );
 }

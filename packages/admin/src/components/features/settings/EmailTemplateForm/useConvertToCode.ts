@@ -11,18 +11,32 @@ import { useState } from "react";
 import { toast } from "@admin/components/ui";
 import { useUpdateEmailTemplate } from "@admin/hooks/queries/useEmailTemplates";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
+import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+
+import type { WorkbenchMenu } from "./WorkbenchHeader";
 
 export interface ConvertToCode {
   open: boolean;
   setOpen: (open: boolean) => void;
   isPending: boolean;
   convert: () => void;
+  /** `base` with Convert to code added, when this email can be converted. */
+  menu: (base: WorkbenchMenu) => WorkbenchMenu;
 }
 
-/** The dialog's state and the conversion of the email with `id`. */
-export function useConvertToCode(id: string | undefined): ConvertToCode {
+/**
+ * The dialog's state and the conversion of `template`. Only a saved written
+ * email the site owns can be converted: a coded one has nothing to convert,
+ * and an owner's content isn't the site's to change.
+ */
+export function useConvertToCode(
+  template: Pick<EmailTemplateRecord, "id" | "format"> | undefined,
+  owns: boolean
+): ConvertToCode {
   const [open, setOpen] = useState(false);
   const { mutate, isPending } = useUpdateEmailTemplate();
+  const id = template?.id;
+  const convertible = Boolean(id) && owns && template?.format === "written";
   const convert = () => {
     if (!id) return;
     mutate(
@@ -45,5 +59,12 @@ export function useConvertToCode(id: string | undefined): ConvertToCode {
       }
     );
   };
-  return { open, setOpen, isPending, convert };
+  return {
+    open,
+    setOpen,
+    isPending,
+    convert,
+    menu: base =>
+      convertible ? { ...base, onConvert: () => setOpen(true) } : base,
+  };
 }
