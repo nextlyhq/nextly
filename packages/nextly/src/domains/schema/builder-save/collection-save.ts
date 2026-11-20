@@ -44,6 +44,7 @@ import { dirname, join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { sql } from "drizzle-orm";
 
 import { serializeUiSchema } from "../../../cli/utils/ui-schema-writer";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -54,6 +55,7 @@ import {
 } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { statedMoment } from "../../dynamic-collections/services/stated-default";
@@ -89,11 +91,19 @@ import {
   companionTableExists,
   liveColumnsOf,
 } from "../../i18n/runtime/companion-io";
+import type { VersionsWhereCondition } from "../../versions/db-api";
+import { snapshotRecord } from "../../versions/shared-publish-base";
+import { WORKING_DRAFT_SHAPE } from "../../versions/versions-repository";
 import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
 import { runUnitInTries } from "../busy-table/run-unit";
 import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
+import type { FieldMoveRequest } from "../field-moves/check-move";
+import { keptValuesOf, type KeptValues } from "../field-moves/kept-values";
+import { heldValueAt, holdsValueAt } from "../field-moves/move-statements";
+import { movedColumnSentences } from "../field-moves/moved-column-facts";
+import { planEntityMoves, type EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
 import { migrationDriftError, type DriftItem } from "../migrate/drift-error";
 import {
@@ -137,7 +147,10 @@ import {
   isWriterOvertaken,
   WRITER_HOLD_LOST_REASON,
 } from "../migrate-create/writer-hold";
-import { countRowsBreakingNotNull } from "../pipeline/classifier/count-helpers";
+import {
+  countRowsBreakingNotNull,
+  querySqlRows,
+} from "../pipeline/classifier/count-helpers";
 import { diffSnapshots } from "../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type {
@@ -323,6 +336,12 @@ export interface CollectionSave {
   removedTogether?: readonly string[];
   /** The fields the person renamed, by name: written as renames, keeping their values. */
   renamedFields?: ReadonlyArray<{ from: string; to: string }>;
+  /**
+   * The fields the person moved into or out of a group, by path before and after: each entry's
+   * value is carried to where the field now is by the file's own statements (`planEntityMoves`),
+   * and a move that cannot keep them is refused before anything is written.
+   */
+  moves?: readonly FieldMoveRequest[];
   /** Override the clock for tests. */
   now?: Date;
 }
@@ -1195,6 +1214,11 @@ async function writeSave(
   await refuseSaveTypeChanges(deps, save, plan.table);
   refuseUnconfirmedConversions(plan, save);
   refuseUnenforceableUniques(deps, save, plan.table);
+  // A move that cannot keep its values is refused here, before the definition is written.
+  const planned = plannedMovesOf(deps, save, plan.table);
+  await refuseEmptyRequiredRefills(deps, planned);
+  await refuseUnkeptValues(deps, planned);
+  await refuseMovesUnderWorkingDrafts(deps, save);
   await settledRows(deps, save, plan.table);
   // The translations table is judged before anything is written wherever the change reaches it:
   // the file's statements are planned from the history's record of it, and a push changes it too,
@@ -1524,12 +1548,18 @@ export async function previewCollectionSave(
       ...files.change,
     ];
     const conversions = plan.adoption?.conversions ?? [];
+    const planned = plannedMovesOf(deps, save, plan.table);
+    await refuseEmptyRequiredRefills(deps, planned);
+    await refuseUnkeptValues(deps, planned);
+    await refuseMovesUnderWorkingDrafts(deps, save);
+    const moved = await moveSentencesOf(deps, planned);
     return {
       adopts: plan.adoption !== null,
       conversions,
       notices: [
         ...conversions.map(conversionNotice),
         ...(await settledRows(deps, save, plan.table)).map(resolutionNotice),
+        ...moved.values(),
       ],
       files: await Promise.all(
         names.map(async name => ({
@@ -2219,7 +2249,7 @@ async function writeFiles(
     name: `${migrationSlug(save.slug)}_${save.change}`,
     table: plan.table,
     now: new Date(now.getTime() + offset),
-    appended: addedStatements(deps, save, plan.table),
+    ...(await movesOf(deps, save, plan.table)),
     ...fileResolutions(save, plan.table),
     ...(save.keys === undefined
       ? {}
@@ -2953,6 +2983,24 @@ async function needsAdopting(
   return deps.adapter.tableExists(table);
 }
 
+type MovesFacts = Pick<
+  GenerateArgs,
+  "valueMoves" | "refilledColumns" | "valuesMovedIn"
+>;
+
+/** The facts of a save's moves the generator takes, each left out where the moves have none. */
+function movesFacts(args: MovesFacts): MovesFacts {
+  const facts: MovesFacts = {};
+  if ((args.valueMoves?.length ?? 0) > 0) facts.valueMoves = args.valueMoves;
+  if ((args.refilledColumns?.length ?? 0) > 0) {
+    facts.refilledColumns = args.refilledColumns;
+  }
+  if ((args.valuesMovedIn?.length ?? 0) > 0) {
+    facts.valuesMovedIn = args.valuesMovedIn;
+  }
+  return facts;
+}
+
 /**
  * Generate the collection's migration from `manifest` into the folder, and
  * name every file the run wrote (its main file and any companion beside it),
@@ -2968,6 +3016,12 @@ async function generateFor(
     now: Date;
     tablesAsTheyStand?: TableSpec[];
     appended?: { up: AddedStatements; down: AddedStatements };
+    /** Columns the save drops whose values its moves copied first (`movesOf`). */
+    valueMoves?: GenerateArgs["valueMoves"];
+    /** Columns the save adds that its moves fill last (`movesOf`). */
+    refilledColumns?: GenerateArgs["refilledColumns"];
+    /** The table whose values the save's moves carry, where they carry any (`movesOf`). */
+    valuesMovedIn?: GenerateArgs["valuesMovedIn"];
     newTableKeys?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
     existingTableKeys?: GenerateArgs["foreignKeysOfExistingTables"];
     resolutions?: readonly ColumnResolution[];
@@ -3039,6 +3093,7 @@ async function generateFor(
     ...(args.appended === undefined
       ? {}
       : { appendedStatements: args.appended }),
+    ...movesFacts(args),
     ...(args.newTableKeys === undefined
       ? {}
       : { foreignKeysOfNewTables: args.newTableKeys }),
@@ -3077,7 +3132,8 @@ async function generateFor(
 function addedStatements(
   deps: CollectionSaveDeps,
   save: CollectionSave,
-  table: string
+  table: string,
+  moves: EntityMoves = NO_MOVES
 ): { up: AddedStatements; down: AddedStatements } {
   const junctions =
     save.junctions === undefined
@@ -3087,16 +3143,417 @@ function addedStatements(
     save.keys === undefined || save.entity === null || save.previous === null
       ? emptyAdded()
       : keyChanges(deps.adapter.getCapabilities().dialect, table, save.keys);
+  // A move's copy into a group leads the file, before any drop; its copy out of one ends it,
+  // after every add; each way down the other way round.
   return {
     up: {
-      first: [...keys.up.first, ...junctions.up.first],
-      last: [...junctions.up.last, ...keys.up.last],
+      first: [...moves.up.first, ...keys.up.first, ...junctions.up.first],
+      last: [...junctions.up.last, ...keys.up.last, ...moves.up.last],
     },
     down: {
-      first: [...keys.down.first, ...junctions.down.first],
-      last: [...junctions.down.last, ...keys.down.last],
+      first: [...moves.down.first, ...keys.down.first, ...junctions.down.first],
+      last: [...junctions.down.last, ...keys.down.last, ...moves.down.last],
     },
   };
+}
+
+const NO_MOVES: EntityMoves = {
+  up: { first: [], last: [] },
+  down: { first: [], last: [] },
+  movedColumns: [],
+  refilledColumns: [],
+};
+
+/**
+ * The change file's added statements and the columns its moves drop, with the save's moves
+ * planned between the definitions before and after it: a move refused here stops the save before
+ * anything is written.
+ */
+async function movesOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): Promise<{
+  appended: { up: AddedStatements; down: AddedStatements };
+  valueMoves: NonNullable<GenerateArgs["valueMoves"]>;
+  refilledColumns: NonNullable<GenerateArgs["refilledColumns"]>;
+  valuesMovedIn: NonNullable<GenerateArgs["valuesMovedIn"]>;
+}> {
+  const moves = plannedMovesOf(deps, save, table);
+  // The header names each dropped column as the move it is, with what the group does not carry.
+  const sentences = await moveSentencesOf(deps, moves);
+  return {
+    appended: addedStatements(deps, save, table, moves),
+    valueMoves: moves.movedColumns.map(moved => ({
+      table: moved.table,
+      column: moved.column,
+      reason:
+        sentences.get(moved.column) ??
+        `moved into the group ${moved.into}; its values are copied there first`,
+    })),
+    refilledColumns: moves.refilledColumns,
+    valuesMovedIn: carriesValues(moves) ? [table] : [],
+  };
+}
+
+/** Whether a save's planned moves carry any values, so its file changes the table's rows. */
+function carriesValues(moves: EntityMoves): boolean {
+  return moves.up.first.length + moves.up.last.length > 0;
+}
+
+/**
+ * What each column `moves` drops had that its group does not carry, by column
+ * (`movedColumnSentences`), read from the table each is dropped from: the entity's own, or its
+ * language table for a field kept per language.
+ */
+async function moveSentencesOf(
+  deps: CollectionSaveDeps,
+  moves: EntityMoves
+): Promise<Map<string, string>> {
+  const byTable = new Map<string, EntityMoves["movedColumns"]>();
+  for (const moved of moves.movedColumns) {
+    byTable.set(moved.table, [...(byTable.get(moved.table) ?? []), moved]);
+  }
+  const sentences = new Map<string, string>();
+  for (const [table, moved] of byTable) {
+    const read = await movedColumnSentences(
+      deps.adapter.getDrizzle(),
+      deps.adapter.getCapabilities().dialect,
+      table,
+      moved
+    );
+    for (const [column, sentence] of read) sentences.set(column, sentence);
+  }
+  return sentences;
+}
+
+/**
+ * The save's moves planned between its definitions before and after (`planEntityMoves`), or the
+ * refusal of the first that cannot keep its values. A save that creates or deletes the entity
+ * moves nothing.
+ */
+/**
+ * Refuses a move while a working draft of the collection holds a value at the field's old place:
+ * the move rewrites each entry's row, not a draft's snapshot, which keeps the field where it was,
+ * so publishing that draft would drop the pending change (its reads prune a path the definition
+ * no longer has). It names the field and how many entries, read before anything is written; once
+ * the drafts are published or discarded, the move goes ahead.
+ */
+async function refuseMovesUnderWorkingDrafts(
+  deps: CollectionSaveDeps,
+  save: CollectionSave
+): Promise<void> {
+  if (save.moves === undefined || save.moves.length === 0) return;
+  const scope = draftScopeOf(save);
+  const drafts = await deps.adapter.select<{
+    entryId: string;
+    snapshot: unknown;
+  }>(VERSIONS_TABLE, {
+    where: { and: [...scope.where, ...WORKING_DRAFT_SHAPE] },
+  });
+  const { holds } = scope;
+  for (const move of save.moves) {
+    const entries = new Set(
+      drafts
+        .filter(draft => holds(snapshotRecord(draft.snapshot), move.from))
+        .map(draft => draft.entryId)
+    );
+    if (entries.size === 0) continue;
+    const name = move.from.at(-1) ?? "This field";
+    const count = entries.size === 1 ? "1 entry" : `${entries.size} entries`;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: move.to.join("."),
+          code: "FIELD_MOVE_REFUSED",
+          message: `${name} has unpublished changes in a working draft of ${count}, which keeps it where it was. Publish or discard those drafts first, then move ${name}.`,
+        },
+      ],
+      logContext: {
+        slug: save.slug,
+        field: move.from.join("."),
+        drafts: entries.size,
+      },
+    });
+  }
+}
+
+/**
+ * Where a save's working drafts are, and how a moved path is looked for in one. A collection's and
+ * a Single's drafts are their own; a field group's values sit in the drafts of every entity that
+ * uses it, under a path this save does not know, so every working draft is read and the moved path
+ * looked for at any depth: refused where it may be held, not missed.
+ */
+function draftScopeOf(save: CollectionSave): {
+  where: VersionsWhereCondition[];
+  holds: (values: Record<string, unknown>, path: readonly string[]) => boolean;
+} {
+  if (save.kind === "fieldGroup") {
+    return { where: [], holds: holdsValueAtPathAnywhere };
+  }
+  return {
+    where: [
+      {
+        column: "scopeKind",
+        op: "=",
+        value: save.kind === "single" ? "single" : "collection",
+      },
+      { column: "scopeSlug", op: "=", value: save.slug },
+    ],
+    holds: holdsValueAtPath,
+  };
+}
+
+/** Whether a document's values hold something other than null at `path`, at any depth. */
+function holdsValueAtPathAnywhere(
+  values: Record<string, unknown>,
+  path: readonly string[]
+): boolean {
+  if (holdsValueAtPath(values, path)) return true;
+  return Object.values(values).some(value =>
+    (Array.isArray(value) ? value : [value]).some(
+      item =>
+        item !== null &&
+        typeof item === "object" &&
+        holdsValueAtPathAnywhere(item as Record<string, unknown>, path)
+    )
+  );
+}
+
+/** Whether a document's values hold something other than null at `path`. */
+function holdsValueAtPath(
+  values: Record<string, unknown>,
+  path: readonly string[]
+): boolean {
+  let at: unknown = values;
+  for (const key of path) {
+    if (at === null || typeof at !== "object" || !Object.hasOwn(at, key)) {
+      return false;
+    }
+    at = (at as Record<string, unknown>)[key];
+  }
+  return at !== null && at !== undefined;
+}
+
+/**
+ * The row columns a save's moves carry into a group, as the save plans them (`plannedMovesOf`):
+ * their values are copied by its file before the column goes, so they are not drops. A move the
+ * planner refuses is refused here, before anything is written.
+ */
+export function movedColumnsOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): string[] {
+  return plannedMovesOf(deps, save, table).movedColumns.map(
+    moved => moved.column
+  );
+}
+
+function plannedMovesOf(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string
+): EntityMoves {
+  if (
+    save.moves === undefined ||
+    save.moves.length === 0 ||
+    save.previous === null ||
+    save.entity === null
+  ) {
+    return NO_MOVES;
+  }
+  const planned = planEntityMoves({
+    before: (save.previous.fields ?? []) as FieldDefinition[],
+    after: (save.entity.fields ?? []) as FieldDefinition[],
+    moves: save.moves,
+    // Where the values are stored, not whether the entity is translated: under per-language
+    // storage a shared entity keeps its translatable fields in the language table too.
+    localized: storesPerLanguage(save.entity),
+    renames: save.renamedFields ?? [],
+    table,
+    dialect: deps.adapter.getCapabilities().dialect,
+    // A field group's table is made by its own generator; a Single's by the collection's.
+    builtBy: save.kind === "fieldGroup" ? "fieldGroup" : "collection",
+    // The settings the save's definition keeps, which may name a field the save moves.
+    ...(save.entity.admin === undefined ? {} : { admin: save.entity.admin }),
+    // The hooks it stores, whose settings name top-level fields as the admin settings do.
+    ...(save.entity.hooks === undefined ? {} : { hooks: save.entity.hooks }),
+    // The media library records each use by the field's path under its collection or Single; a
+    // field group's uses are recorded under each entity that uses it, so none are moved here.
+    ...(save.kind === "fieldGroup"
+      ? {}
+      : {
+          mediaUses: {
+            kind:
+              save.kind === "single"
+                ? ("single" as const)
+                : ("collection" as const),
+            slug: save.slug,
+          },
+        }),
+    // A fill answer writes every entry's value before the copy, so it needs no stop.
+    filledColumns: (save.resolutions ?? [])
+      .filter(resolution => resolution.kind === "fill")
+      .map(resolution => toSnakeCase(resolution.column)),
+  });
+  refuseDeletesBeforeRefill(save, planned);
+  return planned;
+}
+
+/**
+ * Refuses a required field moved out of a group while some entry's group holds no value for it,
+ * counted before anything is written: the file would add its column, fill it and make it
+ * required, and on MySQL, which keeps the statements a refusal stops after, the column would
+ * stay behind.
+ */
+async function refuseEmptyRequiredRefills(
+  deps: CollectionSaveDeps,
+  planned: EntityMoves
+): Promise<void> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  for (const refill of planned.refilledColumns) {
+    if (!refill.required) continue;
+    const held = holdsValueAt(
+      refill.source.column,
+      refill.source.keys,
+      dialect
+    );
+    const [row] = await querySqlRows<{ count: string | number }>(
+      deps.adapter.getDrizzle(),
+      dialect,
+      // Counted on the table the field moves in: the entity's own, or its language table.
+      sql`SELECT COUNT(*) AS count FROM ${sql.identifier(refill.table)} WHERE NOT (${sql.raw(held)})`
+    );
+    const empty = Number(row?.count ?? 0);
+    if (empty === 0) continue;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: refill.field,
+          code: "FIELD_MOVE_REFUSED",
+          message: `${empty} ${empty === 1 ? "entry holds" : "entries hold"} no value for ${refill.field} in the group it moves out of, and it is required. Give ${empty === 1 ? "that entry" : "those entries"} a value first, or move it as optional.`,
+        },
+      ],
+      logContext: { table: refill.table, column: refill.column, empty },
+    });
+  }
+}
+
+/** How many entries a check of moved values reads at a time. */
+const DATE_CHECK_PAGE = 500;
+
+/** How many of the entries holding a value their column would not keep a refusal names. */
+const NAMED_ENTRIES = 3;
+
+/**
+ * Refuses a field moved out of a group while some entry's group holds a value its column would
+ * not keep as the same value (`keptValuesOf`, one rule per column kind). It names the field and
+ * the entries, read before anything is written. The copy would otherwise change the value without
+ * saying so (a rounded decimal, MySQL's rounded seconds, a checkbox value read as false), write
+ * nothing for that entry on SQLite, roll the file back on PostgreSQL, or stop part-way on MySQL.
+ */
+async function refuseUnkeptValues(
+  deps: CollectionSaveDeps,
+  planned: EntityMoves
+): Promise<void> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  for (const refill of planned.refilledColumns) {
+    const kept = keptValuesOf(refill, dialect);
+    if (kept === undefined) continue;
+    // Read on the table the field moves in, as the required count is.
+    const unkept = await unkeptEntries(
+      deps,
+      refill.table,
+      refill.source,
+      kept.keeps
+    );
+    if (unkept.count === 0) continue;
+    const { count } = unkept;
+    const named = unkept.first.join(", ");
+    const more =
+      count > NAMED_ENTRIES ? ` and ${count - NAMED_ENTRIES} more` : "";
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: refill.field,
+          code: "FIELD_MOVE_REFUSED",
+          message: `${count} ${count === 1 ? "entry holds" : "entries hold"} a ${kept.noun} for ${refill.field} its own column would not keep as the same ${kept.noun} (${named}${more}). ${kept.ask(count === 1 ? "it" : "each")}, then move the field.`,
+        },
+      ],
+      logContext: {
+        table: refill.table,
+        column: refill.column,
+        unkept: count,
+      },
+    });
+  }
+}
+
+/**
+ * How many entries' groups hold a value at `source` its column would not keep (`keeps`), and the
+ * first ids of them a refusal names, read a page at a time in id order.
+ */
+async function unkeptEntries(
+  deps: CollectionSaveDeps,
+  table: string,
+  source: { column: string; keys: readonly string[] },
+  keeps: KeptValues["keeps"]
+): Promise<{ count: number; first: string[] }> {
+  const dialect = deps.adapter.getCapabilities().dialect;
+  const held = holdsValueAt(source.column, source.keys, dialect);
+  const value = heldValueAt(source.column, source.keys, dialect);
+  const id = sql.identifier("id");
+  // Counted, with only the ids a refusal names kept: a table of millions holds no list of them.
+  const unkept = { count: 0, first: [] as string[] };
+  // The last id read, as the driver gave it, so the next page starts past it whatever its type.
+  let after: unknown;
+  for (;;) {
+    const past = after === undefined ? sql`` : sql` AND ${id} > ${after}`;
+    const rows = await querySqlRows<{
+      id: unknown;
+      type: unknown;
+      text: unknown;
+    }>(
+      deps.adapter.getDrizzle(),
+      dialect,
+      sql`SELECT ${id} AS id, ${sql.raw(value.type)} AS type, ${sql.raw(value.text)} AS text FROM ${sql.identifier(table)} WHERE ${sql.raw(held)}${past} ORDER BY ${id} LIMIT ${DATE_CHECK_PAGE}`
+    );
+    for (const row of rows) {
+      if (keeps(row)) continue;
+      unkept.count += 1;
+      if (unkept.first.length < NAMED_ENTRIES)
+        unkept.first.push(String(row.id));
+    }
+    if (rows.length < DATE_CHECK_PAGE) return unkept;
+    after = rows[rows.length - 1].id;
+  }
+}
+
+/**
+ * Refuses deleting the entries without a value in a column a move fills from its group: the
+ * file runs that delete before the values arrive, when every entry is without one. A fill is
+ * kept: it runs first, and the copy then writes over it each value the group held.
+ */
+function refuseDeletesBeforeRefill(
+  save: CollectionSave,
+  planned: EntityMoves
+): void {
+  const refilled = new Set(planned.refilledColumns.map(c => c.column));
+  const deleting = (save.resolutions ?? []).find(
+    r =>
+      r.kind === "delete_nonconforming" && refilled.has(toSnakeCase(r.column))
+  );
+  if (deleting === undefined) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: deleting.column,
+        code: "FIELD_MOVE_REFUSED",
+        message: `${deleting.column} takes its values from the group it moves out of, so no entries are deleted for it in the same save. Give the entries without a value one, or move it as optional.`,
+      },
+    ],
+  });
 }
 
 const emptyAdded = (): { up: AddedStatements; down: AddedStatements } => ({

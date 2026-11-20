@@ -945,6 +945,21 @@ async function loadConfigInternal(
     // refuse it.
     assertOpensIn(config.collections, config.plugins ?? [], config.singles);
 
+    // Every problem in the configuration's entities, found by the rules that judge each one, so
+    // a command refuses an invalid configuration before it does anything else, and names every
+    // problem rather than the first. Run once the plugins' field types are registered, since a
+    // field's type is judged against them.
+    // The app's own entities, in the form the plugins' setups left them, placed where the app
+    // declared them; a plugin's contributions keep the checks of their own type.
+    const problems = configurationProblems(appConfig, config);
+    if (problems.length > 0) {
+      throw NextlyError.validation({
+        errors: problems,
+        logContext: { configPath, reason: "config-invalid" },
+      });
+    }
+
+    // After the configuration's problems, among which a cycle in its own field groups is listed.
     // Field groups placed in a cycle are judged over code and the Builder's field groups whether
     // or not a plugin is configured, as the boot judges them, so a command does not pass what a
     // start refuses. Without plugins nothing above read the Builder's field groups.
@@ -960,20 +975,6 @@ async function loadConfigInternal(
       stored: builderFieldGroups.stored,
       warn: message => consoleLogger.warn(message),
     });
-
-    // Every problem in the configuration's entities, found by the rules that judge each one, so
-    // a command refuses an invalid configuration before it does anything else, and names every
-    // problem rather than the first. Run once the plugins' field types are registered, since a
-    // field's type is judged against them.
-    // The app's own entities, in the form the plugins' setups left them, placed where the app
-    // declared them; a plugin's contributions keep the checks of their own type.
-    const problems = configurationProblems(appConfig, config);
-    if (problems.length > 0) {
-      throw NextlyError.validation({
-        errors: problems,
-        logContext: { configPath, reason: "config-invalid" },
-      });
-    }
 
     debugLog(options, "Config loaded successfully");
     debugLog(options, "Dependencies:", dependencies);
@@ -1093,9 +1094,10 @@ function publishConfiguredPostgresSchema(config: {
 /** The configuration file `options` names or the search finds, as `loadConfigInternal` resolves it. */
 function configFileFor(options: LoadConfigOptions): string | undefined {
   const cwd = resolve(options.cwd ?? process.cwd());
-  return options.configPath
-    ? resolve(cwd, options.configPath)
-    : findConfigFile(cwd);
+  if (!options.configPath) return findConfigFile(cwd);
+  // A file `-c` names that is gone is none: `loadConfigInternal` refuses it (`CONFIG_NOT_FOUND`).
+  const named = resolve(cwd, options.configPath);
+  return existsSync(named) ? named : undefined;
 }
 
 export async function loadConfig(

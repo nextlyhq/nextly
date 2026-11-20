@@ -67,6 +67,12 @@ export async function refuseUnansweredDialogQuestions(args: {
   eventResolutions: readonly Resolution[];
   legacy?: LegacyResolutionsBundle;
   /**
+   * The row columns the save's planned moves carry into a group (`planEntityMoves`), whose values
+   * its file copies before the column goes. Never the request's hints alone: a column named there
+   * but not planned as a move is still asked about.
+   */
+  moved?: readonly string[];
+  /**
    * Set by a collection's dialog: a column of its own table that no field describes, left
    * unanswered by the request, is refused as the push refuses it (`columnsNotDescribed`), rather
    * than as cancelled.
@@ -79,8 +85,13 @@ export async function refuseUnansweredDialogQuestions(args: {
     dialect: args.dialect,
     defaultLocale: appLocalization()?.defaultLocale ?? "en",
   });
+  // A column a move carries into a group is not a drop, nor a rename's source: the save's file
+  // copies its values before the column goes, so it is asked nothing (`moved`, from the save's
+  // planned moves).
+  const moved = new Set(args.moved ?? []);
   const candidates = preview.candidates.filter(
-    candidate => candidate.tableName === args.tableName
+    candidate =>
+      candidate.tableName === args.tableName && !moved.has(candidate.fromColumn)
   );
   // The drops the request answers for are those of the fields the change removes, as the dialog
   // lists them for the person to confirm (`rowFieldDiff`), a field inside a group with no name
@@ -96,7 +107,9 @@ export async function refuseUnansweredDialogQuestions(args: {
     builtBy: args.builtBy,
   });
   const removed = new Set(
-    [...removedFields, ...losingColumn].map(field => toSnakeCase(field.name))
+    [...removedFields, ...losingColumn]
+      .map(field => toSnakeCase(field.name))
+      .filter(column => !moved.has(column))
   );
   // A removed field kept per language, or one kept by name that loses its column, has its values
   // in the translations table, which the preview does not read: its drop is confirmed by the
