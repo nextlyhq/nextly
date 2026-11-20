@@ -544,7 +544,7 @@ function waysOut(left: {
   }
   if (left.elsewhere.size > 0) {
     ways.push(
-      `One left on another machine is settled by a development start on that machine (${[...left.elsewhere].join(", ")}).`
+      `One left on another machine is settled by \`nextly migrate\`, or a development start, on that machine (${[...left.elsewhere].join(", ")}).`
     );
   }
   return [...ways, ...left.unreadable];
@@ -922,7 +922,7 @@ function unreadableRecordStep(key: string): string {
 }
 
 const SETTLES =
-  "start the app in development (`next dev`) on this project: its start settles the save";
+  "run `nextly migrate`, or start the app in development (`next dev`), on this project: either settles the save";
 
 /**
  * Refuse while the project's markers record a save left part-way on this host against this
@@ -964,7 +964,7 @@ export async function refuseWhileSaveLeftPartWay(args: {
       );
     } else {
       args.notice(
-        `${described(record)} is recorded in .nextly/ as left part-way; it is settled by a development start on that machine.`
+        `${described(record)} is recorded in .nextly/ as left part-way; it is settled by \`nextly migrate\`, or a development start, on that machine.`
       );
     }
   }
@@ -1030,9 +1030,34 @@ export type ReadRow =
  * @throws NextlyError `CONFLICT` naming each save and the one step that settles it
  */
 export async function refuseWhileSaveInProgress(
-  adapter: DrizzleAdapter
+  adapter: DrizzleAdapter,
+  options: {
+    /**
+     * The records the caller's own run finishes, which do not refuse it: those `nextly migrate`'s
+     * settle left pending, whose remaining files its run applies.
+     */
+    allow?: ReadonlySet<string>;
+    /**
+     * Given a line for each record of another host's save made outside development, which does
+     * not refuse: that save changed no table here, and its files are on its own host.
+     */
+    notice?: (line: string) => void;
+  } = {}
 ): Promise<void> {
-  const rows = await readSavesInProgress(adapter);
+  // A database with no meta table yet (a first run) holds no record.
+  if (!(await adapter.tableExists("nextly_meta"))) return;
+  const here = hostname();
+  const rows = (await readSavesInProgress(adapter)).filter(row => {
+    if (!("record" in row)) return true;
+    if (options.allow?.has(row.record.id) === true) return false;
+    if (row.record.applies === false && row.record.host !== here) {
+      options.notice?.(
+        `${described(row.record)} was made outside development and is recorded as left part-way; it is settled by \`nextly migrate\` on that machine.`
+      );
+      return false;
+    }
+    return true;
+  });
   if (rows.length === 0) return;
   // A row that cannot be read still stands for a save: it refuses, named by its key.
   const named = rows.map(row =>

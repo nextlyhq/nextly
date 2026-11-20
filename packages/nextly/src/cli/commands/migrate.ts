@@ -49,6 +49,11 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
+import {
+  recheckBeforeFiles,
+  settleAfterMigrate,
+  settleBeforeMigrate,
+} from "../../domains/schema/builder-save/settle-at-migrate";
 import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
 import {
   runUnitInTries,
@@ -846,6 +851,24 @@ export async function runMigrate(
     // backup nobody confirmed is refused here, before anything changes.
     await storedData.confirmBeforeSchemaChanges(options.step).catch(fail);
 
+    // A Builder save left part-way is settled first, as a development start settles it: its
+    // files recorded applied, or withdrawn with its definition put back, and one made outside
+    // development judged by its files. What cannot be settled refuses the run before its first
+    // file. A save left pending has its remaining files applied by this run.
+    const saveSettle = {
+      adapter: adapter as unknown as DrizzleAdapter,
+      projectRoot: cwd,
+      migrationsDir: appMigrationsDir,
+      ...(configResult.config.db.migrateLockTtlSeconds === undefined
+        ? {}
+        : { lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds }),
+      logger: {
+        info: (m: string) => logger.info(m),
+        warn: (m: string) => logger.warn(m),
+      },
+    };
+    const leftSaves = await settleBeforeMigrate(saveSettle).catch(fail);
+
     // The retired-table cleanup has flags of its own: removing those tables
     // and losing rows still in them are each a separate decision from
     // accepting a core schema change. Read here so all three live at one edge.
@@ -880,6 +903,8 @@ export async function runMigrate(
     let hooksFailed: NextlyError | null = null;
     try {
       const { applied, pluginModulesApplied, metadata } = await migrateCore({
+        // Asked again under the run's lock, before its first file.
+        recheckSaveRecords: recheckBeforeFiles(saveSettle, leftSaves),
         extensionSchema,
         dialect,
         db,
@@ -973,6 +998,15 @@ export async function runMigrate(
        * registry work it had just measured was still owed.
        */
       reportMetadataOutcome(metadata, logger);
+
+      // A save left pending, settled again once this run has applied its remaining files. The run
+      // has applied them by now, so a settle that fails is said, never the run's answer: its record
+      // stays, and the next run settles it.
+      await settleAfterMigrate(saveSettle, leftSaves).catch((error: unknown) =>
+        logger.warn(
+          `The migrations applied, but settling the Builder save they finished failed (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next \`nextly migrate\` settles it.`
+        )
+      );
 
       // Both streams count: a run that executed only plugin modules did
       // migrate, and saying "nothing to migrate" after it is untrue.
@@ -1419,6 +1453,13 @@ export interface MigrateCoreDeps {
    * and its own push brings the database to it.
    */
   refuseUnwrittenChanges?: () => Promise<void>;
+  /**
+   * Asked under the lock, before anything changes the database: a Builder save left part-way
+   * refuses the run (`refuseWhileSaveInProgress`). `nextly migrate` passes it with the saves its
+   * own settle left pending, whose files the run applies; a production start passes it alone.
+   * Not passed, nothing is asked.
+   */
+  recheckSaveRecords?: () => Promise<void>;
   /**
    * Refuse, reading only, a database that lacks a table or column the newest
    * applied app snapshot records (`database-behind-migrations.ts`), naming
@@ -3108,6 +3149,9 @@ export async function migrateCore(
     deps.adapter as unknown as DrizzleAdapter,
     deps.dialect,
     async () => {
+      // A Builder save left part-way first, on the records as they stand now that no other run
+      // changes them: a save that started while this run waited for the lock refuses it.
+      await deps.recheckSaveRecords?.();
       // Before anything changes the database, the core reconcile included:
       // a deploy refused after the core reconcile would leave core's tables
       // at a release that never ran.

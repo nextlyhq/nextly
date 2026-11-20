@@ -341,6 +341,20 @@ export async function runDbSync(
     exitWithError(logger, error);
   }
 
+  // A Builder save left part-way refuses the sync before it changes anything: its push would
+  // change the tables the save's record is judged against. Another host's save made outside
+  // development changed no table, and is named only.
+  try {
+    const { refuseWhileSaveInProgress } = await import(
+      "../../domains/schema/builder-save/save-in-progress"
+    );
+    await refuseWhileSaveInProgress(adapter as unknown as DrizzleAdapter, {
+      notice: line => logger.warn(line),
+    });
+  } catch (error) {
+    exitWithError(logger, error);
+  }
+
   // What the run does with data an earlier release stored: the steps `nextly
   // migrate` takes once its migrations have applied, taken here once the
   // sync is done, for a database that has no migrations to apply.

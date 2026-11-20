@@ -58,6 +58,7 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
+import { refuseWhileSaveLeftPartWay } from "../../domains/schema/builder-save/save-in-progress";
 import {
   describeDeletion,
   type Deletion,
@@ -202,6 +203,19 @@ export async function runMigrateCheck(
 
   const cwd = options.cwd ?? process.cwd();
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
+
+  // A Builder save this machine left part-way against this database refuses the check: the
+  // migrations it reads do not describe the database until the save is settled. Another machine's
+  // or another database's is named only.
+  try {
+    await refuseWhileSaveLeftPartWay({
+      projectRoot: cwd,
+      postgresSchema: configResult.config.db.postgres?.schema,
+      notice: line => logger.warn(line),
+    });
+  } catch (error) {
+    exitWithError(logger, error);
+  }
 
   // The Builder's definitions, read by the rules `migrate:create` reads them
   // by (`readBuilderDefinitions`), and judged against the newest snapshot once
