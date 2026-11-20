@@ -15,7 +15,9 @@ import { afterEach, expect, it } from "vitest";
 
 import {
   defineCollection,
+  defineFieldGroup,
   defineSingle,
+  fieldGroup,
   group,
   number,
   repeater,
@@ -70,6 +72,27 @@ const ARTICLES = defineCollection({
   ],
 });
 
+/** A component, placed inside each row of a repeater. */
+const PANEL_CARD = defineFieldGroup({
+  slug: "panelcard",
+  fields: [text({ name: "label" }), number({ name: "size" })],
+});
+
+/** A collection whose repeater holds a component in each row. */
+const GALLERIES = defineCollection({
+  slug: "galleries",
+  fields: [
+    text({ name: "title" }),
+    repeater({
+      name: "panels",
+      fields: [
+        number({ name: "position" }),
+        fieldGroup({ name: "card", component: "panelcard" }),
+      ],
+    }),
+  ],
+});
+
 /** A Single holding the same kind of repeater, written through the Single's own path. */
 const NOTICE = defineSingle({
   slug: "notice",
@@ -100,8 +123,9 @@ describeEachDialect("one structure across languages", dialect => {
   async function site(): Promise<TestNextly> {
     t = await createTestNextly({
       dialect,
-      collections: [ARTICLES],
+      collections: [ARTICLES, GALLERIES],
       singles: [NOTICE],
+      fieldGroups: [PANEL_CARD],
       localization: LANGUAGES,
     });
     return t;
@@ -423,6 +447,75 @@ describeEachDialect("one structure across languages", dialect => {
       ]);
       const [en] = await sectionsIn(id, "en");
       expect(en!.items.map(item => item.label)).toEqual(["bread", "apple"]);
+    },
+    BOOT_TIMEOUT
+  );
+
+  it(
+    "keeps a component's translation inside each row with its row when the rows are reordered",
+    async () => {
+      const { nextly } = await site();
+      type Panel = {
+        id: string;
+        position?: number;
+        card?: { label?: string; size?: number } | null;
+      };
+      const panelsIn = async (id: string, locale: string) =>
+        (
+          (await nextly.findByID({ collection: "galleries", id, locale })) as {
+            panels: Panel[];
+          }
+        ).panels;
+      const created = await nextly.create({
+        collection: "galleries",
+        locale: "en",
+        data: {
+          title: "Gallery",
+          panels: [
+            { position: 1, card: { label: "one", size: 10 } },
+            { position: 2, card: { label: "two", size: 20 } },
+          ],
+        },
+      });
+      const id = (created.item as { id: string }).id;
+      const [first, second] = await panelsIn(id, "en");
+      await nextly.update({
+        collection: "galleries",
+        id,
+        locale: "es",
+        data: {
+          panels: [
+            { id: first!.id, position: 1, card: { label: "uno", size: 10 } },
+            { id: second!.id, position: 2, card: { label: "dos", size: 20 } },
+          ],
+          _overwrite: true,
+        },
+      });
+
+      // English reorders the rows.
+      await nextly.update({
+        collection: "galleries",
+        id,
+        locale: "en",
+        data: {
+          panels: [
+            { id: second!.id, position: 2, card: { label: "two", size: 20 } },
+            { id: first!.id, position: 1, card: { label: "one", size: 10 } },
+          ],
+          _overwrite: true,
+        },
+      });
+
+      // Each row's component keeps its own Spanish text, on the rows in their new order.
+      expect(
+        (await panelsIn(id, "es")).map(panel => [panel.id, panel.card?.label])
+      ).toEqual([
+        [second!.id, "dos"],
+        [first!.id, "uno"],
+      ]);
+      expect(
+        (await panelsIn(id, "en")).map(panel => panel.card?.label)
+      ).toEqual(["two", "one"]);
     },
     BOOT_TIMEOUT
   );
