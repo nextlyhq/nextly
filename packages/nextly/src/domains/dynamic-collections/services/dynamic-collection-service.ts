@@ -1583,12 +1583,12 @@ export class DynamicCollectionService extends BaseService {
         renameCandidates,
         field => this.schemaService.columnNameOf(field)
       );
-      // A column pair the request answered as a drop and an add, from the same candidates, which
-      // the translated-field preflight below is told of, so it takes the removal as the request's.
-      const declinedColumn = renameCandidates.some(
-        pair =>
-          this.schemaService.columnNameOf(pair.from) !== undefined &&
-          declinedRename(pair)
+      // The translated field the request answered as a drop and an add, from the same candidates,
+      // which the translated-field preflight below is told of, so it takes that removal, and only
+      // that one, as the request's.
+      const droppedByAnswer = this.schemaService.translatedFieldDroppedByAnswer(
+        renameCandidates,
+        collectionWasLocalized
       );
 
       // A many-to-many added to a renamed collection would get a junction its reads can't find.
@@ -1645,7 +1645,9 @@ export class DynamicCollectionService extends BaseService {
         newFields: userDefinedFields,
         wasLocalized: collectionWasLocalized,
         isLocalized: collectionIsLocalized,
-        ...(declinedColumn ? { renamed: null } : {}),
+        ...(droppedByAnswer === undefined
+          ? {}
+          : { renamed: null, droppedByAnswer }),
       });
       // What the existing entries must satisfy for the change to apply, asked before any statement
       // runs: a refusal part-way would leave MySQL, which commits each schema statement, holding

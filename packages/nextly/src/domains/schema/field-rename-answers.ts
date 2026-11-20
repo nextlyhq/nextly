@@ -107,15 +107,40 @@ export function declinedRename(pair: FieldPair): boolean {
  * doesn't answer: each of `pairs`, the change's rename candidates (`renameCandidatesOf`).
  * `entity` names it: `The collection "posts"`, say. A pair answered `drop_and_add` whose two
  * names are one column (`columnOf`, none for a field with no column), as `fooBar` and `foo_bar` are, is refused too: the
- * column cannot be dropped and added again in one change, only renamed. An answer for a pair the
- * change doesn't make is left aside. Off such a road nothing is refused.
+ * column cannot be dropped and added again in one change, only renamed. A `rename` answer for a
+ * pair that isn't among them is refused as well, as when a change replaces two fields at once,
+ * which no candidate pairs: left aside, its fields would be dropped and added with their values
+ * lost though the request asked to keep them. A `drop_and_add` answer for such a pair asks for
+ * what the change does anyway, so it is left aside. Off such a road nothing is refused.
  */
 export function refuseUnansweredRename<F extends { name?: string }>(
   entity: string,
   pairs: readonly FieldPair<F>[],
   columnOf: (field: F) => string | undefined
 ): void {
-  if (answersScope.getStore() === undefined) return;
+  const sent = answersScope.getStore();
+  if (sent === undefined) return;
+  const unoffered = sent.find(
+    a =>
+      a.choice === "rename" &&
+      !pairs.some(pair => pair.from.name === a.from && pair.to.name === a.to)
+  );
+  if (unoffered) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "renames",
+          code: "FIELD_RENAME_NOT_OFFERED",
+          message: `${entity}: the change can't rename "${unoffered.from}" to "${unoffered.to}". A rename is one field removed and one of a compatible type added, one field at a time: rename each field in a change of its own, or answer "drop_and_add".`,
+        },
+      ],
+      logContext: {
+        reason: "field-rename-not-offered",
+        from: unoffered.from,
+        to: unoffered.to,
+      },
+    });
+  }
   for (const pair of pairs) {
     const from = pair.from.name ?? "";
     const to = pair.to.name ?? "";

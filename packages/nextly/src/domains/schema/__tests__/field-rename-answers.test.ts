@@ -1,7 +1,8 @@
 /**
  * A schema change's answers about a field leaving and another arriving: read at the boundary once
  * per pair, refused for a pair left unanswered on a road that takes them, and never asked for off
- * such a road. A pair whose two names are one column can't be dropped and added in one change.
+ * such a road. A pair whose two names are one column can't be dropped and added in one change, and
+ * a rename answered for a pair the change doesn't make is refused rather than left aside.
  *
  * @module domains/schema/__tests__/field-rename-answers.test
  */
@@ -96,6 +97,31 @@ describe("refuseUnansweredRename", () => {
 
   it("asks nothing off such a road, as the Builder's own saves are", async () => {
     expect(await refusedWith(undefined, "heading", "headline")).toBeUndefined();
+  });
+
+  it("refuses a rename answer for a pair the change doesn't make, and leaves a drop_and_add one aside", async () => {
+    // The change pairs heading/headline; body/copy is no candidate, as when two fields are
+    // replaced at once and nothing pairs.
+    expect(
+      await refusedWith(
+        [
+          { from: "heading", to: "headline", choice: "rename" },
+          { from: "body", to: "copy", choice: "rename" },
+        ],
+        "heading",
+        "headline"
+      )
+    ).toBe("FIELD_RENAME_NOT_OFFERED");
+    expect(
+      await refusedWith(
+        [
+          { from: "heading", to: "headline", choice: "rename" },
+          { from: "body", to: "copy", choice: "drop_and_add" },
+        ],
+        "heading",
+        "headline"
+      )
+    ).toBeUndefined();
   });
 
   it("refuses dropping and adding two names of one column, and lets them be renamed", async () => {

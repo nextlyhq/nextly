@@ -2889,6 +2889,25 @@ ${allColumnDefs.join(",\n")}
   }
 
   /**
+   * The translated field among `candidates` (`renameCandidatesOf`) that the running change
+   * answered `drop_and_add` for, by name, or none: what the translated-field preflight is told
+   * the request chose to drop (`archiveFieldsLeavingTranslation`'s `droppedByAnswer`). A shared
+   * field's pair is none of its business, so a change answering one still has every translated
+   * field it removes asked about. Translated as storage planned it before the change.
+   */
+  translatedFieldDroppedByAnswer(
+    candidates: readonly { from: FieldDefinition; to: FieldDefinition }[],
+    wasLocalized: boolean
+  ): string | undefined {
+    return candidates.find(
+      pair =>
+        this.columnNameOf(pair.from) !== undefined &&
+        isFieldLocalized(pair.from, wasLocalized) &&
+        declinedRename(pair)
+    )?.from.name;
+  }
+
+  /**
    * The one leaving and one arriving field of a compatible type a change could be renaming, or
    * none, whatever the change answered about it: what a road that takes answers asks for an
    * answer to (`refuseUnansweredRename`). `detectFieldRename` is this less a pair answered

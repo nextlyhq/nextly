@@ -1655,20 +1655,20 @@ export class SingleMetadataService {
   }
 
   /**
-   * Whether the request answered a column pair of the change as a drop and an add: from the same
-   * candidates the refusal asks about.
+   * The translated field the request answered as a drop and an add, from the same candidates the
+   * refusal asks about (`translatedFieldDroppedByAnswer`), or none.
    */
-  private async declinedColumnRename(
+  private async translatedFieldDroppedByAnswer(
     input: UpdateSingleSchemaInput
-  ): Promise<boolean> {
-    if (input.fields === undefined) return false;
+  ): Promise<string | undefined> {
+    if (input.fields === undefined) return undefined;
     const { schema, candidates } = await this.renameCandidatesOf(
       input,
       input.fields
     );
-    return candidates.some(
-      pair =>
-        schema.columnNameOf(pair.from) !== undefined && declinedRename(pair)
+    return schema.translatedFieldDroppedByAnswer(
+      candidates,
+      input.wasLocalized
     );
   }
 
@@ -1752,9 +1752,20 @@ export class SingleMetadataService {
       newFields: input.fields,
       wasLocalized: input.wasLocalized,
       isLocalized: input.isLocalized,
-      // A column pair the request answered as a drop and an add: the removal is the request's.
-      ...((await this.declinedColumnRename(input)) ? { renamed: null } : {}),
+      // The translated field the request answered as a drop and an add: that removal, and only
+      // that one, is the request's.
+      ...(await this.droppedByAnswerArgs(input)),
     });
+  }
+
+  /** What the translated-field preflight is told of a drop the request answered for, if any. */
+  private async droppedByAnswerArgs(
+    input: UpdateSingleSchemaInput
+  ): Promise<{ renamed?: null; droppedByAnswer?: string }> {
+    const droppedByAnswer = await this.translatedFieldDroppedByAnswer(input);
+    return droppedByAnswer === undefined
+      ? {}
+      : { renamed: null, droppedByAnswer };
   }
 
   private async refreshForUpdate(

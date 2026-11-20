@@ -5,7 +5,8 @@
  * says `rename` renames, keeping the values, and one that says `drop_and_add` drops the old field
  * and adds the new one. On each road that takes a field list without the Builder's own answers:
  * the collection schema PATCH, the Single schema PATCH, and a plugin's
- * `ctx.services.collections.updateCollection`.
+ * `ctx.services.collections.updateCollection`. A rename is one field at a time: a request that
+ * answers `rename` for two fields replaced at once is refused rather than dropping both.
  */
 import {
   existsSync,
@@ -55,7 +56,12 @@ interface Road {
   create(t: TestNextly): Promise<void>;
   /** Stores "Kept" in `heading`. */
   store(t: TestNextly): Promise<void>;
-  change(t: TestNextly, renames?: Renames): Promise<unknown>;
+  /** Sends `fields`, AFTER unless a case says otherwise. */
+  change(
+    t: TestNextly,
+    renames?: Renames,
+    fields?: readonly Record<string, unknown>[]
+  ): Promise<unknown>;
 }
 
 const ROADS: readonly Road[] = [
@@ -75,12 +81,12 @@ const ROADS: readonly Road[] = [
     store: async t => {
       await t.nextly.create({ collection: "posts", data: { heading: "Kept" } });
     },
-    change: (_t, renames) =>
+    change: (_t, renames, fields = AFTER) =>
       dispatchCollections(
         {} as ServiceContainer,
         "updateCollection",
         { collectionName: "posts" },
-        { fields: AFTER, ...(renames ? { renames } : {}) }
+        { fields, ...(renames ? { renames } : {}) }
       ),
   },
   {
@@ -99,12 +105,12 @@ const ROADS: readonly Road[] = [
     store: async t => {
       await t.nextly.create({ collection: "posts", data: { heading: "Kept" } });
     },
-    change: (t, renames) => {
+    change: (t, renames, fields = AFTER) => {
       const service: CollectionService = t.getService("collectionService");
       return service.updateCollection(
         "posts",
         {
-          fields: AFTER,
+          fields,
           ...(renames ? { renames } : {}),
         } as Parameters<CollectionService["updateCollection"]>[1],
         {}
@@ -132,11 +138,11 @@ const ROADS: readonly Road[] = [
       );
       expect(written.success, JSON.stringify(written)).toBe(true);
     },
-    change: (_t, renames) =>
+    change: (_t, renames, fields = AFTER) =>
       dispatchSingles(
         "updateSingleSchema",
         { slug: "hero" },
-        { fields: AFTER, ...(renames ? { renames } : {}) }
+        { fields, ...(renames ? { renames } : {}) }
       ),
   },
 ];
@@ -292,6 +298,38 @@ describeEachDialect(
         expect(file).not.toMatch(/RENAME COLUMN/i);
         expect(file).toMatch(/DROP COLUMN/i);
       });
+
+      it(`refuses on ${road.name} renaming two fields replaced at once, rather than dropping both`, async () => {
+        // Two fields leave and two arrive, which pairs nothing: the answers would be left aside
+        // and both columns dropped with their values, though the request asked to keep them.
+        await road.create(current);
+        await road.store(current);
+        const files = sqlFiles();
+
+        const answer = await answerOf(() =>
+          road.change(
+            current,
+            [
+              { from: "heading", to: "headline", choice: "rename" },
+              { from: "body", to: "copy", choice: "rename" },
+            ],
+            [
+              { name: "headline", type: "text" },
+              { name: "copy", type: "text" },
+            ]
+          )
+        );
+
+        expect(answer).toEqual([
+          expect.objectContaining({
+            code: "FIELD_RENAME_NOT_OFFERED",
+            message: expect.stringMatching(/heading[\s\S]*headline/),
+          }),
+        ]);
+        expect(await registeredNames(road)).toEqual(["heading", "body"]);
+        expect(await valuesOf(road, "heading")).toEqual(["Kept"]);
+        expect(sqlFiles(), "the migration files").toEqual(files);
+      });
     }
   }
 );
@@ -386,6 +424,27 @@ describeEachDialect(
             { name: "summary", type: "text", localized: true },
             { name: "views", type: "number" },
           ])
+        )
+      ).toBe("TRANSLATED_FIELD_REMOVED_BESIDE_ADDED");
+    });
+
+    it("still asks about a translated field removed beside one added when the request answered only a shared pair", async () => {
+      // `views` to `count` is the only pair, answered drop_and_add; `heading` leaving beside
+      // `summary` of another type is no pair, so its translations are not the request's to drop.
+      await posts([
+        { name: "views", type: "number", localized: false },
+        { name: "heading", type: "text", localized: true },
+      ]);
+
+      expect(
+        await codeOf(
+          change(
+            [
+              { name: "count", type: "number", localized: false },
+              { name: "summary", type: "richText", localized: true },
+            ],
+            [{ from: "views", to: "count", choice: "drop_and_add" }]
+          )
         )
       ).toBe("TRANSLATED_FIELD_REMOVED_BESIDE_ADDED");
     });
