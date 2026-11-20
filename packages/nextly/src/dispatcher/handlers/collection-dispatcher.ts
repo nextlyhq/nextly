@@ -406,6 +406,20 @@ function dialogConfirmations(
   };
 }
 
+/** The dialog's confirmations as the change's `confirmedBeside`, where it sent any. */
+function dialogConfirmationsBeside(
+  tableName: string,
+  resolutions: Record<string, FieldResolution> | undefined,
+  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
+): { confirmedBeside?: LegacyResolutionsBundle } {
+  const { legacy } = dialogConfirmations(
+    tableName,
+    resolutions,
+    confirmedDeletions
+  );
+  return legacy === undefined ? {} : { confirmedBeside: legacy };
+}
+
 /** The save's answer of the counts confirmed, where the body sent them; nothing otherwise. */
 function confirmedDeletionsAnswer(
   confirmedDeletions: z.infer<
@@ -1263,6 +1277,9 @@ const COLLECTIONS_METHODS: Record<
             legacyResolutions: resolutions
               ? { tableName, byFieldName: resolutions }
               : undefined,
+            // A translated field's values the push's companion step drops are confirmed by name
+            // as on the file road, the counted deletions included (`dialogConfirmations`).
+            ...dialogConfirmationsBeside(tableName, resolutions, confirmedDeletions),
           };
           let pushedSummary: PushSummary | undefined;
           // A push that fails after changing the database keeps its files, recorded applied

@@ -1811,6 +1811,16 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 legacyBundle,
               ],
               firstQuestion,
+              // A translated field's values the companion reconcile after the push drops, asked of
+              // the push by field name, as the save's file road asks them.
+              fields: {
+                tableName,
+                builtBy: "collection",
+                oldFields: (single.fields ?? []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+              },
             }),
             dialect,
             firstQuestion
