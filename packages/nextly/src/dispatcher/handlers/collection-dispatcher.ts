@@ -1442,6 +1442,23 @@ const COLLECTIONS_METHODS: Record<
               refreshRuntime(storedFields);
               bumpSchemaVersion();
             },
+            // The change landed, its file recorded and its fields with it: only the renamed field's
+            // provenance move failed, and logged the statements that finish it. The row is
+            // written with the fields as the save wrote them and its version moved on, so a client
+            // holding the old one is refused, as a Single's is; the answer says the change landed
+            // (`provenanceNotMoved`). Where the row cannot be written either, that is logged too,
+            // and the answer stays the move's.
+            provenanceNotMoved: async storedFields => {
+              refreshRuntime(storedFields);
+              try {
+                await writeRow(storedFields, false);
+              } catch (rowError) {
+                consoleLogger.error(
+                  `[applySchemaChanges] The registry row of '${p.collectionName}' was not written after its rename, so its version did not move on: ${rowError instanceof Error ? rowError.message : String(rowError)}`
+                );
+              }
+              bumpSchemaVersion();
+            },
             appliedBy: push.appliedBy,
             // Where the file carries the change, the push's questions are asked of it first: a
             // rename the request does not answer, or a drop it does not confirm, refuses the save
@@ -1503,26 +1520,6 @@ const COLLECTIONS_METHODS: Record<
                 : { acknowledgedConversions }),
               ...confirmedDeletionsAnswer(confirmedDeletions),
             },
-          }).catch(async (error: unknown) => {
-            // The change landed, its file recorded and its fields with it: only the renamed
-            // field's provenance move failed, and logged the statements that finish it. The row's
-            // version moves on as its fields did, so a client holding the old one is refused, as a
-            // Single's does; the answer says the change landed (`provenanceNotMoved`). Where the
-            // row cannot be written either, that is logged too, and the answer stays the move's.
-            // A push that fails part way is not this: its failure is thrown below, its files kept.
-            if (isProvenanceNotMoved(error)) {
-              const landed = fields as unknown as FieldDefinition[];
-              refreshRuntime(landed);
-              try {
-                await writeRow(landed, false);
-              } catch (rowError) {
-                consoleLogger.error(
-                  `[applySchemaChanges] The registry row of '${p.collectionName}' was not written after its rename, so its version did not move on: ${rowError instanceof Error ? rowError.message : String(rowError)}`
-                );
-              }
-              bumpSchemaVersion();
-            }
-            throw error;
           });
           // Thrown before the registry row is written: the row keeps the fields the database
           // held before, as the kept files record the change still to finish.
@@ -2495,6 +2492,12 @@ async function saveThroughWriter(
      */
     settled?: (fields: FieldDefinition[]) => void;
     /**
+     * Where the file ran and what it does not reach stopped at a renamed field's provenance move
+     * (`isProvenanceNotMoved`): what the caller does with the change that landed, given the fields
+     * as the save wrote them, before that failure is passed on.
+     */
+    provenanceNotMoved?: (fields: FieldDefinition[]) => Promise<void>;
+    /**
      * The questions the push asks before it changes anything, asked where the save's file rather
      * than the push carries the change, before anything is written: a dialog's request that leaves
      * one unanswered is refused as the push refuses it (`refuseUnansweredDialogQuestions`).
@@ -2559,7 +2562,7 @@ async function saveThroughWriter(
           }
         : beforeWrite
   );
-  if (runsFile) await change.fileRoad?.after();
+  if (runsFile) await afterTheFile(change, prepared.fields);
   return {
     fields: prepared.fields,
     applied: result.applied,
@@ -2567,6 +2570,27 @@ async function saveThroughWriter(
     ...(result.checked === undefined ? {} : { checked: result.checked }),
     registryWritten: inFile,
   };
+}
+
+/**
+ * What a save's file does not reach, brought in step once the file ran (`fileRoad.after`). Where
+ * that stops at a renamed field's provenance move (`isProvenanceNotMoved`), the file is recorded,
+ * so the change it carried landed as the save prepared it: the caller is handed `fields`, the ones
+ * the file and the definition hold, before the failure is passed on.
+ */
+async function afterTheFile(
+  change: {
+    fileRoad?: { after: () => Promise<void> };
+    provenanceNotMoved?: (fields: FieldDefinition[]) => Promise<void>;
+  },
+  fields: FieldDefinition[]
+): Promise<void> {
+  try {
+    await change.fileRoad?.after();
+  } catch (error) {
+    if (isProvenanceNotMoved(error)) await change.provenanceNotMoved?.(fields);
+    throw error;
+  }
 }
 
 /**

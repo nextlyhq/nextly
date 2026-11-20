@@ -412,8 +412,11 @@ describeEachDialect(
       ).toBe("Hola");
     });
 
-    it("answers that a translated Collection was saved only in part when its translations step fails", async () => {
-      const name = "trp_posts";
+    /**
+     * A translated Collection `name` holding one entry with an English and a Spanish heading, its
+     * registry row as seeded.
+     */
+    async function seedTranslatedCollection(name: string) {
       const collections = t.getService("collectionsHandler") as unknown as {
         createCollection(data: Record<string, unknown>): Promise<{
           success: boolean;
@@ -452,7 +455,12 @@ describeEachDialect(
         { heading: "Hola", _overwrite: true }
       );
       expect(spanish.success, JSON.stringify(spanish)).toBe(true);
-      const before = await recorded("dynamic_collections", name);
+      return recorded("dynamic_collections", name);
+    }
+
+    it("answers that a translated Collection was saved only in part when its translations step fails", async () => {
+      const name = "trp_posts";
+      const before = await seedTranslatedCollection(name);
       expect(before.fields, "the Collection as seeded").toEqual([
         "heading",
         "views",
@@ -547,6 +555,70 @@ describeEachDialect(
         schemaVersion: after.schemaVersion + 1,
         localized: true,
       });
+    });
+
+    it("records the fields as the save wrote them when a translated Collection's rename stops part way, an answer making a field optional included", async () => {
+      const name = "trp_optional";
+      const before = await seedTranslatedCollection(name);
+      await refuseProvenanceRename(name);
+      captureErrorLog();
+
+      // `views` sent required, with the answer that keeps it optional: the save's file and its
+      // definition hold it optional, and so does the registry row once the rename stops part way.
+      await expect(
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: name },
+          {
+            fields: [
+              { name: "title2", type: "text" },
+              { name: "views", type: "number", required: true },
+            ],
+            confirmed: true,
+            localized: true,
+            renameResolutions: [
+              {
+                tableName: `dc_${name}_locales`,
+                fromColumn: "heading",
+                toColumn: "title2",
+                choice: "rename" as const,
+              },
+            ],
+            eventResolutions: [
+              {
+                kind: "make_optional",
+                eventId: `add_not_null_with_nulls:dc_${name}.views`,
+              },
+            ],
+            schemaVersion: before.schemaVersion,
+          }
+        )
+      ).rejects.toThrow(
+        expect.objectContaining({
+          logContext: expect.objectContaining({
+            reason: "translation-records-not-moved",
+          }),
+        })
+      );
+
+      clearRegistryRowCache();
+      const [row] = await t.adapter.select<Record<string, unknown>>(
+        "dynamic_collections",
+        {
+          columns: ["fields", "schemaVersion"],
+          where: { and: [{ column: "slug", op: "=", value: name }] },
+        }
+      );
+      const fields = (
+        typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+      ) as { name: string; required?: boolean }[];
+      expect(fields.map(f => f.name)).toEqual(["title2", "views"]);
+      expect(
+        fields.find(f => f.name === "views")?.required ?? false,
+        "views, as the save's answer left it"
+      ).toBe(false);
+      expect(Number(row?.schemaVersion)).toBe(before.schemaVersion + 1);
     });
 
     it("gives statements that move the records as the move itself does, dropping a path that no longer fits", async () => {
