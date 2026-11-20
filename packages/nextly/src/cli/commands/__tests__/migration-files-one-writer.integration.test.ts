@@ -654,22 +654,17 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 120_000);
 
-    // The save changes its definition before its migration is written, so the
-    // command that took the folder read the definition with the save's
-    // change in it, and wrote it into its own migration; the save then put
-    // its definition back. Holds once a save writes its definition last.
-    it.fails(
-      "the migration written over a stalled Builder save holds only its own change",
-      async () => {
-        const { created } = await stalledSaveTakenOver();
+    // The save writes its definition last, after its migration, so the
+    // command that took the folder meanwhile read the definition without the
+    // save's change, and wrote only its own.
+    it("the migration written over a stalled Builder save holds only its own change", async () => {
+      const { created } = await stalledSaveTakenOver();
 
-        expect(created?.code, created?.said).toBeUndefined();
-        // The command's migration creates its own collection, and not the
-        // one the stalled save was creating.
-        expect(oneLine()).toEqual([[table(POSTS)], [table(PAGES)]]);
-      },
-      120_000
-    );
+      expect(created?.code, created?.said).toBeUndefined();
+      // The command's migration creates its own collection, and not the
+      // one the stalled save was creating.
+      expect(oneLine()).toEqual([[table(POSTS)], [table(PAGES)]]);
+    }, 120_000);
 
     it("a writer suspended between its last check and its files, past its lease, says what it wrote and deletes nothing", async () => {
       restoreBounds();

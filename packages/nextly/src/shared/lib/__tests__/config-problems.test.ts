@@ -173,3 +173,89 @@ describe("an app's entity a plugin's setup renamed", () => {
     expect(configurationProblems(declared, effective)).toEqual([]);
   });
 });
+
+describe("a field with no type", () => {
+  // The entity's own rules name it (`FIELD_TYPE_REQUIRED`); the field-type check, which asks only
+  // whether something offers a type that was given, leaves it to them, so it is counted once.
+  it.each([
+    ["no type", { name: "score" }],
+    ["an empty type", { name: "score", type: "" }],
+  ])("with %s is reported once", (_, field) => {
+    const problems = configurationProblems({
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }, field] },
+      ],
+    });
+
+    expect(problems.map(problem => `${problem.path} ${problem.code}`)).toEqual([
+      "collections[0].fields[1].type FIELD_TYPE_REQUIRED",
+    ]);
+  });
+});
+
+describe("a define* collection a plugin's setup gives a field of a system field's name", () => {
+  // The setup's own `title` stands beside the one `defineCollection` added, so the collection
+  // declares that column twice; the system field is known by what it is, not by its name.
+  it("is reported as declaring the field twice", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [{ name: "body", type: "text" }],
+        }),
+      ],
+    };
+    const [notes] = setupTransformerInput(declared, []).collections;
+    const effective = {
+      collections: [
+        {
+          ...notes,
+          fields: [{ name: "title", type: "text" }, ...notes.fields],
+        },
+      ],
+    };
+
+    expect(
+      configurationProblems(declared, effective).map(problem => problem.path)
+    ).toEqual(["collections[0].fields"]);
+  });
+});
+
+describe("a define* collection with no fields, copied for the plugins' setups", () => {
+  // The copy a setup is handed keeps which of its fields are the system ones.
+  it("is still reported as declaring no field of its own", () => {
+    const declared = {
+      collections: [defineCollection({ slug: "notes", fields: [] })],
+    };
+    const effective = setupTransformerInput(declared, []);
+
+    expect(configurationProblems(declared, effective)).toContainEqual(
+      expect.objectContaining({
+        path: "collections[0].fields",
+        code: "FIELDS_EMPTY",
+      })
+    );
+  });
+});
+
+describe("a define* collection with no fields, whose fields a plugin's setup copies", () => {
+  // A setup that rebuilds each field (`{ ...field }`) still hands back the system ones.
+  it("is still reported as declaring no field of its own", () => {
+    const declared = {
+      collections: [defineCollection({ slug: "notes", fields: [] })],
+    };
+    const [notes] = setupTransformerInput(declared, []).collections;
+    const effective = {
+      collections: [
+        { ...notes, fields: notes.fields.map(field => ({ ...field })) },
+      ],
+    };
+
+    expect(configurationProblems(declared, effective)).toContainEqual(
+      expect.objectContaining({
+        path: "collections[0].fields",
+        code: "FIELDS_EMPTY",
+      })
+    );
+  });
+});

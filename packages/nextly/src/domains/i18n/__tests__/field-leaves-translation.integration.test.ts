@@ -219,6 +219,8 @@ describeEachDialect("a field that stops being translated", dialect => {
   const PATHS = [
     {
       path: "the builder saves the field alone",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: false,
       entity: {
         slug: "posts",
         table: "dc_posts",
@@ -235,6 +237,8 @@ describeEachDialect("a field that stops being translated", dialect => {
     },
     {
       path: "the builder applies the change with the schema dialog",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       entity: {
         slug: "posts",
         table: "dc_posts",
@@ -261,6 +265,8 @@ describeEachDialect("a field that stops being translated", dialect => {
     },
     {
       path: "a Single's schema is saved with the field shared",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       entity: {
         slug: "hero",
         table: "single_hero",
@@ -277,6 +283,8 @@ describeEachDialect("a field that stops being translated", dialect => {
     },
     {
       path: "a Single's schema is applied with the schema dialog",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       entity: {
         slug: "hero",
         table: "single_hero",
@@ -298,6 +306,8 @@ describeEachDialect("a field that stops being translated", dialect => {
     },
     {
       path: "a field group's schema is applied with the field shared",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       entity: {
         slug: "promo",
         table: "comp_promo",
@@ -320,13 +330,9 @@ describeEachDialect("a field that stops being translated", dialect => {
     },
   ];
 
-  /**
-   * Whether a save of `table`'s entity runs the migration file it writes: a Single's and a field
-   * group's do; a collection's is still applied by its push.
-   */
-  const runsItsFile = (table: string) => !table.startsWith("dc_");
-
-  it.each(PATHS)("keeps them when $path", async ({ entity, seed, change }) => {
+  it.each(PATHS)(
+    "keeps them when $path",
+    async ({ entity, seed, change, runsFile }) => {
     const id = await seed();
 
     await change();
@@ -344,7 +350,7 @@ describeEachDialect("a field that stops being translated", dialect => {
     // too, as `nextly migrate:create`'s file does, so the file's DOWN can put it back.
     expect(archived).toEqual([
       { locale: "ar", value: VALUES.ar },
-      ...(runsItsFile(entity.table) ? [{ locale: "en", value: VALUES.en }] : []),
+      ...(runsFile ? [{ locale: "en", value: VALUES.en }] : []),
       { locale: "es", value: VALUES.es },
     ]);
     expect(await columnsOf(`${entity.table}_locales`)).not.toContain("heading");

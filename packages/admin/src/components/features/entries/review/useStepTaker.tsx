@@ -15,9 +15,16 @@
 import { useState, type ReactNode } from "react";
 
 import { toast } from "@admin/components/ui";
-import { useTakeStep } from "@admin/hooks/queries/useReviewState";
+import {
+  useReviewState,
+  useTakeStep,
+} from "@admin/hooks/queries/useReviewState";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
-import type { PartReview, ReviewStep } from "@admin/types/workflows";
+import type {
+  PartReview,
+  ReviewStateAnswer,
+  ReviewStep,
+} from "@admin/types/workflows";
 
 import type { DocumentActionOutcome } from "../EntryForm/useDocumentActionBindings";
 
@@ -67,10 +74,28 @@ export interface StepTaker {
   dialog: ReactNode;
 }
 
+/**
+ * `parts` as the review state now reads them: a step refused as stale reads the state again, so
+ * a retry from the comment dialog is sent with each part's revision and version as they stand,
+ * not those of when it was asked. A part the state no longer names is sent as it was.
+ */
+function freshParts(
+  parts: readonly PartReview[],
+  answer: ReviewStateAnswer | undefined
+): readonly PartReview[] {
+  if (answer?.attached !== true) return parts;
+  const now = answer.review.parts;
+  return parts.map(
+    each => now.find(candidate => candidate.part === each.part) ?? each
+  );
+}
+
 export function useStepTaker(
   document: ReleaseDocumentRef | undefined
 ): StepTaker {
   const mutation = useTakeStep(document);
+  // The same query, under the same key, every surface reads the review from.
+  const { data: answer } = useReviewState(document);
   const [asking, setAsking] = useState<Asking | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
 
@@ -135,12 +160,14 @@ export function useStepTaker(
       }}
       onSend={comment => {
         if (asking === null) return;
-        void send(asking.step, asking.parts, comment).then(outcome => {
-          // A refused step keeps the dialog, and the comment, for a retry.
-          if (!outcome.ok) return;
-          asking.resolve(outcome);
-          setAsking(null);
-        });
+        void send(asking.step, freshParts(asking.parts, answer), comment).then(
+          outcome => {
+            // A refused step keeps the dialog, and the comment, for a retry.
+            if (!outcome.ok) return;
+            asking.resolve(outcome);
+            setAsking(null);
+          }
+        );
       }}
     />
   );

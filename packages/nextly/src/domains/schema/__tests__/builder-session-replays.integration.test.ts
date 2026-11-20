@@ -4,11 +4,7 @@
  * the session ran on. Each session runs through the dispatchers the admin calls, on every dialect,
  * and covers all three entity kinds. Along the way, every save writes at least one non-empty
  * file, and a save that changes settings alone writes one settings-only file naming the setting.
- *
- * The sessions holding a translated entity whose translations table one file creates and a later
- * file writes rows into are applied with data-loss consent given: `nextly migrate` asks consent for
- * those writes on an empty database, though nothing can be lost, since it judges the later file
- * against a table the earlier one has not made yet.
+ * Every session is applied without data-loss consent: an empty database holds nothing to lose.
  */
 import { randomBytes } from "node:crypto";
 import { cp, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
@@ -47,13 +43,6 @@ const SERVER_URL_ENV = {
   postgresql: "TEST_POSTGRES_URL",
   mysql: "TEST_MYSQL_URL",
 } as const;
-
-/** Consent to every deletion, as `--accept-data-loss` gives it. */
-const ALL_CONSENT: DataLossConsent = {
-  given: { from: "flag", targets: "all" },
-  earlier: [],
-  ignored: [],
-};
 
 const TWO_LANGUAGES = {
   localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -611,8 +600,8 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(descriptions).not.toHaveProperty("drafts");
     }, 600_000);
 
-    it("replays a many-to-many, a type change, a relationship switch, translated entities and deletes, with consent given", async () => {
-      await replayed(TWO_LANGUAGES, ALL_CONSENT, async tools => {
+    it("replays a many-to-many, a type change, a relationship switch, translated entities and deletes", async () => {
+      await replayed(TWO_LANGUAGES, NO_CONSENT, async tools => {
         const { save, collections, singles, fieldGroups, versionOf } = tools;
         const posts = (
           change: (f: Record<string, unknown>) => Record<string, unknown> = f =>
@@ -792,8 +781,8 @@ for (const dialect of getConfiguredTestDialects()) {
       });
     }, 600_000);
 
-    it("replays a field group inside a collection, a unique and a filled required field, cleared and switched settings, and translation turned on and off, with consent given", async () => {
-      await replayed(TWO_LANGUAGES, ALL_CONSENT, async tools => {
+    it("replays a field group inside a collection, a unique and a filled required field, cleared and switched settings, and translation turned on and off", async () => {
+      await replayed(TWO_LANGUAGES, NO_CONSENT, async tools => {
         const {
           save,
           collections,

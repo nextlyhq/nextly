@@ -230,4 +230,20 @@ describe("versionApi.diffFromBaseline", () => {
 
     expect(sentQuery()).toEqual({ baseline: "draft", to: "7" });
   });
+  it("names the shared part, which compares the shared fields across languages", async () => {
+    await versionApi.diffFromBaseline(collection, "since-approved", {
+      to: 11,
+      part: "shared",
+    });
+
+    expect(sentQuery()).toEqual({
+      baseline: "since-approved",
+      to: "11",
+      part: "shared",
+    });
+
+    await versionApi.diff(collection, 7, 11, { part: "shared" });
+
+    expect(sentQuery()).toEqual({ from: "7", to: "11", part: "shared" });
+  });
 });

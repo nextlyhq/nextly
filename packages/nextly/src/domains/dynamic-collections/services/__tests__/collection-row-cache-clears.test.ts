@@ -111,6 +111,10 @@ describe("writes outside the registry services clear the collection row cache", 
         transaction: async (work: (tx: unknown) => Promise<unknown>) =>
           work({ getDrizzle: () => db }),
         transactionOpenInFlow: () => true,
+        // Outside a transaction an after-commit effect runs at once, as the adapter runs it.
+        afterCommit: async (effect: () => unknown) => {
+          await effect();
+        },
       } as never;
       expect(
         await cachedThenRead(() =>

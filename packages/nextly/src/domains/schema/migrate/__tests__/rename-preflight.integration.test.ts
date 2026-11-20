@@ -8,6 +8,8 @@
  *   ledger records nothing, both names stay, and the value is read under the old name. A
  *   statement on another table before the rename did not run either: on MySQL, which commits each
  *   schema statement as it runs, the database's own refusal used to leave it applied.
+ * - On MySQL, a column's rename written as `migrate:create` writes it there (a run built from the
+ *   catalog when the file runs) is refused the same, and one onto a free name runs.
  * - `migrate --dry-run` names the refusal.
  * - Controls: a rename onto a free name runs and the value follows; a rename already made (the old
  *   name gone, the new one there) is not refused; a file that drops the column in the way before
@@ -38,6 +40,7 @@ import { NO_CONSENT, resolveDataLossConsent } from "../data-loss-consent";
 import { SchemaOwnersRepository } from "../../ownership/schema-owners-repository";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { queryLiveColumnTypes } from "../../pipeline/live-column-types";
+import { mysqlLiveStatements } from "../../pipeline/sql-templates/mysql-live-restate";
 import {
   LOCK_DIALECTS,
   lockWorld,
@@ -821,7 +824,60 @@ describe.each(LOCK_DIALECTS)(
       }
     );
 
+    // On MySQL `migrate:create` writes a column's rename as a run built from the catalog when the
+    // file runs (`mysqlLiveStatements`), four statements no reader sees into one by one.
+    const renameRun = (from: string, to: string) =>
+      mysqlLiveStatements({
+        type: "rename_column",
+        tableName: NOTES,
+        fromColumn: from,
+        toColumn: to,
+        fromType: "text",
+        toType: "text",
+      }) ?? [];
+
+    it.runIf(dialect === "mysql")(
+      "refuses a column rename written as migrate:create's MySQL run onto one the table has, before any statement of the run",
+      async () => {
+        // Positive control: the file carries the run, not the plain rename.
+        expect(renameRun("heading", "headline")).toHaveLength(4);
+        writeFile([
+          `ALTER TABLE ${q(OTHER)} ADD COLUMN ${q("extra")} text`,
+          ...renameRun("heading", "headline"),
+        ]);
+        const notesBefore = await columnsOf(NOTES);
+
+        const error = await refusal();
+
+        // The statement before the run, on another table, did not run: the database's own
+        // refusal of the run's rename used to come after MySQL had committed it.
+        expect(await columnsOf(OTHER)).toEqual(["id"]);
+        expect(await ledger()).toEqual([]);
+        expect(await columnsOf(NOTES)).toEqual(notesBefore);
+        expect(await valueOf("heading")).toBe("Kept");
+        expect(entries(error)).toEqual([
+          {
+            path: FILE,
+            code: "RENAME_TARGET_TAKEN",
+            message: `Column 'heading' cannot be renamed to 'headline': table '${NOTES}' already has a column 'headline'.`,
+          },
+        ]);
+      }
+    );
+
     // Controls.
+
+    it.runIf(dialect === "mysql")(
+      "runs a column rename written as migrate:create's MySQL run onto a free name, and the value follows",
+      async () => {
+        writeFile(renameRun("heading", "title"));
+
+        await migrate();
+
+        expect(await ledger()).toEqual(["applied"]);
+        expect(await valueOf("title")).toBe("Kept");
+      }
+    );
 
     it("runs a rename onto a free name, and the value follows", async () => {
       writeFile([renameColumn("heading", "title")]);

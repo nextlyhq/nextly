@@ -41,6 +41,7 @@ import {
   snapshotFieldTypes,
   withoutDisabledBehavior,
 } from "../../domains/schema/field-types/field-type-registry";
+import { loadLatestSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import {
   currentWithheldScopeFields,
   publishWithheldScopeFields,
@@ -49,6 +50,7 @@ import {
   resolvePostgresSchema,
   setActivePostgresSchema,
 } from "../../domains/schema/services/postgres-schema";
+import { assertBuilderDefinitionsKept } from "../../domains/schema/ui-schema/builder-definitions";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { manifestToBuilderEntities } from "../../domains/schema/ui-schema/merge";
 import { publishWebhookEventTypes } from "../../domains/webhooks/event-type-registry";
@@ -95,9 +97,16 @@ import { consoleLogger } from "../../shared/types";
 import { bundleAndRequire } from "./config-bundler";
 
 /**
+ * What `readBuilderEntities` gives for a definition file it could not read: no entities, and,
+ * being this one object, told apart from a file that declares none, so nothing is called lost
+ * for a file whose content is unknown.
+ */
+const UNREAD_BUILDER_ENTITIES: BuilderEntities = Object.freeze({});
+
+/**
  * The Builder's entities from the app's ui-schema file, empty when there is none. A malformed file
  * is surfaced by migrate:create and migrate:check, which load it again; loading the configuration
- * for any other command does not fail on it.
+ * for any other command does not fail on it, and gets `UNREAD_BUILDER_ENTITIES`.
  */
 async function readBuilderEntities(
   projectRoot: string,
@@ -108,8 +117,58 @@ async function readBuilderEntities(
       await loadUiSchema({ projectRoot, uiSchemaFile })
     );
   } catch {
-    return {};
+    return UNREAD_BUILDER_ENTITIES;
   }
+}
+
+/**
+ * Refuse, as `migrate:check` and `migrate:create` do (`assertBuilderDefinitionsKept`), when the
+ * newest snapshot records a Builder entity that neither the configuration nor the definition file
+ * declares now. Asked where a plugin's extend or a relationship names a target nothing declares:
+ * that target may be the entity the file lost, and restoring the file is then the fix. Returns
+ * where nothing was lost, or where the definition file or the snapshot cannot be read, which
+ * those commands report as what they are.
+ */
+async function refuseLostBuilderDefinitions(
+  projectRoot: string,
+  config: SanitizedNextlyConfig,
+  builderEntities: BuilderEntities
+): Promise<void> {
+  if (builderEntities === UNREAD_BUILDER_ENTITIES) return;
+  let latest: Awaited<ReturnType<typeof loadLatestSnapshot>>;
+  try {
+    latest = await loadLatestSnapshot(
+      resolve(projectRoot, config.db.migrationsDir, "meta")
+    );
+  } catch {
+    return;
+  }
+  assertBuilderDefinitionsKept({
+    recorded: latest?.data.entities,
+    merged: {
+      collections: [
+        ...(config.collections ?? []),
+        ...(builderEntities.collections ?? []),
+      ],
+      singles: [...(config.singles ?? []), ...(builderEntities.singles ?? [])],
+      components: [
+        ...(config.fieldGroups ?? []),
+        ...(builderEntities.components ?? []),
+      ],
+    },
+    definitionFile: config.db.uiSchemaFile,
+  });
+}
+
+/** The refusals of a plugin's extend, or a relationship, whose target nothing declares. */
+const UNKNOWN_TARGET_CODES: ReadonlySet<string> = new Set([
+  "NEXTLY_SCHEMA_EXTEND_TARGET_UNKNOWN",
+  "NEXTLY_SCHEMA_RELATION_TARGET_MISSING",
+]);
+
+/** Whether `error` refuses a target nothing declares, which may be an entity the file lost. */
+function namesAnUnknownTarget(error: unknown): boolean {
+  return NextlyError.is(error) && UNKNOWN_TARGET_CODES.has(error.code);
 }
 
 /** Builder collection slugs (the only valid relationTo targets among Builder entities). */
@@ -242,6 +301,16 @@ export interface LoadConfigOptions {
    * @default false
    */
   debug?: boolean;
+
+  /**
+   * What happens when no configuration file is found (and `configPath` names none):
+   * `"defaults"` gives the default configuration, which declares no collection, Single or field
+   * group; `"refuse"` throws, naming where it looked. A command that reads the app's entities
+   * refuses, since acting on the default would generate, migrate or prune as if the app declared
+   * nothing; the running site and the commands that read none of them keep the default.
+   * @default "defaults"
+   */
+  missing?: "defaults" | "refuse";
 }
 
 /**
@@ -556,6 +625,22 @@ async function loadConfigInternal(
     ? resolve(cwd, options.configPath)
     : findConfigFile(cwd);
 
+  if (!configPath && options.missing === "refuse") {
+    // The status is the code's own (`error-codes.ts`).
+    throw new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: "Failed to load Nextly configuration.",
+      logMessage: "Config loader error",
+      // Where the search looked, from the one list it reads, so the report names each place.
+      logContext: {
+        projectRoot: cwd,
+        names: [...CONFIG_FILE_NAMES],
+        folders: [...CONFIG_SEARCH_DIRS],
+        reason: "config-missing",
+      },
+    });
+  }
+
   if (!configPath) {
     debugLog(options, "No config file found, using default config");
     // Cleared here too: a long-lived process that had loaded a plugin config
@@ -782,20 +867,31 @@ async function loadConfigInternal(
       assertRegisteredKeepTheirKind(config, builderEntities);
       // Kept for the cycle judgement below: the Builder's field groups as stored, and with each
       // plugin's extension onto them, as the boot judges them.
-      const extended = resolveBuilderExtends(
-        folded.deferredExtends,
-        builderEntities
-      );
+      let extended: ReturnType<typeof resolveBuilderExtends>;
+      try {
+        extended = resolveBuilderExtends(
+          folded.deferredExtends,
+          builderEntities
+        );
+        finalizeRelationTargets(
+          collectUnresolvedRelationTargets(
+            config as unknown as NextlyServiceConfig
+          ),
+          builderCollectionSlugs(builderEntities)
+        );
+      } catch (error) {
+        // A target the definition file lost is that loss first: refused as the migrate commands
+        // refuse it, so the fix named is restoring the file, not creating the target. Only a
+        // target nothing declares can be that entity; any other refusal is reported as itself.
+        if (namesAnUnknownTarget(error)) {
+          await refuseLostBuilderDefinitions(cwd, config, builderEntities);
+        }
+        throw error;
+      }
       builderFieldGroups = {
         stored: builderEntities.components ?? [],
         registered: extended.components ?? [],
       };
-      finalizeRelationTargets(
-        collectUnresolvedRelationTargets(
-          config as unknown as NextlyServiceConfig
-        ),
-        builderCollectionSlugs(builderEntities)
-      );
       validateCrossPluginRelations(transformedPlugins);
 
       // Fail fast on invalid plugin-declared custom permissions (D36) — same
@@ -821,6 +917,25 @@ async function loadConfigInternal(
       // whose last plugin was removed holds nothing back, and its fields stop
       // being kept by the schema changes that read this (`kept-scope-fields`).
       publishWithheldScopeFields(new Map());
+
+      // Nor does a fold resolve relation targets. A code relationship naming a target that
+      // neither the configuration nor the Builder declares may name an entity the definition
+      // file lost, which is refused as that loss, as it is where a plugin is configured.
+      const builderEntities = await readBuilderEntities(
+        cwd,
+        config.db?.uiSchemaFile
+      );
+      const builderSlugs = new Set(builderCollectionSlugs(builderEntities));
+      const unknownTarget = collectUnresolvedRelationTargets(
+        config as unknown as NextlyServiceConfig
+      ).some(relation => !builderSlugs.has(relation.target));
+      if (unknownTarget) {
+        await refuseLostBuilderDefinitions(cwd, config, builderEntities);
+      }
+      builderFieldGroups = {
+        stored: builderEntities.components ?? [],
+        registered: builderEntities.components ?? [],
+      };
     }
 
     // Where each collection opens its entries, and each Single, judged as the
@@ -975,10 +1090,26 @@ function publishConfiguredPostgresSchema(config: {
  * });
  * ```
  */
+/** The configuration file `options` names or the search finds, as `loadConfigInternal` resolves it. */
+function configFileFor(options: LoadConfigOptions): string | undefined {
+  const cwd = resolve(options.cwd ?? process.cwd());
+  return options.configPath
+    ? resolve(cwd, options.configPath)
+    : findConfigFile(cwd);
+}
+
 export async function loadConfig(
   options: LoadConfigOptions = {}
 ): Promise<LoadConfigResult> {
-  if (cachedConfig && !options.watch) {
+  // A cached default, given where no configuration file was found, is no answer to a caller that
+  // refuses to act without one: it is asked again, and refused.
+  // Nor is one from another project, or from a file since removed: the file this call would
+  // read must be the one the cache holds.
+  const cachedDefaultRefused =
+    options.missing === "refuse" &&
+    (cachedConfig?.configPath === undefined ||
+      cachedConfig.configPath !== configFileFor(options));
+  if (cachedConfig && !options.watch && !cachedDefaultRefused) {
     debugLog(options, "Returning cached config");
     return cachedConfig;
   }

@@ -1,3 +1,4 @@
+import { WORKFLOW_SETTINGS_READ } from "../components/features/settings/workflows/workflow-permissions";
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import {
   EMAIL_DELIVERIES_READ_PERMISSION,
@@ -153,6 +154,12 @@ const EditWebhookPage = lazyRoute(
 );
 const WebhooksPage = lazyRoute(
   () => import("./dashboard/settings/webhooks/index")
+);
+const WorkflowsPage = lazyRoute(
+  () => import("./dashboard/settings/workflows/index")
+);
+const WorkflowDetailPage = lazyRoute(
+  () => import("./dashboard/settings/workflows/[slug]")
 );
 const SingleAPIPlaygroundPage = lazyRoute(
   () => import("./dashboard/singles/[slug]/api")
@@ -804,6 +811,23 @@ export const routeConfig: Record<string, RouteConfig> = {
     screenName: settingsScreen(ROUTES.SETTINGS_BACKGROUND_JOBS),
     type: "private",
     requiredPermission: "manage-background-jobs",
+    section: overridableBy("settings"),
+  },
+  // Workflows are read by whoever may read settings or change them, as the
+  // server's workflow routes are; what each reader may change is decided on
+  // the page, control by control.
+  [ROUTES.SETTINGS_WORKFLOWS]: {
+    component: WorkflowsPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_WORKFLOWS),
+    type: "private",
+    requiredPermission: [...WORKFLOW_SETTINGS_READ],
+    section: overridableBy("settings"),
+  },
+  [ROUTES.SETTINGS_WORKFLOW_DETAIL]: {
+    component: WorkflowDetailPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_WORKFLOWS),
+    type: "private",
+    requiredPermission: [...WORKFLOW_SETTINGS_READ],
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_WEBHOOKS]: {

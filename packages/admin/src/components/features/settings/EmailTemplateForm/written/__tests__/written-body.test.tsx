@@ -12,16 +12,51 @@ import type {
   WrittenBlock,
   WrittenDocument,
 } from "@admin/services/emailTemplateApi";
+import type { Media } from "@admin/types/media";
 
 import { WrittenBody, type InsertVariable } from "../WrittenBody";
 
-const toast = vi.hoisted(() => vi.fn());
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { info: vi.fn() }));
 vi.mock("@admin/components/ui", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/components/ui")>()),
   toast,
 }));
 
-afterEach(() => toast.mockReset());
+afterEach(() => {
+  toast.mockReset();
+  toast.info.mockReset();
+});
+
+/** A file in the media library, as the picker hands it over. */
+const LAMP: Media = {
+  id: "m1",
+  filename: "lamp.png",
+  originalFilename: "lamp.png",
+  mimeType: "image/png",
+  size: 1200,
+  url: "/uploads/lamp.png",
+  altText: "A brass lamp",
+  uploadedBy: null,
+  uploadedAt: new Date(0),
+  updatedAt: new Date(0),
+};
+
+// The library itself is the media library's to test: here, a picker that
+// hands over one file when asked.
+vi.mock("@admin/components/features/media-library/MediaPickerDialog", () => ({
+  MediaPickerDialog: ({
+    open,
+    onSelect,
+  }: {
+    open: boolean;
+    onSelect: (media: Media[]) => void;
+  }) =>
+    open ? (
+      <button type="button" onClick={() => onSelect([LAMP])}>
+        Pick the lamp
+      </button>
+    ) : null,
+}));
 
 const heading = (text: string): WrittenBlock => ({
   type: "heading",
@@ -208,7 +243,10 @@ describe("a written email's blocks", () => {
           { type: "spacer" },
           { type: "list", variable: "", blocks: [] }
         )}
-        listVariables={["lines", "name"]}
+        variables={[
+          { name: "name", description: "", required: true },
+          { name: "lines", description: "", required: true },
+        ]}
         onChange={seen}
       />
     );
@@ -243,5 +281,326 @@ describe("a written email's blocks", () => {
       type: "list",
       variable: "lines",
     });
+  });
+
+  it("shows chips by friendly name, and a list's item by the list's own fields", () => {
+    const chip = (variable: string) => ({ type: "chip" as const, variable });
+    render(
+      <WrittenBody
+        value={doc(
+          { type: "heading", text: [chip("customer.firstName")] },
+          {
+            type: "list",
+            variable: "order.lines",
+            blocks: [{ type: "text", text: [chip("item.title")] }],
+          }
+        )}
+        variables={[
+          {
+            name: "customer",
+            description: "",
+            required: true,
+            presentation: {
+              label: "Customer",
+              fields: [{ name: "firstName", label: "First name" }],
+            },
+          },
+          {
+            name: "order",
+            description: "",
+            required: true,
+            presentation: {
+              label: "Order",
+              fields: [
+                {
+                  name: "lines",
+                  label: "Lines",
+                  fields: [{ name: "title", label: "Product" }],
+                },
+              ],
+            },
+          },
+        ]}
+        onChange={vi.fn()}
+      />
+    );
+    const heading = screen.getByRole("textbox", { name: "Heading" });
+    expect(heading.textContent).toContain("Customer › First name");
+    const text = screen.getByRole("textbox", { name: "Text" });
+    expect(text.textContent).toContain("Item › Product");
+    // The path stays on hover, for whoever knows the data by its keys.
+    expect(screen.getByTitle("item.title").textContent).toBe("Item › Product");
+  });
+
+  it("marks a chip that shows nothing, and its fallback dialog stores the fallback", async () => {
+    const user = userEvent.setup();
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    function Body() {
+      const [value, setValue] = useState(
+        doc({
+          type: "heading",
+          text: [
+            { type: "chip", variable: "customer.firstName" },
+            { type: "chip", variable: "customer.lastName" },
+          ],
+        })
+      );
+      return (
+        <WrittenBody
+          value={value}
+          variables={[
+            {
+              name: "customer",
+              description: "",
+              required: true,
+              presentation: {
+                label: "Customer",
+                fields: [
+                  { name: "firstName", label: "First name" },
+                  { name: "lastName", label: "Last name" },
+                ],
+              },
+            },
+          ]}
+          sampleData={{ customer: { firstName: "Ada" } }}
+          onChange={next => {
+            seen(next);
+            setValue(next);
+          }}
+        />
+      );
+    }
+    render(<Body />);
+
+    // A test value: shown plainly. None and no fallback: marked.
+    expect(
+      screen.getByRole("button", { name: "Customer › First name" })
+    ).toBeDefined();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Customer › Last name, shows nothing",
+      })
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("status").textContent).toContain(
+      "No test value and no fallback"
+    );
+
+    await user.type(within(dialog).getByLabelText("Fallback"), "there");
+    expect(within(dialog).queryByRole("status")).toBeNull();
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save fallback" })
+    );
+
+    const last = seen.mock.calls[seen.mock.calls.length - 1]?.[0];
+    expect(last?.blocks[0]).toEqual({
+      type: "heading",
+      text: [
+        { type: "chip", variable: "customer.firstName" },
+        { type: "chip", variable: "customer.lastName", fallback: "there" },
+      ],
+    });
+    expect(
+      screen.getByRole("button", { name: "Customer › Last name" })
+    ).toBeDefined();
+  });
+
+  it("offers a list's item fields, only into the blocks that list repeats", async () => {
+    const user = userEvent.setup();
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    render(
+      <WrittenBody
+        value={doc(heading("Your order"), {
+          type: "list",
+          variable: "lines",
+          blocks: [{ type: "text", text: [{ type: "text", text: "One " }] }],
+        })}
+        variables={[
+          {
+            name: "lines",
+            description: "",
+            required: true,
+            presentation: {
+              type: "list",
+              fields: [{ name: "title", label: "Product" }],
+            },
+          },
+        ]}
+        onChange={seen}
+      />
+    );
+    const field = within(
+      screen.getByRole("group", { name: "Item fields" })
+    ).getByRole("button", { name: "Item › Product" });
+
+    // Outside the list, `item` means nothing: it says where to click.
+    fireEvent.focus(screen.getByRole("textbox", { name: "Heading" }));
+    await user.click(field);
+    expect(toast.info).toHaveBeenCalledTimes(1);
+    expect(seen).not.toHaveBeenCalled();
+
+    fireEvent.focus(screen.getByRole("textbox", { name: "Text" }));
+    await user.click(field);
+    const last = seen.mock.calls[seen.mock.calls.length - 1]?.[0];
+    expect(last?.blocks[1]).toEqual({
+      type: "list",
+      variable: "lines",
+      blocks: [
+        {
+          type: "text",
+          text: [
+            { type: "text", text: "One " },
+            { type: "chip", variable: "item.title" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("chooses an image from the media library, with a complete address and its alt text", async () => {
+    const user = userEvent.setup();
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    render(
+      <WrittenBody
+        value={doc(
+          { type: "image", src: { url: "" }, alt: [] },
+          {
+            type: "image",
+            src: { url: "" },
+            alt: [{ type: "text", text: "Ours" }],
+          }
+        )}
+        onChange={seen}
+      />
+    );
+    const [first, second] = screen.getAllByRole("button", {
+      name: "Choose from library",
+    });
+    await user.click(first);
+    await user.click(screen.getByRole("button", { name: "Pick the lamp" }));
+    // A relative library address is made complete, so a sent email loads it.
+    expect(seen.mock.calls[0]?.[0].blocks[0]).toEqual({
+      type: "image",
+      src: { url: `${window.location.origin}/uploads/lamp.png` },
+      alt: [{ type: "text", text: "A brass lamp" }],
+    });
+
+    // Alt text the block already has is its own: the library's does not replace it.
+    await user.click(second);
+    await user.click(screen.getByRole("button", { name: "Pick the lamp" }));
+    const last = seen.mock.calls[seen.mock.calls.length - 1]?.[0];
+    expect(last?.blocks[1]).toMatchObject({
+      alt: [{ type: "text", text: "Ours" }],
+    });
+  });
+
+  it("gives an image's variable address the same chip: its name, its mark and its fallback", async () => {
+    const user = userEvent.setup();
+    const seen = vi.fn<(doc: WrittenDocument) => void>();
+    render(
+      <WrittenBody
+        value={doc({
+          type: "image",
+          src: { chip: { variable: "logoUrl" } },
+          alt: [{ type: "text", text: "Logo" }],
+        })}
+        variables={[
+          {
+            name: "logoUrl",
+            description: "",
+            required: true,
+            presentation: { label: "Logo address" },
+          },
+        ]}
+        sampleData={{}}
+        onChange={seen}
+      />
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Logo address, shows nothing" })
+    );
+    const dialog = await screen.findByRole("dialog");
+    // An image's fallback is an address, as the server requires.
+    const field = within(dialog).getByLabelText("Fallback");
+    await user.type(field, "there");
+    expect(
+      within(dialog).getByText("Use a complete https or http image address.")
+    ).toBeDefined();
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Save fallback",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    await user.clear(field);
+    await user.type(field, "https://cdn.example/logo.png");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save fallback" })
+    );
+    expect(seen.mock.calls[0]?.[0].blocks[0]).toMatchObject({
+      src: {
+        chip: { variable: "logoUrl", fallback: "https://cdn.example/logo.png" },
+      },
+    });
+  });
+
+  it("marks no chip while the test data is unknown", () => {
+    render(
+      <WrittenBody
+        value={doc({
+          type: "heading",
+          text: [{ type: "chip", variable: "name" }],
+        })}
+        sampleData={null}
+        onChange={vi.fn()}
+      />
+    );
+    // Not "shows nothing": with the sample JSON invalid, nothing is known.
+    expect(screen.getByRole("button", { name: "name" })).toBeDefined();
+  });
+
+  it("opens no fallback dialog while the email is read-only", () => {
+    render(
+      <WrittenBody
+        value={doc({
+          type: "heading",
+          text: [{ type: "chip", variable: "name" }],
+        })}
+        readOnly
+        onChange={vi.fn()}
+      />
+    );
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "name, shows nothing",
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+  });
+
+  it("offers declared lists first in a list's picker, by their friendly names", () => {
+    render(
+      <WrittenBody
+        value={doc({ type: "list", variable: "", blocks: [] })}
+        variables={[
+          { name: "resetUrl", description: "", required: true },
+          {
+            name: "lines",
+            description: "",
+            required: true,
+            presentation: { type: "list", label: "Order lines" },
+          },
+        ]}
+        onChange={vi.fn()}
+      />
+    );
+    const options = within(
+      screen.getByRole("combobox", { name: "List variable" })
+    )
+      .getAllByRole("option")
+      .map(option => option.textContent);
+    expect(options).toEqual(["Choose a list", "Order lines", "resetUrl"]);
   });
 });
