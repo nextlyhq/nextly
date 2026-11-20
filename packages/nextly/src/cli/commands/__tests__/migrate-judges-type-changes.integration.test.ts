@@ -11,7 +11,7 @@
  * the config loader and the command's connection are stood in for.
  */
 import { randomBytes } from "node:crypto";
-import { readdirSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -416,5 +416,127 @@ describe.each(getConfiguredTestDialects())(
         /a real run would refuse it: Collection 'posts'/
       );
     }, 180_000);
+
+    // A dry run meets the database as it is: a change after a file it does not run is named as
+    // judged when the run reaches it, never listed as clean.
+    it("names in a dry run a type change after a hand-written file as judged when reached", async () => {
+      await deployedHolding({ r1: "12", r2: "abc" });
+      handWritten(
+        "touch",
+        `UPDATE ${q(TABLE)} SET ${q("title")} = ${q("title")}`
+      );
+      const said = vi.spyOn(logger, "info");
+
+      expect(await migrate({ dryRun: true })).toBe("applied");
+
+      expect(said.mock.calls.flat().map(String).join("\n")).toMatch(
+        /field type changes in .+\.sql are judged when the run reaches it/
+      );
+    }, 180_000);
+
+    // A field leaving translation copies its default language onto the entity's own table after
+    // that change's own file: the next change, which converts that column, is judged once the copy
+    // has run, so a value the copy brings in is judged before the conversion meets it.
+    it("judges a change after a field leaving translation has copied its values in", async () => {
+      const site = await mkdtemp(join(tmpdir(), "migrate-type-change-leave-"));
+      const localization = { locales: ["en", "es"], defaultLocale: "en" };
+      const history = join(site, "database", "history");
+      vi.stubEnv("NODE_ENV", "development");
+      current = await createTestNextly({
+        adapter: (await open()) as never,
+        basePath: site,
+        collections: [],
+        localization,
+        db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION_FILE },
+      });
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "notes",
+          label: "Notes",
+          localized: true,
+          fields: [{ name: "v", type: "text", localized: true }],
+        }
+      );
+      for (const [schemaVersion, field] of [
+        [1, { name: "v", type: "text", localized: false }],
+        [2, { name: "v", type: "number", localized: false }],
+      ] as const) {
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "notes" },
+          { fields: [field], confirmed: true, schemaVersion, localized: true }
+        );
+      }
+      await current.destroy();
+      current = undefined;
+
+      // The deploy: every file before the field leaves translation, then a value the development
+      // database never held, in its default language.
+      const adapter = await open();
+      run.adapter = adapter;
+      run.config = defineConfig({
+        collections: [],
+        localization,
+        db: {
+          migrationsDir: history,
+          uiSchemaFile: join(site, "schema", "builder.json"),
+        },
+      } as never);
+      setNonInteractive(true);
+      const files = readdirSync(history)
+        .filter(file => file.endsWith(".sql"))
+        .sort();
+      const leaving = files.findIndex(file =>
+        /"kind":"archive"/.test(readFileSync(join(history, file), "utf-8"))
+      );
+      expect(leaving).toBeGreaterThan(0);
+      const deployed = await runMigrate(
+        {
+          cwd: site,
+          quiet: true,
+          throwOnFailure: true,
+          step: leaving,
+        } as never,
+        context
+      ).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+      expect(deployed).toBe("applied");
+      await adapter.executeQuery(
+        `INSERT INTO ${q("dc_notes")} (${q("id")}, ${q("slug")}, ${q("title")}) VALUES ('n1', 'n1', 'T')`
+      );
+      await adapter.executeQuery(
+        `INSERT INTO ${q("dc_notes_locales")} (${q("_parent")}, ${q("_locale")}, ${q("v")}) VALUES ('n1', 'en', 'abc')`
+      );
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "dc_notes.v,dc_notes_locales.v");
+
+      const refused = await runMigrate(
+        { cwd: site, quiet: true, throwOnFailure: true } as never,
+        context
+      ).then(
+        () => "applied",
+        (error: unknown) => error
+      );
+
+      expect(NextlyError.is(refused)).toBe(true);
+      expect(
+        (
+          refused as {
+            publicData?: { errors?: { path: string; code: string }[] };
+          }
+        ).publicData?.errors
+      ).toEqual([
+        expect.objectContaining({
+          path: "fields.v",
+          code: "TYPE_CHANGE_LOSES_VALUES",
+        }),
+      ]);
+      await rm(site, { recursive: true, force: true });
+    }, 240_000);
   }
 );

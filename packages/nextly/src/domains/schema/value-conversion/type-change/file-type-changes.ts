@@ -24,6 +24,7 @@ import type {
   RecordedEntitySettings,
   SettingsEntityKind,
 } from "../../migrate-create/entity-settings";
+import { conversionBetweenShapes } from "../../pipeline/diff/types";
 import { builtByFor } from "../../pipeline/registered-collections";
 import { mysqlLiveRunAt } from "../../pipeline/sql-templates/mysql-live-restate";
 import {
@@ -39,6 +40,7 @@ import { type ColumnAt, columnDescriptorAt } from "./field-type";
 import {
   type EntityTypeChangeInput,
   entityLabel,
+  type FieldTypeChange,
   fieldTypeChangeRefusals,
   fieldTypeChangesOf,
   perLanguageAfter,
@@ -207,11 +209,21 @@ function entitiesByTable(
   );
 }
 
+/** Whether a change is a relationship's change of shape, which the file converts or guards itself. */
+function guardedByTheFile(change: FieldTypeChange): boolean {
+  const was = change.fromType.relation?.kept;
+  const now = change.toType.relation?.kept;
+  if (was === undefined || now === undefined) return false;
+  if (was === "join" || now === "join") return false;
+  return conversionBetweenShapes(was, now) !== undefined;
+}
+
 /**
  * Each table the file leaves renamed, by the name it had before the file, following the renames in
  * the order they run: a table renamed twice keeps its first name. A table the file made itself and
  * renamed into place (SQLite's rebuild writes `__new_<table>` and renames it over the table) is
- * no table of the entity before, so it never replaces the name the table had.
+ * no table of the entity before, so it never replaces the name the table had, whether the table
+ * was renamed before the rebuild or is renamed after it.
  */
 function tablesBefore(
   renames: readonly (readonly [string, string])[],
@@ -226,7 +238,7 @@ function tablesBefore(
   for (const [from, to] of renames) {
     const first = origin.get(from) ?? from;
     origin.delete(from);
-    if (!known.has(first) && origin.has(to)) continue;
+    if (!known.has(first) && (origin.has(to) || known.has(to))) continue;
     origin.set(to, first);
   }
   return origin;
@@ -366,12 +378,16 @@ function entityTypeChange(args: {
     ...stated,
     ...sameColumnRenames(previous, next, stated, columnOf),
   ]);
+  // The old columns as the old owner made them: an entity the file moves between the Schema
+  // Builder and code (a Builder's unbounded text becoming code's bounded one) changes type there.
+  const builtByBefore = columnAtFor(kind, args.was.recorded).builtBy;
   const changes = fieldTypeChangesOf({
     previous,
     next,
     ...(renamed.size > 0 ? { renamed } : {}),
     dialect,
     ...at,
+    ...(builtByBefore !== at.builtBy ? { builtByBefore } : {}),
   });
   const unread = unreadRenameFields({
     statements: source.statements,
@@ -383,18 +399,15 @@ function entityTypeChange(args: {
     at,
   });
   if (changes.length === 0 && unread.length === 0) return [];
-  // A relationship whose storage changes shape, a relationship on both sides, is the file's own to
-  // answer for: its statements carry the guard that refuses a held link and the conversion that
-  // carries one (a reference list's or a translated relation's), each with its own message on every
-  // database, which run first. A relationship becoming another type, or one becoming a
-  // relationship, is judged here as any change is: no statement of the file guards it.
+  // A relationship whose links change where they are kept is the file's own to answer for: the
+  // diff writes it as the guarded conversion `conversionBetweenShapes` names (a reference list's,
+  // a single reference's, or the guard that refuses a held link), which runs first with its own
+  // message on every database. Any other change, a relationship becoming another type or one
+  // keeping its shape under other targets (a relationship becoming an upload), is judged here: no
+  // statement of the file converts or guards it.
   const relationsShaped = new Set(
     changes
-      .filter(
-        change =>
-          change.fromType.relation !== undefined &&
-          change.toType.relation !== undefined
-      )
+      .filter(change => guardedByTheFile(change))
       .map(change => change.to.name)
   );
   return [
@@ -415,6 +428,7 @@ function entityTypeChange(args: {
         next,
         ...(renamed.size > 0 ? { renamed } : {}),
         ...(relationsShaped.size > 0 ? { ignore: relationsShaped } : {}),
+        ...(builtByBefore !== at.builtBy ? { builtByBefore } : {}),
         ...at,
       },
     },

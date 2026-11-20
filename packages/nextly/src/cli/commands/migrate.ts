@@ -288,6 +288,7 @@ import {
 } from "../../domains/schema/schema-version";
 import {
   fileTypeChangeRefusals,
+  fileTypeChangesOf,
   refuseFileTypeChanges,
 } from "../../domains/schema/value-conversion/type-change/file-type-changes";
 import { provisionUserFieldStorage } from "../../domains/users/services/provision-user-field-storage";
@@ -1601,13 +1602,8 @@ export async function previewMigrate(args: {
   if (pendingFiles.length > 0 && pendingModules.length === 0) {
     await previewFileTypeChanges(
       listed.map(({ file }) => file),
-      pendingFiles[0],
-      {
-        db,
-        dialect,
-        metaDir: resolve(args.migrationsDir, "meta"),
-        runs: new Set(pendingFiles),
-      },
+      pendingFiles,
+      { db, dialect, metaDir: resolve(args.migrationsDir, "meta") },
       logger
     );
   } else if (pendingFiles.length > 0) {
@@ -1910,33 +1906,46 @@ function previewPendingFile(
 }
 
 /**
- * What a real run would refuse of the change `first` begins, by its field type changes
- * (`fileTypeChangeRefusals`), judged after the newest snapshot before it, as the run judges it.
+ * What a real run would refuse of the changes it applies, by their field type changes
+ * (`fileTypeChangeRefusals`). Only a change nothing runs before is judged here, after the newest
+ * snapshot before it, as the run judges it: a later one meets the database as the files before it
+ * leave it, which a dry run does not run, so each later change that changes a field's type is
+ * named as judged when the run reaches it, never listed as clean.
  */
 async function previewFileTypeChanges(
   files: readonly ParsedMigration[],
-  first: ParsedMigration,
-  args: {
-    db: unknown;
-    dialect: SupportedDialect;
-    metaDir: string;
-    /** The files the real run would apply, its step's. */
-    runs: ReadonlySet<ParsedMigration>;
-  },
+  pending: readonly ParsedMigration[],
+  args: { db: unknown; dialect: SupportedDialect; metaDir: string },
   logger: Pick<CommandContext["logger"], "info">
 ): Promise<void> {
-  const at = files.indexOf(first);
+  const runs = new Set(pending);
+  let at = files.indexOf(pending[0]);
   if (at < 0) return;
-  const change = await changeFilesFrom(files, at, args.metaDir, file =>
-    args.runs.has(file)
-  );
-  if (change === null) return;
-  const before = await newestSnapshotBefore(files, at, args.metaDir);
-  for (const refusal of await fileTypeChangeRefusals(
-    args.db,
-    change.source(before, args.dialect)
-  )) {
-    logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
+  let before = await newestSnapshotBefore(files, at, args.metaDir);
+  let first = true;
+  while (at < files.length && runs.has(files[at])) {
+    const change = await changeFilesFrom(files, at, args.metaDir, file =>
+      runs.has(file)
+    );
+    if (change === null) {
+      // A file that heads no change runs as written, so what follows is no longer this database.
+      first = false;
+      at += 1;
+      continue;
+    }
+    const source = change.source(before, args.dialect);
+    if (first) {
+      for (const refusal of await fileTypeChangeRefusals(args.db, source)) {
+        logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
+      }
+    } else if (fileTypeChangesOf(source).length > 0) {
+      logger.info(
+        `  ⚠ field type changes in ${source.filename} are judged when the run reaches it: a dry run does not run the files before it`
+      );
+    }
+    before = change.target;
+    first = false;
+    at += change.files.length;
   }
 }
 
@@ -4888,6 +4897,17 @@ async function refusePendingFilesTheServerCannotHold(args: {
 }
 
 /**
+ * The companion files `migrate:create` writes ahead of their change's own file
+ * (`generate.ts`' `beforeMain`): an entity's translation turned off, a field leaving translation's
+ * archive, and a field joining translation's move. The others are written after it.
+ */
+const WRITTEN_AHEAD: ReadonlySet<string> = new Set([
+  "disable",
+  "archive",
+  "joins",
+]);
+
+/**
  * The files one change between two snapshots is written in, from `files[at]`: the companion files
  * `migrate:create` writes ahead of the change's own file, each declaring what it is for
  * (`localization`; a translated field's moves and renames among them), and that file, whose
@@ -4901,6 +4921,8 @@ async function changeFilesFrom(
   metaDir: string,
   within: (file: ParsedMigration) => boolean = () => true
 ): Promise<{
+  /** The change's own file's snapshot: what the next change is judged after. */
+  target: SnapshotFile;
   files: readonly ParsedMigration[];
   /** What `refuseFileTypeChanges` is asked with, judged after the change `before` records. */
   source: (
@@ -4912,11 +4934,17 @@ async function changeFilesFrom(
     if (!within(files[end])) return null;
     const target = await loadTargetSnapshot(metaDir, files[end].name);
     if (target === null) {
-      if (files[end].localization === undefined) return null;
+      // Only a companion `migrate:create` writes ahead of its change's own file heads that change.
+      // Any other (one written after its own change's file, as a field leaving translation's
+      // `shared` copy is; a `unique` file, written on either side; a hand-written file) runs before
+      // the next change is judged, never inside it.
+      const kind = files[end].localization?.kind;
+      if (kind === undefined || !WRITTEN_AHEAD.has(kind)) return null;
       continue;
     }
     const written = files.slice(at, end + 1);
     return {
+      target,
       files: written,
       source: (before, dialect) => ({
         filename: `${files[end].name}.sql`,
