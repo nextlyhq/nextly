@@ -50,14 +50,19 @@ export function formUploadsCollection(): CollectionConfig {
       update: nobody,
       delete: nobody,
     },
+    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
+    // paths, states, actors), never translated: each says `localized: false`, so its
+    // column stays on the main table, where a lookup by it finds it in every language.
     fields: [
+      // The ids the indexes below are on are keys, never translated, so their
+      // columns stay on the main table the indexes are built on.
       // The media item's id, as a file answer names it.
-      text({ name: "media", required: true }),
+      text({ name: "media", required: true, localized: false }),
       // The form's id and the file field's name it was uploaded for.
-      text({ name: "form", required: true }),
-      text({ name: "field", required: true }),
+      text({ name: "form", required: true, localized: false }),
+      text({ name: "field", localized: false, required: true }),
       // The submission's id once one claims it; empty until then.
-      text({ name: "submission" }),
+      text({ name: "submission", localized: false }),
       // When it stopped being claimable, its file to be deleted.
       date({ name: "releasedAt" }),
     ],

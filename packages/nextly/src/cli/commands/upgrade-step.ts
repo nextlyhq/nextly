@@ -82,6 +82,13 @@ export interface UpgradeStepContext {
   warn: (message: string) => void;
 }
 
+/**
+ * How a step's refusal ends: nothing was changed, which holds of a refusal made before any work.
+ * One made in the run after earlier work applied ends instead with what applied
+ * (`refusalAfterWork` in `data-steps`), so the ending is one constant both can name.
+ */
+export const NOTHING_CHANGED = "Nothing was changed.";
+
 /** One step over data an earlier release stored. */
 export interface UpgradeStep {
   /**
@@ -107,4 +114,10 @@ export interface UpgradeStep {
    * and what an editor should check.
    */
   report?: (context: UpgradeStepContext) => Promise<UpgradeReport>;
+  /**
+   * The steps this one reads the repairs of: a step reads what the earlier steps of its group
+   * repair, and nothing a step of another group changes. So its count is taken ahead of the run
+   * only where no earlier step of its group has work. A step with none is a group of its own.
+   */
+  group?: string;
 }

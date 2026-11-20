@@ -35,7 +35,11 @@ import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../../schemas/translation-provenance/table-name";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
-import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
+import {
+  NOTHING_CHANGED,
+  type UpgradeReport,
+  type UpgradeStepContext,
+} from "../upgrade-step";
 
 import {
   assertVersionHistoryReady,
@@ -87,7 +91,7 @@ function collision(colliding: [string, string[]][]): NextlyError {
     code: "NEXTLY_LANGUAGE_CODES_COLLIDE",
     publicMessage:
       `The configuration names ${named}: one language under two codes once written in standard ` +
-      `form. Keep one of them in the configuration and run \`nextly migrate\` again. Nothing was changed.`,
+      `form. Keep one of them in the configuration and run \`nextly migrate\` again. ${NOTHING_CHANGED}`,
     logContext: { colliding: colliding.map(([standard]) => standard) },
   });
 }
@@ -218,25 +222,42 @@ async function meetsBoth(
 }
 
 /**
- * Where some one thing is kept under both spellings of `conversion`, each named by its table and
- * the key of the first such thing: each translation table with a document translated in both, and
- * each other keyed table the rewrite would collide in.
+ * The tables the rewrite could collide in, in two sets: those the tables as they stand can be
+ * asked about (each translation table, a document translated under both spellings, and every keyed
+ * table but the version history), and the version history, whose key of a pending change is one of
+ * the columns an earlier release's history lacks until the run's migrations add them.
+ */
+function collisionTargets(translationTables: readonly string[]): {
+  asTheyStand: KeyedTarget[];
+  versionHistory: KeyedTarget[];
+} {
+  const translations = translationTables.map(table => ({
+    table,
+    same: ["_parent"],
+    language: "_locale",
+    spelled: asWritten,
+  }));
+  return {
+    asTheyStand: [
+      ...translations,
+      ...KEYED_TARGETS.filter(target => target.table !== VERSIONS_TABLE),
+    ],
+    versionHistory: KEYED_TARGETS.filter(
+      target => target.table === VERSIONS_TABLE
+    ),
+  };
+}
+
+/**
+ * Where some one thing is kept under both spellings of `conversion` among `targets`, each named
+ * by its table and the key of the first such thing.
  */
 async function tablesMeetingBoth(
   context: UpgradeStepContext,
-  translationTables: readonly string[],
+  targets: readonly KeyedTarget[],
   conversion: CodeConversion
 ): Promise<string[]> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
-  const targets: KeyedTarget[] = [
-    ...translationTables.map(table => ({
-      table,
-      same: ["_parent"],
-      language: "_locale",
-      spelled: asWritten,
-    })),
-    ...KEYED_TARGETS,
-  ];
   const meeting: string[] = [];
   for (const target of targets) {
     if (!(await context.adapter.tableExists(target.table))) continue;
@@ -259,10 +280,60 @@ function keptUnderBoth(
     publicMessage:
       `Rows under both "${conversion.from}" and "${other}", one language under two codes, are ` +
       `kept for the same thing in ${where.join("; ")}; moving them to "${conversion.to}" would ` +
-      "make them one. Keep the rows of one spelling, then run `nextly migrate` again. Nothing " +
-      "was changed.",
+      "make them one. Keep the rows of one spelling, then run `nextly migrate` again. " +
+      NOTHING_CHANGED,
     logContext: { from: conversion.from, other, to: conversion.to, where },
   });
+}
+
+/**
+ * Every conversion the site has: each configured code written the earlier way, and each older
+ * spelling the rows still hold that a configuration already corrected to the standard code no
+ * longer names, found as the start finds them and converted the same way.
+ */
+async function conversionsOfSite(
+  context: UpgradeStepContext,
+  tables: readonly string[]
+): Promise<CodeConversion[]> {
+  const configured = (await configuredLanguages(context)).codes;
+  const conversions = conversionsOf(configured);
+  for (const stored of await storedOlderSpellings(
+    context.adapter as unknown as DrizzleAdapter,
+    tables,
+    configured.map(code => standardLanguageCode(code) ?? code)
+  )) {
+    if (!conversions.some(({ from }) => from === stored.from)) {
+      conversions.push(stored);
+    }
+  }
+  return conversions;
+}
+
+/**
+ * Refuses one thing kept under both spellings of a conversion among `targets`, before any row is
+ * written, so one that would collide stops the step with nothing changed rather than part-way.
+ * Two older spellings of one code (`pt_BR` and `PT_br`) both become that code, so each pair is
+ * checked against the other first, then each spelling against the code itself.
+ */
+async function refuseCollisions(
+  context: UpgradeStepContext,
+  targets: readonly KeyedTarget[],
+  conversions: readonly CodeConversion[]
+): Promise<void> {
+  for (const [index, one] of conversions.entries()) {
+    for (const other of conversions.slice(index + 1)) {
+      if (other.to !== one.to) continue;
+      const meeting = await tablesMeetingBoth(context, targets, {
+        from: one.from,
+        to: other.from,
+      });
+      if (meeting.length > 0) throw keptUnderBoth(one, meeting, other.from);
+    }
+  }
+  for (const conversion of conversions) {
+    const meeting = await tablesMeetingBoth(context, targets, conversion);
+    if (meeting.length > 0) throw keptUnderBoth(conversion, meeting);
+  }
 }
 
 /**
@@ -273,42 +344,18 @@ async function conversionsToRun(
   context: UpgradeStepContext
 ): Promise<CodeConversion[]> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
-  const configured = (await configuredLanguages(context)).codes;
-  const written = conversionsOf(configured);
   const tables = await translationTables(context);
-  // The older spellings the rows still hold, which a configuration already corrected to the
-  // standard code no longer names: found as the start finds them, and converted the same way.
-  const conversions = [...written];
-  for (const stored of await storedOlderSpellings(
-    adapter,
-    tables,
-    configured.map(code => standardLanguageCode(code) ?? code)
-  )) {
-    if (!conversions.some(({ from }) => from === stored.from)) {
-      conversions.push(stored);
-    }
-  }
+  const conversions = await conversionsOfSite(context, tables);
   if (conversions.length === 0) return [];
+  const targets = collisionTargets(tables);
+  // Every collision the tables as they stand can show is refused first, so `nextly migrate` makes
+  // that refusal before its schema changes; the version history's waits for its newer columns.
+  await refuseCollisions(context, targets.asTheyStand, conversions);
   // Rewriting a version's languages writes the newer columns: only on a history laid out for them.
   await assertVersionHistoryReady(context);
-  // Two older spellings of one code (`pt_BR` and `PT_br`) both become that code, so each pair is
-  // checked against the other as well as against the code itself, before any row is written.
-  for (const [index, one] of conversions.entries()) {
-    for (const other of conversions.slice(index + 1)) {
-      if (other.to !== one.to) continue;
-      const meeting = await tablesMeetingBoth(context, tables, {
-        from: one.from,
-        to: other.from,
-      });
-      if (meeting.length > 0) throw keptUnderBoth(one, meeting, other.from);
-    }
-  }
+  await refuseCollisions(context, targets.versionHistory, conversions);
   const pending: CodeConversion[] = [];
   for (const conversion of conversions) {
-    // Every conversion is checked before any row is written, so one that would collide stops
-    // the step with nothing changed rather than part-way through.
-    const meeting = await tablesMeetingBoth(context, tables, conversion);
-    if (meeting.length > 0) throw keptUnderBoth(conversion, meeting);
     // Where the start finds rows under the older spelling, the same answer as its refusal.
     const held = await tablesHoldingCode(adapter, tables, conversion.from);
     if (held.length > 0 || (await registryHolds(context, conversion.from))) {

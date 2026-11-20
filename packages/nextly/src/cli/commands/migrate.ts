@@ -344,12 +344,12 @@ import {
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
 import { storedDataOfRun } from "./stored-data-of-run";
-import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
   judgeCoreDeletions,
 } from "./upgrade-steps/core-upgrade-consent";
+import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 // Re-exported for the callers that import it from this command. Other
 // commands import it from cli/utils, which does not pull this one in.
 export { installRegistryResolver };
@@ -1077,7 +1077,11 @@ export async function runMigrate(
         // schema lock: with every migration applied, since each step reads
         // the tables as this release keeps them, and after the permissions
         // the run seeded, which a role's conversion gives.
-        await storedData.takeAfterSchemaChanges();
+        await storedData.takeAfterSchemaChanges(
+          appliedThisRun === 0
+            ? undefined
+            : `the ${formatCount(appliedThisRun, "migration")} this run applied`
+        );
         // The plugins' own deploy work, last, once every step above has
         // left the schema in step (`migrate-hooks`). Not where migrations
         // are still pending, as none of the steps above are.

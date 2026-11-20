@@ -96,6 +96,9 @@ export function pageBuilderSettingsSingle(): SingleConfig {
       beforeValidate: [refuseUnmarkedWrite],
       beforeChange: [refuseUnmarkedWrite],
     },
+    // Its keys, ids, states and actors are bookkeeping, never translated: each says
+    // `localized: false`, so its column stays on the main table, where a lookup by it
+    // finds it in every language. Its editorial text is translated as any field is.
     fields: [
       // Nullable: a site whose default is unset draws its pages with no
       // regions until the repair seeds one.
@@ -121,6 +124,7 @@ export function pageBuilderSettingsSingle(): SingleConfig {
       // one is credited with a choice they did not make.
       text({
         name: "defaultLayoutChangedBy",
+        localized: false,
         label: "Default changed by",
         admin: { readOnly: true, hidden: true },
       }),

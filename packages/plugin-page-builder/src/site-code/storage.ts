@@ -104,17 +104,22 @@ export function siteCodeSingle(): SingleConfig {
       beforeValidate: [refuseUnmarkedWrite],
       beforeChange: [refuseUnmarkedWrite],
     },
+    // Its keys, ids, states and actors are bookkeeping, never translated: each says
+    // `localized: false`, so its column stays on the main table, where a lookup by it
+    // finds it in every language. Its editorial text is translated as any field is.
     fields: [
       // What the person wrote for the head, as it was judged: shown again for
       // editing, never rendered.
       textarea({
         name: "headSource",
+        localized: false,
         label: "Head",
         admin: { readOnly: true },
       }),
       // What the person wrote for the end of the body.
       textarea({
         name: "bodySource",
+        localized: false,
         label: "End of body",
         admin: { readOnly: true },
       }),
@@ -133,6 +138,7 @@ export function siteCodeSingle(): SingleConfig {
       // Who saved it last: `user:<id>`. API keys may not save site code.
       text({
         name: "changedBy",
+        localized: false,
         label: "Changed by",
         admin: { readOnly: true, hidden: true },
       }),

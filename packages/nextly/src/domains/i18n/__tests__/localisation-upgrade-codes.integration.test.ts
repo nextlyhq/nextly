@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { MIGRATE_DATA_STEPS } from "../../../cli/commands/upgrade-steps";
+import { NextlyError } from "../../../errors";
 import { runStatement } from "../../schema/pipeline/_internal/run-statement";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { createDynamicHandlers } from "../../../routeHandler";
@@ -25,6 +26,7 @@ import {
   type VersionRow,
 } from "../../versions/versions-repository";
 import { normalizeLocalization } from "../config/normalize";
+import { MetaService } from "../../meta/services/meta-service";
 import { OLDER_CODES_CHECKED_KEY } from "../older-codes";
 import { ensureI18nArchive } from "../migration/ensure-archive";
 import { _resetPerLanguageStorage } from "../per-language-storage";
@@ -35,6 +37,7 @@ import {
   migrateData,
   openUpgradeDatabase,
   previewMigrateData,
+  refusalBeforeSchemaChanges,
   siteWithLanguages,
   storeUnderCode,
   type UpgradeDatabase,
@@ -235,6 +238,78 @@ describeEachDialect(
       expect(rows.map(row => row.locale)).toEqual(["pt-BR"]);
     });
 
+    // A configuration already corrected to the standard code no longer names the older spelling,
+    // so it is found from the rows: from every table the conversion rewrites, not only the
+    // translation tables. Broken, a spelling left only in the archive or in a version's list of
+    // changed languages is never converted, and that row stays out of reach of the language.
+    it("converts an older spelling only the archive holds, under a configuration that no longer names it", async () => {
+      database = await openUpgradeDatabase(dialect);
+      await bootSite(database, "legacy", STANDARD);
+      await ensureI18nArchive(database.adapter as never, dialect);
+      await database.adapter.insert(
+        "nextly_i18n_archive",
+        {
+          collection: ARTICLES,
+          entityKind: "collection",
+          entryId: "e1",
+          locale: "pt_BR",
+          field: "title",
+          value: "olá",
+          archivedAt: new Date("2026-08-01T10:00:00Z"),
+        },
+        { returning: [] }
+      );
+
+      await migrateData(database.adapter as never, STANDARD);
+
+      const rows = await database.adapter.select<{ locale: string }>(
+        "nextly_i18n_archive",
+        { columns: ["locale"] }
+      );
+      expect(rows.map(row => row.locale)).toEqual(["pt-BR"]);
+    });
+
+    it("converts an older spelling only a version's changed languages hold, under a configuration that no longer names it", async () => {
+      database = await openUpgradeDatabase(dialect);
+      const t = await bootSite(database, "legacy", STANDARD);
+      const created = await entriesOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+        { title: "hello", code: "code-list", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      const [version] = await database.adapter.select<{ id: string }>(
+        VERSIONS_TABLE,
+        {
+          columns: ["id"],
+          where: { and: [{ column: "entryId", op: "=", value: id }] },
+          limit: 1,
+        }
+      );
+      // The premise: the one place the older spelling is kept.
+      await database.adapter.update(
+        VERSIONS_TABLE,
+        { changedLocales: JSON.stringify(["en", "pt_BR"]) },
+        { and: [{ column: "id", op: "=", value: version!.id }] }
+      );
+      const changed = async () => {
+        const [row] = await database!.adapter.select<{
+          changedLocales: unknown;
+        }>(VERSIONS_TABLE, {
+          columns: ["changedLocales"],
+          where: { and: [{ column: "id", op: "=", value: version!.id }] },
+        });
+        const value = row?.changedLocales;
+        return typeof value === "string"
+          ? (JSON.parse(value) as unknown)
+          : value;
+      };
+      expect(await changed()).toEqual(["en", "pt_BR"]);
+
+      await migrateData(database.adapter as never, STANDARD);
+
+      expect(await changed()).toEqual(["en", "pt-BR"]);
+    });
+
     it("serves the old code as the standard one once upgraded", async () => {
       const id = await legacyArticle();
       await migrateData(database!.adapter as never, UNDERSCORED);
@@ -370,6 +445,38 @@ describeEachDialect(
       ).rejects.toThrow(/pt_BR[\s\S]*nextly migrate/);
     });
 
+    // A database started before the scan read every column a code is stored in recorded its scan
+    // over the translation tables alone, in the languages and nothing else. The start reads that
+    // record as a scan of fewer columns and scans once more, so a spelling only a newer column
+    // holds is found. Broken, the earlier record is taken as this scan's and the start goes on.
+    it("scans again a database whose record was written over fewer columns", async () => {
+      database = await openUpgradeDatabase(dialect);
+      await bootSite(database, "upgraded", STANDARD, warningsKept().logger);
+      await ensureI18nArchive(database.adapter as never, dialect);
+      await database.adapter.insert(
+        "nextly_i18n_archive",
+        {
+          collection: ARTICLES,
+          entityKind: "collection",
+          entryId: "e1",
+          locale: "pt_BR",
+          field: "title",
+          value: "olá",
+          archivedAt: new Date("2026-08-01T10:00:00Z"),
+        },
+        { returning: [] }
+      );
+      // The record as the earlier scan wrote it: the configured languages alone.
+      await new MetaService(
+        database.adapter as never,
+        warningsKept().logger as never
+      ).set(OLDER_CODES_CHECKED_KEY, "en,pt-BR");
+
+      await expect(
+        bootSite(database, "upgraded", STANDARD, warningsKept().logger)
+      ).rejects.toThrow(/pt_BR[\s\S]*nextly migrate/);
+    });
+
     // A site that changed how it wrote a language more than once can hold one document under two
     // older spellings of one code. Both become the same code, so the conversion stops before
     // writing anything, naming both, rather than stop on the unique key after rewriting some
@@ -411,6 +518,95 @@ describeEachDialect(
         expect(await storedLanguages()).toEqual(["PT_br", "en", "pt_BR"]);
       }
     );
+
+    /** A copy of the article's `pt_BR` translation row under `locale`: one language kept twice. */
+    async function translationAlsoUnder(locale: string): Promise<void> {
+      const table = sql.identifier("dc_articles_locales");
+      const [row] = await database!.adapter.queryStatement<
+        Record<string, unknown>
+      >(
+        sql`SELECT * FROM ${table} WHERE ${sql.identifier("_locale")} = ${"pt_BR"}`
+      );
+      const copy = Object.entries(row!).map(([column, value]) => [
+        column,
+        column === "_locale"
+          ? locale
+          : column === "id"
+            ? `${String(value)}-${locale}`
+            : value,
+      ]);
+      await runStatement(
+        database!.adapter.getDrizzle(),
+        database!.adapter.dialect,
+        sql`INSERT INTO ${table} (${sql.join(
+          copy.map(([column]) => sql.identifier(String(column))),
+          sql`, `
+        )}) VALUES (${sql.join(
+          copy.map(([, value]) => sql`${value}`),
+          sql`, `
+        )})`
+      );
+    }
+
+    // The translation tables can show one language kept under two spellings as they stand, so
+    // `nextly migrate` refuses it before its schema changes, ahead of the version history's check,
+    // which waits for the columns those changes add. Broken, that check comes first, its refusal is
+    // left for after the schema changes, and the collision is refused only then.
+    it("refuses one language under two spellings before the schema changes, on a version history of an earlier release", async () => {
+      await legacyArticle();
+      await translationAlsoUnder("pt-BR");
+      // The version history as an earlier release laid it out, still holding a pending change.
+      await runStatement(
+        database!.adapter.getDrizzle(),
+        database!.adapter.dialect,
+        sql`ALTER TABLE ${sql.identifier(VERSIONS_TABLE)} DROP COLUMN ${sql.identifier("changed_locales")}`
+      );
+
+      const refusal = await refusalBeforeSchemaChanges(
+        database!.adapter,
+        STANDARD
+      );
+
+      expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
+        true
+      );
+      expect(await storedLanguages()).toEqual(["en", "pt-BR", "pt_BR"]);
+    });
+
+    // The conversion reads every underscore of a code as a hyphen (`standardLanguageCode`), so a
+    // spelling that mixes the two is converted; the discovery of what the rows hold reads it the
+    // same way. Broken, it looks the spelling up with only its hyphens read as underscores, never
+    // finds `zh_Hant-TW`, and leaves those rows out of reach of the language.
+    it("converts a stored spelling that mixes underscores and hyphens", async () => {
+      const MIXED = siteWithLanguages(["en", "zh-Hant-TW"], "en");
+      database = await openUpgradeDatabase(dialect);
+      const t = await bootSite(database, "upgraded", MIXED);
+      const created = await entriesOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+        {
+          title: "hello",
+          summary: "s",
+          code: "code-mixed",
+          status: "published",
+        }
+      );
+      const id = (created.data as { id: string }).id;
+      await entriesOf(t).updateEntry(
+        {
+          collectionName: ARTICLES,
+          entryId: id,
+          locale: "zh-Hant-TW",
+          overrideAccess: true,
+        },
+        { title: "你好", status: "published", _overwrite: true }
+      );
+      await storeUnderCode(database, "zh-Hant-TW", "zh_Hant-TW");
+      expect(await storedLanguages()).toEqual(["en", "zh_Hant-TW"]);
+
+      await migrateData(database.adapter as never, MIXED);
+
+      expect(await storedLanguages()).toEqual(["en", "zh-Hant-TW"]);
+    });
 
     // A site that manages its languages in Settings keeps them in `nextly_languages`, each with the
     // codes it falls back to. The upgrade converts that registry with the content, so the site's

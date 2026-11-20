@@ -5,29 +5,137 @@
  *
  * @module domains/i18n/older-codes
  */
+import { createHash } from "node:crypto";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
 import { MEDIA_USAGE_TABLE } from "../../schemas/media-usage/table-name";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../schemas/translation-provenance/table-name";
 import { VERSIONS_TABLE } from "../../schemas/versions/types";
+import { introspectLiveColumns } from "../schema/pipeline/diff/introspect-live";
 
-/** Whether `table` holds a row whose `column` is `code`. */
-async function holdsRowIn(
+import { standardLanguageCode } from "./config/standard-code";
+
+/**
+ * A column a language code is stored in: one code, written after `prefix` where it has one, or a
+ * JSON list of codes (`list`).
+ */
+interface CodeColumn {
+  table: string;
+  column: string;
+  prefix?: string;
+  list?: true;
+}
+
+/**
+ * Every column a code is stored in besides the translation tables' `_locale`, each one the
+ * conversion rewrites: the versions, by their language and the list of languages each records it
+ * changed; a pinned base kept for a language's pending change (its slot); each translation's
+ * record of where it came from; the archive of removed translations; the releases' members; and
+ * each media use and preview link in a language.
+ */
+const CODE_COLUMNS: readonly CodeColumn[] = [
+  { table: VERSIONS_TABLE, column: "locale" },
+  { table: VERSIONS_TABLE, column: "changed_locales", list: true },
+  { table: "nextly_version_pins", column: "slot", prefix: "pending:" },
+  { table: TRANSLATION_PROVENANCE_TABLE, column: "locale" },
+  { table: TRANSLATION_PROVENANCE_TABLE, column: "source_locale" },
+  { table: "nextly_i18n_archive", column: "locale" },
+  { table: "nextly_release_members", column: "locale" },
+  { table: MEDIA_USAGE_TABLE, column: "locale" },
+  { table: "nextly_preview_links", column: "locale" },
+];
+
+/**
+ * The columns of `CODE_COLUMNS` and of the translation tables `translationTables` that the
+ * database has. A table or a column an earlier release did not have yet holds no code, where
+ * reading it would fail: the versions' list of changed languages comes with this release's
+ * migrations.
+ */
+async function codeColumnsOn(
   adapter: DrizzleAdapter,
-  table: string,
-  column: string,
+  translationTables: readonly string[]
+): Promise<CodeColumn[]> {
+  const present: CodeColumn[] = translationTables.map(table => ({
+    table,
+    column: "_locale",
+  }));
+  const tables = [...new Set(CODE_COLUMNS.map(({ table }) => table))];
+  const existing = new Set<string>();
+  for (const table of tables) {
+    if (await adapter.tableExists(table)) existing.add(table);
+  }
+  // Only a list column's table is read for its columns: the others are as old as their tables.
+  const listTables = [
+    ...new Set(
+      CODE_COLUMNS.filter(({ list, table }) => list && existing.has(table)).map(
+        ({ table }) => table
+      )
+    ),
+  ];
+  const { tables: live } = await introspectLiveColumns(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    listTables
+  );
+  const listColumns = new Set(
+    live.flatMap(({ name, columns }) =>
+      columns.map(column => `${name}.${column.name}`)
+    )
+  );
+  for (const place of CODE_COLUMNS) {
+    if (!existing.has(place.table)) continue;
+    if (place.list && !listColumns.has(`${place.table}.${place.column}`)) {
+      continue;
+    }
+    present.push(place);
+  }
+  return present;
+}
+
+/** A list column's text, which every dialect can match with LIKE: JSON on PostgreSQL and MySQL. */
+function asText(adapter: DrizzleAdapter, column: string) {
+  const type = sql.raw(adapter.dialect === "mysql" ? "CHAR" : "TEXT");
+  return sql`CAST(${sql.identifier(column)} AS ${type})`;
+}
+
+/** `text` as LIKE matches it literally, through the escape character `!`. */
+function likeLiteral(text: string): string {
+  return text.replace(/[!%_]/g, character => `!${character}`);
+}
+
+/** The codes of a list column's stored text; a list that cannot be read names none. */
+function codesOfList(text: string): string[] {
+  try {
+    const list: unknown = JSON.parse(text);
+    return Array.isArray(list)
+      ? list.filter((code): code is string => typeof code === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Whether `place` holds `code`: as its one code, or in its list. */
+async function holdsCode(
+  adapter: DrizzleAdapter,
+  place: CodeColumn,
   code: string
 ): Promise<boolean> {
+  // A list is matched by the code as its JSON writes it, quotes included: that code, not one it begins.
+  const where = place.list
+    ? sql`${asText(adapter, place.column)} LIKE ${`%${likeLiteral(JSON.stringify(code))}%`} ESCAPE '!'`
+    : sql`${sql.identifier(place.column)} = ${`${place.prefix ?? ""}${code}`}`;
   const rows = await adapter.queryStatement<{ found: unknown }>(
-    sql`SELECT 1 AS ${sql.identifier("found")} FROM ${sql.identifier(table)} WHERE ${sql.identifier(column)} = ${code} LIMIT 1`
+    sql`SELECT 1 AS ${sql.identifier("found")} FROM ${sql.identifier(place.table)} WHERE ${where} LIMIT 1`
   );
   return rows.length > 0;
 }
 
 /**
  * The tables still holding a row under `code`: each of the translation tables `translationTables`
- * keeps its language in `_locale`, and every other table the code is stored in.
+ * keeps its language in `_locale`, and every other table the code is stored in (`CODE_COLUMNS`).
  */
 export async function tablesHoldingCode(
   adapter: DrizzleAdapter,
@@ -35,27 +143,9 @@ export async function tablesHoldingCode(
   code: string
 ): Promise<string[]> {
   const holding: string[] = [];
-  for (const table of translationTables) {
-    if (await holdsRowIn(adapter, table, "_locale", code)) holding.push(table);
-  }
-  // Every other table the code is stored in, by the column that holds it: the versions and the
-  // releases' members (`locale`), a pinned base kept for a language's pending change (its slot),
-  // each translation's record of where it came from, the archive of removed translations, and
-  // each media use and preview link in a language.
-  const others: readonly [table: string, column: string, value: string][] = [
-    [VERSIONS_TABLE, "locale", code],
-    ["nextly_version_pins", "slot", `pending:${code}`],
-    [TRANSLATION_PROVENANCE_TABLE, "locale", code],
-    [TRANSLATION_PROVENANCE_TABLE, "source_locale", code],
-    ["nextly_i18n_archive", "locale", code],
-    ["nextly_release_members", "locale", code],
-    [MEDIA_USAGE_TABLE, "locale", code],
-    ["nextly_preview_links", "locale", code],
-  ];
-  for (const [table, column, value] of others) {
-    if (holding.includes(table)) continue;
-    if (!(await adapter.tableExists(table))) continue;
-    if (await holdsRowIn(adapter, table, column, value)) holding.push(table);
+  for (const place of await codeColumnsOn(adapter, translationTables)) {
+    if (holding.includes(place.table)) continue;
+    if (await holdsCode(adapter, place, code)) holding.push(place.table);
   }
   return holding;
 }
@@ -66,41 +156,66 @@ export interface StoredOlderSpelling {
   to: string;
 }
 
+/** The codes with an underscore that `place` holds, as stored: its own codes, or its lists'. */
+async function underscoredCodesIn(
+  adapter: DrizzleAdapter,
+  place: CodeColumn
+): Promise<string[]> {
+  // `_` is LIKE's single-character wildcard, so it is matched through an escape character.
+  const pattern = `${likeLiteral(place.prefix ?? "")}%!_%`;
+  const value = place.list
+    ? asText(adapter, place.column)
+    : sql.identifier(place.column);
+  const where = sql`${value} LIKE ${pattern} ESCAPE '!'`;
+  // Asked first whether it holds any at all, stopping at the first row.
+  const any = await adapter.queryStatement<{ found: unknown }>(
+    sql`SELECT 1 AS ${sql.identifier("found")} FROM ${sql.identifier(place.table)} WHERE ${where} LIMIT 1`
+  );
+  if (any.length === 0) return [];
+  const rows = await adapter.queryStatement<{ held: unknown }>(
+    sql`SELECT DISTINCT ${value} AS ${sql.identifier("held")} FROM ${sql.identifier(place.table)} WHERE ${where}`
+  );
+  const codes: string[] = [];
+  for (const { held } of rows) {
+    if (typeof held !== "string") continue;
+    if (!place.list) {
+      codes.push(held.slice((place.prefix ?? "").length));
+      continue;
+    }
+    codes.push(...codesOfList(held));
+  }
+  return codes;
+}
+
 /**
- * The older spellings of `codes` that rows in `translationTables` are still stored under, found
- * from the rows rather than the configuration: a configuration already corrected to the standard
- * code no longer names them. Only an underscore is ever converted (`standardLanguageCode`), so an
- * older spelling of `pt-BR` is `pt_BR` in any letter case. Each table is first asked whether it
- * holds any code with an underscore at all, stopping at the first row; only a table that does is
- * read for its spellings.
+ * The older spellings of `codes` that rows are still stored under, found from the rows rather than
+ * the configuration: a configuration already corrected to the standard code no longer names them.
+ * Read from every column the conversion rewrites (`tablesHoldingCode`'s), the translation tables
+ * `translationTables` included, so a spelling left only in a version or the archive is found too.
+ * Only an underscore is ever converted (`standardLanguageCode`), so an older spelling of `pt-BR`
+ * is `pt_BR` in any letter case.
  */
 export async function storedOlderSpellings(
   adapter: DrizzleAdapter,
   translationTables: readonly string[],
   codes: readonly string[]
 ): Promise<StoredOlderSpelling[]> {
-  // The underscore form of each configured code that has a part after its language.
+  // Each configured code that has a part after its language, in any letter case.
   const byLowered = new Map(
     codes
       .filter(code => code.includes("-"))
-      .map(code => [code.replace(/-/g, "_").toLowerCase(), code] as const)
+      .map(code => [code.toLowerCase(), code] as const)
   );
   if (byLowered.size === 0) return [];
-  // `_` is LIKE's single-character wildcard, so it is matched through an escape character.
-  const underscored = sql`${sql.identifier("_locale")} LIKE ${"%!_%"} ESCAPE '!'`;
   const found = new Map<string, string>();
-  for (const table of translationTables) {
-    const any = await adapter.queryStatement<{ found: unknown }>(
-      sql`SELECT 1 AS ${sql.identifier("found")} FROM ${sql.identifier(table)} WHERE ${underscored} LIMIT 1`
-    );
-    if (any.length === 0) continue;
-    const spellings = await adapter.queryStatement<{ locale: unknown }>(
-      sql`SELECT DISTINCT ${sql.identifier("_locale")} AS ${sql.identifier("locale")} FROM ${sql.identifier(table)} WHERE ${underscored}`
-    );
-    for (const { locale } of spellings) {
-      if (typeof locale !== "string") continue;
-      const to = byLowered.get(locale.toLowerCase());
-      if (to !== undefined) found.set(locale, to);
+  for (const place of await codeColumnsOn(adapter, translationTables)) {
+    for (const code of await underscoredCodesIn(adapter, place)) {
+      // Read as the conversion reads it (`standardLanguageCode`): every underscore a hyphen, so a
+      // spelling that mixes the two (`zh_Hant-TW`) is found as the one it converts to.
+      const to = byLowered.get(
+        (standardLanguageCode(code) ?? code).toLowerCase()
+      );
+      if (to !== undefined) found.set(code, to);
     }
   }
   return [...found].map(([from, to]) => ({ from, to }));
@@ -113,7 +228,22 @@ export async function storedOlderSpellings(
  */
 export const OLDER_CODES_CHECKED_KEY = "i18n.olderCodesChecked";
 
-/** The value `OLDER_CODES_CHECKED_KEY` records for `codes`: one per configured language set. */
+/**
+ * The columns the scan read when a database recorded it, as a short fingerprint of `CODE_COLUMNS`.
+ * A database whose record was written over fewer columns is scanned again once, so a spelling only
+ * the newer columns hold is found; derived from the list, a column added to it does the same.
+ */
+const SCANNED_COLUMNS = createHash("sha256")
+  .update(
+    CODE_COLUMNS.map(({ table, column }) => `${table}.${column}`).join(",")
+  )
+  .digest("hex")
+  .slice(0, 12);
+
+/**
+ * The value `OLDER_CODES_CHECKED_KEY` records for `codes`: one per configured language set and
+ * set of columns scanned (`SCANNED_COLUMNS`).
+ */
 export function olderCodesCheckedFor(codes: readonly string[]): string {
-  return [...new Set(codes)].sort().join(",");
+  return `${SCANNED_COLUMNS}:${[...new Set(codes)].sort().join(",")}`;
 }
