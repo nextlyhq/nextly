@@ -72,6 +72,10 @@ import {
   type EntryRow,
   type EntryVersions,
 } from "./useEntrySelection";
+import {
+  BulkMoveResultNote,
+  useWorkflowBulkMoves,
+} from "./useWorkflowBulkMoves";
 
 // ============================================================================
 // Types
@@ -382,6 +386,17 @@ export const EntryTable: ForwardRefExoticComponent<
     [collection]
   );
 
+  // The workflow's moves over the selection, each refusal named by the row's title.
+  const bulkMoves = useWorkflowBulkMoves({
+    collection,
+    offered: offered.workflowMoves,
+    rows: entries,
+    titleOf: (row, id) => {
+      const title = row && titleField ? row[titleField] : undefined;
+      return typeof title === "string" && title !== "" ? title : id;
+    },
+  });
+
   // A plugin's column decided by a read of its own (whether the collection
   // has what the column shows) is registered once that read answers. Asked
   // here from the list's first draw, outline included, so the read leaves
@@ -549,6 +564,11 @@ export const EntryTable: ForwardRefExoticComponent<
   return (
     // The table draws its columns from the ask the hold above was decided by.
     <HeldPluginColumnsPass.Provider value={pass}>
+      {bulkMoves.dialogs}
+      {/* What the last workflow move did, each refusal named, until the next one. */}
+      {bulkMoves.result ? (
+        <BulkMoveResultNote result={bulkMoves.result} />
+      ) : null}
       <ListView<EntryRow>
         search={{
           value: globalFilter,
@@ -714,6 +734,7 @@ export const EntryTable: ForwardRefExoticComponent<
                 declaredBulkActions,
                 selected
               )}
+              workflowMoves={bulkMoves.movesFor(selected)}
             />
           ) : undefined
         }

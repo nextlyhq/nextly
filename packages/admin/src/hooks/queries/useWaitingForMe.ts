@@ -22,7 +22,7 @@ import {
 import type { WaitingItem } from "@admin/types/workflows";
 
 /** The query keys of the waiting list and its scope, all under one root so a move can refresh both. */
-const waitingKeys = {
+export const waitingKeys = {
   all: () => ["workflow-waiting"] as const,
   scope: () => ["workflow-waiting", "scope"] as const,
   page: (page: number, limit: number) =>
