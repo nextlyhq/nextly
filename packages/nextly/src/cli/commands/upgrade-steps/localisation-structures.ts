@@ -150,13 +150,23 @@ async function structuredColumns(
 ): Promise<StructuredColumn[]> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
   const found: StructuredColumn[] = [];
-  for (const entity of await siteEntities(context)) {
+  const entities = await siteEntities(context);
+  // The site's components, by slug: a container placing one is read through its fields.
+  const components = new Map(
+    entities
+      .filter(entity => entity.kind === "component")
+      .map(entity => [entity.slug, entity.fields as readonly StructuredField[]])
+  );
+  for (const entity of entities) {
     const languagesTable = languagesTableOf(entity.tableName);
     if (!(await adapter.tableExists(languagesTable))) continue;
     const shaped = withoutContainerFlags(entity.fields).fields.flatMap(
       field => {
         if (!isPlainObject(field) || typeof field.name !== "string") return [];
-        const shape = sharedStructureShape(field as unknown as StructuredField);
+        const shape = sharedStructureShape(
+          field as unknown as StructuredField,
+          slug => components.get(slug)
+        );
         return shape ? [{ field: field.name, shape }] : [];
       }
     );

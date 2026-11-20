@@ -179,6 +179,7 @@ import {
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
@@ -2281,7 +2282,11 @@ export class SingleQueryService extends BaseService {
       fillCompanionFields({
         rows: [doc],
         companionRows: translations.companionRows,
-        localizedFields: translations.companion.localizedFields,
+        // A container placing a component is put back by its component's fields.
+        localizedFields: await withComponentShapes(
+          translations.companion.localizedFields,
+          this.adapter.getDrizzle()
+        ),
         localeChain: translations.localeChain,
         idKey: "id",
         statusValues:

@@ -132,6 +132,7 @@ import {
   companionNotReadyMessage,
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapesOf } from "../../i18n/runtime/component-shapes";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { partsTogether, type ChangedParts } from "../../versions/changed-parts";
 import {
@@ -2700,7 +2701,13 @@ export class SinglePublishAllService extends BaseService {
     access: FieldGroupWriteAccess
   ): Promise<void> {
     if (pending.length === 0) return;
-    const { singleMeta, existingDoc, companion } = plan;
+    const { singleMeta, existingDoc } = plan;
+    // A container placing a component is split by its component's fields, read on this
+    // transaction (`withComponentShapes`).
+    const companion = await withComponentShapesOf(
+      plan.companion,
+      tx.getDrizzle()
+    );
     // So the type tags the drafts record come off at every depth.
     const componentFields = await this.componentFieldsOn(tx, plan.fieldConfigs);
 

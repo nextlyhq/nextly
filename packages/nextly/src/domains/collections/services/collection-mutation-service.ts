@@ -317,6 +317,7 @@ import {
   resolveCompanionReadiness,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
 import {
@@ -3983,7 +3984,12 @@ export class CollectionMutationService extends BaseService {
     const companionData: Record<string, unknown> = {};
     const localizedFieldValues: Record<string, unknown> = {};
     const sharedStructures: SharedStructureWritten[] = [];
-    for (const field of companion.localizedFields) {
+    // A container placing a component is split by its component's fields, read on the write's
+    // own executor (`withComponentShapes`).
+    for (const field of await withComponentShapes(
+      companion.localizedFields,
+      executor
+    )) {
       // createEntry passes snake_case keys (already converted); updateEntry passes camelCase
       // field names. Accept either; always store under the snake_case companion column.
       const key = Object.prototype.hasOwnProperty.call(entryData, field.column)

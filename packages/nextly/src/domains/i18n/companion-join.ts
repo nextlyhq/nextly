@@ -37,9 +37,11 @@ import {
 } from "./provenance/field-status";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
 import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
+import { withComponentShapes } from "./runtime/component-shapes";
 import {
   assembleStoredValue,
   type SharedStructureShape,
+  type StructuredField,
 } from "./shared-structure";
 import type { TranslationFilterState } from "./translation-filter-states";
 
@@ -85,6 +87,13 @@ export interface LocalizedFieldRef {
    * resolve or compare whole.
    */
   sharedStructure?: SharedStructureShape;
+  /**
+   * Set beside `sharedStructure` for a container placing a component inside it, whose values its
+   * rows hold inline: the container's definition, which its shape is read again from once the
+   * components' fields are read (`withComponentShapes`). Until then the shape holds only what the
+   * container translates of its own.
+   */
+  placingComponents?: StructuredField;
 }
 
 // The blank rule lives beside nothing else, so the shared-structure assembly reads the same one.
@@ -263,9 +272,12 @@ export async function populateCompanionFieldsByLanguage(
   });
   if (companionRows === undefined) return undefined;
 
+  // A container placing a component is put back by its component's fields, read on this read's
+  // own handle (`withComponentShapes`).
+  const refs = await withComponentShapes(localizedFields, db);
   for (const language of languages) {
     fillCompanionFields({
-      localizedFields,
+      localizedFields: refs,
       statusValues: args.statusValues,
       revealed: args.revealed,
       idKey: args.idKey,
@@ -772,6 +784,8 @@ export async function populateCompanionFieldsAllLocales(
   });
   if (companionRows === undefined) return;
 
+  // A container placing a component is put back by its component's fields (`withComponentShapes`).
+  const refs = await withComponentShapes(localizedFields, db);
   const byParent = indexCompanionRowsByParent(
     companionRows,
     args.statusValues,
@@ -780,7 +794,7 @@ export async function populateCompanionFieldsAllLocales(
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
-    for (const field of localizedFields) {
+    for (const field of refs) {
       const keyed: Record<string, unknown> = {};
       if (field.sharedStructure) {
         // Each language's value assembled from the one structure and that language's overlay

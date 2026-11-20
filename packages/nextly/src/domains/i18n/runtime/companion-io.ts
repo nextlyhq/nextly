@@ -73,8 +73,9 @@ import { storesPerLanguage } from "../per-language-storage";
 import {
   hasTranslationColumn,
   keepsTranslationsInside,
+  placesComponent,
   pruneOverlay,
-  sharedStructureShape,
+  shapeBeforeComponents,
   splitStoredValue,
   type SharedStructureShape,
   type StructuredField,
@@ -184,14 +185,21 @@ export function localizedFieldRefs(
         : isFieldLocalized(field, true)
     )
     .map(field => {
-      // Null for a field translated whole: a container marked so keeps no shape.
-      const shape = sharedStructures ? sharedStructureShape(field) : null;
+      // Null for a field translated whole: a container marked so keeps no shape. A container
+      // placing a component keeps its definition too, for its shape to be read again with the
+      // component's fields (`withComponentShapes`).
+      const keepsInside =
+        sharedStructures && keepsTranslationsInside(field, true);
+      const shape = keepsInside ? shapeBeforeComponents(field) : null;
       return {
         name: field.name,
         column: toColumn(field.name),
         ...(unique.has(field.name) ? { unique: true } : {}),
         ...(json.has(field.name) ? { json: true } : {}),
         ...(shape ? { sharedStructure: shape } : {}),
+        ...(keepsInside && placesComponent(field)
+          ? { placingComponents: field }
+          : {}),
       };
     });
 }

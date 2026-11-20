@@ -197,6 +197,7 @@ import {
   resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { inReleaseCondition } from "../../releases/in-release-condition";
 import {
   NO_DECISIONS,
@@ -5833,7 +5834,11 @@ export class CollectionQueryService extends BaseService {
           fillCompanionFields({
             rows: [entry],
             companionRows: joined.companionRows,
-            localizedFields: companion.localizedFields,
+            // A container placing a component is put back by its component's fields.
+            localizedFields: await withComponentShapes(
+              companion.localizedFields,
+              this.db
+            ),
             localeChain: joinedLocaleChain,
             // A read scoped to published content takes only the languages published.
             statusValues:

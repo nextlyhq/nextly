@@ -218,6 +218,7 @@ import {
   resolveCompanionReadiness,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { withComponentShapes } from "../../i18n/runtime/component-shapes";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import { assembleStoredValue } from "../../i18n/shared-structure";
 import { stopReleasesHolding } from "../../releases/early-stop";
@@ -3824,6 +3825,15 @@ export class SingleMutationService extends BaseService {
         // phases into units of their own, as `assemblesSaveDocuments` is.
         // fallow-ignore-next-line complexity
         updatedRows = await transact(async tx => {
+          // The Single's translated fields, a container placing a component read with its
+          // component's fields on this transaction (`withComponentShapes`): what its write is
+          // split by and its value put back together by below.
+          const shapedRefs = companion
+            ? await withComponentShapes(
+                companion.localizedFields,
+                tx.getDrizzle()
+              )
+            : [];
           // This attempt's component values. A publish merges the held
           // draft's into them, and a retry after a lost race must start again
           // from the caller's own values: the draft may have moved on since.
@@ -3999,7 +4009,7 @@ export class SingleMutationService extends BaseService {
           // pre-transaction guard above has already proven is actually possible.
           let { main: mainPayload, companion: companionData } =
             companion && companionPhysicallyExists
-              ? splitLocalizedWrite(updatePayload, companion.localizedFields)
+              ? splitLocalizedWrite(updatePayload, shapedRefs)
               : {
                   main: updatePayload,
                   companion: {} as Record<string, unknown>,
@@ -4622,7 +4632,10 @@ export class SingleMutationService extends BaseService {
                 pendingDraft.snapshot,
                 singleMeta.tableName,
                 fieldConfigs,
-                companion && companionPhysicallyExists ? companion : null,
+                // Split by its component-read refs (`shapedRefs`).
+                companion && companionPhysicallyExists
+                  ? { ...companion, localizedFields: shapedRefs }
+                  : null,
                 updatePayload,
                 componentSlug =>
                   singleComponentSchemas?.get(componentSlug)?.fields
@@ -5363,7 +5376,7 @@ export class SingleMutationService extends BaseService {
               promotesDraft: promotedDraft,
             });
             const row = rows[0] as Record<string, unknown>;
-            for (const f of companion.localizedFields) {
+            for (const f of shapedRefs) {
               if (
                 Object.prototype.hasOwnProperty.call(companionData, f.column)
               ) {
@@ -5656,7 +5669,7 @@ export class SingleMutationService extends BaseService {
             // snapshot only by being overlaid here — keyed by field name to
             // match the read shape, as the version capture does.
             if (companion) {
-              for (const f of companion.localizedFields) {
+              for (const f of shapedRefs) {
                 if (
                   Object.prototype.hasOwnProperty.call(companionData, f.column)
                 ) {
@@ -5918,7 +5931,7 @@ export class SingleMutationService extends BaseService {
             // recovered translations.
             let overlaidPriorTranslations = false;
             if (companion) {
-              for (const f of companion.localizedFields) {
+              for (const f of shapedRefs) {
                 if (
                   Object.prototype.hasOwnProperty.call(companionData, f.column)
                 ) {

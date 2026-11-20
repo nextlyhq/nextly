@@ -36,6 +36,7 @@ import {
   assembleSharedStructure,
   componentStructureShape,
   type ComponentFieldsOf,
+  placesComponent,
   sameShare,
   sharedStructureShape,
   splitSharedStructure,
@@ -137,11 +138,16 @@ export async function partKeysOf(
     const { single, many } = extractFieldGroupReferences(field);
     return single !== undefined || many !== undefined;
   });
+  // The fields that need a component's fields to be read: a component field, and a repeater or
+  // group placing one inside its rows.
+  const needingComponents = named.filter(
+    field => componentFields.includes(field) || placesComponent(field)
+  );
   const componentsOf =
-    options.translated === false || componentFields.length === 0
+    options.translated === false || needingComponents.length === 0
       ? undefined
       : (options.components ??
-        (await registryComponents(componentFields, options.executor)));
+        (await registryComponents(needingComponents, options.executor)));
   const language = await perLanguageFieldNames(
     named,
     new Set(
@@ -170,7 +176,7 @@ export async function partKeysOf(
         continue;
       }
       if (language.has(field.name)) continue;
-      const shape = sharedStructureShape(field);
+      const shape = sharedStructureShape(field, componentsOf);
       if (shape) structured.set(field.name, shape);
     }
   }
