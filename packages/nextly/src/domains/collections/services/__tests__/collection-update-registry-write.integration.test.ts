@@ -33,8 +33,13 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { SchemaEventsRepository } from "../../../schema/events/schema-events-repository";
+import {
+  writeCollectionSave,
+  type CollectionSaveDeps,
+} from "../../../schema/builder-save/collection-save";
 import { PushSchemaPipeline } from "../../../schema/pipeline/pushschema-pipeline";
 import { writeRegistryRows } from "../../../schema/schema-version";
+import type { UiSchemaEntity } from "../../../../schemas/_zod/ui-schema";
 import { isWebhookRecordingEnabled } from "../../../webhooks/recording-policy";
 
 const HISTORY = "./database/history";
@@ -89,15 +94,19 @@ describeEachDialect("a collection update's registry write", dialect => {
     return current;
   }
 
-  /** An update (by default the one adding `extra`), as what it threw or what it answered. */
+  /**
+   * An update of `slug` (by default the one adding `extra` to the collection under test), as what
+   * it threw or what it answered.
+   */
   async function update(
-    body: Record<string, unknown> = { fields: AFTER }
+    body: Record<string, unknown> = { fields: AFTER },
+    slug = SLUG
   ): Promise<{ failed: boolean; said: string; status?: unknown }> {
     try {
       const answer = await dispatchCollections(
         {} as ServiceContainer,
         "updateCollection",
-        { collectionName: SLUG },
+        { collectionName: slug },
         body
       );
       const said =
@@ -240,6 +249,53 @@ describeEachDialect("a collection update's registry write", dialect => {
       migrationStatus: "applied",
     });
     expect(await columnsOf(t)).toContain("extra");
+  });
+
+  // A group with no name at the top level is a shape only the definition file holds: the
+  // collection API refuses one in the fields it is sent. An update that sends no fields changes
+  // the table from the stored ones, the group included.
+  it("runs its own file for a collection holding a group with no name, turning Draft/Published on", async () => {
+    const t = await boot();
+    const handler = t.getService("collectionsHandler");
+    const metadata = Reflect.get(handler as object, "metadataService") as {
+      saveDeps(): CollectionSaveDeps | undefined;
+    };
+    const deps = metadata.saveDeps();
+    expect(deps, "the Builder save writer").toBeDefined();
+    // The group only lays its field out: `subtitle` is a column of the row.
+    const byline = {
+      type: "group",
+      label: "Byline",
+      fields: [{ name: "subtitle", type: "text" }],
+    };
+    await writeCollectionSave(deps!, {
+      slug: "cur_laid",
+      previous: null,
+      entity: {
+        slug: "cur_laid",
+        labels: { singular: "cur_laid", plural: "cur_laids" },
+        fields: [...BEFORE, byline],
+      } as UiSchemaEntity,
+      change: "create",
+    });
+    clearRegistryRowCache();
+    const pushed = vi.spyOn(PushSchemaPipeline.prototype, "apply");
+
+    const { failed, said } = await update({ status: true }, "cur_laid");
+
+    expect(failed, `the update failed: ${said}`).toBe(false);
+    expect(pushed, "the push").not.toHaveBeenCalled();
+    const columns = (
+      await t.adapter.executeQuery<{ name: string }>(
+        dialect === "sqlite"
+          ? `SELECT name FROM pragma_table_info('dc_cur_laid')`
+          : dialect === "mysql"
+            ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dc_cur_laid'`
+            : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'dc_cur_laid'`
+      )
+    ).map(row => String(row.name));
+    // The group's field kept; the lifecycle column added.
+    expect(columns).toEqual(expect.arrayContaining(["subtitle", "status"]));
   });
 
   it("keeps the push for a field filled from a stated default, filling the rows already there", async () => {

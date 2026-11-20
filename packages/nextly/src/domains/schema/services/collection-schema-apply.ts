@@ -1587,18 +1587,21 @@ async function companionUniqueNamesHeld(
 /**
  * The fields a change keeps, by name or under a rename it makes (`renames`, by column), that stop
  * being unique: a field renamed in the same save keeps whatever unique index its column had, which
- * follows the column to its new name.
+ * follows the column to its new name. Asked of the fields stored on the row (`fieldsStoredOnRow`):
+ * a group with no name has no column and no name of its own, and the fields it holds are the
+ * row's.
  */
 function fieldsStoppingUnique(
   oldFields: readonly FieldDefinition[],
   newFields: readonly FieldDefinition[],
   renames: ReadonlyArray<{ from: string; to: string }>
 ): FieldDefinition[] {
-  return newFields.filter(field => {
+  const before = fieldsStoredOnRow(oldFields);
+  return fieldsStoredOnRow(newFields).filter(field => {
     if (field.unique === true) return false;
     const column = toSnakeCase(field.name);
     const from = renames.find(rename => rename.to === column)?.from ?? column;
-    return oldFields.some(
+    return before.some(
       old => old.unique === true && toSnakeCase(old.name) === from
     );
   });
