@@ -188,7 +188,10 @@ describe.each(getConfiguredTestDialects())(
       if (!row) throw new Error("no row for the first page");
       const ids = [first, ...Array.from({ length: 1000 }, () => randomUUID())];
       // In batches, each under SQLite's 999 bound values however many columns a row has.
-      const copies = ids.slice(1).map(id => ({ ...row, id }));
+      // Each under a slug of its own, which the table keeps unique.
+      const copies = ids
+        .slice(1)
+        .map(id => ({ ...row, id, slug: `page-${id}` }));
       for (let at = 0; at < copies.length; at += 25) {
         await app.adapter.insertMany(
           entity.tableName,

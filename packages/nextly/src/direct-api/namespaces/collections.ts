@@ -135,6 +135,10 @@ export async function find<TSlug extends CollectionSlug>(
       totalPages,
       hasNext: legacy.hasNextPage ?? page < totalPages,
       hasPrev: legacy.hasPrevPage ?? page > 1,
+      // A total counted no further than it had to, or a filter that read no further than it
+      // may: a floor, said as REST says it. Carried only when set, so an exact total's meta is
+      // unchanged.
+      ...(legacy.totalCapped ? { totalCapped: true as const } : {}),
     },
   };
 }
