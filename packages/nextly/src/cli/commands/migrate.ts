@@ -110,6 +110,7 @@ import {
   applyFailedError,
   reconcileFile,
   runRecordedAttempt,
+  snapshotsEquivalent,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
   leftoverTranslationsTables,
@@ -5408,13 +5409,15 @@ export async function runFileMigrations(args: {
       // save judges it, once per change and before the first of the change's files runs, while
       // every old column still holds its values: a value the new type cannot read refuses the run
       // before any statement, naming the field, its rows and the file (`refuseFileTypeChanges`).
+      // It is taken here, with the files as written, and asked once the database is read below.
+      let typeChanges: Parameters<typeof refuseFileTypeChanges>[1] | undefined;
       if (index > judgedThrough) {
         const change = await changeFilesFrom(all, index, metaDir, file =>
           plan.runs.has(file)
         );
         if (change !== null) {
           judgedThrough = index + change.files.length - 1;
-          await refuseFileTypeChanges(db, change.source(beforeFile, dialect));
+          typeChanges = change.source(beforeFile, dialect);
         }
       }
       // A file adding per-language unique indexes is refused here, before the ledger records an
@@ -5442,6 +5445,64 @@ export async function runFileMigrations(args: {
         before,
       });
       m.upSql = adoption.upSql;
+      // The database as this file finds it, read before the caller's last word below so the type
+      // change judgement can ask where it stands. Read only; nothing is written before the file.
+      let sides: ReturnType<typeof narrowToContributions> | undefined;
+      if (target) {
+        // Recompute the managed-table scope per file: tables created by earlier
+        // migrations in THIS run must be visible to this file's drift check.
+        // Capturing it once before the loop left it empty on a fresh DB, so the
+        // 2nd+ migration saw its tables as "absent" and aborted with false drift.
+        const liveTables = await safeListTables(adapter);
+        // Managed main tables only, for the same reason `migrate:resolve` uses
+        // this predicate: a localized companion never appears in the snapshot this
+        // is diffed against, so including one reports drift that is not there.
+        // Junctions are excluded alongside companions: neither is declared by
+        // config, so neither can appear in the snapshot this is compared against,
+        // and including one reports drift that no migration could ever resolve.
+        //
+        // The snapshots on either side of this file ARE the declaration, so a
+        // table named in them is a real one however much its name resembles the
+        // `<mainA>_<mainB>_<field>` shape a relationship produces.
+        const declared = new Set([
+          ...before.tables.map(t => t.name),
+          ...target.tables.map(t => t.name),
+        ]);
+        const managed = snapshotComparableTables(
+          liveTables,
+          declared,
+          args.knownJunctions
+        );
+        // Tables the app only contributes to are judged on the app's elements
+        // alone; see `narrowToContributions`.
+        sides = narrowToContributions({
+          before,
+          target,
+          // Without the indexes the file adopted, which its snapshot before it does not record.
+          // On a table the file itself creates they stay: a table that is there already, with
+          // them, is the file's own end, as where a migration written to record a merge
+          // creates a table an earlier one of the merge made.
+          live: withoutAdoptedIndexes(
+            await introspectLiveSnapshot(db, dialect, managed),
+            adoptedOnTablesOf(before, adoption.adopted)
+          ),
+          contributions: mergeContributions(
+            beforeContributions,
+            targetFile?.contributions ?? {}
+          ),
+        });
+      }
+      // Where the database already stands at this file's end (its statements committed, as MySQL
+      // commits each, and its ledger row never written), the reconcile records it without running
+      // a statement: no value is converted, and the column holds the new type already, so there
+      // is nothing to judge. Read as the source, it would refuse values the run never converts.
+      const atItsEnd =
+        sides !== undefined &&
+        !snapshotsEquivalent(sides.live, sides.before) &&
+        snapshotsEquivalent(sides.live, sides.target);
+      if (typeChanges !== undefined && !atItsEnd) {
+        await refuseFileTypeChanges(db, typeChanges);
+      }
       // The caller's last word before the file applies, every refusal of it passed.
       await args.beforeApply?.(m.name);
 
@@ -5452,7 +5513,7 @@ export async function runFileMigrations(args: {
         if (m.transaction === false || dialect === "mysql") running = filename;
         return executeSql(...statement);
       };
-      if (!target) {
+      if (!target || sides === undefined) {
         // No paired snapshot (hand-written migration): run verbatim + record.
         logger.warn(
           `No snapshot for ${filename}; applying verbatim without drift checks.`
@@ -5500,48 +5561,6 @@ export async function runFileMigrations(args: {
         continue;
       }
 
-      // Recompute the managed-table scope per file: tables created by earlier
-      // migrations in THIS run must be visible to this file's drift check.
-      // Capturing it once before the loop left it empty on a fresh DB, so the
-      // 2nd+ migration saw its tables as "absent" and aborted with false drift.
-      const liveTables = await safeListTables(adapter);
-      // Managed main tables only, for the same reason `migrate:resolve` uses
-      // this predicate: a localized companion never appears in the snapshot this
-      // is diffed against, so including one reports drift that is not there.
-      // Junctions are excluded alongside companions: neither is declared by
-      // config, so neither can appear in the snapshot this is compared against,
-      // and including one reports drift that no migration could ever resolve.
-      //
-      // The snapshots on either side of this file ARE the declaration, so a
-      // table named in them is a real one however much its name resembles the
-      // `<mainA>_<mainB>_<field>` shape a relationship produces.
-      const declared = new Set([
-        ...before.tables.map(t => t.name),
-        ...target.tables.map(t => t.name),
-      ]);
-      const managed = snapshotComparableTables(
-        liveTables,
-        declared,
-        args.knownJunctions
-      );
-      // Tables the app only contributes to are judged on the app's elements
-      // alone; see `narrowToContributions`.
-      const sides = narrowToContributions({
-        before,
-        target,
-        // Without the indexes the file adopted, which its snapshot before it does not record.
-        // On a table the file itself creates they stay: a table that is there already, with
-        // them, is the file's own end, as where a migration written to record a merge
-        // creates a table an earlier one of the merge made.
-        live: withoutAdoptedIndexes(
-          await introspectLiveSnapshot(db, dialect, managed),
-          adoptedOnTablesOf(before, adoption.adopted)
-        ),
-        contributions: mergeContributions(
-          beforeContributions,
-          targetFile?.contributions ?? {}
-        ),
-      });
       // A field whose type this file changes has its entity's registry row
       // written with the file, not at the run's end, so no write is judged
       // against the type the column no longer has (`typeChangedRowsWriter`).

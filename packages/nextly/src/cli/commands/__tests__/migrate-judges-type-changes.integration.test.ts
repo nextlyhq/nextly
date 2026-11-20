@@ -11,15 +11,16 @@
  * the config loader and the command's connection are stood in for.
  */
 import { randomBytes } from "node:crypto";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { defineConfig } from "../../../config";
+import { date, defineCollection, defineConfig, number } from "../../../config";
 import { createAdapter } from "../../../database/factory";
 import {
   createDatabaseStatement,
@@ -29,8 +30,14 @@ import { clearServices } from "../../../di/register";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
-import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { toMinimalEntities } from "../../../domains/schema/migrate-create/config-entities";
+import { generateMigration } from "../../../domains/schema/migrate-create/generate";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
+import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { splitSqlStatements } from "../../../domains/schema/migrate/split-sql";
+import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
+import type { RenameCandidate } from "../../../domains/schema/pipeline/pushschema-pipeline-interfaces";
+import { resolveCollectionTableName } from "../../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
@@ -538,5 +545,88 @@ describe.each(getConfiguredTestDialects())(
       ]);
       await rm(site, { recursive: true, force: true });
     }, 240_000);
+    // A file whose statements committed while its ledger row was never written (MySQL commits each
+    // statement, so a run that stops after them leaves the file unrecorded; so does a release
+    // before this judgement): the database already stands at the file's end, and the run records
+    // the file without running a statement. Nothing converts, so nothing is judged. A date becoming
+    // a number is refused whatever its rows hold, so judged here it would keep the file pending
+    // forever on a database it has nothing left to do to. `migrate:create` writes such a file for
+    // a project declared in code; the Schema Builder refuses the change before writing one. On
+    // MySQL only: PostgreSQL has no cast from a timestamp to a number, so the file never commits
+    // there, and SQLite keeps both as an integer, so the database reads as before the file, which
+    // the run then runs and judges.
+    it.runIf(dialect === "mysql")(
+      "records a type change's file the database already stands at the end of, refusing nothing",
+      async () => {
+        const site = await mkdtemp(join(tmpdir(), "migrate-type-change-done-"));
+        const history = join(site, "database", "history");
+        mkdirSync(history, { recursive: true });
+        const blobs = (field: unknown) =>
+          defineCollection({ slug: "blobs", fields: [field] as never });
+        for (const [at, field] of [
+          [1, date({ name: "data" })],
+          [2, number({ name: "data" })],
+        ] as const) {
+          const written = await generateMigration({
+            name: `step_${at}`,
+            dialect: dialect as SupportedDialect,
+            migrationsDir: history,
+            collections: toMinimalEntities([blobs(field)], e =>
+              resolveCollectionTableName(e.slug, e.dbName)
+            ),
+            singles: [],
+            components: [],
+            nonInteractive: true,
+            decideRenames: async (candidates: readonly RenameCandidate[]) =>
+              candidates.map(candidate => ({ candidate, accepted: false })),
+            now: new Date(Date.UTC(2026, 10, 20, 12, at)),
+          });
+          expect(written).not.toBeNull();
+        }
+        const adapter = await open();
+        run.adapter = adapter;
+        run.config = defineConfig({
+          collections: [blobs(number({ name: "data" }))],
+          db: { migrationsDir: history },
+        } as never);
+        setNonInteractive(true);
+        const step = (options: { step?: number } = {}) =>
+          runMigrate(
+            {
+              cwd: site,
+              quiet: true,
+              throwOnFailure: true,
+              ...options,
+            } as never,
+            context
+          ).then(
+            () => "applied",
+            (error: unknown) => error
+          );
+        expect(await step({ step: 1 })).toBe("applied");
+        // The type change's file, its statements run and its ledger row never written.
+        const files = readdirSync(history)
+          .filter(file => file.endsWith(".sql"))
+          .sort();
+        expect(files).toHaveLength(2);
+        const change = files[1];
+        for (const statement of splitSqlStatements(
+          parseSqlSections(readFileSync(join(history, change), "utf-8")).upSql,
+          dialect as SupportedDialect
+        )) {
+          await adapter.executeQuery(statement);
+        }
+        vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "dc_blobs.data");
+
+        expect(await step()).toBe("applied");
+
+        const recorded = (await adapter.executeQuery(
+          `SELECT ${q("filename")} AS filename FROM ${q("nextly_schema_events")} WHERE ${q("event_type")} = 'file_apply' AND ${q("status")} = 'applied'`
+        )) as Array<{ filename: string }>;
+        expect(recorded.map(row => row.filename)).toContain(change);
+        await rm(site, { recursive: true, force: true });
+      },
+      240_000
+    );
   }
 );
