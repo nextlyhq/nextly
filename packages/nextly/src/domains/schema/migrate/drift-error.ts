@@ -260,6 +260,8 @@ function translationsTableVariant(table: string): DriftVariant {
       "    [B] If a missing column was removed on purpose, remove its field from",
       "        your config and write a migration for it, then re-run migrate:",
       "          pnpm nextly migrate:create --name <name> && pnpm nextly migrate",
+      "        This works only when no migration file not yet applied uses that column;",
+      "        one that does runs first and needs the column, so put it back as in [A].",
     ],
     suggestedActions: ["restore-table", "migrate-the-change"],
   };

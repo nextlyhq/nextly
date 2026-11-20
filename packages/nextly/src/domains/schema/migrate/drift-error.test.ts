@@ -75,6 +75,11 @@ describe("migrationDriftError", () => {
       "Put back what the lines above say is missing"
     );
     expect(err.publicMessage).toContain("pnpm nextly migrate:create");
+    // Removing the field clears the check, yet a pending file that still uses the column runs
+    // first and fails on it: the recovery has to say so, and send that case to [A].
+    expect(err.publicMessage).toContain(
+      "only when no migration file not yet applied uses that column"
+    );
     // The main file's recoveries do not work here: a companion file has no snapshot to
     // capture into, and marking it applied would skip the values it moves.
     expect(err.publicMessage).not.toContain("migrate:resolve --applied");
