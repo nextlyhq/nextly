@@ -11,7 +11,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { roleIdsOfSlugs } from "../holders";
+import { roleIdsOfSlugs, rolesHolding } from "../holders";
 
 import { bootSteps, role } from "./helpers/step-harness";
 
@@ -46,6 +46,46 @@ describe.each(getConfiguredTestDialects())(
       expect(
         six.length,
         `1 slug:\n${one.join("\n")}\n\n6 slugs:\n${six.join("\n")}`
+      ).toBe(one.length);
+    });
+
+    it("finds the roles holding a permission granted to many roles in one walk", async () => {
+      t = await bootSteps(dialect);
+      const app = t;
+      // Clear on posts granted to six roles, each inherited by a role of its own; Clear on pages
+      // granted to one such pair. Each walk up the hierarchy reads a level at a time, so one walk
+      // for all six costs what one for a single role does.
+      const holding: string[] = [];
+      for (let n = 0; n < 6; n += 1) {
+        const base = await role(app, `walk-base-${n}`, [["sign-off", "posts"]]);
+        holding.push(
+          base,
+          await role(app, `walk-senior-${n}`, [["read", "posts"]], [base])
+        );
+      }
+      const pagesBase = await role(app, "walk-pages", [["sign-off", "pages"]]);
+      const pagesSenior = await role(
+        app,
+        "walk-pages-senior",
+        [["read", "pages"]],
+        [pagesBase]
+      );
+      const posts = await rolesHolding(app.adapter, "sign-off", "posts");
+      expect(posts).toEqual(expect.arrayContaining(holding));
+      expect(posts).not.toContain(pagesBase);
+      expect(await rolesHolding(app.adapter, "sign-off", "pages")).toEqual(
+        expect.arrayContaining([pagesBase, pagesSenior])
+      );
+
+      const one = await statementsOf(dialect, () =>
+        rolesHolding(app.adapter, "sign-off", "pages")
+      );
+      const six = await statementsOf(dialect, () =>
+        rolesHolding(app.adapter, "sign-off", "posts")
+      );
+      expect(
+        six.length,
+        `granted to 1:\n${one.join("\n")}\n\ngranted to 6:\n${six.join("\n")}`
       ).toBe(one.length);
     });
   }

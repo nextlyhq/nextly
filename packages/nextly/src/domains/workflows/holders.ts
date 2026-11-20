@@ -11,9 +11,10 @@
  *
  * The roles holding a permission are found the same way the other way round: the roles granted it
  * directly and the super-admin role, and every role inheriting one of those
- * (`listAncestorRoles`). The same walk answers who would hold it once a write about to be made
- * grants it directly to a given set of roles (`holderAnswerOnceGranted`), so a write that sets
- * grants and default reviewers together judges the reviewers by what it is about to store.
+ * (`listAncestorRolesOfAll`, one walk). The same walk answers who would hold it once a write
+ * about to be made grants it directly to a given set of roles (`holderAnswerOnceGranted`), so a
+ * write that sets grants and default reviewers together judges the reviewers by what it is about to
+ * store.
  *
  * These read on the pool, not on a transaction: a caller asks before it opens the transaction its
  * writes go in, so no statement runs beside that transaction on another connection.
@@ -355,12 +356,12 @@ async function rolesHoldingThrough(
     SUPER_ADMIN_SLUG
   );
   const holding = new Set([...granted, ...(superAdmin ? [superAdmin.id] : [])]);
-  const inheritance = new RoleInheritanceService(adapter, log);
-  for (const roleId of [...holding]) {
-    for (const inheriting of await inheritance.listAncestorRoles(roleId)) {
-      holding.add(inheriting);
-    }
-  }
+  // One walk up from all of them together, however many roles the permission is granted to.
+  const inheriting = await new RoleInheritanceService(
+    adapter,
+    log
+  ).listAncestorRolesOfAll([...holding]);
+  for (const roleId of inheriting) holding.add(roleId);
   return holding;
 }
 
