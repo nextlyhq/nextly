@@ -519,18 +519,15 @@ describeEachDialect(
     );
 
     it.skipIf(dialect === "sqlite")(
-      "a column narrowed by hand from the type its file made it with is drift",
+      "a column's type is not judged, which no file records as the column has it",
       async () => {
-        const pending = await secondFieldPending();
+        await secondFieldPending();
         await retype("title", "VARCHAR(10)");
 
         const run = await migrate(configWith(["title", "summary"]));
 
-        expect(run.code, run.said).toBe(1);
-        expect(run.said).toMatch(
-          new RegExp(`\\? column ${COMPANION}\\.title is varchar\\(10\\)`, "i")
-        );
-        expect((await pendingFiles()).map(file => file.name)).toEqual(pending);
+        expect(run.code, run.said).toBeUndefined();
+        expect(await pendingFiles()).toEqual([]);
       },
       240_000
     );

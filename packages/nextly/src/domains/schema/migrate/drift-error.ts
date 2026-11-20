@@ -193,8 +193,7 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
     : args.translationsTable !== undefined
       ? [
           "  Recovery (pick one):",
-          "    [A] Put the table back as the migration files left it (the lines above",
-          "        say what differs), then re-run migrate.",
+          "    [A] Put back what the lines above say is missing, then re-run migrate.",
           "    [B] If a missing column was removed on purpose, remove its field from",
           "        your config and write a migration for it, then re-run migrate:",
           "          pnpm nextly migrate:create --name <name> && pnpm nextly migrate",

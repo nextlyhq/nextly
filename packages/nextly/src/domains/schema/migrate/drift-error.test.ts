@@ -71,7 +71,9 @@ describe("migrationDriftError", () => {
       "The translations table dc_posts_locales differs from what the applied"
     );
     expect(err.publicMessage).toContain("- column dc_posts_locales.title");
-    expect(err.publicMessage).toContain("Put the table back");
+    expect(err.publicMessage).toContain(
+      "Put back what the lines above say is missing"
+    );
     expect(err.publicMessage).toContain("pnpm nextly migrate:create");
     // The main file's recoveries do not work here: a companion file has no snapshot to
     // capture into, and marking it applied would skip the values it moves.

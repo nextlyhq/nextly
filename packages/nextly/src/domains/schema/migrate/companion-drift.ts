@@ -3,20 +3,18 @@
  * translations table, made before `nextly migrate` applies any pending file.
  *
  * A companion file has no snapshot of its own: it carries statements that move values and must
- * run as written. What its table should look like is recorded all the same, in two places.
+ * run as written. What its table should look like is recorded all the same.
  *
- * - The snapshots of the main files say which tables are translated and name each one's
- *   translated columns. They are written from the config, so they follow a renamed field and a
- *   collection removed and added again.
- * - The headers of the applied companion files say what type a column was made with, where the
- *   file made it with the field's own type: a file that creates the table, or adds a column to
- *   it. A file that moves a field into translation may make the column with the main column's
- *   wider type, which its header does not record, so of such a column only the name is judged.
+ * The snapshots of the main files say which tables are translated and name each one's translated
+ * columns. They are written from the config, so they follow a renamed field and a collection
+ * removed and added again. A column's type is not judged: a file's header records the type its
+ * field declares, and the file adopts a column already there, so the header does not say what
+ * the column is.
  *
  * The table may rightly stand anywhere between the last applied snapshot and the newest pending
  * one: a run stopped part-way leaves it there. So, as for a main file, drift is what fits
- * neither: the table, or a translated column, that both snapshots name and the database lacks,
- * or holds narrower than its file made it. A column neither names is not drift: a translated
+ * neither: the table, or a translated column, that both snapshots name and the database lacks.
+ * A column neither names is not drift: a translated
  * field deleted from the config leaves its column behind, and the files cannot tell that column
  * from one added by hand.
  *
@@ -31,15 +29,10 @@ import { readFile } from "node:fs/promises";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { earlierCompanionColumnType } from "../../i18n/migration/companion-column-holds";
 import { companionHistoryKey } from "../../i18n/migration/companion-history";
-import { ddlType } from "../../i18n/migration/ddl-types";
 import type { LocalizationMigrationIntent } from "../../i18n/migration/migration-intent";
-import type { LocalizedColumnSpec } from "../../i18n/migration/types";
 import { LOCALIZATION_MIGRATION_MARKER } from "../../i18n/migration/write-migration-file";
-import { columnHolds, declaredSize } from "../pipeline/diff/declared-size";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
-import { normalizeType } from "../pipeline/diff/normalize-type";
 import type {
   ColumnSpec,
   NextlySchemaSnapshot,
@@ -100,59 +93,6 @@ const MAKES_OR_DROPS_TABLE: ReadonlySet<Kind> = new Set<Kind>([
   "disable",
 ]);
 
-/**
- * What each kind of file does to the record of exact column types: a create or an add makes its
- * columns with the field's own type; a move into translation may carry the main column's, so its
- * columns are no longer known exactly; a move out and a disable drop theirs.
- */
-const TYPES_AFTER: Record<
-  Kind,
-  (
-    types: Map<string, LocalizedColumnSpec>,
-    named: readonly LocalizedColumnSpec[]
-  ) => void
-> = {
-  "create-only": record,
-  adds: record,
-  enable: forget,
-  joins: forget,
-  shared: forget,
-  disable: types => types.clear(),
-  archive: () => {},
-  unique: () => {},
-};
-
-function record(
-  types: Map<string, LocalizedColumnSpec>,
-  named: readonly LocalizedColumnSpec[]
-): void {
-  for (const column of named) types.set(column.name, column);
-}
-
-function forget(
-  types: Map<string, LocalizedColumnSpec>,
-  named: readonly LocalizedColumnSpec[]
-): void {
-  for (const column of named) types.delete(column.name);
-}
-
-/** The exact column types the applied companion files record, by entity then column. */
-function exactTypes(
-  applied: readonly CompanionFileRef[]
-): Map<string, Map<string, LocalizedColumnSpec>> {
-  const byEntity = new Map<string, Map<string, LocalizedColumnSpec>>();
-  for (const file of applied.filter(hasIntent)) {
-    const key = keyOf(file.localization);
-    const types = byEntity.get(key) ?? new Map<string, LocalizedColumnSpec>();
-    TYPES_AFTER[file.localization.kind](types, file.localization.spec.columns);
-    // After a rename the names the earlier headers recorded types under are no longer the
-    // columns', and no header says which moved.
-    if (renamesColumn(file)) types.clear();
-    byEntity.set(key, types);
-  }
-  return byEntity;
-}
-
 /** The snapshot of the last of `files` that has one, or null when none has. */
 async function lastSnapshot(
   files: readonly CompanionFileRef[],
@@ -170,69 +110,19 @@ type SnapshotOf = (
   name: string
 ) => Promise<{ snapshot: NextlySchemaSnapshot } | null>;
 
-/**
- * Whether `live` holds what a file made the column to hold: the type it gave it or a wider one,
- * or the type an earlier release gave it. SQLite enforces no size, so there none decides.
- */
-function holds(
-  live: ColumnSpec,
-  recorded: LocalizedColumnSpec,
-  dialect: SupportedDialect
-): boolean {
-  const wanted = ddlType(recorded, dialect);
-  const earlier = earlierCompanionColumnType(wanted, dialect);
-  return (
-    columnHolds(
-      live,
-      { name: live.name, type: wanted, nullable: true },
-      { sizes: dialect !== "sqlite" }
-    ) ||
-    (earlier !== undefined &&
-      normalizeType(live.type) === normalizeType(earlier))
-  );
-}
-
-/** A live column's definition as a drift line says it: its type, its size, and NOT NULL. */
-function definitionOf(column: ColumnSpec): string {
-  const size = declaredSize(column);
-  const type =
-    size === undefined || column.type.includes("(")
-      ? column.type
-      : `${column.type}(${size})`;
-  return column.nullable ? type : `${type} NOT NULL`;
-}
-
-/**
- * How the real table's columns fall short of the ones both snapshots name, as drift items: each
- * such column that is not there, or holds narrower than its file made it.
- */
-function differences(args: {
+/** The columns among `names` the real table lacks, as drift items. */
+function missingColumns(args: {
   table: string;
   /** The columns both the last applied and the newest pending snapshot name. */
   names: readonly string[];
-  types: ReadonlyMap<string, LocalizedColumnSpec> | undefined;
   live: readonly ColumnSpec[];
   /** The columns a file not yet applied adds. */
   leftToFiles: ReadonlySet<string>;
-  dialect: SupportedDialect;
 }): DriftItem[] {
-  const { table, names, types, live, leftToFiles, dialect } = args;
-  const byName = new Map(live.map(column => [column.name, column]));
-  const items: DriftItem[] = [];
-  for (const name of names) {
-    if (leftToFiles.has(name)) continue;
-    const column = byName.get(name);
-    const recorded = types?.get(name);
-    if (column === undefined) {
-      items.push({ kind: "-", detail: `column ${table}.${name}` });
-    } else if (recorded !== undefined && !holds(column, recorded, dialect)) {
-      items.push({
-        kind: "?",
-        detail: `column ${table}.${name} is ${definitionOf(column)}, and its migration file made it ${ddlType(recorded, dialect)}`,
-      });
-    }
-  }
-  return items;
+  const there = new Set(args.live.map(column => column.name));
+  return args.names
+    .filter(name => !args.leftToFiles.has(name) && !there.has(name))
+    .map(name => ({ kind: "-", detail: `column ${args.table}.${name}` }));
 }
 
 /** One entity's companion files not yet applied, in the order they run. */
@@ -264,11 +154,9 @@ function judge(args: {
   before: TableSpec | undefined;
   /** The main table as the newest pending snapshot records it: `before`, where none is pending. */
   after: TableSpec | undefined;
-  types: ReadonlyMap<string, LocalizedColumnSpec> | undefined;
   live: readonly ColumnSpec[] | undefined;
-  dialect: SupportedDialect;
 }): Verdict {
-  const { entity, before, after, types, live, dialect } = args;
+  const { entity, before, after, live } = args;
   const [first] = entity.files;
   if (first === undefined) return { kind: "matches" };
   const table = first.localization.spec.companionTable;
@@ -308,10 +196,9 @@ function judge(args: {
     };
   }
   const named = new Set(after.localizedColumns);
-  const items = differences({
+  const items = missingColumns({
     table,
     names: before.localizedColumns.filter(name => named.has(name)),
-    types,
     live,
     leftToFiles: new Set(
       entity.files
@@ -320,7 +207,6 @@ function judge(args: {
           file.localization.spec.columns.map(column => column.name)
         )
     ),
-    dialect,
   });
   return items.length === 0 ? { kind: "matches" } : { kind: "drift", items };
 }
@@ -396,7 +282,6 @@ export async function checkCompanionFiles(args: {
 
   const before = await lastSnapshot(args.applied, args.snapshotOf);
   const after = (await lastSnapshot(args.pending, args.snapshotOf)) ?? before;
-  const types = exactTypes(args.applied);
   const tables = entities.flatMap(entity =>
     entity.files.slice(0, 1).map(file => file.localization.spec.companionTable)
   );
@@ -409,10 +294,8 @@ export async function checkCompanionFiles(args: {
       entity,
       before: before?.tables.find(table => table.name === spec.mainTable),
       after: after?.tables.find(table => table.name === spec.mainTable),
-      types: types.get(entity.key),
       live: live.tables.find(table => table.name === spec.companionTable)
         ?.columns,
-      dialect: args.dialect,
     });
     const notAsserted = whyNotAsserted(spec.companionTable, ofNoRecord);
     const verdict: Verdict =

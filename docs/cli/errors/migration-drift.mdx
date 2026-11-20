@@ -13,6 +13,7 @@ Before it runs a migration, `nextly migrate` compares the database with the stat
 
 - Pick one of the recoveries the Next line lists: sync the database to your config, mark the migration applied if you ran it by hand, or capture the difference in a new migration.
 - [Production migrations](/docs/guides/production-migrations) explains each.
+- When the message names a translations table (`<table>_locales`), the file is one `migrate:create` wrote for a translated collection, and the three recoveries above do not apply to it. A column or the table itself that the migrations record is missing from the database. Put back what the drift lines say is missing and run `nextly migrate` again. If a column was removed on purpose, remove its field from your config, run `nextly migrate:create`, then `nextly migrate`.
 
 ## Example
 
