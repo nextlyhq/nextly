@@ -686,6 +686,8 @@ export interface EntityTypeChangeInput {
   componentRow?: boolean;
   /** The fields whose lost values the owner consented to clearing, by name. */
   acknowledged?: ReadonlySet<string>;
+  /** Fields whose change another check answers for, by their new name: not judged here. */
+  ignore?: ReadonlySet<string>;
 }
 
 /**
@@ -705,7 +707,7 @@ export async function fieldTypeChangeRefusals(
     dialect,
     builtBy: entity.builtBy,
     ...(entity.componentRow === true ? { componentRow: true } : {}),
-  });
+  }).filter(change => entity.ignore?.has(change.to.name) !== true);
   if (changes.length === 0) return [];
   const pending =
     entity.migrationStatus === undefined

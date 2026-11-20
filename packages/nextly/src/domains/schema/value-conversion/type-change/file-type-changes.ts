@@ -360,6 +360,18 @@ function entityTypeChange(args: {
     at,
   });
   if (changes.length === 0 && unread.length === 0) return [];
+  // A relationship whose storage changes shape is the file's own to answer for: its statements
+  // carry the guard that refuses a held link and the conversion that carries one (a reference list's
+  // or a translated relation's), each with its own message on every database, which run first.
+  const relationsShaped = new Set(
+    changes
+      .filter(
+        change =>
+          change.fromType.relation !== undefined ||
+          change.toType.relation !== undefined
+      )
+      .map(change => change.to.name)
+  );
   return [
     {
       kind,
@@ -377,6 +389,7 @@ function entityTypeChange(args: {
         previous,
         next,
         ...(renamed.size > 0 ? { renamed } : {}),
+        ...(relationsShaped.size > 0 ? { ignore: relationsShaped } : {}),
         ...at,
       },
     },

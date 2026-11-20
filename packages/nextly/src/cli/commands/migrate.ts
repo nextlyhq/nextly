@@ -286,6 +286,10 @@ import {
   newestAppliedAppMigration,
   writeRegistryRows,
 } from "../../domains/schema/schema-version";
+import {
+  fileTypeChangeRefusals,
+  refuseFileTypeChanges,
+} from "../../domains/schema/value-conversion/type-change/file-type-changes";
 import { provisionUserFieldStorage } from "../../domains/users/services/provision-user-field-storage";
 import { UserExtSchemaService } from "../../domains/users/services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
@@ -1592,6 +1596,16 @@ export async function previewMigrate(args: {
     logger,
     pendingModules.length > 0
   );
+  // The field type changes of the first change a real run applies, judged as the run judges them:
+  // only the first, since nothing before a later one is run here.
+  if (pendingFiles.length > 0 && pendingModules.length === 0) {
+    await previewFileTypeChanges(
+      listed.map(({ file }) => file),
+      pendingFiles[0],
+      { db, dialect, metaDir: resolve(args.migrationsDir, "meta") },
+      logger
+    );
+  }
   // The translations tables deleted entities left, which a real run judges with its files'
   // deletions and drops under the consent: listed as it lists them, with the consent it needs.
   const leftovers = await leftoverTranslationsOf(
@@ -1882,6 +1896,29 @@ function previewPendingFile(
   // (`MIGRATION_NOT_PROVEN`); one that finds it at neither end refuses it for drift. Neither is
   // previewed: both depend on where the live schema stands.
   logger.info(`    UP, as written in the file:\n${m.upSql.trim()}`);
+}
+
+/**
+ * What a real run would refuse of the change `first` begins, by its field type changes
+ * (`fileTypeChangeRefusals`), judged after the newest snapshot before it, as the run judges it.
+ */
+async function previewFileTypeChanges(
+  files: readonly ParsedMigration[],
+  first: ParsedMigration,
+  args: { db: unknown; dialect: SupportedDialect; metaDir: string },
+  logger: Pick<CommandContext["logger"], "info">
+): Promise<void> {
+  const at = files.indexOf(first);
+  if (at < 0) return;
+  const change = await changeFilesFrom(files, at, args.metaDir);
+  if (change === null) return;
+  const before = await newestSnapshotBefore(files, at, args.metaDir);
+  for (const refusal of await fileTypeChangeRefusals(
+    args.db,
+    change.source(before, args.dialect)
+  )) {
+    logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
+  }
 }
 
 /** A unit's deletions as the dry run lists them, with the consent a real run needs; nothing when none. */
@@ -4831,6 +4868,57 @@ async function refusePendingFilesTheServerCannotHold(args: {
   }
 }
 
+/**
+ * The files one change between two snapshots is written in, from `files[at]`: the files with no
+ * snapshot of their own that `migrate:create` writes ahead of the change's own file (a translated
+ * field's moves and renames among them), and that file, whose snapshot records the change. Null
+ * where no file from `at` on has a snapshot: a hand-written file states no field types.
+ */
+async function changeFilesFrom(
+  files: readonly ParsedMigration[],
+  at: number,
+  metaDir: string
+): Promise<{
+  files: readonly ParsedMigration[];
+  /** What `refuseFileTypeChanges` is asked with, judged after the change `before` records. */
+  source: (
+    before: SnapshotFile | null,
+    dialect: SupportedDialect
+  ) => Parameters<typeof refuseFileTypeChanges>[1];
+} | null> {
+  for (let end = at; end < files.length; end += 1) {
+    const target = await loadTargetSnapshot(metaDir, files[end].name);
+    if (target === null) continue;
+    const written = files.slice(at, end + 1);
+    return {
+      files: written,
+      source: (before, dialect) => ({
+        filename: `${files[end].name}.sql`,
+        before: before?.entities,
+        target: target.entities,
+        statements: written.flatMap(file =>
+          splitSqlStatements(file.upSql, dialect, file)
+        ),
+        dialect,
+      }),
+    };
+  }
+  return null;
+}
+
+/** The newest snapshot of a file before `files[at]`, or null where none before it has one. */
+async function newestSnapshotBefore(
+  files: readonly ParsedMigration[],
+  at: number,
+  metaDir: string
+): Promise<SnapshotFile | null> {
+  for (let i = at - 1; i >= 0; i -= 1) {
+    const snapshot = await loadTargetSnapshot(metaDir, files[i].name);
+    if (snapshot !== null) return snapshot;
+  }
+  return null;
+}
+
 async function loadTargetSnapshot(
   metaDir: string,
   name: string
@@ -5193,8 +5281,11 @@ export async function runFileMigrations(args: {
   // not wrapped in a transaction, or any file on MySQL, where DDL commits as it runs. A lost lock
   // names it, since the database may then stand part-way through it.
   let running: string | undefined;
+  // The last file of the newest change whose field type changes were judged: each change is judged
+  // once, at its first file, before any of its files runs.
+  let judgedThrough = -1;
   try {
-    for (const m of all) {
+    for (const [index, m] of all.entries()) {
       const filename = `${m.name}.sql`;
       running = undefined;
       const targetFile = await loadTargetSnapshot(metaDir, m.name);
@@ -5259,6 +5350,17 @@ export async function runFileMigrations(args: {
       // A column made unique while its entries repeat a value: refused here too, before any
       // statement, where MySQL would otherwise keep every statement before the index's.
       await refuseUniqueIndexesOverRepeats(db, dialect, upStatements, filename);
+      // A field type change is judged over the values its column holds here, as a Schema Builder
+      // save judges it, once per change and before the first of the change's files runs, while
+      // every old column still holds its values: a value the new type cannot read refuses the run
+      // before any statement, naming the field, its rows and the file (`refuseFileTypeChanges`).
+      if (index > judgedThrough) {
+        const change = await changeFilesFrom(all, index, metaDir);
+        if (change !== null) {
+          judgedThrough = index + change.files.length - 1;
+          await refuseFileTypeChanges(db, change.source(beforeFile, dialect));
+        }
+      }
       // A file adding per-language unique indexes is refused here, before the ledger records an
       // attempt and before any statement, where one cannot hold. It also answers with the UP to
       // run on THIS database, which leaves out an index already installed here.
