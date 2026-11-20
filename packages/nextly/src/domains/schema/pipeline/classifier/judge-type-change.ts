@@ -77,6 +77,11 @@ export interface FieldReadings {
    * or by a single-column unique index its entity declares.
    */
   unique?: true;
+  /**
+   * For each unique index of several columns the column is one of, the index's other columns: the
+   * values that, beside this column's, the index holds once.
+   */
+  uniqueWith?: readonly (readonly string[])[];
 }
 
 /** One offered type change, judged from the rows its column holds. */
@@ -159,7 +164,8 @@ function fieldReadingsOf(
   table: string,
   field: FieldDefinition | undefined,
   dialect: SupportedDialect,
-  unique: boolean
+  unique: boolean,
+  uniqueWith: readonly (readonly string[])[]
 ): FieldReadings | undefined {
   if (dialect !== "sqlite" || field === undefined) return undefined;
   const owner = ownerOf(schema, table);
@@ -172,6 +178,7 @@ function fieldReadingsOf(
     builtBy: builtByFor(owner.kind, owner.e.builderOwned),
     ...(owner.kind === "fieldGroup" ? { componentRow: true as const } : {}),
     ...(unique ? { unique: true as const } : {}),
+    ...(uniqueWith.length > 0 ? { uniqueWith } : {}),
   };
 }
 
@@ -226,7 +233,8 @@ async function fieldVerdict(
   db: unknown,
   dialect: SupportedDialect,
   table: string,
-  readings: FieldReadings
+  readings: FieldReadings,
+  onReading?: (key: RowKey, readsAs: string) => void
 ): Promise<ColumnVerdict | null> {
   const at = {
     builtBy: readings.builtBy,
@@ -245,17 +253,35 @@ async function fieldVerdict(
       readings.unique === true
         ? { ...change, to: { ...change.to, unique: true } }
         : change
-    );
+    )
+    .map(withoutOwnValidate);
   const [judged] = await judgeFieldTypeChanges({
     db,
     dialect,
     table,
     changes,
     ...at,
+    ...(onReading !== undefined ? { onReading } : {}),
   });
   return judged === undefined
     ? null
     : { judgement: judged.result.judgement, cleared: judged.result.cleared };
+}
+
+/**
+ * `change` with the new field's own `validate` function left out, so the judge asks only the
+ * field's built-in rules of each stored value.
+ *
+ * That function is written for a whole entry and its request: it may read the entry's other
+ * fields, or who is writing. The judge has one stored value and neither, so the function would
+ * answer about an entry that does not exist, and a value it refused there would be cleared under
+ * a consent. It judges the value at the entry's next write, as it does for any rule added to a
+ * field whose type stays.
+ */
+function withoutOwnValidate<C extends { to: FieldDefinition }>(change: C): C {
+  if (typeof change.to.validate !== "function") return change;
+  const { validate: _left, ...to } = change.to;
+  return { ...change, to };
 }
 
 /** The rows a reason names, as one text, so two reasons naming the same rows compare equal. */
@@ -321,11 +347,104 @@ export async function judgeOfferedTypeChange(
   ) {
     return { judgement, cleared };
   }
+  // Each value as the new type reads it, kept only where an index of several columns needs it.
+  const read = new Map<string, { key: RowKey; readsAs: string }>();
   const verdict = worseOf(
     { judgement, cleared },
-    await fieldVerdict(db, dialect, at.table, fieldReadings)
+    await fieldVerdict(
+      db,
+      dialect,
+      at.table,
+      fieldReadings,
+      fieldReadings.uniqueWith === undefined
+        ? undefined
+        : (key, readsAs) => read.set(rowKeyText(key), { key, readsAs })
+    )
   );
-  return withRepeatsToClear(db, dialect, at, verdict, fieldReadings);
+  return withRepeatsAcrossColumns(
+    db,
+    dialect,
+    at,
+    await withRepeatsToClear(db, dialect, at, verdict, fieldReadings),
+    fieldReadings,
+    read
+  );
+}
+
+/** `verdict`, blocked for `repeated`: rows a unique index would hold the same value in twice. */
+function blockedForRepeats(
+  verdict: ColumnVerdict,
+  repeated: readonly RowKey[]
+): ColumnVerdict {
+  if (repeated.length === 0) return verdict;
+  return {
+    judgement: {
+      class: "blocked",
+      reasons: [
+        ...verdict.judgement.reasons,
+        {
+          kind: "repeated",
+          class: reasonClass("repeated"),
+          rows: {
+            first: repeated.slice(0, AFFECTED_ROWS_BOUND),
+            count: repeated.length,
+          },
+        },
+      ],
+    },
+    cleared: verdict.cleared,
+  };
+}
+
+/**
+ * `verdict`, blocked where a unique index of several columns would hold one set of values twice
+ * once this column's are read as the new type: "1" and " 1" are two texts and one number, so two
+ * rows that differ only there become one pair to an index of this column and another.
+ *
+ * SQLite's rebuild copies every value and makes the index after, so such a pair ends the apply
+ * with the column already converted. It is refused before any statement, naming the rows. A row
+ * with no value in one of the index's columns repeats nothing, as the index itself holds.
+ *
+ * @param read each row's value as the new type reads it, by the row's key
+ */
+async function withRepeatsAcrossColumns(
+  db: unknown,
+  dialect: SupportedDialect,
+  at: { table: string; column: string; keyedBy: KeyedBy },
+  verdict: ColumnVerdict,
+  readings: FieldReadings,
+  read: ReadonlyMap<string, { key: RowKey; readsAs: string }>
+): Promise<ColumnVerdict> {
+  const repeated = new Map<string, RowKey>();
+  for (const others of readings.uniqueWith ?? []) {
+    // Each row's values in the index, this column's first; null once any of them is no value.
+    const held = new Map<string, string[] | null>(
+      [...read].map(([row, { readsAs }]) => [row, [readsAs]])
+    );
+    for (const column of others) {
+      for await (const value of readStoredValues(db, dialect, {
+        ...at,
+        column,
+        toJson: false,
+      })) {
+        const row = rowKeyText(value.key);
+        const values = held.get(row);
+        if (values === undefined || values === null) continue;
+        held.set(row, value.text === null ? null : [...values, value.text]);
+      }
+    }
+    const holders = new Map<string, RowKey[]>();
+    for (const [row, values] of held) {
+      const key = read.get(row)?.key;
+      if (values === null || key === undefined) continue;
+      const set = JSON.stringify(values);
+      holders.set(set, [...(holders.get(set) ?? []), key]);
+    }
+    for (const keys of holders.values()) {
+      if (keys.length > 1) keys.forEach(k => repeated.set(rowKeyText(k), k));
+    }
+  }
+  return blockedForRepeats(verdict, [...repeated.values()]);
 }
 
 /**
@@ -353,25 +472,27 @@ async function withRepeatsToClear(
     if (value.text === null || !toClear.has(rowKeyText(value.key))) continue;
     holders.set(value.text, [...(holders.get(value.text) ?? []), value.key]);
   }
-  const repeated = [...holders.values()].filter(keys => keys.length > 1).flat();
-  if (repeated.length === 0) return verdict;
-  return {
-    judgement: {
-      class: "blocked",
-      reasons: [
-        ...verdict.judgement.reasons,
-        {
-          kind: "repeated",
-          class: reasonClass("repeated"),
-          rows: {
-            first: repeated.slice(0, AFFECTED_ROWS_BOUND),
-            count: repeated.length,
-          },
-        },
-      ],
-    },
-    cleared: verdict.cleared,
-  };
+  return blockedForRepeats(
+    verdict,
+    [...holders.values()].filter(keys => keys.length > 1).flat()
+  );
+}
+
+/**
+ * The other columns of each unique index of several columns that `column` of `table` is one of.
+ * An index over part of the table's rows is left out: which rows it holds is the database's to say.
+ */
+function indexedWith(table: TableSpec, column: string): string[][] {
+  const same = (name: string) => name.toLowerCase() === column.toLowerCase();
+  return (table.indexes ?? [])
+    .filter(
+      index =>
+        index.unique &&
+        index.where === undefined &&
+        index.columns.length > 1 &&
+        index.columns.some(same)
+    )
+    .map(index => index.columns.filter(name => !same(name)));
 }
 
 /**
@@ -412,7 +533,8 @@ export function typeChangeJudge(args: {
       op.tableName,
       field,
       args.dialect,
-      isUnique(op.tableName, op.columnName)
+      isUnique(op.tableName, op.columnName),
+      indexedWith(expectedTable, expected.name)
     );
     const { judgement, cleared } = await judgeOfferedTypeChange(
       args.db,

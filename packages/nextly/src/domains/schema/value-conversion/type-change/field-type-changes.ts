@@ -172,6 +172,11 @@ export async function judgeFieldTypeChanges(args: {
   /** The names of the fields kept per language after the save: none where absent. */
   translatedAfter?: ReadonlySet<string>;
   changes: readonly FieldTypeChange[];
+  /**
+   * Handed each kept or changed value as the new type reads it, with its row: for a caller that
+   * compares the readings itself. It changes nothing of the judgement.
+   */
+  onReading?: (key: RowKey, readsAs: string) => void;
 }): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
   const columnsOf = liveColumnReader(args.db, args.dialect);
@@ -202,8 +207,13 @@ export async function judgeFieldTypeChanges(args: {
       accepts: fieldAccepts(change.toType, change.to),
       // A unique field holds each value once: two that read as one value of the new type block.
       unique: change.to.unique === true && !collated,
-      ...(collated
-        ? { onReading: (key, readsAs) => readings.push({ key, readsAs }) }
+      ...(collated || args.onReading !== undefined
+        ? {
+            onReading: (key, readsAs) => {
+              if (collated) readings.push({ key, readsAs });
+              args.onReading?.(key, readsAs);
+            },
+          }
         : {}),
     });
     const result =
