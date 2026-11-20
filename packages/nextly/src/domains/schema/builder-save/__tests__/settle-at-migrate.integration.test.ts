@@ -2,9 +2,10 @@
  * `nextly migrate` settles a Builder save left part-way before its run, and the commands that
  * cannot settle one refuse while it stands.
  *
- * A save is left part-way here as a stopped process leaves it: the save runs, and its record (the
- * row and the project's marker) is kept where its end would clear it. A save made outside
- * development (`NODE_ENV=test`) writes its files and its definition and applies none of them.
+ * A save made outside development is left here as its process leaves it when stopped after its
+ * last write: its definition written, its migration files and snapshots written from it (as
+ * `migrate:create` writes them, and as the save writes them), none applied, and its record (the
+ * row and the project's marker) standing.
  *
  * - `nextly migrate` judges a save made outside development by its files: whole files run; a save
  *   stopped before its definition has its own unapplied files withdrawn; a file this database has
@@ -18,13 +19,14 @@
  */
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +37,7 @@ import { runMigrateCheck } from "../../../../cli/commands/migrate-check";
 import { runMigrateCreate } from "../../../../cli/commands/migrate-create";
 import type { CommandContext } from "../../../../cli/program";
 import { createLogger } from "../../../../cli/utils/logger";
+import { serializeUiSchema } from "../../../../cli/utils/ui-schema-writer";
 import { defineConfig } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
@@ -53,20 +56,8 @@ import { MetaService } from "../../../meta/services/meta-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { recordAlreadyApplied } from "../../migrate/drift-reconcile";
 import { setNonInteractive } from "../../migrate/can-prompt";
+import { newestSnapshotName } from "../../migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
-
-/** Whether a save's record is kept where its end would clear it, as a stopped process leaves it. */
-const keep = vi.hoisted(() => ({ records: false }));
-
-// The record's marker is removed through `rm`: kept while a case leaves the save part-way.
-vi.mock("node:fs/promises", async importOriginal => {
-  const real = await importOriginal<typeof import("node:fs/promises")>();
-  const rm: typeof real.rm = async (path, options) => {
-    if (keep.records && String(path).includes("save-in-progress")) return;
-    return real.rm(path, options);
-  };
-  return { ...real, rm, default: { ...real, rm } };
-});
 
 /** The configuration the commands load: the project the instance runs. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -104,7 +95,6 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  keep.records = false;
   vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
@@ -174,43 +164,52 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /**
-     * A save adding `alpha`, left part-way: its record kept as a stopped process leaves it. Made
-     * outside development where `applies` is false, so it writes its files and its definition and
-     * applies none of them.
+     * A save adding `alpha` made outside development, stopped after its last write: its
+     * definition and its files written, none applied, its record and marker standing.
      */
     async function leftSave(
-      t: TestNextly,
-      applies: boolean
-    ): Promise<{ written: string[]; before: string | null; after: string }> {
-      const before = definitionText();
+      t: TestNextly
+    ): Promise<{ written: string[]; before: string; after: string }> {
+      const before = definitionText() ?? "";
       const filesBefore = sqlFiles();
-      if (!applies) vi.stubEnv("NODE_ENV", "test");
-      keep.records = true;
-      const realDelete = MetaService.prototype.delete;
-      vi.spyOn(MetaService.prototype, "delete").mockImplementation(
-        async function (this: MetaService, key: string) {
-          if (keep.records && key.startsWith("builder-save-in-progress:")) {
-            return;
-          }
-          return realDelete.call(this, key);
-        }
-      );
-      await dispatchSingles(
-        "applySingleSchemaChanges",
-        { slug: SLUG },
-        {
-          fields: [text("heading"), text("alpha")],
-          confirmed: true,
-          schemaVersion: await versionOf(t),
-        }
-      ).catch((error: unknown) => error);
-      keep.records = false;
-      vi.mocked(MetaService.prototype.delete).mockRestore();
-      vi.stubEnv("NODE_ENV", "development");
+      const startedFrom =
+        (await newestSnapshotName(join(historyDir(), "meta"))) ?? null;
+      const manifest = JSON.parse(before) as {
+        singles: Array<{ slug: string; fields: Field[] }>;
+      };
+      const single = manifest.singles.find(each => each.slug === SLUG);
+      single?.fields.push(text("alpha"));
+      const after = serializeUiSchema(manifest as never);
+      writeFileSync(join(basePath, DEFINITION), after);
+      setNonInteractive(true);
+      const created = await command(context =>
+        runMigrateCreate("hero_alpha", { cwd: basePath }, context)
+      ).finally(() => setNonInteractive(false));
+      expect(created.code, created.said).toBeUndefined();
       const written = sqlFiles().filter(name => !filesBefore.includes(name));
-      expect(written.length, "the save wrote its files").toBeGreaterThan(0);
-      expect(await recordRow(t), "the save's record").toBeDefined();
-      return { written, before, after: definitionText() ?? "" };
+      expect(written.length, "the save's files").toBeGreaterThan(0);
+      const record = {
+        id: "a-save-made-outside-development",
+        kind: "single",
+        slug: SLUG,
+        startedAt: new Date().toISOString(),
+        host: hostname(),
+        database: "unknown",
+        definitionFile: DEFINITION.replace(/^\.\//, ""),
+        definitionBefore: before,
+        definitionAfter: after,
+        startedFrom,
+        files: written,
+        applies: false,
+      };
+      await new MetaService(t.adapter, consoleLogger).set(RECORD_KEY, record);
+      const folder = join(basePath, ".nextly", "save-in-progress");
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(
+        join(folder, `single-${SLUG}-${record.id}.json`),
+        JSON.stringify(record)
+      );
+      return { written, before, after };
     }
 
     async function recordRow(t: TestNextly): Promise<unknown> {
@@ -303,7 +302,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("runs the whole files of a save made outside development, and clears its record", async () => {
       const t = await boot();
-      const { written } = await leftSave(t, false);
+      const { written } = await leftSave(t);
       expect(await liveColumns(t)).not.toContain("alpha");
 
       const run = await migrate();
@@ -319,7 +318,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("withdraws the files of a save made outside development stopped before its definition", async () => {
       const t = await boot();
-      const { written, before } = await leftSave(t, false);
+      const { written, before } = await leftSave(t);
       // As a save stopped before its definition leaves it: the definition it found.
       writeFileSync(join(basePath, DEFINITION), before ?? "");
 
@@ -334,7 +333,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("never removes a file this database has applied, and refuses the run", async () => {
       const t = await boot();
-      const { written, before } = await leftSave(t, false);
+      const { written, before } = await leftSave(t);
       writeFileSync(join(basePath, DEFINITION), before ?? "");
       // One of its files recorded applied here, as a run before this one could have left it.
       await recordAlreadyApplied(
@@ -354,7 +353,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("settles a development save stopped before its file ran, then runs", async () => {
       const t = await boot();
-      const { written, before } = await leftSave(t, false);
+      const { written, before } = await leftSave(t);
       // As a development save stopped after writing its files, before they ran.
       await setRecord(t, { applies: true });
 
@@ -369,7 +368,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses before its first file while another machine's applying save is left", async () => {
       const t = await boot();
-      const { written } = await leftSave(t, false);
+      const { written } = await leftSave(t);
       await setRecord(t, { applies: true, host: "another-machine" });
 
       const run = await migrate();
@@ -384,9 +383,11 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses a production start that migrates, leaving the files and the definition as they are", async () => {
       const t = await boot();
-      const { written, after } = await leftSave(t, false);
+      const { written, after } = await leftSave(t);
       const files = sqlFiles();
       vi.stubEnv("NODE_ENV", "production");
+      // A production start reads the project from its own folder.
+      vi.spyOn(process, "cwd").mockReturnValue(basePath);
       const logged: string[] = [];
       const logger = {
         info: () => undefined,
@@ -426,7 +427,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses migrate:check and migrate:create on this machine's marker", async () => {
       const t = await boot();
-      await leftSave(t, false);
+      await leftSave(t);
       expect(markers().length, "the record's marker").toBeGreaterThan(0);
 
       const checked = await command(context =>
