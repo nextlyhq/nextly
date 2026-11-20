@@ -25,8 +25,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { CliError } from "../../../cli/errors";
 import { databaseBehindMigrations } from "../../../cli/errors/areas/migrations";
+import type { FieldGroupNaming } from "../../field-groups/services/field-group-storage-names";
 import {
   parseSnapshotFile,
+  snapshotFieldGroupNaming,
   SnapshotFileError,
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
@@ -53,6 +55,11 @@ export interface MissingFromDatabase {
 export interface AppliedSnapshot {
   migration: string;
   snapshot: NextlySchemaSnapshot;
+  /**
+   * The field-group names the snapshot records its point of the history on: an app snapshot's,
+   * which `appliedSnapshotsOf` reads. Absent reads as legacy.
+   */
+  fieldGroupNaming?: FieldGroupNaming;
   /**
    * The tables in `snapshot` another owner declares (a plugin's, Nextly's),
    * held for the columns the app contributed to them: never named missing
@@ -238,6 +245,7 @@ export async function appliedSnapshotsOf(
       );
       applied.push({
         migration: name.replace(/\.snapshot\.json$/, ""),
+        fieldGroupNaming: snapshotFieldGroupNaming(file),
         ...appOwnedTables(file),
       });
     } catch (error) {

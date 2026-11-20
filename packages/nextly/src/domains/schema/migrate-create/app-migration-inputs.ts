@@ -28,6 +28,7 @@ import {
   type FieldGroupStorageNames,
 } from "../../field-groups/services/field-group-storage-names";
 import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import {
   judgeBuilderDefinitions,
   readBuilderDefinitions,
@@ -51,6 +52,7 @@ import { assertMigrationSiblingFields } from "./sibling-fields";
 import {
   EMPTY_SNAPSHOT,
   loadLatestSnapshot,
+  snapshotFieldGroupNaming,
   type LatestSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
@@ -117,8 +119,8 @@ export interface AppMigrationInputsArgs {
   /**
    * The naming the site's field-group storage is on (`field-group-storage-names`): the table each
    * field group is generated under, and the registry its Builder row is upserted into. A Builder
-   * save reads it from the database it writes to. Absent, the legacy names, which every migration
-   * history this release writes is on.
+   * save reads it from the database it writes to. Absent, the latest snapshot's naming (legacy where the
+   * folder has none), so every offline command follows the history.
    */
   fieldGroupNaming?: FieldGroupNaming;
   /**
@@ -143,6 +145,12 @@ export interface AppMigrationInputs {
    * of it: `generateMigration` is handed this (`GenerateArgs.previous`).
    */
   latest: LatestSnapshot | null;
+  /**
+   * The field-group names `components` were resolved under: the caller's, else the latest
+   * snapshot's. Passed on to `generateMigration`, which records it and refuses one that differs
+   * from the history's.
+   */
+  fieldGroupNaming: FieldGroupNaming;
   /** Whether there is nothing a migration could be generated from (`nothingToGenerate`). */
   nothing: boolean;
 }
@@ -189,8 +197,24 @@ export async function appMigrationInputs(
     ...(input.manifest === undefined ? {} : { manifest: input.manifest }),
     logger,
   });
+  // A project made from a template starts from the template's older-format
+  // snapshot, read as the tables its listed entities were made with. Field
+  // groups play no part in that start, so it is read before their names are.
+  const latest = await loadLatestSnapshot(
+    resolve(input.migrationsDir, "meta"),
+    templateStartFor({
+      collections: definitions.merged.collections,
+      singles: definitions.merged.singles,
+      plugins: config.plugins,
+      dialect,
+    })
+  );
+  // The names the history keeps field groups under, unless the caller read the site's own: a
+  // history moved to the current names generates every group there, and `generateMigration`
+  // refuses a caller's naming that differs from the history's (`refuseNamingAgainstHistory`).
+  const fieldGroupNaming = namingOfInputs(input.fieldGroupNaming, latest);
   // Each field group under the table it is stored in on this site (`withFieldGroupTables`).
-  const fieldGroupNames = storageNamesFor(input.fieldGroupNaming ?? "legacy");
+  const fieldGroupNames = storageNamesFor(fieldGroupNaming);
   const merged = withFieldGroupTables(
     definitions.merged,
     fieldGroupNames,
@@ -217,20 +241,7 @@ export async function appMigrationInputs(
   // but extension schema. Taking that early return first meant an
   // extension-only configuration wrote no migration at all and production
   // never received the table.
-  //
-  // A project made from a template starts from the template's older-format
-  // snapshot, read as the tables its listed entities were made with.
-  const latest = await loadLatestSnapshot(
-    resolve(input.migrationsDir, "meta"),
-    templateStartFor({
-      collections,
-      singles,
-      plugins: config.plugins,
-      dialect,
-    })
-  );
-
-  // The definitions judged against that snapshot, as `migrate:check` judges
+  // The definitions judged against the latest snapshot, as `migrate:check` judges
   // them: a Builder entity the file lost (the drop below would take its
   // table), then each relationship's target. A save writing one entity's
   // migration judges that entity's relationships alone, and no loss
@@ -287,24 +298,17 @@ export async function appMigrationInputs(
     // Each field group under the table the entities above name, so a contribution to it attaches
     // to the same physical table in both streams. Only where the caller said where groups are
     // stored; otherwise both streams derive the same names, as before.
-    ...(input.fieldGroupNaming === undefined &&
-    input.fieldGroupTables === undefined
+    ...(fieldGroupNaming === "legacy" && input.fieldGroupTables === undefined
       ? {}
       : {
           fieldGroupTables: new Map(
             components.map(component => [component.slug, component.tableName])
           ),
-          // And the discriminator each holds as the newest migration recorded it
-          // (`chooseTypeColumns`: a table no migration made yet takes its name's).
-          fieldGroupTypeColumns: chooseTypeColumns(
-            (latest?.data.snapshot.tables ?? []).map(table => ({
-              table: table.name,
-              columns: table.columns.map(column => column.name),
-            })),
-            components.map(component => component.tableName),
-            dialect === "mysql"
-              ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
-              : identifierCaseRules({ dialect })
+          // And the discriminator each holds as the newest migration recorded it.
+          fieldGroupTypeColumns: recordedTypeColumns(
+            latest?.data.snapshot,
+            components,
+            dialect
           ),
         }),
   });
@@ -342,6 +346,7 @@ export async function appMigrationInputs(
     previousMetadataUpserts,
     appStream,
     latest,
+    fieldGroupNaming,
     nothing,
   };
 }
@@ -446,7 +451,9 @@ export function nothingToGenerate(input: {
  * these names, except for a row an earlier release created under the other naming, which `stored`
  * names.
  */
-function withFieldGroupTables<T extends { components: MinimalConfigEntity[] }>(
+export function withFieldGroupTables<
+  T extends { components: MinimalConfigEntity[] },
+>(
   merged: T,
   names: FieldGroupStorageNames,
   stored: ReadonlyMap<string, string> | undefined
@@ -534,4 +541,39 @@ function builderEntriesOf(record: EntitySettingsRecord | undefined): {
     singles: of(record?.singles),
     components: of(record?.fieldGroups),
   };
+}
+
+/**
+ * The names `appMigrationInputs` resolves field groups under: the caller's, else the latest
+ * snapshot's (the history's), else legacy where the folder has none.
+ */
+function namingOfInputs(
+  requested: FieldGroupNaming | undefined,
+  latest: LatestSnapshot | null
+): FieldGroupNaming {
+  if (requested !== undefined) return requested;
+  return latest === null ? "legacy" : snapshotFieldGroupNaming(latest.data);
+}
+
+/**
+ * The discriminator each field group's table holds as the newest migration recorded it
+ * (`chooseTypeColumns`): `_field_group_type` on a table the history moved to the current names,
+ * and a table no migration made yet takes its name's. What the app stream compiles a contribution
+ * to a field group against, for `migrate:create` and `migrate:check` alike.
+ */
+export function recordedTypeColumns(
+  snapshot: NextlySchemaSnapshot | undefined,
+  components: readonly Pick<MinimalConfigEntity, "tableName">[],
+  dialect: SupportedDialect
+): ReadonlyMap<string, string> {
+  return chooseTypeColumns(
+    (snapshot?.tables ?? []).map(table => ({
+      table: table.name,
+      columns: table.columns.map(column => column.name),
+    })),
+    components.map(component => component.tableName),
+    dialect === "mysql"
+      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+      : identifierCaseRules({ dialect })
+  );
 }

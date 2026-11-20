@@ -13,6 +13,7 @@ import {
   newestSnapshotName,
   parseSnapshotFile,
   SnapshotFileError,
+  snapshotFieldGroupNaming,
   snapshotPathOf,
   verifyMigrationHash,
   writeSnapshot,
@@ -184,6 +185,71 @@ describe("snapshot-io", () => {
       expect(parsed.migrationHash).toMatch(/^[a-f0-9]{64}$/);
       expect(parsed.migrationHash).toBe(computeMigrationHash(sqlContent));
       expect(parsed.snapshot.tables[0].name).toBe("dc_posts");
+    });
+
+    // A history on the legacy field-group names is written exactly as before the record existed.
+    it("writes a legacy snapshot byte for byte as before the field-group naming record", async () => {
+      const snapshot = {
+        tables: [
+          {
+            name: "comp_card",
+            columns: [
+              { name: "_component_type", type: "text", nullable: true },
+            ],
+          },
+        ],
+      };
+      const sql = "SELECT 1;";
+      const unnamed = await readFile(
+        await writeSnapshot(metaDir, "20260101_000000_000_a", snapshot, sql),
+        "utf-8"
+      );
+      const named = await readFile(
+        await writeSnapshot(
+          metaDir,
+          "20260101_000000_000_b",
+          snapshot,
+          sql,
+          {},
+          undefined,
+          undefined,
+          undefined,
+          "legacy"
+        ),
+        "utf-8"
+      );
+      expect(named).toBe(unnamed);
+      const parsed = JSON.parse(named) as Record<string, unknown>;
+      expect(parsed.version).toBe(1);
+      expect(parsed).not.toHaveProperty("fieldGroupStorage");
+      expect(snapshotFieldGroupNaming(parseSnapshotFile(named, "a"))).toBe(
+        "legacy"
+      );
+    });
+
+    // An older CLI refuses any version but 1 ("upgrade your CLI"), so it stops at a history on the
+    // current names instead of planning to drop each fg_ table and create its comp_ twin.
+    it("writes a snapshot on the current field-group names as version 2, which an older CLI refuses", async () => {
+      const raw = await readFile(
+        await writeSnapshot(
+          metaDir,
+          "20260101_000000_000_c",
+          { tables: [] },
+          "SELECT 1;",
+          {},
+          undefined,
+          undefined,
+          undefined,
+          "current"
+        ),
+        "utf-8"
+      );
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      expect(parsed.version).toBe(2);
+      expect(parsed.fieldGroupStorage).toBe("current");
+      expect(snapshotFieldGroupNaming(parseSnapshotFile(raw, "c"))).toBe(
+        "current"
+      );
     });
 
     // Every declared permission, by owner, travels in the snapshot so it alone says what they were;
@@ -436,7 +502,35 @@ describe("snapshot-io", () => {
       ).toThrow(/expected version: 1/);
     });
 
-    it("throws on wrong version (e.g. future v2 snapshot)", () => {
+    it("throws on a version it does not know (e.g. a future v3 snapshot)", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 3,
+            migrationHash: VALID_HASH,
+            snapshot: { tables: [] },
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/expected version: 1 or 2, got 3\. .*upgrade your CLI/);
+    });
+
+    // The field-group naming record and the version go together, so a file whose two disagree
+    // was edited by hand and is refused rather than read by either one.
+    it("accepts a version 2 snapshot on the current field-group names", () => {
+      const parsed = parseSnapshotFile(
+        JSON.stringify({
+          version: 2,
+          fieldGroupStorage: "current",
+          migrationHash: VALID_HASH,
+          snapshot: { tables: [] },
+        }),
+        "test.snapshot.json"
+      );
+      expect(snapshotFieldGroupNaming(parsed)).toBe("current");
+    });
+
+    it("refuses a version 2 snapshot that does not say it is on the current names", () => {
       expect(() =>
         parseSnapshotFile(
           JSON.stringify({
@@ -446,7 +540,35 @@ describe("snapshot-io", () => {
           }),
           "test.snapshot.json"
         )
-      ).toThrow(/expected version: 1, got 2/);
+      ).toThrow(/fieldGroupStorage: "current" in a version 2 snapshot/);
+    });
+
+    it("refuses a version 1 snapshot that says it is on the current names", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 1,
+            fieldGroupStorage: "current",
+            migrationHash: VALID_HASH,
+            snapshot: { tables: [] },
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/expected version: 2 for a snapshot on the current/);
+    });
+
+    it("refuses a field-group naming record it does not know", () => {
+      expect(() =>
+        parseSnapshotFile(
+          JSON.stringify({
+            version: 2,
+            fieldGroupStorage: "legacy",
+            migrationHash: VALID_HASH,
+            snapshot: { tables: [] },
+          }),
+          "test.snapshot.json"
+        )
+      ).toThrow(/fieldGroupStorage to be "current" when present/);
     });
 
     it("throws on missing migrationHash", () => {

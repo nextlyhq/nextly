@@ -749,13 +749,20 @@ export async function survivingCompanionRefusal(
 export async function refuseCompanionColumnsThatCannotHold(
   adapter: CompanionIntrospectAdapter,
   config: Parameters<typeof localizableConfigEntities>[0],
-  recordedBefore: RecordedEntities | undefined
+  recordedBefore: RecordedEntities | undefined,
+  /**
+   * The table each field group is stored in, by slug: on a site whose storage moved to the
+   * current names, a group's translations table is `fg_<slug>_locales`, which no slug alone says.
+   * Absent, the legacy derivation.
+   */
+  fieldGroupTable?: (slug: string) => string
 ): Promise<void> {
   if (recordedBefore === undefined) return;
   const reasons: string[] = [];
   const errors: { path: string; code: string; message: string }[] = [];
   for (const [kind, group, resolveTableName] of localizableConfigEntities(
-    config
+    config,
+    fieldGroupTable
   )) {
     for (const entity of group) {
       // Every entity kept per language: a translated one, or any under

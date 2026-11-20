@@ -383,7 +383,23 @@ async function applyBootMigrations(
       tables: resolvedSchema.declaredTables,
     },
   });
+  // Each field group's stored table and type column, so a contribution to a group is compiled,
+  // and its ownership recorded, against the table the group is in (`fg_<slug>` once migrated).
+  const { declaredFieldGroupStorage } = await import(
+    "../domains/field-groups/services/field-group-stored-tables"
+  );
+  const fieldGroups = await declaredFieldGroupStorage(
+    // The connected adapter, which reads the registry and the catalog as the start's own reads do.
+    adapter as unknown as Parameters<typeof declaredFieldGroupStorage>[0],
+    args.config.fieldGroups
+  );
   const extensionSchema = await compileExtensionSchema({
+    ...(fieldGroups === undefined
+      ? {}
+      : {
+          fieldGroupTables: fieldGroups.tables,
+          fieldGroupTypeColumns: fieldGroups.typeColumns,
+        }),
     dialect: adapter.dialect,
     plugins: args.config.plugins ?? [],
     config: args.config,

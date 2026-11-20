@@ -56,6 +56,7 @@ import { resolve } from "node:path";
 
 import type { Command } from "commander";
 
+import { storageNamesFor } from "../../domains/field-groups/services/field-group-storage-names";
 import { LOCALIZATION_MIGRATION_MARKER } from "../../domains/i18n/migration/write-migration-file";
 import {
   describeDeletion,
@@ -70,7 +71,10 @@ import {
   unrecordedMerges,
 } from "../../domains/schema/migrate/history-line";
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
-import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
+import {
+  declaredNamesOf,
+  fieldGroupNamingOfHistory,
+} from "../../domains/schema/migrate/resolved-schema";
 import {
   marksNoTransaction,
   splitSqlStatements,
@@ -82,6 +86,10 @@ import {
   unwrittenChangesError,
 } from "../../domains/schema/migrate/unwritten-changes";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
+import {
+  recordedTypeColumns,
+  withFieldGroupTables,
+} from "../../domains/schema/migrate-create/app-migration-inputs";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
@@ -219,7 +227,23 @@ export async function runMigrateCheck(
   } catch (error) {
     exitWithError(logger, configDeclarationError(error) ?? error);
   }
-  const { merged } = definitions;
+  // Each field group under the names the history keeps them under, as `migrate:create` names them
+  // (`appMigrationInputs`): a history moved to the current names compares `fg_<slug>` tables.
+  // A snapshot this CLI cannot read is reported by the checks below, as `INVALID_SNAPSHOT` naming
+  // the file; read here first, it would end the run as an unexpected error. Until then the names
+  // are taken as legacy, which every history before the record is on.
+  const fieldGroupNaming = await fieldGroupNamingOfHistory({
+    projectRoot: cwd,
+    config: configResult.config,
+  }).catch((error: unknown) => {
+    if (error instanceof SnapshotFileError) return "legacy" as const;
+    throw error;
+  });
+  const merged = withFieldGroupTables(
+    definitions.merged,
+    storageNamesFor(fieldGroupNaming),
+    undefined
+  );
 
   // Built once the latest snapshot is read, as `migrate:create` builds it:
   // a field a plugin holds back from a type switched off keeps its column
@@ -242,6 +266,24 @@ export async function runMigrateCheck(
     config: configResult.config,
     dialect,
     logger: { warn: m => logger.warn(m) },
+    // A contribution to a field group attaches to the table the entities above name.
+    ...(fieldGroupNaming === "legacy"
+      ? {}
+      : {
+          fieldGroupTables: new Map(
+            merged.components.map(c => [c.slug, c.tableName])
+          ),
+          // And the discriminator each holds, as `migrate:create` compiles them.
+          fieldGroupTypeColumns: recordedTypeColumns(
+            (
+              await loadLatestSnapshot(resolve(migrationsDir, "meta")).catch(
+                () => null
+              )
+            )?.data.snapshot,
+            merged.components,
+            dialect
+          ),
+        }),
   });
 
   // Read as `nextly migrate` reads the folder.

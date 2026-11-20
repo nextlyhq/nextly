@@ -4,6 +4,11 @@
  * @module cli/__tests__/error-cases/migrate-create
  */
 import {
+  refuseChangesToTransition,
+  refuseNamingAgainstHistory,
+} from "../../../domains/schema/migrate-create/field-group-names-transition";
+import {
+  fieldGroupNamesOptionInvalid,
   migrationCreateCancelled,
   migrationNameRequired,
   recordSnapshotNeedsAppMigration,
@@ -18,6 +23,14 @@ export const MIGRATE_CREATE_CASES = {
   MIGRATION_NAME_REQUIRED: () => migrationNameRequired(),
   MIGRATION_CREATE_CANCELLED: () => migrationCreateCancelled(),
   RECORD_SNAPSHOT_NEEDS_APP_MIGRATION: () => recordSnapshotNeedsAppMigration(),
+  FIELD_GROUP_NAMES_OPTION_INVALID: () => fieldGroupNamesOptionInvalid("fg"),
+  // Each built by the check `generateMigration` runs, as it throws it.
+  FIELD_GROUP_NAMES_DIFFER_FROM_HISTORY: () =>
+    thrownBy(() => refuseNamingAgainstHistory({}, "current")),
+  FIELD_GROUP_TRANSITION_REFUSED: () =>
+    thrownBy(() =>
+      refuseChangesToTransition({ tables: ["dc_posts"], beyondTables: false })
+    ),
   // The command's own first check, run for real: it refuses before reading anything.
   NO_TRANSACTION_NEEDS_BLANK: () =>
     runMigrateCreate(
@@ -109,3 +122,13 @@ export const MIGRATE_CREATE_CASES = {
       },
     }),
 } satisfies ErrorCases;
+
+/** The error `check` throws; a check that throws nothing fails the case. */
+function thrownBy(check: () => unknown): unknown {
+  try {
+    check();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the check to refuse");
+}

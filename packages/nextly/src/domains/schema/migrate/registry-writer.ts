@@ -20,6 +20,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import type { Logger } from "../../../shared/types";
 import {
@@ -33,12 +34,14 @@ import {
 } from "../../collections/services/collection-sync-service";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import {
   FieldGroupRegistryService,
   toCodeFirstComponentConfig,
   type CodeFirstComponentConfig,
   type CodeFirstComponentSource,
 } from "../../field-groups/services/field-group-registry-service";
+import type { FieldGroupRegistryName } from "../../field-groups/storage/resolve-storage-names";
 import {
   SingleRegistryService,
   toCodeFirstSingleConfig,
@@ -344,6 +347,38 @@ async function removeRows(
 }
 
 /**
+ * The field-group registry the database holds, read on the transaction the registry write holds
+ * (`adapterForReads`), each probe a step of its own, as `tableStands` asks: a catalog listing
+ * would run on another connection, blind to the transaction. The legacy registry where it is
+ * there, as the catalog's own choice prefers it, else the migrated one, else legacy.
+ */
+async function fieldGroupRegistryOf(
+  adapter: DrizzleAdapter
+): Promise<FieldGroupRegistryName> {
+  const view = adapterForReads(adapter);
+  const exists = (table: string) =>
+    inRegistryStep(adapter, () => view.tableExists(table));
+  if (await exists(STORAGE_FORMAT.registryTable)) {
+    return STORAGE_FORMAT.registryTable;
+  }
+  if (await exists(MIGRATION_TARGET.registryTable)) {
+    return MIGRATION_TARGET.registryTable;
+  }
+  return STORAGE_FORMAT.registryTable;
+}
+
+/** The table a stored registry row names, where it names one. */
+function storedTableOf(row: unknown): string | undefined {
+  const tableName =
+    row !== null && typeof row === "object"
+      ? (row as { tableName?: unknown }).tableName
+      : undefined;
+  return typeof tableName === "string" && tableName !== ""
+    ? tableName
+    : undefined;
+}
+
+/**
  * Whether the table a stored registry row names is there, asked as a step of
  * its own; a row naming none, or a table that cannot be asked about, reads
  * as standing, so its row is kept.
@@ -353,11 +388,8 @@ async function tableStands(
   view: DrizzleAdapter,
   row: unknown
 ): Promise<boolean> {
-  const tableName =
-    row !== null && typeof row === "object"
-      ? (row as { tableName?: unknown }).tableName
-      : undefined;
-  if (typeof tableName !== "string" || tableName === "") return true;
+  const tableName = storedTableOf(row);
+  if (tableName === undefined) return true;
   try {
     return await inRegistryStep(adapter, () => view.tableExists(tableName));
   } catch {
@@ -381,6 +413,9 @@ async function recordedRows(
   const collections = new CollectionRegistryService(deps.adapter, deps.logger);
   const singles = new SingleRegistryService(deps.adapter, deps.logger);
   const fieldGroups = new FieldGroupRegistryService(deps.adapter, deps.logger);
+  // The field-group registry under the name the database holds it, which a Builder group's new
+  // row is written into and named by (`fieldGroupRegistryOf`).
+  const fieldGroupRegistry = await fieldGroupRegistryOf(deps.adapter);
   // A slug the system keeps for its own resources is never a registry row,
   // whatever a snapshot says.
   const kept = ([slug]: [string, RecordedEntitySettings]) =>
@@ -492,7 +527,10 @@ async function recordedRows(
         write: () => {
           // Projected inside the row's own write, so a record that cannot be
           // read costs that row alone.
-          const { config, tableName } = recordedFieldGroup(slug, recorded);
+          const { config, tableName } = recordedFieldGroup(slug, recorded, {
+            registry: fieldGroupRegistry,
+            stored: storedTableOf(storedFieldGroups?.get(slug)),
+          });
           return fieldGroups.writeRecordedComponent(
             config,
             originOf(recorded),
@@ -617,7 +655,13 @@ function recordedSingle(
  */
 function recordedFieldGroup(
   slug: string,
-  recorded: RecordedEntitySettings
+  recorded: RecordedEntitySettings,
+  /**
+   * Where a Builder group's row is: the field-group registry under the name the database holds
+   * it, and the table its stored row already names. A row the database holds keeps its table; a
+   * new one takes its slug's name under the registry's naming (`componentRowValues`).
+   */
+  at: { registry: FieldGroupRegistryName; stored: string | undefined }
 ): { config: CodeFirstComponentConfig; tableName?: string } {
   const declared = { ...declaration(recorded), slug };
   if (recorded.source === "code") {
@@ -625,7 +669,11 @@ function recordedFieldGroup(
       config: toCodeFirstComponentConfig(declared as CodeFirstComponentSource),
     };
   }
-  const row = componentRowValues(declared as UiSchemaEntity);
+  const row = componentRowValues(
+    declared as UiSchemaEntity,
+    at.registry,
+    at.stored
+  );
   return {
     config: {
       slug,

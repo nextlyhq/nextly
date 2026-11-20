@@ -1258,7 +1258,42 @@ export const MIGRATION_CODES = defineCodes({
     cause:
       "The database lacks a table or column that the migrations it records as applied created.",
   },
+  FIELD_GROUP_STORAGE_NOT_MIGRATED: {
+    cause:
+      "`nextly migrate` reached the migration that moves the history to the current field-group names on a database whose field groups are still on the legacy names.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "field-group-storage-not-migrated",
+        describe: error => sentenceParts(error),
+      },
+    ],
+  },
+  FIELD_GROUP_HISTORY_BEHIND_STORAGE: {
+    cause:
+      "The database's field groups were moved to the current names while the project's migration history is still on the legacy names.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "field-group-history-behind-storage",
+        describe: error => sentenceParts(error),
+      },
+    ],
+  },
 });
+
+/**
+ * A refusal written as what happened, then why, then what to do: its first sentence, its second,
+ * and the rest.
+ */
+function sentenceParts(error: NextlyError): CliErrorParts {
+  const parts = sentences(error.publicMessage);
+  return {
+    what: parts[0] ?? error.publicMessage,
+    why: parts.slice(1, 2).join(" "),
+    next: parts.slice(2).join(" "),
+  };
+}
 
 /** A refused data-loss verdict as the command's error, under the code for its reason. */
 export function dataLossRefusal(
