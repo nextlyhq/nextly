@@ -267,8 +267,8 @@ export function workflowAttachedTo(
 
 /**
  * The workflow a collection or Single is attached to, as its schema read names
- * it: slug, label and its steps by name, label and kind, or `null` where none
- * is attached. The editor reads it to know, before a document exists, that it
+ * it: slug, label, its stages by name and label, and its steps by name, label
+ * and kind, or `null` where none is attached. A list filters by its stages. The editor reads it to know, before a document exists, that it
  * cannot be created as published; a list reads its steps to take the
  * workflow's one step of a kind over several documents (never an approval).
  *
@@ -280,6 +280,8 @@ export function attachedWorkflowSummary(
 ): {
   slug: string;
   label: string;
+  /** Its stages in order, by name and the label the code gives them: what a list filters by. */
+  stages: { name: string; label: string }[];
   steps: { name: string; label: string; kind: WorkflowStepKind }[];
 } | null {
   const attached = workflowAttachedTo(kind, slug);
@@ -288,6 +290,10 @@ export function attachedWorkflowSummary(
     : {
         slug: attached.workflow.slug,
         label: attached.workflow.label,
+        stages: attached.workflow.stages.map(stage => ({
+          name: stage.name,
+          label: stage.label,
+        })),
         steps: attached.workflow.steps.map(step => ({
           name: step.name,
           label: step.label,

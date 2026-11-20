@@ -79,6 +79,25 @@ export interface PartReview {
   lastMove: ReviewLastMove | null;
 }
 
+/**
+ * One part of a listed document, where it stands, as a list read gives it under each row's
+ * `_review` (`reviewState`): what the Review column shows and a bulk move names as seen.
+ */
+export type RowPartReview = Pick<
+  PartReview,
+  | "part"
+  | "stage"
+  | "stageLabel"
+  | "stageColour"
+  | "publishable"
+  | "enteredAt"
+  | "assignee"
+  | "dueAt"
+  | "waitingFor"
+  | "revision"
+  | "version"
+>;
+
 /** A document's review state, part by part. */
 export interface DocumentReview {
   /** Null where no workflow is attached; there are then no parts. */
