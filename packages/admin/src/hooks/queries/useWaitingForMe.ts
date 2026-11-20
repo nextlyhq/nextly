@@ -100,8 +100,13 @@ export function useWaitingForMe({
   const collections = useEveryNavCollection();
   const singles = useEverySingle();
   const labels = new Map<string, string>([
+    // A collection by its name as the sidebar shows it: the plural label, which names the list.
     ...(collections.data ?? []).map(
-      each => [`collection:${each.name}`, each.label] as [string, string]
+      each =>
+        [
+          `collection:${each.name}`,
+          each.labels?.plural || each.label || each.name,
+        ] as [string, string]
     ),
     ...(singles.data ?? []).map(
       each => [`single:${each.slug}`, each.label] as [string, string]
