@@ -20,11 +20,13 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { chooseRegistryTable } from "../../field-groups/storage/resolve-storage-names";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import { introspectTableNames } from "../pipeline/diff/introspect-live";
 import { collectionOwnTables } from "../services/field-column-descriptor";
 import { readIdentifierCaseRules } from "../utils/read-identifier-case";
 import {
+  identifierCaseRules,
   indexCatalog,
   resolveCatalogName,
   type CatalogIndex,
@@ -76,7 +78,12 @@ export function coveredEntity(row: {
     kind: row.kind,
     slug: row.slug,
     table: row.tableName,
-    tables: collectionOwnTables(row.tableName, fieldsOf(row.fields)),
+    // A field group keeps its many-to-many lists on its own row, in no junction table: it owns
+    // its table and its translations table alone.
+    tables:
+      row.kind === "fieldGroup"
+        ? [row.tableName, `${row.tableName}_locales`]
+        : collectionOwnTables(row.tableName, fieldsOf(row.fields)),
   };
 }
 
@@ -238,7 +245,35 @@ interface RegistryRow {
 const REGISTRIES = [
   { kind: "collection", table: "dynamic_collections" },
   { kind: "single", table: "dynamic_singles" },
+  // A database holds the field-group registry under one of two names, as its storage migration
+  // left it.
+  { kind: "fieldGroup", table: "dynamic_components" },
+  { kind: "fieldGroup", table: "dynamic_field_groups" },
 ] as const;
+
+/**
+ * The registries a database holds that are read for its entities. A database may hold the
+ * field-group registry under both names, as a stopped storage migration leaves it: only the one
+ * every reader of it uses (`chooseRegistryTable`) is read, so a field group is never read twice and
+ * made to dispute its own table. `present` holds the names lower-cased.
+ */
+function registriesToRead(
+  present: ReadonlySet<string>,
+  dialect: SupportedDialect
+): (typeof REGISTRIES)[number][] {
+  const fieldGroupRegistry = chooseRegistryTable(
+    [...present],
+    // Lower-cased, so compared folded on every server.
+    dialect === "mysql"
+      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+      : identifierCaseRules({ dialect })
+  ).name;
+  return REGISTRIES.filter(
+    registry =>
+      present.has(registry.table) &&
+      (registry.kind !== "fieldGroup" || registry.table === fieldGroupRegistry)
+  );
+}
 
 /**
  * The collections and Singles the database's registries record, read on the
@@ -266,8 +301,7 @@ export async function readCoveredEntities(
     return [];
   }
   const entities: CoveredEntity[] = [];
-  for (const registry of REGISTRIES) {
-    if (!present.has(registry.table)) continue;
+  for (const registry of registriesToRead(present, dialect)) {
     let rows: RegistryRow[];
     try {
       rows = await querySqlRows<RegistryRow>(

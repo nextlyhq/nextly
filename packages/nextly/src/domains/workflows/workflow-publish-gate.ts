@@ -96,6 +96,15 @@ function partName(part: string | null): string {
   return part === null ? "The shared fields" : `The "${part}" language`;
 }
 
+/**
+ * A part named for a person with `verb` agreeing with it: a language is one ("is", "has"), the
+ * shared fields are many ("are", "have").
+ */
+function partWith(part: string | null, verb: "is" | "has"): string {
+  if (part !== null) return `${partName(part)} ${verb}`;
+  return `${partName(part)} ${verb === "is" ? "are" : "have"}`;
+}
+
 /** Whether a part was live before the move, as core read it. */
 function wasLive(question: PublishGateQuestion, part: string | null): boolean {
   return part === null
@@ -236,13 +245,13 @@ export function holdReason(
   // Live with nothing pending: the publish puts nothing new live.
   if (stage === null) return null;
   if (!allowsPublish(registered.workflow, stage)) {
-    return `${partName(part)} is in "${stageLabel(registered, stage)}", which does not allow publishing.`;
+    return `${partWith(part, "is")} in "${stageLabel(registered, stage)}", which does not allow publishing.`;
   }
   if (
     state?.approval == null ||
     state.definitionHash !== registered.definitionHash
   ) {
-    return `${partName(part)} has no current approval.`;
+    return `${partWith(part, "has")} no current approval.`;
   }
   if (approvedNow === false) {
     return `${partName(part)} changed since it was approved.`;
@@ -283,6 +292,11 @@ const documentOf = (question: PublishGateQuestion): ReviewDocument => ({
 interface JudgedPart {
   part: string | null;
   state: ReviewState | null;
+  /**
+   * Why the part would have been held, where it would: a publish without review goes past it, and
+   * records it as published without review. Null where the part may go live as it stands.
+   */
+  held: string | null;
 }
 
 /**
@@ -381,9 +395,8 @@ async function judgeOnLock(
   const refusals: PublishGateRefusal[] = [];
   for (const { key, part } of reviewParts(question, table.localized)) {
     const state = states.find(candidate => candidate.part === key) ?? null;
-    judged.push({ part: key, state });
-    // Let through without review: its parts are judged only so the move closes their cycles.
-    if (bypass.kind === "allowed") continue;
+    // Judged under a publish without review too: the parts it goes past are the ones it records,
+    // and a part that may go live as it stands is published as any publish would put it.
     const approvedNow =
       state?.approval == null
         ? undefined
@@ -395,7 +408,9 @@ async function judgeOnLock(
       { live: wasLive(question, key), pending: pending(key) },
       approvedNow
     );
-    if (message !== null) {
+    judged.push({ part: key, state, held: message });
+    // Let through without review: a part held is gone past, not refused.
+    if (message !== null && bypass.kind !== "allowed") {
       refusals.push({ part, code: "NOT_APPROVED", message });
     }
   }
@@ -446,7 +461,8 @@ export async function stillApprovedOn(
  * written: a compare-and-set on the revision `judge` read (a part with none must still have
  * none), then the pins released, the stage change recorded for integrations, and the approval it
  * went live under kept in the document's history. A publish without review is recorded with its
- * reason. Any part that moved since it was judged refuses the whole publish.
+ * reason, naming the parts it went past (none recorded where every part held its approval). Any
+ * part that moved since it was judged refuses the whole publish.
  */
 async function settle(
   adapter: DrizzleAdapter,
@@ -514,7 +530,10 @@ async function settle(
       }
     );
   }
-  if (bypass.kind === "allowed") {
+  // Recorded for the parts the publish went past without review alone: a part that held its
+  // approval went live under it, as the event above already says.
+  const bypassed = judged.filter(entry => entry.held !== null);
+  if (bypass.kind === "allowed" && bypassed.length > 0) {
     await recordWriteEvent(
       tx,
       { adapter },
@@ -523,7 +542,7 @@ async function settle(
         kind: REVIEW_STATE_EVENT_KINDS.publishedWithoutReview,
         actor,
         note: bypass.reason,
-        parts: eventParts(judged.map(entry => entry.part)),
+        parts: eventParts(bypassed.map(entry => entry.part)),
         definitionHash: registered.definitionHash,
       }
     );

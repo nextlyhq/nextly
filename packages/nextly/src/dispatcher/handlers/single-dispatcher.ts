@@ -53,6 +53,7 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
+import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
@@ -72,6 +73,7 @@ import {
   reviewWithRowFillsSettled,
 } from "../../domains/schema/builder-save/single-row-fills";
 import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
+import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
@@ -102,6 +104,7 @@ import {
   schemaDraftSplit,
 } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
+import { attachedWorkflowSummary } from "../../domains/workflows/registry";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
@@ -127,6 +130,8 @@ import {
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
+  entityDialogQuestions,
+  entityPushReason,
   reviewBuilderSchemaChange,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
@@ -151,6 +156,7 @@ import {
   getSingleRegistryFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
+import { readRequestedMoves } from "../helpers/request-moves";
 import {
   offsetPaginationToMeta,
   unwrapServiceResult,
@@ -649,6 +655,8 @@ async function singleSaveTakesPush(args: {
   db: Parameters<typeof introspectLiveSnapshot>[0];
   dialect: Parameters<typeof introspectLiveSnapshot>[1];
   tableName: string;
+  /** The fields the save moves, whose values its own file carries. */
+  moved?: Parameters<typeof pushCarriesValues>[0]["moved"];
 }): Promise<boolean> {
   return pushCarriesValues({
     oldFields: args.oldFields,
@@ -662,6 +670,7 @@ async function singleSaveTakesPush(args: {
     columnOf: field =>
       getSingleRowColumnDescriptor(field, args.dialect, "collection"),
     renames: renamedFieldsOf(args.renameResolutions ?? []),
+    ...(args.moved === undefined ? {} : { moved: args.moved }),
   });
 }
 
@@ -1264,6 +1273,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             enrichedData as unknown as SingleWithFields
           ),
           ...draftSplitResponseFields(draftSplit),
+          // The workflow that holds this Single's publishing, so the editor
+          // knows whether a review state is coming before it reads one: one
+          // with none publishes without waiting. `null` where none is
+          // attached; read by signed-in callers only, as the route is.
+          workflow: attachedWorkflowSummary(
+            "single",
+            String((single as { slug?: string }).slug ?? "")
+          ),
         } as Record<string, unknown>,
       ]);
       // As the Builder's editor reads it: a relationship the earlier Builder stored gets the
@@ -1511,6 +1528,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         table: tableName,
         stored: singleEntity(single),
         fields: fields as FieldDefinition[],
+        // Each move checked as the save checks it, and what its column does not carry named.
+        moves: readRequestedMoves(body),
         localized:
           readRequestLocalized(body) ??
           (single as { localized?: boolean }).localized === true,
@@ -1577,6 +1596,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
       // before the lock is taken.
       const requestedLifecycle = readRequestedLifecycle(body);
+      // The fields the save moves, each kept by statements its migration file carries.
+      const moves = readRequestedMoves(body);
       assertValidFieldsPayload(sentFields, { stored: "under-lock" });
       // Only named fields at the top level, as every road that saves a Single takes them.
       assertTopLevelFieldsNamed(sentFields);
@@ -1725,6 +1746,27 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             oldFields: single.fields,
             newFields: fields,
             subject: `Single '${slug}'`,
+          });
+          // Whether the push applies this save rather than its file, asked at most once. A save
+          // whose moves would need the push is refused here, before the preflights below write
+          // anything; the write reuses the answer.
+          let pushAnswer: Promise<boolean> | undefined;
+          const pushes = () =>
+            (pushAnswer ??= singleSaveTakesPush({
+              oldFields: single.fields as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              layout,
+              companionRename,
+              renameResolutions,
+              db: adapter.getDrizzle(),
+              dialect: adapter.dialect,
+              tableName,
+              moved: moves,
+            }));
+          await refuseMovesOffTheFile({
+            moves,
+            writes: builderSave !== undefined,
+            pushReason: () => entityPushReason(builderSave, pushes),
           });
           // A field leaving translation has preconditions of its own, asked before the push alters
           // anything.
@@ -1917,6 +1959,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               stored: singleEntity(single),
               fields: fields as unknown as FieldDefinition[],
               localized: isLocalized,
+              moves,
               answers: {
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
@@ -1941,19 +1984,29 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             landing.landed,
             {
               // The push where the save carries values across its change; its own migration file,
-              // run in tries as `nextly migrate` runs it, where it carries none.
-              pushWhen: () =>
-                singleSaveTakesPush({
-                  oldFields: single.fields as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  layout,
-                  companionRename,
-                  renameResolutions,
-                  db,
-                  dialect,
-                  tableName,
-                }),
+              // run in tries as `nextly migrate` runs it, where it carries none. The answer the
+              // move check asked above, so the two never differ.
+              pushWhen: pushes,
               afterFile: () => reconcileBuilderCompanion("single", companion),
+              // The push's questions, asked of the file before anything is written: a rename the
+              // request does not answer, or a drop it does not confirm, refuses the save as the
+              // push refuses it.
+              questions: entityDialogQuestions({
+                desired,
+                db,
+                dialect,
+                tableName,
+                // The builder that made the table, which the offered rename is judged by.
+                builtBy: "collection",
+                oldFields: (single.fields ??
+                  []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+                renameResolutions,
+                eventResolutions,
+                legacy: legacyBundle,
+              }),
               // On the file road the row is written in the file's own transaction, so a failed
               // write leaves the save as it was and is answered as the failure it is. Not where the
               // translations table is reconciled after the file: the row would then record the
@@ -1962,7 +2015,26 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 ? { registry: writeRow, settled: refreshRuntime }
                 : {}),
             }
-          );
+          ).catch(async (error: unknown) => {
+            // The change landed, its file recorded and its fields with it: only the renamed
+            // field's provenance move failed, and logged the statements that finish it. The row's
+            // version moves on as its fields did, so a client holding the old one is refused; the
+            // answer says the change landed (`provenanceNotMoved`). Where the row cannot be
+            // written either, that is logged too, and the answer stays the move's: it is what says
+            // what landed and where the statements are. The running shape follows the table
+            // first, whatever the row write does, as the table has the change either way.
+            if (isProvenanceNotMoved(error)) {
+              refreshRuntime(fields);
+              try {
+                await writeRow();
+              } catch (rowError) {
+                (getLoggerFromDI() ?? consoleLogger).error(
+                  `[applySingleSchemaChanges] The registry row of '${slug}' was not written after its rename, so its version did not move on: ${rowError instanceof Error ? rowError.message : String(rowError)}`
+                );
+              }
+            }
+            throw error;
+          });
 
           // Post-apply: update dynamic_singles fields JSON + schema_hash, advance
           // schema_version so the optimistic-lock check above sees a new value on the

@@ -40,21 +40,27 @@ import {
   $isRangeSelection,
   type LexicalEditor,
 } from "lexical";
-import { useRef, type JSX, type MutableRefObject } from "react";
+import { useRef, useState, type JSX, type MutableRefObject } from "react";
 
+import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
 import {
   ArrowDown,
   ArrowUp,
   GripVertical,
+  Image as ImageIcon,
   MoreHorizontal,
   Plus,
 } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
+import { copyableMediaUrl } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type {
   WrittenBlock,
   WrittenDocument,
 } from "@admin/services/emailTemplateApi";
+import type { Media } from "@admin/types/media";
+
+import type { TemplateFormVariable } from "../schema";
 
 import {
   addBlock,
@@ -67,6 +73,9 @@ import {
   type BlockKind,
   type BlockPath,
 } from "./block-model";
+import { chipNamer, itemPaths, listPaths } from "./chip-names";
+import { chipShowsBlank } from "./chip-values";
+import { ChipButton, ChipViewContext, type ChipView } from "./ChipLabel";
 import { RunEditor } from "./RunEditor";
 import { ChipNode, type Inline } from "./runs";
 
@@ -105,6 +114,24 @@ const SPACER_SIZES: ReadonlyArray<[string, number]> = [
   ["Large", 48],
 ];
 
+/**
+ * How chips read in the email, or inside the list at `list`: by friendly
+ * name, and marked when the test data leaves them blank.
+ */
+function chipView(edit: Edit, list?: string): ChipView {
+  return {
+    name: chipNamer(edit.variables, list),
+    // Unknown test data (invalid sample JSON) marks nothing.
+    blank: chip =>
+      edit.sampleData !== null && chipShowsBlank(chip, edit.sampleData, list),
+    // Inside a list, its item's fields first: what each repeat links to.
+    paths: [
+      ...(list === undefined ? [] : itemPaths(edit.variables, list)),
+      ...edit.variables.map(variable => variable.name).filter(Boolean),
+    ],
+  };
+}
+
 /** Plain text and chips only: what a heading, label or alt text stores. */
 function plain<T>(runs: Inline[]): T[] {
   return runs.map(run =>
@@ -124,10 +151,187 @@ interface Edit {
   /** The document as it is now, for an Undo that runs after other edits. */
   current: () => WrittenDocument;
   readOnly: boolean;
-  /** The declared list variables a list block can repeat over. */
-  listVariables: readonly string[];
-  /** Told which field's editor was typed in last. */
-  focused: (editor: LexicalEditor) => void;
+  /** The template's declared variables, which name chips and lists. */
+  variables: readonly TemplateFormVariable[];
+  /** The workbench's test data, or null while it is invalid and unknown. */
+  sampleData: Record<string, unknown> | null;
+  /** Told which field's editor was typed in last, and its block's place. */
+  focused: (editor: LexicalEditor, path: BlockPath) => void;
+  /**
+   * Puts a chip for one of a list's item fields where the person was last
+   * typing; false unless that was inside the list at `list`, the only place
+   * its `item` means anything.
+   */
+  insertItemField: (list: number, variable: string) => boolean;
+}
+
+/** Puts a chip for `variable` at the caret of `editor`, or at its end. */
+function insertChip(editor: LexicalEditor, variable: string): void {
+  editor.update(
+    () => {
+      const chip = new ChipNode(variable);
+      const selection = $getSelection();
+      if ($isRangeSelection(selection)) {
+        selection.insertNodes([chip]);
+        return;
+      }
+      // No caret kept: at the end of what the field holds.
+      const paragraph = $getRoot().getLastChild();
+      if ($isElementNode(paragraph)) paragraph.append(chip);
+      else $getRoot().append($createParagraphNode().append(chip));
+    },
+    { discrete: true }
+  );
+}
+
+/** A list's item fields, as chips to put into the blocks it repeats. */
+function ItemFields({
+  list,
+  variable,
+  edit,
+}: {
+  list: number;
+  variable: string;
+  edit: Edit;
+}): JSX.Element | null {
+  const paths = itemPaths(edit.variables, variable);
+  if (paths.length === 0 || edit.readOnly) return null;
+  const name = chipNamer(edit.variables, variable);
+  return (
+    <div
+      role="group"
+      aria-label="Item fields"
+      className="flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground"
+    >
+      Insert an item field:
+      {paths.map(path => (
+        <Button
+          key={path}
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-7 px-2 text-xs"
+          onClick={() => {
+            if (!edit.insertItemField(list, path)) {
+              toast.info(
+                "Click into a block inside this list, then insert the item field."
+              );
+            }
+          }}
+        >
+          {name(path)}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+type ImageBlock = Extract<WrittenBlock, { type: "image" }>;
+
+/** An image's address, typed or chosen from the media library, and its alt text. */
+function ImageFields({
+  block,
+  path,
+  edit,
+  set,
+}: {
+  block: ImageBlock;
+  path: BlockPath;
+  edit: Edit;
+  set: (next: WrittenBlock) => void;
+}): JSX.Element {
+  const [picking, setPicking] = useState(false);
+  const choose = (media: Media[]) => {
+    const picked = media[0];
+    setPicking(false);
+    if (!picked) return;
+    // The library's alt text, unless the block already has its own.
+    const alt =
+      block.alt.length === 0 && picked.altText
+        ? [{ type: "text" as const, text: picked.altText }]
+        : block.alt;
+    // A sent email is read far from the admin: the address as the library
+    // copies it, complete, so it loads there.
+    set({ ...block, src: { url: copyableMediaUrl(picked.url) }, alt });
+  };
+  return (
+    <div className="grid gap-2">
+      {"url" in block.src ? (
+        <div className="flex flex-wrap gap-2">
+          <Input
+            aria-label="Image address"
+            placeholder="https://"
+            className="min-w-0 flex-1"
+            value={block.src.url}
+            readOnly={edit.readOnly}
+            onChange={event =>
+              set({ ...block, src: { url: event.target.value } })
+            }
+          />
+          {edit.readOnly ? null : (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setPicking(true)}
+            >
+              <ImageIcon aria-hidden className="size-4" />
+              Choose from library
+            </Button>
+          )}
+        </div>
+      ) : (
+        // An address held by a variable: the same chip as in text, with its
+        // name, its mark and its fallback.
+        <p className="text-sm text-muted-foreground">
+          The image at{" "}
+          <span className="mx-0.5 rounded-md border border-border bg-muted px-1.5 py-0.5 text-xs text-foreground">
+            <ChipButton
+              variable={block.src.chip.variable}
+              fallback={block.src.chip.fallback}
+              editable={!edit.readOnly}
+              address="image"
+              onFallback={fallback => {
+                if (!("chip" in block.src)) return;
+                const { variable } = block.src.chip;
+                set({
+                  ...block,
+                  src: {
+                    chip: {
+                      variable,
+                      ...(fallback !== undefined ? { fallback } : {}),
+                    },
+                  },
+                });
+              }}
+            />
+          </span>
+        </p>
+      )}
+      <RunEditor
+        label="Alt text"
+        placeholder="Describe the image"
+        value={block.alt}
+        readOnly={edit.readOnly}
+        onFocusEditor={editor => edit.focused(editor, path)}
+        onChange={alt => set({ ...block, alt: plain(alt) })}
+      />
+      {block.alt.length === 0 ? (
+        <p className="text-xs text-warning-text">
+          No alt text: screen readers and blocked images show nothing.
+        </p>
+      ) : null}
+      {picking ? (
+        <MediaPickerDialog
+          mode="single"
+          open
+          onOpenChange={setPicking}
+          onSelect={choose}
+          accept="image/*"
+          title="Choose an image"
+        />
+      ) : null}
+    </div>
+  );
 }
 
 /** The fields of one block, by its kind. */
@@ -150,7 +354,7 @@ function BlockFields({
           placeholder="Write a heading"
           value={block.text}
           readOnly={edit.readOnly}
-          onFocusEditor={edit.focused}
+          onFocusEditor={editor => edit.focused(editor, path)}
           onChange={text => set({ ...block, text: plain(text) })}
         />
       );
@@ -162,7 +366,7 @@ function BlockFields({
           placeholder="Write something."
           value={block.text}
           readOnly={edit.readOnly}
-          onFocusEditor={edit.focused}
+          onFocusEditor={editor => edit.focused(editor, path)}
           onChange={text => set({ ...block, text })}
         />
       );
@@ -173,7 +377,7 @@ function BlockFields({
             label="Button label"
             value={block.label}
             readOnly={edit.readOnly}
-            onFocusEditor={edit.focused}
+            onFocusEditor={editor => edit.focused(editor, path)}
             onChange={label => set({ ...block, label: plain(label) })}
           />
           {"url" in block.link ? (
@@ -194,38 +398,7 @@ function BlockFields({
         </div>
       );
     case "image":
-      return (
-        <div className="grid gap-2">
-          {"url" in block.src ? (
-            <Input
-              aria-label="Image address"
-              placeholder="https://"
-              value={block.src.url}
-              readOnly={edit.readOnly}
-              onChange={event =>
-                set({ ...block, src: { url: event.target.value } })
-              }
-            />
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              The image at [{block.src.chip.variable}]
-            </p>
-          )}
-          <RunEditor
-            label="Alt text"
-            placeholder="Describe the image"
-            value={block.alt}
-            readOnly={edit.readOnly}
-            onFocusEditor={edit.focused}
-            onChange={alt => set({ ...block, alt: plain(alt) })}
-          />
-          {block.alt.length === 0 ? (
-            <p className="text-xs text-warning-text">
-              No alt text: screen readers and blocked images show nothing.
-            </p>
-          ) : null}
-        </div>
-      );
+      return <ImageFields block={block} path={path} edit={edit} set={set} />;
     case "divider":
       return null;
     case "spacer":
@@ -263,15 +436,23 @@ function BlockFields({
               }
             >
               <option value="">Choose a list</option>
-              {edit.listVariables.map(name => (
+              {listPaths(edit.variables).map(name => (
                 <option key={name} value={name}>
-                  {name}
+                  {chipNamer(edit.variables)(name)}
                 </option>
               ))}
             </select>
           </label>
+          {block.variable ? (
+            <ItemFields list={path[0]} variable={block.variable} edit={edit} />
+          ) : null}
           <div className="rounded-md border border-dashed border-border bg-muted/40 p-2">
-            <BlockList blocks={block.blocks} list={path[0]} edit={edit} />
+            {/* Inside, `item` is this list's current item. */}
+            <ChipViewContext.Provider
+              value={chipView(edit, block.variable || undefined)}
+            >
+              <BlockList blocks={block.blocks} list={path[0]} edit={edit} />
+            </ChipViewContext.Provider>
           </div>
         </div>
       );
@@ -510,8 +691,10 @@ export interface WrittenBodyProps {
   value: WrittenDocument;
   onChange: (next: WrittenDocument) => void;
   readOnly?: boolean;
-  /** The declared list variables a list block can repeat over. */
-  listVariables?: readonly string[];
+  /** The template's declared variables, which name chips and lists. */
+  variables?: readonly TemplateFormVariable[];
+  /** The workbench's test data, which says which chips show blank. */
+  sampleData?: Record<string, unknown> | null;
   /** Set to a way to put a variable where the person was last typing. */
   insertRef?: MutableRefObject<InsertVariable | null>;
 }
@@ -520,30 +703,16 @@ export function WrittenBody({
   value,
   onChange,
   readOnly = false,
-  listVariables = [],
+  variables = [],
+  sampleData = {},
   insertRef,
 }: WrittenBodyProps): JSX.Element {
-  // The field typed in last, where the Variables rail puts a chip.
-  const lastEditor = useRef<LexicalEditor | null>(null);
+  // The field typed in last, where a chip goes, and the list it sits in.
+  const last = useRef<{ editor: LexicalEditor; list?: number } | null>(null);
   if (insertRef) {
     insertRef.current = variable => {
-      const editor = lastEditor.current;
-      if (!editor || readOnly) return false;
-      editor.update(
-        () => {
-          const chip = new ChipNode(variable);
-          const selection = $getSelection();
-          if ($isRangeSelection(selection)) {
-            selection.insertNodes([chip]);
-            return;
-          }
-          // No caret kept: at the end of what the field holds.
-          const paragraph = $getRoot().getLastChild();
-          if ($isElementNode(paragraph)) paragraph.append(chip);
-          else $getRoot().append($createParagraphNode().append(chip));
-        },
-        { discrete: true }
-      );
+      if (!last.current || readOnly) return false;
+      insertChip(last.current.editor, variable);
       return true;
     };
   }
@@ -557,9 +726,15 @@ export function WrittenBody({
     },
     current: () => latest.current,
     readOnly,
-    listVariables,
-    focused: editor => {
-      lastEditor.current = editor;
+    variables,
+    sampleData,
+    focused: (editor, path) => {
+      last.current = { editor, list: path.length === 2 ? path[0] : undefined };
+    },
+    insertItemField: (list, variable) => {
+      if (readOnly || last.current?.list !== list) return false;
+      insertChip(last.current.editor, variable);
+      return true;
     },
   };
   return (
@@ -568,7 +743,9 @@ export function WrittenBody({
         <span className="font-medium text-foreground">Content</span> · The look
         comes from your brand settings.
       </p>
-      <BlockList blocks={value.blocks} list={undefined} edit={edit} />
+      <ChipViewContext.Provider value={chipView(edit)}>
+        <BlockList blocks={value.blocks} list={undefined} edit={edit} />
+      </ChipViewContext.Provider>
     </div>
   );
 }

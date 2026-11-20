@@ -159,6 +159,18 @@ function makeAdapter(options: { mainTableExists?: boolean } = {}) {
         transaction: async (run: (tx: unknown) => Promise<void>) => run(db),
         // No archive rows of unknown owner, so a teardown has none to label.
         selectDistinct: () => ({ from: () => ({ where: async () => [] }) }),
+        // A Single's delete teardown looks its translation transition record up on the
+        // transaction's handle, and finds none: there is nothing to forget.
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: () =>
+                Object.assign(Promise.resolve([]), {
+                  for: () => Promise.resolve([]),
+                }),
+            }),
+          }),
+        }),
         delete: () => ({ where: async () => [] }),
       };
       return db;

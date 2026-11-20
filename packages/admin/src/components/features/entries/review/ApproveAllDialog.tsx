@@ -273,7 +273,6 @@ function PartRow({
         <span className="font-medium">{name}</span>
         <span className="text-xs text-muted-foreground">
           {partPairWords(read)}
-          {read.note === undefined ? null : ` ${read.note}`}
         </span>
       </button>
       {open && pair?.kind === "pair" ? (
@@ -286,6 +285,8 @@ function PartRow({
             {...(pair.seededBy === undefined
               ? {}
               : { seededBy: pair.seededBy })}
+            // The shared part's pair compares the shared fields alone.
+            {...(pair.part === undefined ? {} : { part: pair.part })}
           />
         </div>
       ) : null}

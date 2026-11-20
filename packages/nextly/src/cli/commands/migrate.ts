@@ -85,6 +85,7 @@ import {
 } from "../../domains/schema/migrate/core-reconcile";
 import {
   consentToCover,
+  countDeletions,
   describeDeletion,
   resolveDataLossConsent,
   type DataLossConsent,
@@ -111,6 +112,10 @@ import {
   runRecordedAttempt,
 } from "../../domains/schema/migrate/drift-reconcile";
 import {
+  leftoverTranslationsTables,
+  type LeftoverTranslations,
+} from "../../domains/schema/migrate/dropped-entity-leftovers";
+import {
   retiredByRun,
   withEntityCoverage,
 } from "../../domains/schema/migrate/entity-shared-rows";
@@ -129,6 +134,7 @@ import {
   type AppMigrationStanding,
   type FirstRun,
 } from "../../domains/schema/migrate/first-run";
+import { refuseForkedHistory } from "../../domains/schema/migrate/history-line";
 import {
   outsideTransactionNotice,
   runMigrationStatements,
@@ -169,7 +175,6 @@ import {
   asServiceLogger,
   reconcileMigrationMetadata,
 } from "../../domains/schema/migrate/reconcile-metadata";
-import { refuseForkedHistory } from "../../domains/schema/migrate/history-line";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
   findRegistryDisagreements,
@@ -183,6 +188,7 @@ import {
   takeRegistryBaseline,
   type RegistryRecord,
 } from "../../domains/schema/migrate/registry-record";
+import { readRegistrySource } from "../../domains/schema/migrate/registry-source";
 import { typeChangedRowsWriter } from "../../domains/schema/migrate/registry-writer";
 import {
   refuseRenamesOntoTakenTargets,
@@ -212,6 +218,13 @@ import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { danglingReferences } from "../../domains/schema/migrate/sqlite-foreign-keys";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import {
+  endsTheRun,
+  isStoppedAtPoint,
+  reachStopPoint,
+  withStopPoints,
+  type StopPointHook,
+} from "../../domains/schema/migrate/stop-points";
+import {
   adoptUniqueIndexesAlreadyThere,
   type AdoptedUniqueIndex,
   refuseUniqueIndexesOverRepeats,
@@ -223,7 +236,10 @@ import {
   mergeContributions,
   narrowToContributions,
 } from "../../domains/schema/migrate-create/app-stream";
-import type { EntitySettingsRecord } from "../../domains/schema/migrate-create/entity-settings";
+import type {
+  EntitySettingsRecord,
+  SettingsEntityKind,
+} from "../../domains/schema/migrate-create/entity-settings";
 import {
   ENTITY_HEADER_GUIDANCE,
   parseEntityHeaders,
@@ -664,6 +680,8 @@ export async function runMigrate(
   let configResult: Awaited<ReturnType<typeof loadConfig>>;
   try {
     configResult = await loadConfig({
+      // Reads the app's entities: with no configuration file it refuses rather than act on none.
+      missing: "refuse",
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,
@@ -869,6 +887,7 @@ export async function runMigrate(
         // A deleted entity's field-group values are read through the ORM, which this command's
         // resolver of Nextly's own tables cannot address: every field group's table is added to
         // it first, as `prune` adds them (`registerComponentSchemas`).
+        judgeLeftoverTranslations: true,
         prepareLeftoverTables: async () => {
           const drizzleAdapter = adapter as unknown as DrizzleAdapter;
           await registerComponentSchemas({
@@ -1289,6 +1308,13 @@ export interface MigrateCoreDeps {
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
   /**
+   * For tests: called at each named point the run reaches (`stop-points.ts`): before and after
+   * each statement of a file, once a file is recorded applied, as a dropped entity's registry row
+   * goes, once the registry write commits, and as what a dropped entity left goes. One that throws
+   * fails the run there.
+   */
+  stopAt?: StopPointHook;
+  /**
    * What the run does with the registry rows the migrations record:
    * `write` (the default, for `nextly migrate` and the production boot
    * step) brings each to the newest applied snapshot; `insert-missing`
@@ -1307,6 +1333,13 @@ export interface MigrateCoreDeps {
    * Nextly's own tables alone; a booted app's adapter resolves them already.
    */
   prepareLeftoverTables?: () => Promise<void>;
+  /**
+   * Judge, with the run's other deletions, the translations tables deleted
+   * entities left standing (`leftoverTranslationsTables`), and drop the ones
+   * the consent covers once their entity's rows go. Set by the command; a
+   * development start leaves them, so it never asks about them.
+   */
+  judgeLeftoverTranslations?: boolean;
   /**
    * Seam for tests; defaults to recording and retiring element owner rows
    * against the database.
@@ -1559,6 +1592,19 @@ export async function previewMigrate(args: {
     logger,
     pendingModules.length > 0
   );
+  // The translations tables deleted entities left, which a real run judges with its files'
+  // deletions and drops under the consent: listed as it lists them, with the consent it needs.
+  const leftovers = await leftoverTranslationsOf(
+    { adapter, db, dialect, migrationsDir: args.migrationsDir },
+    new Set(pendingFiles.map(file => fileUnit(file, dialect).label))
+  );
+  if (leftovers.length > 0) {
+    logger.info(`  • ${LEFTOVER_TRANSLATIONS_LABEL}`);
+    previewDeletions(
+      await leftoverDeletions(leftovers, { db, dialect }),
+      logger
+    );
+  }
   // The renames a real run would refuse before any statement, from the same check over the same
   // units: the modules, then the files.
   for (const { file, message } of await renamesOntoTakenTargets(
@@ -2705,6 +2751,11 @@ async function addDocumentColumnsFor(deps: MigrateCoreDeps): Promise<void> {
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
+  // A test's stop points (`stopAt`), installed for this run alone: the run itself goes on below.
+  if (deps.stopAt !== undefined) {
+    const { stopAt, ...run } = deps;
+    return withStopPoints(stopAt, () => migrateCore(run));
+  }
   // Refused HERE rather than in `runMigrate`, because this function is also
   // reached from `runMigrationsOnBoot` and from boot-apply. A refusal in the
   // command alone would let a production boot apply migrations that silently
@@ -2776,6 +2827,9 @@ export async function migrateCore(
   // on them; judged again under the lock, below, against the database as it
   // stands then, accepting only what was agreed here.
   const { agreement: agreedDeletions } = await judgeFileDeletions(deps);
+  // The translations tables deleted entities left that the judgement under the lock covered, for
+  // the metadata pass to drop (`judgeLeftoverTranslations`).
+  let judgedLeftovers: readonly string[] = [];
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
@@ -2828,20 +2882,31 @@ export async function migrateCore(
     ...(deps.prepareLeftoverTables === undefined
       ? {}
       : { prepareLeftoverTables: deps.prepareLeftoverTables }),
+    ...(judgedLeftovers.length === 0
+      ? {}
+      : { dropLeftoverTranslations: new Set(judgedLeftovers) }),
     logger: {
       info: (m: string) => deps.logger.debug(m),
       warn: (m: string) => deps.logger.warn(m),
       debug: (m: string) => deps.logger.debug(m),
     },
   });
+  /**
+   * The registry rows of the files that applied before one failed with `error`, except after a
+   * test's stop at a point (`stop-points.ts`), which ends the run where it stands.
+   */
+  const recordMetadataAfter = async (error: unknown): Promise<void> => {
+    if (!isStoppedAtPoint(error)) await recordMetadata();
+  };
   const recordMetadata = async (): Promise<void> => {
     deps.logger.info("Phase 3: recording migration metadata...");
     try {
       metadata = await reconcileMetadata(metadataArgs());
     } catch (error) {
       // A run that lost the schema lock stops here: it is not a bookkeeping
-      // failure to warn about and carry on from into Phase 4's writes.
-      if (isSchemaLockLost(error)) throw error;
+      // failure to warn about and carry on from into Phase 4's writes. Nor is
+      // a test's stop at a point (`stop-points.ts`).
+      if (endsTheRun(error)) throw error;
       // The whole pass failed, so nothing was read: say so in the result
       // rather than returning zeroes that read like "nothing needed doing".
       metadata = {
@@ -2882,6 +2947,15 @@ export async function migrateCore(
           await assertSchemaLockHeld();
           await deps.markOrphanedPermissions?.(scope, applied.name);
         };
+  /**
+   * What follows an applied app migration: its orphaned permissions marked, then the point a test
+   * stops the run at once the file and that are done (`stop-points.ts`), since a later run passes
+   * over a recorded file and nothing of it may be left for one.
+   */
+  const afterApplied = async (applied: AppliedAppMigration): Promise<void> => {
+    await markOrphans?.(applied);
+    await reachStopPoint(`${applied.name}.sql: recorded applied`);
+  };
   const dz = deps.adapter as unknown as DrizzleAdapter;
   /**
    * Store the registry record on `tx` at the point the database is now at,
@@ -3043,10 +3117,11 @@ export async function migrateCore(
       // A file that deletes data runs only with consent covering each
       // deletion, judged from the database this run holds the lock on. The
       // files run only as they were judged here (`assertRunsAsJudged`).
-      const { files: judgedFiles } = await judgeFileDeletions(
+      const { files: judgedFiles, leftovers } = await judgeFileDeletions(
         deps,
         agreedDeletions
       );
+      judgedLeftovers = leftovers;
       // And the history as one line, read again under the lock and after the
       // files this run applies were read from the folder: a migration written
       // beside another while the run waited is among those files only if it
@@ -3166,13 +3241,13 @@ export async function migrateCore(
           runFiles,
           judgedFiles,
           firstRun.beforeApply,
-          markOrphans
+          afterApplied
         ));
       } catch (error) {
         // A file failed after earlier ones applied: their registry rows are
         // still written, from the newest snapshot that did apply, before the
         // failure ends the run.
-        await recordMetadata();
+        await recordMetadataAfter(error);
         throw error;
       }
 
@@ -3606,7 +3681,12 @@ export async function refuseUnresolvedAppAttempts(args: {
 async function judgeFileDeletions(
   deps: MigrateCoreDeps,
   agreed?: Agreement
-): Promise<{ agreement: Agreement; files: ReadonlyMap<string, string> }> {
+): Promise<{
+  agreement: Agreement;
+  files: ReadonlyMap<string, string>;
+  /** The translations tables deleted entities left that this judgement covered. */
+  leftovers: readonly string[];
+}> {
   const consent = runConsent(deps);
   const listed = await listMigrationFiles(
     deps.adapter,
@@ -3663,6 +3743,32 @@ async function judgeFileDeletions(
     deps.dialect
   );
   const units = [...modules, ...fileUnits];
+  // The translations tables deleted entities left standing, asked about with the files' deletions
+  // and dropped by the metadata pass once covered: a table drop runs only under the consent.
+  const leftovers =
+    deps.judgeLeftoverTranslations === true
+      ? await leftoverTranslationsOf(
+          deps,
+          // The app files the run applies, from the window it runs them in: plugin modules
+          // take their part of a step first (`appStepAfter`), as the run applies them.
+          new Set(
+            appFileUnits(
+              listed,
+              appStepAfter(deps.step, modules.length),
+              deps.dialect
+            ).map(unit => unit.label)
+          )
+        )
+      : [];
+  if (leftovers.length > 0) {
+    const source = deletionSource(
+      LEFTOVER_TRANSLATIONS_LABEL,
+      leftovers.map(left => left.table).join("\n")
+    );
+    for (const deletion of await leftoverDeletions(leftovers, deps)) {
+      sources.set(deletion, source);
+    }
+  }
   for (const { unit, deletions } of await pendingRunDeletions(
     units,
     deps.db,
@@ -3692,7 +3798,71 @@ async function judgeFileDeletions(
   const files = new Map(
     fileUnits.map(unit => [unit.label, textDigest(unit.text)])
   );
-  return { agreement, files };
+  return { agreement, files, leftovers: leftovers.map(left => left.table) };
+}
+
+/** The word a deletion's reason names each kind of entity by. */
+const KIND_WORDS: Record<SettingsEntityKind, string> = {
+  collection: "collection",
+  single: "Single",
+  fieldGroup: "field group",
+};
+
+/**
+ * The translations tables the entities the run's migrations dropped left
+ * standing (`leftoverTranslationsTables`), read from the history the run ends
+ * at: the applied records and `runFiles`, the app files this run applies. An
+ * entity a pending file of the run makes again is not dropped there, so its
+ * old table is not asked about, as the metadata pass, reading the same history
+ * once the files have run, would not drop it. None where it cannot be read.
+ */
+async function leftoverTranslationsOf(
+  target: Pick<MigrateCoreDeps, "adapter" | "db" | "dialect" | "migrationsDir">,
+  runFiles: ReadonlySet<string>
+): Promise<LeftoverTranslations[]> {
+  // A database without the ledger yet (a first run) has applied no file, so
+  // no deleted entity left anything; the ledger is not read where it is absent.
+  const hasLedger = await (
+    target.adapter as unknown as {
+      tableExists: (n: string) => Promise<boolean>;
+    }
+  ).tableExists("nextly_schema_events");
+  if (!hasLedger) return [];
+  const events = new SchemaEventsRepository(target.db, target.dialect);
+  const source = await readRegistrySource({
+    migrationsDir: target.migrationsDir,
+    isApplied: async filename =>
+      runFiles.has(filename) || (await events.isFileApplied(filename)),
+  });
+  if (source.kind !== "snapshot") return [];
+  return leftoverTranslationsTables({
+    adapter: target.adapter as unknown as DrizzleAdapter,
+    chain: source.chain ?? [source.entities],
+  });
+}
+
+/** The heading a run lists the translations tables deleted entities left under. */
+const LEFTOVER_TRANSLATIONS_LABEL = "tables deleted entities left";
+
+/**
+ * The deletion each table in `leftovers` is listed and judged as: named for
+ * the entity it belonged to, covered as that entity's table's translations,
+ * and counted (`countDeletions`) so the listing says how many rows go.
+ */
+async function leftoverDeletions(
+  leftovers: readonly LeftoverTranslations[],
+  target: Pick<MigrateCoreDeps, "db" | "dialect">
+): Promise<Deletion[]> {
+  return countDeletions(
+    leftovers.map(left => ({
+      kind: "table" as const,
+      table: left.table,
+      translates: left.translates,
+      reason: `left by the deleted ${KIND_WORDS[left.kind]} "${left.slug}"`,
+    })),
+    target.db,
+    target.dialect
+  );
 }
 
 /**
@@ -5284,6 +5454,7 @@ export async function runFileMigrations(args: {
               : [],
         }),
       });
+      // The file and its ledger row have committed (`stop-points.ts`).
       applied++;
       lastApplied = filename;
       appliedFiles.push(filename);

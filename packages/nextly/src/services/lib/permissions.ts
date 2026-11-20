@@ -53,7 +53,7 @@ import {
 import {
   cacheExpiry,
   soonestExpiry,
-  userRoleAssignmentsInForce,
+  usersRoleAssignmentsInForce,
   type ResolvedRoles,
 } from "./role-assignments";
 
@@ -271,26 +271,52 @@ class PermissionChecker {
 
   /**
    * The user's role assignments in force now, and the soonest expiry among
-   * them. A lapsed assignment grants nothing, so it is left out here, where
-   * every permission and super-admin decision starts.
+   * them: {@link directRoleAssignments} asked of one user.
    */
   private async getDirectRoleAssignments(
     userId: string,
     // Optional transaction-bound executor; see `hasPermission`.
     executor?: unknown
   ): Promise<ResolvedRoles> {
+    const assigned = (await this.directRoleAssignments([userId], executor)).get(
+      userId
+    );
+    return assigned ?? { roleIds: new Set(), validUntil: soonestExpiry([]) };
+  }
+
+  /**
+   * Each of `userIds`' role assignments in force now, and the soonest expiry
+   * among each one's, read in one statement. A lapsed assignment grants
+   * nothing, so it is left out here, where every permission and super-admin
+   * decision starts.
+   */
+  async directRoleAssignments(
+    userIds: readonly string[],
+    // Optional transaction-bound executor; see `hasPermission`.
+    executor?: unknown
+  ): Promise<Map<string, ResolvedRoles>> {
+    const byUser = new Map<string, ResolvedRoles>();
+    if (userIds.length === 0) return byUser;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { userRoles } = this.t as any;
     const rows = (await rbacQuery(executor)
-      .select({ roleId: userRoles.roleId, expiresAt: userRoles.expiresAt })
+      .select({
+        userId: userRoles.userId,
+        roleId: userRoles.roleId,
+        expiresAt: userRoles.expiresAt,
+      })
       .from(userRoles)
       .where(
-        userRoleAssignmentsInForce(userRoles, userId, new Date())
-      )) as Array<{ roleId: string; expiresAt: Date | null }>;
-    return {
-      roleIds: new Set(rows.map(r => String(r.roleId))),
-      validUntil: soonestExpiry(rows),
-    };
+        usersRoleAssignmentsInForce(userRoles, userIds, new Date())
+      )) as Array<{ userId: string; roleId: string; expiresAt: Date | null }>;
+    for (const userId of new Set(userIds)) {
+      const own = rows.filter(row => String(row.userId) === userId);
+      byUser.set(userId, {
+        roleIds: new Set(own.map(row => String(row.roleId))),
+        validUntil: soonestExpiry(own),
+      });
+    }
+    return byUser;
   }
 
   private async roleSetHasPermission(
@@ -789,6 +815,21 @@ export async function resolveUserRoles(
   executor?: unknown
 ): Promise<ResolvedRoles> {
   return new PermissionChecker().resolveRoles(userId, executor);
+}
+
+/**
+ * The roles each of `userIds` is assigned directly and in force now, read in
+ * one statement: the assignments every permission and super-admin decision
+ * starts from, before inheritance. For work that asks about many people at
+ * once, by the roles that hold a permission, inheritance included.
+ */
+export async function directRoleIdsOfUsers(
+  userIds: readonly string[]
+): Promise<Map<string, ReadonlySet<string>>> {
+  const assigned = await new PermissionChecker().directRoleAssignments(userIds);
+  return new Map(
+    [...assigned].map(([userId, roles]) => [userId, roles.roleIds])
+  );
 }
 
 /**

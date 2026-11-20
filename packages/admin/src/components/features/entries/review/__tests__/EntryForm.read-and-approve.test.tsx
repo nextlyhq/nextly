@@ -117,6 +117,7 @@ const inReview: PartReview = {
   part: null,
   stage: "inReview",
   stageLabel: "In review",
+  stageColour: null,
   publishable: false,
   enteredAt: null,
   enteredBy: null,
@@ -147,6 +148,8 @@ const inReview: PartReview = {
   ],
   waitingFor: { kind: "roles", roles: [{ id: "r-rev", name: "Reviewers" }] },
   lastMove: null,
+  // The version its review state names as under review: the newest listed.
+  reviewedVersionNo: 3,
 };
 
 function renderAs(reader: boolean): void {

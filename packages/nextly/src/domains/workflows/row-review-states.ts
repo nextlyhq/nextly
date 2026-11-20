@@ -44,13 +44,13 @@ import {
   partWaitsDecider,
   type PartWaitingFor,
   type PartWaits,
+  type WaitingPartInput,
 } from "./part-waits-for";
 import { workflowAttachedTo } from "./registry";
 import {
   readReviewStatesOfDocuments,
   type ReviewAssignee,
   type ReviewState,
-  type ReviewStatesDb,
 } from "./review-state-repository";
 import { readStagePresentation } from "./stage-presentation";
 import { allowsPublish } from "./steps";
@@ -175,9 +175,8 @@ export async function rowReviewStatesOf(
     : new Map<string, Map<string, number>>();
 
   const shown = await readStagePresentation(adapter, workflow);
-  const decide = partWaitsDecider(adapter, workflow, slug);
   const listed: { id: string; review: RowPartReview }[] = [];
-  const decided: { slug: string; waits: PartWaits }[] = [];
+  const inputs: WaitingPartInput[] = [];
   for (const id of ids) {
     const row = main.get(id);
     if (!row) continue;
@@ -218,17 +217,21 @@ export async function rowReviewStatesOf(
           ),
         },
       });
-      decided.push({
-        slug,
-        waits: await decide({
-          stage,
-          assignee: state?.assignee ?? null,
-          enteredBy: state?.enteredBy ?? null,
-        }),
+      inputs.push({
+        stage,
+        assignee: state?.assignee ?? null,
+        enteredBy: state?.enteredBy ?? null,
       });
     }
   }
-  // Whom each part waits for, named once for the page.
+  // Whom each part waits for: every assignee and default reviewer of the page asked at once,
+  // then each part decided, and every name read once for the page.
+  const decider = partWaitsDecider(adapter, workflow, slug);
+  await decider.prime(inputs);
+  const decided: { slug: string; waits: PartWaits }[] = [];
+  for (const input of inputs) {
+    decided.push({ slug, waits: await decider.decide(input) });
+  }
   const names = await nameWaits(adapter, decided);
   for (const [index, { id, review }] of listed.entries()) {
     review.waitingFor = names[index] ?? null;

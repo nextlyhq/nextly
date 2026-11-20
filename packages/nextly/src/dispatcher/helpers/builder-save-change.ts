@@ -21,11 +21,17 @@ import type {
   CollectionSaveDeps,
   CollectionSavePreview,
 } from "../../domains/schema/builder-save/collection-save";
+import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import type { FieldMoveRequest } from "../../domains/schema/field-moves/check-move";
+import {
+  type PushReason,
+  refuseMovesOffTheFile,
+} from "../../domains/schema/field-moves/moves-road";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { NextlyError } from "../../errors/nextly-error";
 import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
@@ -103,6 +109,8 @@ export async function writeBuilderSchemaChange(
     /** A Single's junction statements and relationship keys (`entityRelations`). */
     junctions?: NonNullable<CollectionSave["junctions"]>;
     keys?: NonNullable<CollectionSave["keys"]>;
+    /** The fields the save moves into or out of a group, whose values its file keeps. */
+    moves?: readonly FieldMoveRequest[];
   },
   /**
    * Whether `apply`'s push has landed (`landingPush`): a failure after it,
@@ -128,6 +136,12 @@ export async function writeBuilderSchemaChange(
   fileRoad?: {
     pushWhen: () => Promise<boolean>;
     afterFile: () => Promise<void>;
+    /**
+     * The questions the push asks before it changes anything, asked of the save's file where it
+     * runs instead, before anything is written: a rename the request does not answer, or a drop it
+     * does not confirm, refuses the save as the push refuses it (`refuseUnansweredDialogQuestions`).
+     */
+    questions?: (moved: readonly string[]) => Promise<void>;
     registry?: (fields: readonly FieldDefinition[]) => Promise<void>;
     /**
      * After `registry`, for a file that stopped part way and was settled to what applied: what
@@ -136,6 +150,18 @@ export async function writeBuilderSchemaChange(
     settled?: (fields: readonly FieldDefinition[]) => void;
   }
 ): Promise<{ registryWritten: boolean }> {
+  // Asked at most once: it reads the live table.
+  let pushes: Promise<boolean> | undefined;
+  const pushesNow = () =>
+    (pushes ??=
+      fileRoad === undefined ? Promise.resolve(true) : fileRoad.pushWhen());
+  // A save that moves fields keeps their values only through its own file: one the push would
+  // apply instead is refused before anything is written, in every environment alike.
+  await refuseMovesOffTheFile({
+    moves: change.moves ?? [],
+    writes: deps !== undefined,
+    pushReason: () => entityPushReason(deps, pushesNow),
+  });
   if (deps === undefined) {
     await apply();
     return { registryWritten: false };
@@ -143,18 +169,19 @@ export async function writeBuilderSchemaChange(
   // Asked before the save writes anything, as a change reaching a relation's storage is judged
   // against the live table; only where the answer is used, a save the writer runs.
   const runsFile =
-    deps.applies && fileRoad !== undefined && !(await fileRoad.pushWhen());
-  const { save } = saveOfSchemaChange({
-    ...change,
-    row: {
-      labels: change.stored.labels,
-      fields: change.stored.fields as unknown as FieldDefinition[],
-    },
-    definition: await loadUiSchema({
-      projectRoot: deps.projectRoot,
-      uiSchemaFile: deps.config.db.uiSchemaFile,
-    }),
-  });
+    deps.applies && fileRoad !== undefined && !(await pushesNow());
+  const save = await entitySaveOf(deps, change);
+  // Outside development the push runs after the files are written (`appliedAfter`) and asks only of
+  // the main table's columns, while the translations table's and the link tables' drops follow it:
+  // the questions are asked there too, before anything is written, as the collection's road asks.
+  // They are told the columns the save's planned moves carry into a group, which are not drops.
+  if (runsFile || !deps.applies) {
+    const questions = fileRoad?.questions;
+    if (questions !== undefined) {
+      const { movedColumnsOf } = await loadCollectionSave();
+      await questions(movedColumnsOf(deps, save, change.table));
+    }
+  }
   const { writeEntitySave } = await loadEntitySave();
   if (runsFile) {
     const registry = fileRoad.registry;
@@ -200,6 +227,81 @@ export async function writeBuilderSchemaChange(
 }
 
 /**
+ * Why a Single's or a field group's save goes to its push rather than its migration file
+ * (`PushReason`): outside development every one does, as the push applies the change once the file
+ * is written and the deploy finds it done; in development, one whose values only the push carries
+ * (`pushes`, asked only there).
+ */
+export async function entityPushReason(
+  deps: CollectionSaveDeps | undefined,
+  pushes: () => Promise<boolean>
+): Promise<PushReason> {
+  if (deps !== undefined && !deps.applies) return "applied-directly";
+  return (await pushes()) ? "carries-values" : null;
+}
+
+/** The entity's save as the definition file and its stored row describe it, with its moves. */
+async function entitySaveOf(
+  deps: CollectionSaveDeps,
+  change: Parameters<typeof writeBuilderSchemaChange>[2]
+): Promise<CollectionSave> {
+  const definition = await loadUiSchema({
+    projectRoot: deps.projectRoot,
+    uiSchemaFile: deps.config.db.uiSchemaFile,
+  });
+  const row = {
+    labels: change.stored.labels,
+    fields: change.stored.fields as unknown as FieldDefinition[],
+  };
+  return withMoves(
+    saveOfSchemaChange({ ...change, row, definition }).save,
+    change.moves
+  );
+}
+
+/**
+ * A Single's or a field group's dialog questions, as its file road asks them before anything is
+ * written (`refuseUnansweredDialogQuestions`), told the columns the save's planned moves carry
+ * into a group, which are not drops. One builder for both dialogs.
+ */
+export function entityDialogQuestions(
+  args: Omit<
+    Parameters<typeof refuseUnansweredDialogQuestions>[0],
+    "renameResolutions" | "eventResolutions" | "legacy" | "moved"
+  > & {
+    renameResolutions:
+      | Parameters<
+          typeof refuseUnansweredDialogQuestions
+        >[0]["renameResolutions"]
+      | undefined;
+    eventResolutions:
+      | Parameters<
+          typeof refuseUnansweredDialogQuestions
+        >[0]["eventResolutions"]
+      | undefined;
+    legacy: Parameters<typeof refuseUnansweredDialogQuestions>[0]["legacy"];
+  }
+): (moved: readonly string[]) => Promise<void> {
+  const { legacy, ...rest } = args;
+  return moved =>
+    refuseUnansweredDialogQuestions({
+      ...rest,
+      renameResolutions: args.renameResolutions ?? [],
+      eventResolutions: args.eventResolutions ?? [],
+      ...(legacy === undefined ? {} : { legacy }),
+      moved,
+    });
+}
+
+/** The save with the fields it moves, whose statements its file carries; as it was without any. */
+function withMoves(
+  save: CollectionSave,
+  moves: readonly FieldMoveRequest[] | undefined
+): CollectionSave {
+  return moves === undefined || moves.length === 0 ? save : { ...save, moves };
+}
+
+/**
  * What the save would write beyond the person's change, for the schema
  * dialog's review to show before they confirm: each conversion an adoption
  * makes, each fill and each delete (`previewCollectionSave`). A conversion
@@ -211,17 +313,7 @@ export async function reviewBuilderSchemaChange(
   change: Parameters<typeof writeBuilderSchemaChange>[2]
 ): Promise<BuilderSaveReview> {
   if (deps === undefined) return NOTHING_TO_REVIEW;
-  const { save } = saveOfSchemaChange({
-    ...change,
-    row: {
-      labels: change.stored.labels,
-      fields: change.stored.fields as unknown as FieldDefinition[],
-    },
-    definition: await loadUiSchema({
-      projectRoot: deps.projectRoot,
-      uiSchemaFile: deps.config.db.uiSchemaFile,
-    }),
-  });
+  const save = await entitySaveOf(deps, change);
   const { previewCollectionSave } = await loadCollectionSave();
   return reviewOf(await previewCollectionSave(deps, save));
 }
