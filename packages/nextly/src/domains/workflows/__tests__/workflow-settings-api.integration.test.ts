@@ -603,6 +603,25 @@ describe.each(getConfiguredTestDialects())(
         });
       });
 
+      it("counts every workflow's stages in reads that do not grow with its stages: one grouped read, and one of each first stage", async () => {
+        current = await bootSteps(dialect);
+        await admin();
+        // On the adapter's class, so the REST door's adapter and the Direct API's are both seen.
+        const counts = vi.spyOn(Object.getPrototypeOf(app().adapter), "count");
+        try {
+          await door.list(SAM);
+          const ofReviewStates = counts.mock.calls.filter(
+            ([table]) => table === "nextly_review_states"
+          );
+          // Each workflow's first stage is counted on its own (a part in a stage the workflow
+          // no longer has joins it); every other stage of every workflow comes from one grouped
+          // read, which is not a count call at all.
+          expect(ofReviewStates).toHaveLength(publishedWorkflows().size);
+        } finally {
+          counts.mockRestore();
+        }
+      });
+
       it("says whether each default reviewer still holds the stage's primary step, a person or a role", async () => {
         current = await bootSteps(dialect);
         await admin();

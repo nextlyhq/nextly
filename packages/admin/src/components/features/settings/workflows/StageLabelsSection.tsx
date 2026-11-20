@@ -121,17 +121,13 @@ function StageLabelRow({
     colour: colourKey(set?.colour),
   };
   const current = draft ?? stored;
-  const shownLabel = current.label.trim() || stage.label;
-  const storedColour = stageColourOf(set?.colour);
-  const changed =
-    current.label.trim() !== stored.label || current.colour !== stored.colour;
   const inputId = `stage-label-${stage.name}`;
 
   return (
     <div className="grid gap-3 py-4 first:pt-0 last:pb-0 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <div className="space-y-1">
         <StagePill
-          label={shownLabel}
+          label={current.label.trim() || stage.label}
           colour={current.colour === "" ? undefined : current.colour}
         />
         <p className="text-xs text-muted-foreground">
@@ -156,64 +152,20 @@ function StageLabelRow({
               }
             />
           </div>
-          <fieldset>
-            <legend className="sr-only">Colour for {stage.label}</legend>
-            <div className="flex flex-wrap gap-2">
-              <ColourOption
-                name={`stage-colour-${stage.name}`}
-                value=""
-                label={NEUTRAL_SWATCH.name}
-                checked={current.colour === ""}
-                disabled={saving}
-                surface={NEUTRAL_SWATCH.surface}
-                ink={NEUTRAL_SWATCH.label}
-                onSelect={() => onDraft({ ...current, colour: "" })}
-              />
-              {STAGE_SWATCHES.map(swatch => (
-                <ColourOption
-                  key={swatch.id}
-                  name={`stage-colour-${stage.name}`}
-                  value={swatch.value}
-                  label={swatch.name}
-                  checked={current.colour === swatch.value}
-                  disabled={saving}
-                  surface={swatch.surface}
-                  ink={swatch.label}
-                  onSelect={() => onDraft({ ...current, colour: swatch.value })}
-                />
-              ))}
-              {storedColour.kind === "custom" && (
-                <ColourOption
-                  name={`stage-colour-${stage.name}`}
-                  value={colourKey(storedColour.value)}
-                  label={`Set elsewhere (${storedColour.value})`}
-                  checked={current.colour === colourKey(storedColour.value)}
-                  disabled={saving}
-                  surface={NEUTRAL_SWATCH.surface}
-                  ink={NEUTRAL_SWATCH.label}
-                  onSelect={() =>
-                    onDraft({
-                      ...current,
-                      colour: colourKey(storedColour.value),
-                    })
-                  }
-                />
-              )}
-            </div>
-          </fieldset>
+          <StageColourPicker
+            stage={stage}
+            stored={set?.colour}
+            chosen={current.colour}
+            disabled={saving}
+            onChoose={colour => onDraft({ ...current, colour })}
+          />
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               size="sm"
-              disabled={!changed || saving}
+              disabled={!draftChanged(current, stored) || saving}
               aria-label={`Save ${stage.label}`}
-              onClick={() => {
-                const label = current.label.trim();
-                void onSave({
-                  label: label === "" || label === stage.label ? null : label,
-                  colour: current.colour === "" ? null : current.colour,
-                });
-              }}
+              onClick={() => void onSave(labelPatch(current, stage))}
             >
               Save
             </Button>
@@ -223,9 +175,7 @@ function StageLabelRow({
               variant="ghost"
               disabled={!labelDiffersFromCode(stage, settings) || saving}
               aria-label={`Reset ${stage.label}`}
-              onClick={() => {
-                void onSave(null);
-              }}
+              onClick={() => void onSave(null)}
             >
               Reset
             </Button>
@@ -242,6 +192,99 @@ function StageLabelRow({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/** Whether a row's edits differ from what is stored. */
+function draftChanged(current: Draft, stored: Draft): boolean {
+  return (
+    current.label.trim() !== stored.label || current.colour !== stored.colour
+  );
+}
+
+/**
+ * What a row's Save sends: a label left empty, or the code's own, as no label
+ * of its own, so the code's shows and follows the code; no colour as none.
+ */
+function labelPatch(
+  current: Draft,
+  stage: WorkflowStageSummary
+): { label: string | null; colour: string | null } {
+  const label = current.label.trim();
+  return {
+    label: label === "" || label === stage.label ? null : label,
+    colour: current.colour === "" ? null : current.colour,
+  };
+}
+
+/**
+ * A stage's colour picker: No colour, each palette swatch, and a stored value
+ * outside the palette as its own option, so the choice on screen is the one
+ * stored.
+ */
+function StageColourPicker({
+  stage,
+  stored,
+  chosen,
+  disabled,
+  onChoose,
+}: {
+  stage: WorkflowStageSummary;
+  /** The colour stored for the stage, as the API keeps it. */
+  stored: string | undefined;
+  /** The colour chosen, by its picker key ("" for none). */
+  chosen: string;
+  disabled: boolean;
+  onChoose: (colour: string) => void;
+}): React.JSX.Element {
+  const name = `stage-colour-${stage.name}`;
+  const storedColour = stageColourOf(stored);
+  const options = [
+    {
+      key: "none",
+      value: "",
+      label: NEUTRAL_SWATCH.name,
+      surface: NEUTRAL_SWATCH.surface,
+      ink: NEUTRAL_SWATCH.label,
+    },
+    ...STAGE_SWATCHES.map(swatch => ({
+      key: swatch.id,
+      value: swatch.value,
+      label: swatch.name,
+      surface: swatch.surface,
+      ink: swatch.label,
+    })),
+    ...(storedColour.kind === "custom"
+      ? [
+          {
+            key: "custom",
+            value: colourKey(storedColour.value),
+            label: `Set elsewhere (${storedColour.value})`,
+            surface: NEUTRAL_SWATCH.surface,
+            ink: NEUTRAL_SWATCH.label,
+          },
+        ]
+      : []),
+  ];
+  return (
+    <fieldset>
+      <legend className="sr-only">Colour for {stage.label}</legend>
+      <div className="flex flex-wrap gap-2">
+        {options.map(option => (
+          <ColourOption
+            key={option.key}
+            name={name}
+            value={option.value}
+            label={option.label}
+            checked={chosen === option.value}
+            disabled={disabled}
+            surface={option.surface}
+            ink={option.ink}
+            onSelect={() => onChoose(option.value)}
+          />
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
