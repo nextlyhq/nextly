@@ -163,8 +163,8 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
       ? [
           `  The translations table ${args.translationsTable} differs from what the applied`,
           "  migration files left. It was changed outside a migration (manual SQL, a",
-          "  failed earlier run, another build's files). No migration file of this run",
-          "  has been applied.",
+          "  failed earlier run, another build's files). None of the files in your",
+          "  migrations folder has been applied by this run.",
         ]
       : args.unadoptedDatabase
         ? [
@@ -193,7 +193,8 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
     : args.translationsTable !== undefined
       ? [
           "  Recovery (pick one):",
-          "    [A] Put back what the lines above say is missing, then re-run migrate.",
+          "    [A] Put back what the lines above say is missing (a whole table: from a",
+          "        backup, since its rows are your translations), then re-run migrate.",
           "    [B] If a missing column was removed on purpose, remove its field from",
           "        your config and write a migration for it, then re-run migrate:",
           "          pnpm nextly migrate:create --name <name> && pnpm nextly migrate",

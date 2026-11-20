@@ -3,13 +3,16 @@
  * `migrate:create` wrote for it.
  *
  * A translated collection's migration comes as a main file, checked against the database through
- * its snapshot, and companion files for its translations table, which have no snapshot. Each
- * companion file records the columns it makes, so the table the applied ones left is known, and the
- * real table is compared with it before any pending file applies. The commands themselves are
- * driven, on each configured dialect. What would separate a correct run from a broken one:
+ * its snapshot, and companion files for its translations table, which have no snapshot. The main
+ * files' snapshots name each table's translated columns, so the real table is compared with the
+ * last applied and the newest pending one before any pending file applies: what both name and
+ * the database lacks is drift. The commands themselves are driven, on each configured dialect.
+ * What would separate a correct run from a broken one:
  *
- * - a translations table changed by hand, with the companion file applied over it all the same;
+ * - a translated column or the table dropped by hand, with the companion file applied over it;
  * - the drift found only once the main file, or an earlier companion file, has applied;
+ * - a healthy table refused: a deleted field's left-behind column, a run stopped part-way, a
+ *   collection removed and added again, a renamed field;
  * - a file the generator wrote still announced as applied "without drift checks";
  * - a file written by hand, which has nothing to be checked against, no longer said to be so.
  */
@@ -544,12 +547,13 @@ describeEachDialect(
         acceptDataLoss: true,
       });
       expect(fewer.code, fewer.said).toBeUndefined();
-      const left = await companionColumns();
+      // The fixture's control: the deleted field's column is still there.
+      expect(await companionColumns()).toContain("summary");
 
       await migrateCreate(configWith(["title", "subtitle"]), "subtitle");
       const run = await migrate(configWith(["title", "subtitle"]));
 
-      expect(run.code, `left: ${left.join(",")}\n${run.said}`).toBeUndefined();
+      expect(run.code, run.said).toBeUndefined();
       expect(await companionColumns()).toContain("subtitle");
     }, 240_000);
 
@@ -606,11 +610,31 @@ describeEachDialect(
 
       expect(run.code, run.said).toBeUndefined();
       expect(run.said).toContain(
-        `${String(companionFile)}.sql is applied without a drift check: a migration written by hand, not yet applied, may change the translations table ${COMPANION}.`
+        `${String(companionFile)}.sql is applied without a drift check: 20261029_130000_000_put_title_back.sql, a migration written by hand, may change the translations table ${COMPANION}.`
       );
       expect(await companionColumns()).toEqual(
         expect.arrayContaining(["title", "summary"])
       );
+    }, 240_000);
+
+    it("a pending hand-written file about another table does not excuse the drift", async () => {
+      const pending = await secondFieldPending();
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(COMPANION)} DROP COLUMN ${q("title")}`
+      );
+      writeFileSync(
+        join(dir, "migrations", "20261029_130000_000_by_hand.sql"),
+        `-- UP\nCREATE TABLE ${q("cdc_by_hand")} (${q("id")} INTEGER PRIMARY KEY);\n\n-- DOWN\nDROP TABLE ${q("cdc_by_hand")};\n`
+      );
+
+      const run = await migrate(configWith(["title", "summary"]));
+
+      expect(run.code, run.said).toBe(1);
+      expect(run.said).toMatch(/- .*title/);
+      expect((await pendingFiles()).map(file => file.name)).toEqual([
+        ...pending,
+        "20261029_130000_000_by_hand",
+      ]);
     }, 240_000);
 
     /** The migration files as the run lists them, each with its header's intent. */

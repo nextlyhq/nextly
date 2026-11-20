@@ -78,20 +78,21 @@ const keyOf = ({ entity, spec }: LocalizationMigrationIntent): string =>
 const renamesColumn = (file: CompanionFileRef): boolean =>
   /\bRENAME\s+COLUMN\b/i.test(file.upSql ?? "");
 
-/** The kinds of file that add the columns their header names, which may not be there yet. */
-const ADDS_ITS_COLUMNS: ReadonlySet<Kind> = new Set<Kind>([
-  "create-only",
-  "enable",
-  "joins",
-  "adds",
-]);
-
-/** The kinds of file after which the translations table is there, or gone, whatever it was. */
-const MAKES_OR_DROPS_TABLE: ReadonlySet<Kind> = new Set<Kind>([
-  "create-only",
-  "enable",
-  "disable",
-]);
+/**
+ * What a file of each kind may already have done to the table when a run stopped part-way, so
+ * that the check leaves it to the file: the columns its header names added, the table made or
+ * dropped. A record of every kind, so a new kind is classified before this compiles.
+ */
+const LEFT_TO_FILE: Record<Kind, { columns: boolean; table: boolean }> = {
+  "create-only": { columns: true, table: true },
+  enable: { columns: true, table: true },
+  joins: { columns: true, table: false },
+  adds: { columns: true, table: false },
+  disable: { columns: false, table: true },
+  shared: { columns: false, table: false },
+  archive: { columns: false, table: false },
+  unique: { columns: false, table: false },
+};
 
 /** The snapshot of the last of `files` that has one, or null when none has. */
 async function lastSnapshot(
@@ -163,8 +164,8 @@ function judge(args: {
   // Both snapshots say the table is translated: it should be there throughout.
   const translated = before?.localized === true && after?.localized === true;
   // A file that makes or drops the table may have done so already, in a run stopped part-way.
-  const tableLeftToFiles = entity.files.some(file =>
-    MAKES_OR_DROPS_TABLE.has(file.localization.kind)
+  const tableLeftToFiles = entity.files.some(
+    file => LEFT_TO_FILE[file.localization.kind].table
   );
 
   if (live === undefined) {
@@ -202,7 +203,7 @@ function judge(args: {
     live,
     leftToFiles: new Set(
       entity.files
-        .filter(file => ADDS_ITS_COLUMNS.has(file.localization.kind))
+        .filter(file => LEFT_TO_FILE[file.localization.kind].columns)
         .flatMap(file =>
           file.localization.spec.columns.map(column => column.name)
         )
@@ -211,42 +212,50 @@ function judge(args: {
   return items.length === 0 ? { kind: "matches" } : { kind: "drift", items };
 }
 
-/**
- * The pending files with no header intent, by what they are: a localization file this build
- * cannot read (it carries the marker), or a migration written by hand (no marker, no snapshot).
- * Either may change a translations table in a way no record says.
- */
-async function filesOfNoRecord(
-  pending: readonly CompanionFileRef[],
-  snapshotOf: SnapshotOf
-): Promise<{ unread: CompanionFileRef[]; byHand: CompanionFileRef[] }> {
-  const unread: CompanionFileRef[] = [];
-  const byHand: CompanionFileRef[] = [];
-  for (const file of pending) {
-    if (hasIntent(file)) continue;
-    const content = await readFile(file.filePath, "utf-8");
-    if (content.includes(LOCALIZATION_MIGRATION_MARKER)) unread.push(file);
-    else if ((await snapshotOf(file.name)) === null) byHand.push(file);
-  }
-  return { unread, byHand };
+/** A file this run applies that has no header intent, with its text. */
+interface FileOfNoRecord {
+  file: CompanionFileRef;
+  content: string;
+  /** A localization file this build cannot read (it carries the marker), or one written by hand. */
+  kind: "unread" | "by-hand";
 }
 
 /**
- * Why no drift can be asserted of `table` while such a file is pending, or undefined when none
- * is: the file may be the very change, or the operator's repair, that accounts for the
- * difference.
+ * The files this run applies that have no header intent and no snapshot: a localization file
+ * this build cannot read, or a migration written by hand. Either may change a translations table
+ * in a way no record says.
+ */
+async function filesOfNoRecord(
+  running: readonly CompanionFileRef[],
+  snapshotOf: SnapshotOf
+): Promise<FileOfNoRecord[]> {
+  const found: FileOfNoRecord[] = [];
+  for (const file of running) {
+    if (hasIntent(file)) continue;
+    const content = await readFile(file.filePath, "utf-8");
+    if (content.includes(LOCALIZATION_MIGRATION_MARKER)) {
+      found.push({ file, content, kind: "unread" });
+    } else if ((await snapshotOf(file.name)) === null) {
+      found.push({ file, content, kind: "by-hand" });
+    }
+  }
+  return found;
+}
+
+/**
+ * Why no drift can be asserted of `table`, or undefined when it can: a file of this run that no
+ * record describes names the table, so it may be the very change, or the operator's repair,
+ * that accounts for the difference.
  */
 function whyNotAsserted(
   table: string,
-  pending: { unread: readonly unknown[]; byHand: readonly unknown[] }
+  ofNoRecord: readonly FileOfNoRecord[]
 ): string | undefined {
-  if (pending.unread.length > 0) {
-    return `a localization file not yet applied, which this version cannot read, may change the translations table ${table}`;
-  }
-  if (pending.byHand.length > 0) {
-    return `a migration written by hand, not yet applied, may change the translations table ${table}`;
-  }
-  return undefined;
+  const about = ofNoRecord.find(each => each.content.includes(table));
+  if (about === undefined) return undefined;
+  return about.kind === "unread"
+    ? `${about.file.name}.sql, a localization file this version cannot read, may change the translations table ${table}`
+    : `${about.file.name}.sql, a migration written by hand, may change the translations table ${table}`;
 }
 
 /**
@@ -267,9 +276,12 @@ export async function checkCompanionFiles(args: {
 }): Promise<CompanionCheck> {
   const checked = new Set<string>();
   const unchecked = new Map<string, string>();
-  const ofNoRecord = await filesOfNoRecord(args.pending, args.snapshotOf);
-  for (const file of ofNoRecord.unread) {
-    if (!args.runs.has(file.name)) continue;
+  const ofNoRecord = await filesOfNoRecord(
+    args.pending.filter(file => args.runs.has(file.name)),
+    args.snapshotOf
+  );
+  for (const { file, kind } of ofNoRecord) {
+    if (kind !== "unread") continue;
     unchecked.set(
       file.name,
       "this version cannot read what the file records of its translations table"
