@@ -113,6 +113,31 @@ function pastCondition(
   };
 }
 
+/**
+ * A document's creation time as a statement returned it: decoded as its `created_at` column decodes
+ * it, and where the driver hands that column a timestamp's text (as it does a statement's, on
+ * PostgreSQL and MySQL), read as the UTC wall time the column stores. Undefined for anything else.
+ */
+function createdAtOf(
+  dialect: SupportedDialect,
+  driverValue: unknown
+): Date | undefined {
+  const decoded = systemColumnFromDriverValue(
+    dialect,
+    "created_at",
+    driverValue
+  );
+  const at =
+    typeof decoded === "string"
+      ? new Date(
+          /[zZ]|[+-]\d\d:?\d\d$/.test(decoded)
+            ? decoded.replace(" ", "T")
+            : `${decoded.replace(" ", "T")}Z`
+        )
+      : decoded;
+  return at instanceof Date && !Number.isNaN(at.getTime()) ? at : undefined;
+}
+
 /** The parts of a document, in the order the list reads them: the shared part, then each language. */
 function partsOf(localized: boolean, locales: readonly string[]) {
   return [null, ...(localized ? locales : [])] as (string | null)[];
@@ -184,12 +209,8 @@ async function readScope(
   const found: Omit<UnmovedPart, "seq">[] = [];
   for (const row of rows) {
     const entryId = String(row.id);
-    const createdAt = systemColumnFromDriverValue(
-      dialect,
-      "created_at",
-      row.created_at
-    );
-    if (!(createdAt instanceof Date)) continue;
+    const createdAt = createdAtOf(dialect, row.created_at);
+    if (createdAt === undefined) continue;
     for (const [index, part] of parts.entries()) {
       if (Number(row[`unmoved_${index}`]) !== 1) continue;
       // The position's document: only its parts after the position's part.

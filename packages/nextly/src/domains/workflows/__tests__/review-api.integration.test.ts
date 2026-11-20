@@ -40,7 +40,7 @@ process.env.NEXTLY_SECRET =
 import { randomUUID } from "node:crypto";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { apiKeyScope } from "../../../auth/authenticated-scope";
@@ -147,7 +147,14 @@ async function createdAtOf(
   const table = (await registry.getCollectionBySlug(slug))?.tableName;
   if (table === undefined) throw new Error(`no table for ${slug}`);
   const dialect = t.adapter.dialect as SupportedDialect;
-  await t.adapter.queryStatement(
+  // A statement that returns no rows: SQLite's driver runs one, the others execute it.
+  const db = t.adapter.getDrizzle<{
+    run(statement: SQL): unknown;
+    execute(statement: SQL): Promise<unknown>;
+  }>();
+  const run = (statement: SQL) =>
+    dialect === "sqlite" ? db.run(statement) : db.execute(statement);
+  await run(
     sql`UPDATE ${sql.identifier(table)} SET ${sql.identifier("created_at")} = ${systemColumnDriverValue(dialect, "created_at", at)} WHERE ${sql.identifier("id")} IN (${sql.join(
       ids.map(id => sql`${id}`),
       sql`, `
