@@ -79,7 +79,10 @@ import {
   translatedColumnNames,
 } from "../../i18n/migration/companion-unique-indexes";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
-import { mainTableFields } from "../../i18n/per-language-storage";
+import {
+  mainTableFields,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
 import {
   companionColumnNames,
   companionTableExists,
@@ -951,8 +954,9 @@ function carriesItsOwnRows(save: CollectionSave): boolean {
 }
 
 /**
- * Whether a save reaches past what the judgement reads of the entity's main table: a translated
- * entity's translations table, or the fields a field with no name keeps on the row.
+ * Whether a save reaches past what the judgement reads of the entity's main table: an entity's
+ * translations table, where it keeps translatable values, or the fields a field with no name keeps
+ * on the row.
  */
 function pastItsTable(
   previous: UiSchemaEntity,
@@ -960,9 +964,12 @@ function pastItsTable(
 ): boolean {
   const unnamed = (e: UiSchemaEntity) =>
     JSON.stringify(e.fields.filter(f => f.name === undefined));
+  // Asked of where the entity keeps its translatable values (`storesPerLanguage`), not of its
+  // translation switch alone: with values kept per language, an entity not translated still keeps
+  // its translatable fields' columns in its translations table.
   return (
-    previous.localized === true ||
-    entity.localized === true ||
+    storesPerLanguage(previous) ||
+    storesPerLanguage(entity) ||
     unnamed(previous) !== unnamed(entity)
   );
 }

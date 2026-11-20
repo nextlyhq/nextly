@@ -607,12 +607,13 @@ export class CollectionMetadataService extends BaseService {
         fields
       );
       const { writeCollectionSave } = await loadCollectionSave();
+      const entity = entityAfterUpdate(previous, update, fields);
       const written = await writeCollectionSave(
         deps,
         {
           slug,
           previous,
-          entity: entityAfterUpdate(previous, update, fields),
+          entity,
           change: "update",
           // What the update's push does, written as the schema dialog's save
           // writes it, so a deploy replaying the file ends as this database.
@@ -626,13 +627,20 @@ export class CollectionMetadataService extends BaseService {
         {
           appliedBy,
           inLastTransaction: () => writeRow(),
-          // A push stopped part way, settled: the row records the fields that landed, as the
-          // collection apply's does (`appliedFieldsOf`), in the settle's own transaction.
+          // A push stopped part way, settled: the row records the fields that landed
+          // (`appliedFieldsOf`), in the settle's own transaction. Laid over the writer's own
+          // baseline (`previous`, the definition), as its settled definition is, so the row and the
+          // definition agree even where an earlier stop left the registry row behind it. The
+          // definition holds each field as the registry stores it.
           onSettled: async report => {
             const { appliedFieldsOf } = await import(
               "../../schema/builder-save/stopped-save"
             );
-            const applied = appliedFieldsOf(beforeFields, fields, report);
+            const applied = appliedFieldsOf(
+              previous.fields,
+              entity.fields,
+              report
+            ) as unknown as FieldDefinition[];
             await writeRow(applied);
             settled(applied);
           },
