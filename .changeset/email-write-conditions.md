@@ -31,6 +31,10 @@
 
 A block in a written email can be shown only when a variable has a value, is yes or is no (`@experimental`): choose Show only when in the block's menu. The block carries its condition as a label that can be removed. The variables offered there, and for a link, include every declared path, nested fields too.
 
-A saved written email can be converted to code from the workbench's menu. The dialog says the change can't be undone and waits until unsaved edits are saved; the server writes the code from the saved blocks, keeping every variable, condition and list as Liquid.
+A saved written email can be converted to code from the workbench's menu. The dialog says the change can't be undone, shows the HTML and Liquid the email becomes, and waits until unsaved edits are saved; the server writes the code from the saved blocks, keeping every variable, condition and list as Liquid. For this, the draft preview of a written email now also returns `source: { html, text }`, its compiled code before any data.
+
+`allowedUrl`, the check a save applies to a written email's link and image addresses, is exported from `nextly/api/email-template-preview-types`, so an editor can check an address with the same rule.
+
+In a written email's plain-text body, a link across a bold word, a chip or a line break now gives its address once, after the whole phrase, instead of after each part of it.
 
 A chip inside a list with no items is marked as showing nothing, whatever it holds. A chip that stands for an image address counts only a complete address.
