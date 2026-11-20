@@ -8,6 +8,7 @@
  * @packageDocumentation
  */
 
+import type { ListedExternalIdentity } from "../../domains/auth/services/identity-service";
 import {
   SYSTEM_READ_POLICY,
   SYSTEM_WRITE_POLICY,
@@ -23,20 +24,47 @@ import type {
   FindUserByIDArgs,
   FindUsersArgs,
   ListResult,
+  ListUserIdentitiesArgs,
   MutationResult,
+  UnlinkIdentityArgs,
   UpdateUserArgs,
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
 import {
+  authorizeChecked,
   checkRead,
+  checkedCaller,
   checkedRoleChange,
   createRequestContext,
   isNotFoundError,
   mergeConfig,
   toListResult,
+  type RouteGrant,
 } from "./helpers";
 import { hiddenUserFieldPaths, withoutHiddenPaths } from "./hidden-fields";
+
+/**
+ * The check an identities method runs first, as REST's two doors ask it: a
+ * person acting on their own account needs only to be named, as the
+ * signed-in caller of `/api/me/identities` needs only a session; another
+ * account's identities take the user-management `grant`, and so does every
+ * call made under an API key, its maker's own account included, as REST
+ * asks of a key at either door. A trusted call is server code, and runs
+ * unchecked as every other trusted call does.
+ */
+async function checkIdentityAccess(
+  ctx: NextlyContext,
+  args: DirectAPIConfig,
+  userId: string,
+  grant: RouteGrant
+): Promise<void> {
+  const caller = checkedCaller(ctx.defaultConfig, args);
+  if (!caller) return;
+  const ownSession =
+    caller.authMethod === "session" && caller.userId === userId;
+  if (!ownSession) await authorizeChecked(caller, grant);
+}
 
 /**
  * Users namespace API, bound to a Nextly context.
@@ -51,6 +79,14 @@ export interface UsersNamespace {
   create(args: CreateUserArgs): Promise<MutationResult<User>>;
   update(args: UpdateUserArgs): Promise<MutationResult<User>>;
   delete(args: DeleteUserArgs): Promise<MutationResult<{ id: string }>>;
+  /** The account's linked sign-in identities, oldest link first, as one page. */
+  listIdentities(
+    args: ListUserIdentitiesArgs
+  ): Promise<ListResult<ListedExternalIdentity>>;
+  /** Remove one linked identity from the account, and nothing else. */
+  unlinkIdentity(
+    args: UnlinkIdentityArgs
+  ): Promise<MutationResult<{ id: string }>>;
 }
 
 /**
@@ -247,6 +283,71 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
       return {
         message: "User deleted.",
         item: { id: args.id },
+      };
+    },
+
+    async listIdentities(
+      args: ListUserIdentitiesArgs
+    ): Promise<ListResult<ListedExternalIdentity>> {
+      if (!args.userId) {
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage: "'userId' is required for users.listIdentities()",
+          statusCode: 400,
+        });
+      }
+
+      // Checked as REST checks the listing — another account's with the
+      // user read `findByID` asks, the caller's own as `/api/me/identities`
+      // serves it — before anything is read.
+      await checkIdentityAccess(
+        ctx,
+        args,
+        args.userId,
+        SYSTEM_READ_POLICY.users.read
+      );
+      const identities = await ctx.identityService.listExternalIdentities(
+        args.userId
+      );
+      // Every identity in one page: an account holds a handful, and the
+      // listing is not paginated at either door.
+      return toListResult(
+        { data: identities, pagination: { total: identities.length } },
+        Math.max(identities.length, 1),
+        1
+      );
+    },
+
+    async unlinkIdentity(
+      args: UnlinkIdentityArgs
+    ): Promise<MutationResult<{ id: string }>> {
+      if (!args.userId || !args.identityId) {
+        throw new NextlyError({
+          code: "INVALID_INPUT",
+          publicMessage:
+            "'userId' and 'identityId' are required for users.unlinkIdentity()",
+          statusCode: 400,
+        });
+      }
+
+      // Checked as REST checks the unlink — another account's with the
+      // user update the role assignments take, the caller's own as
+      // `/api/me/identities` serves it — before anything is written.
+      await checkIdentityAccess(
+        ctx,
+        args,
+        args.userId,
+        SYSTEM_WRITE_POLICY.users.update
+      );
+      await ctx.identityService.unlinkExternalIdentity(
+        args.userId,
+        args.identityId
+      );
+      // The unlinked identity's own id, as the delete's `item` carries the
+      // deleted user's: something concrete to chain on.
+      return {
+        message: "Identity unlinked.",
+        item: { id: args.identityId },
       };
     },
   };

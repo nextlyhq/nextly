@@ -37,6 +37,8 @@ import type {
   WorkflowDocumentRef,
 } from "@admin/types/workflows";
 
+import { workflowKeys } from "./workflow-keys";
+
 export const reviewKeys = {
   all: () => ["workflow-review"] as const,
   document: (
@@ -99,13 +101,18 @@ export function useTakeStep(
         ...request,
       }),
     // Read again whether it moved or was refused: a refusal for a stale
-    // revision means the state on screen is not the one stored.
-    onSettled: () =>
-      document === undefined
-        ? undefined
-        : queryClient.invalidateQueries({
-            queryKey: reviewKeys.document(document),
-          }),
+    // revision means the state on screen is not the one stored. A step moves
+    // the document between stages, so the workflows list's counts per stage
+    // are read again too.
+    onSettled: async () => {
+      if (document === undefined) return;
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: reviewKeys.document(document),
+        }),
+        queryClient.invalidateQueries({ queryKey: workflowKeys.list() }),
+      ]);
+    },
   });
 }
 

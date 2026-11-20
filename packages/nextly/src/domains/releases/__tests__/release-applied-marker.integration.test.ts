@@ -348,7 +348,8 @@ function bound(repo: ReleasesRepository): ApplyDueReleasesDeps["repository"] {
     isMemberApplied: (id, revision) => repo.isMemberApplied(id, revision),
     markReleasesPublished: (entries, at) =>
       repo.markReleasesPublished(entries, at),
-    blockReleases: entries => repo.blockReleases(entries),
+    blockReleases: (entries, options) => repo.blockReleases(entries, options),
+    revalidateReleases: ids => repo.revalidateReleases(ids),
   };
 }
 

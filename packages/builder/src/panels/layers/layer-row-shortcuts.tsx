@@ -10,7 +10,7 @@
 import { useShortcuts } from "@nextlyhq/ui";
 import type * as React from "react";
 
-import { isElement } from "../../dom-kind";
+import { isElement } from "../../canvas/dom-kind";
 
 import { ROW_KEYS, type RowKeyAction } from "./layer-row-actions";
 

@@ -30,6 +30,7 @@ import {
   type TestDb,
 } from "../../../../__tests__/fixtures/db";
 import { loadDialectTables } from "../../../../database/dialect-tables";
+import { DbError } from "../../../../database/errors";
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import { externalIdentityKeyDigest } from "../../../../schemas/external-identities";
@@ -61,10 +62,13 @@ const ORBIT: PluginDefinition = {
 };
 
 const GOOGLE_ISSUER = "https://accounts.google.com";
+/** A stored value in the shape core's bcrypt writes: a password sign-in takes. */
+const STORED_HASH =
+  "$2b$10$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 let testDb: TestDb;
 /** Every read and write the service made, counted at its database handle. */
-let seen: { selects: number; inserts: number };
+let seen: { selects: number; inserts: number; deletes: number };
 
 /**
  * The webhook recording activation singleton, snapshotted: the REAL creation
@@ -123,7 +127,7 @@ afterAll(() => {
  * the holding: the count alone is what these tests need.
  */
 function countedAdapter() {
-  seen = { selects: 0, inserts: 0 };
+  seen = { selects: 0, inserts: 0, deletes: 0 };
   const db = new Proxy(testDb.db, {
     get(target, property) {
       // The counter's key per intercepted method, so a read or write the
@@ -131,9 +135,17 @@ function countedAdapter() {
       // is written out rather than derived, because a derived key that
       // mismatched would count into a missing field and every "zero"
       // assertion would pass on nothing.
-      if (property === "select" || property === "insert") {
-        const counted: "selects" | "inserts" =
-          property === "select" ? "selects" : "inserts";
+      if (
+        property === "select" ||
+        property === "insert" ||
+        property === "delete"
+      ) {
+        const counted: "selects" | "inserts" | "deletes" =
+          property === "select"
+            ? "selects"
+            : property === "insert"
+              ? "inserts"
+              : "deletes";
         return (...args: unknown[]) => {
           seen[counted] += 1;
           const method = target[property] as (...a: unknown[]) => unknown;
@@ -147,8 +159,41 @@ function countedAdapter() {
   return new Proxy(testDb.adapter, {
     get(target, property) {
       if (property === "getDrizzle") return () => db;
+      // A transaction's reads and writes are counted the same way, at the
+      // transaction handle the work is given.
+      if (property === "transaction") {
+        return (work: (tx: unknown) => Promise<unknown>, ...rest: unknown[]) =>
+          (target.transaction as (...a: unknown[]) => Promise<unknown>).call(
+            target,
+            (tx: object) => work(countedTransaction(tx)),
+            ...rest
+          );
+      }
       const value: unknown = Reflect.get(target, property);
       return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+/** A transaction handle counting its selects, inserts and deletes into `seen`. */
+function countedTransaction(tx: object): object {
+  const counters: Record<string, "selects" | "inserts" | "deletes"> = {
+    select: "selects",
+    insert: "inserts",
+    delete: "deletes",
+  };
+  return new Proxy(tx, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property);
+      if (typeof value !== "function") return value;
+      const counted =
+        typeof property === "string" && Object.hasOwn(counters, property)
+          ? counters[property]
+          : undefined;
+      return (...args: unknown[]) => {
+        if (counted) seen[counted] += 1;
+        return (value as (...a: unknown[]) => unknown).apply(target, args);
+      };
     },
   });
 }
@@ -160,6 +205,9 @@ function policyEnabling(
   const asked: string[] = [];
   return {
     asked,
+    policyFor(providerKey: string) {
+      return { enabled: keys.includes(providerKey) };
+    },
     requireEnabled(providerKey: string) {
       asked.push(providerKey);
       if (!keys.includes(providerKey)) {
@@ -186,6 +234,9 @@ function policyProvisioning(
   trustedForImplicitLinking = false
 ): LinkingPolicyPort {
   return {
+    policyFor() {
+      return { enabled: true };
+    },
     requireEnabled(providerKey: string) {
       return { providerKey, trustedForImplicitLinking, provisioning };
     },
@@ -240,26 +291,33 @@ function service(deps: {
   });
 }
 
-/** A user row the identity table's foreign key can point at. */
+/** A user row the identity table's foreign key can point at, password-less unless given one. */
 async function plantUser(
   id: string,
-  email = `${id}@example.com`
+  email = `${id}@example.com`,
+  options: { passwordHash?: string } = {}
 ): Promise<void> {
-  await testDb.db
-    .insert(testDb.schema.users)
-    .values({ id, email, isActive: true });
+  await testDb.db.insert(testDb.schema.users).values({
+    id,
+    email,
+    isActive: true,
+    passwordHash: options.passwordHash ?? null,
+  });
 }
 
-/** One identity row, written straight to the table as the fixture does. */
+/** One identity row, written straight to the table as the fixture does. Its id. */
 async function plantIdentity(row: {
   providerKey: string;
   issuer: string;
   subject: string;
   userId: string;
   address?: string | null;
-}): Promise<void> {
+  /** When the link was made; the fixed moment unless a test says otherwise. */
+  createdAt?: Date;
+}): Promise<string> {
+  const id = randomUUID();
   await testDb.db.insert(testDb.schema.nextlyExternalIdentities).values({
-    id: randomUUID(),
+    id,
     providerKey: row.providerKey,
     issuer: row.issuer,
     subject: row.subject,
@@ -272,8 +330,9 @@ async function plantIdentity(row: {
     ),
     address: row.address ?? null,
     userId: row.userId,
-    createdAt: new Date("2020-01-01T00:00:00Z"),
+    createdAt: row.createdAt ?? new Date("2020-01-01T00:00:00Z"),
   });
+  return id;
 }
 
 /** The identity rows one user holds, read straight from the table. */
@@ -381,7 +440,7 @@ describe("the sign-in hand-off intake", () => {
       expect(error.logContext).toMatchObject({
         reason: "identity-handoff-malformed",
       });
-      expect(seen).toEqual({ selects: 0, inserts: 0 });
+      expect(seen).toEqual({ selects: 0, inserts: 0, deletes: 0 });
     });
   }
 
@@ -415,7 +474,7 @@ describe("the sign-in hand-off intake", () => {
     expect(error.logContext).toMatchObject({
       reason: "identity-subject-missing",
     });
-    expect(seen).toEqual({ selects: 0, inserts: 0 });
+    expect(seen).toEqual({ selects: 0, inserts: 0, deletes: 0 });
   });
 
   it("refuses an empty subject before any lookup or write", async () => {
@@ -429,7 +488,7 @@ describe("the sign-in hand-off intake", () => {
     expect(error.logContext).toMatchObject({
       reason: "identity-subject-missing",
     });
-    expect(seen).toEqual({ selects: 0, inserts: 0 });
+    expect(seen).toEqual({ selects: 0, inserts: 0, deletes: 0 });
   });
 
   it("refuses a malformed proof flag, strictly boolean", async () => {
@@ -437,7 +496,7 @@ describe("the sign-in hand-off intake", () => {
     // the address back as a string, or core defaulting a missing flag to
     // true. Both must refuse, and so must a flag that is simply absent.
     for (const malformed of ["yes", 1, undefined] as unknown as boolean[]) {
-      seen = { selects: 0, inserts: 0 };
+      seen = { selects: 0, inserts: 0, deletes: 0 };
       const error = await refusalOf(
         service({ linkingPolicy: policyEnabling() }).resolveSignInIdentity(
           pluginIdentityBinding(ACME),
@@ -448,7 +507,7 @@ describe("the sign-in hand-off intake", () => {
       expect(error.logContext).toMatchObject({
         reason: "identity-address-proof-malformed",
       });
-      expect(seen).toEqual({ selects: 0, inserts: 0 });
+      expect(seen).toEqual({ selects: 0, inserts: 0, deletes: 0 });
     }
   });
 
@@ -484,7 +543,7 @@ describe("the sign-in hand-off intake", () => {
           subject: "subject-one",
           userId: "owner",
         });
-        seen = { selects: 0, inserts: 0 };
+        seen = { selects: 0, inserts: 0, deletes: 0 };
         const linked = await refusalOf(
           service({
             linkingPolicy: policyEnabling("acme-auth:google"),
@@ -497,11 +556,11 @@ describe("the sign-in hand-off intake", () => {
         );
         expect(linked.logContext).toMatchObject({ reason });
         // Nothing written, and nothing read: linked or not never came up.
-        expect(seen).toEqual({ selects: 0, inserts: 0 });
+        expect(seen).toEqual({ selects: 0, inserts: 0, deletes: 0 });
         expect(await identitiesOf("owner")).toBe(1);
 
         // New: nothing is stored under the key at all.
-        seen = { selects: 0, inserts: 0 };
+        seen = { selects: 0, inserts: 0, deletes: 0 };
         const fresh = await refusalOf(
           service({
             linkingPolicy: policyEnabling("acme-auth:google"),
@@ -514,7 +573,7 @@ describe("the sign-in hand-off intake", () => {
           )
         );
         expect(fresh.logContext).toMatchObject({ reason });
-        expect(seen).toEqual({ selects: 0, inserts: 0 });
+        expect(seen).toEqual({ selects: 0, inserts: 0, deletes: 0 });
       });
     }
   });
@@ -542,7 +601,7 @@ describe("the sign-in hand-off intake", () => {
 
     expect(error.code).toBe("FORBIDDEN");
     expect(policy.asked).toEqual(["acme-auth:github"]);
-    expect(seen).toEqual({ selects: 0, inserts: 0 });
+    expect(seen).toEqual({ selects: 0, inserts: 0, deletes: 0 });
   });
 
   it("cannot sign in under another plugin's provider key", async () => {
@@ -1125,6 +1184,219 @@ describe("the provisioning branch", () => {
     expect(account).toMatchObject({ id: result.userId });
     expect(await rolesOf(String(result.userId))).toEqual([editor]);
   });
+
+  it("resolves the loser of two racing first sign-ins to the winner's account, keeping one account and one identity", async () => {
+    await plantUser("first"); // the install is not empty
+    const editor = await plantRole("editor");
+
+    // Both writers are held at the creation primitive's door until both
+    // have arrived, which is after both passed the identity lookup that
+    // precedes it: the read-then-write window two first sign-ins for one
+    // identity actually race in, made deterministic rather than left to
+    // timing. They assert DIFFERENT addresses, so the race is decided by
+    // the identity's uniqueness — the backstop R-22's concurrency test
+    // names — and not by the address's.
+    const adapter = countedAdapter();
+    const primitive = new UserMutationService(adapter, testLogger);
+    let arrived = 0;
+    let open!: () => void;
+    const gate = new Promise<void>(resolve => (open = resolve));
+    const service = new IdentityService(adapter, testLogger, {
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+      roles: new RoleQueryService(adapter, testLogger),
+      users: {
+        createExternalUser: async input => {
+          arrived += 1;
+          if (arrived === 2) open();
+          await gate;
+          return primitive.createExternalUser(input);
+        },
+      },
+      sessionOf: sessionReading(null),
+    });
+
+    const [one, two] = await Promise.all([
+      service.resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({
+          issuer: undefined,
+          subject: "raced",
+          address: "racer-one@example.com",
+        })
+      ),
+      service.resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({
+          issuer: undefined,
+          subject: "raced",
+          address: "racer-two@example.com",
+        })
+      ),
+    ]);
+
+    // One account won; the loser resolved to it rather than seeing the
+    // unique index's refusal as an error. Neither promise rejected, so no
+    // database violation surfaced as a crash.
+    expect(one.userId).toBeTypeOf("string");
+    expect(two.userId).toBe(one.userId);
+    // Exactly the rows one sign-in writes: no second account, no orphaned
+    // account the identity will never resolve to, no dangling role grant.
+    expect(await usersCount()).toBe(2);
+    expect(await identitiesOf(String(one.userId))).toBe(1);
+    expect(await rolesOf(String(one.userId))).toEqual([editor]);
+    const stored = await identityRowOf("acme-auth:google", "raced");
+    expect(stored).toMatchObject({
+      userId: one.userId,
+      issuer: "",
+      subject: "raced",
+    });
+    expect(["racer-one@example.com", "racer-two@example.com"]).toContain(
+      (stored as { address?: unknown } | undefined)?.address
+    );
+  });
+
+  it("restarts a creation the database's restart verdict refused, but not one joined to the caller's transaction", async () => {
+    await plantRole("editor");
+    const adapter = countedAdapter();
+    const verdict = () =>
+      new DbError({
+        message: "Deadlock found when trying to get lock",
+        kind: "deadlock",
+        dialect: "mysql",
+        code: "ER_LOCK_DEADLOCK",
+      });
+    let attempts = 0;
+    const service = new IdentityService(adapter, testLogger, {
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+      roles: new RoleQueryService(adapter, testLogger),
+      users: {
+        // The first attempt meets the verdict, wrapped as the creation
+        // primitive wraps a database error; any restart succeeds.
+        createExternalUser: async () => {
+          attempts += 1;
+          if (attempts === 1) throw NextlyError.fromDatabaseError(verdict());
+          return { id: "restarted" };
+        },
+      },
+      sessionOf: sessionReading(null),
+    });
+
+    // Owning its transaction, the creation is restarted once.
+    const owned = await service.resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "owned" })
+    );
+    expect(owned.userId).toBe("restarted");
+    expect(attempts).toBe(2);
+
+    // Joined to a transaction the caller opened, the verdict ended the
+    // caller's transaction too: no restart, the verdict is the caller's.
+    attempts = 0;
+    await expect(
+      adapter.transaction(() =>
+        service.resolveSignInIdentity(
+          pluginIdentityBinding(ACME),
+          handOff({ subject: "joined" })
+        )
+      )
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(attempts).toBe(1);
+  });
+
+  it("resolves a duplicate refusal to the winner, but not one joined to the caller's transaction", async () => {
+    await plantRole("editor");
+    await plantUser("winner");
+    const adapter = countedAdapter();
+    // The creation meets a winner that stored the identity after this
+    // sign-in's lookup, and is refused as the duplicate it then is.
+    const service = new IdentityService(adapter, testLogger, {
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+      roles: new RoleQueryService(adapter, testLogger),
+      users: {
+        createExternalUser: async input => {
+          await plantIdentity({
+            providerKey: "acme-auth:google",
+            issuer: GOOGLE_ISSUER,
+            subject: input.identity?.subject ?? "",
+            userId: "winner",
+          });
+          throw NextlyError.duplicate();
+        },
+      },
+      sessionOf: sessionReading(null),
+    });
+
+    // Owning its transaction, the loser re-reads and resolves the winner.
+    const owned = await service.resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "owned" })
+    );
+    expect(owned.userId).toBe("winner");
+
+    // Joined to the caller's transaction, the refusal is the caller's: it
+    // propagates rather than being re-read (a re-read here, on the one
+    // connection, would have found the winner and resolved it).
+    await expect(
+      adapter.transaction(() =>
+        service.resolveSignInIdentity(
+          pluginIdentityBinding(ACME),
+          handOff({ subject: "joined" })
+        )
+      )
+    ).rejects.toMatchObject({ code: "DUPLICATE" });
+  });
+
+  it("looks an identity up only once another request's open transaction has ended, never seeing its uncommitted row", async () => {
+    await plantUser("holder");
+    const reader = service({
+      linkingPolicy: policyEnabling("acme-auth:google"),
+    });
+
+    // Another request's transaction writes the identity row and stays open,
+    // then rolls back: on SQLite's one shared connection, a read issued
+    // meanwhile would run inside it.
+    let release!: () => void;
+    const released = new Promise<void>(resolve => (release = resolve));
+    let held!: () => void;
+    const isHeld = new Promise<void>(resolve => (held = resolve));
+    const holding = testDb.adapter.transaction(async () => {
+      await plantIdentity({
+        providerKey: "acme-auth:google",
+        issuer: GOOGLE_ISSUER,
+        subject: "uncommitted",
+        userId: "holder",
+      });
+      held();
+      await released;
+      throw new Error("rolled back");
+    });
+    await isHeld;
+
+    let settled = false;
+    const lookup = reader
+      .resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "uncommitted" })
+      )
+      .finally(() => (settled = true));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    // The lookup waits for the open transaction rather than reading in it.
+    expect(settled).toBe(false);
+
+    release();
+    await expect(holding).rejects.toThrow("rolled back");
+    // And sees only what committed: the rolled-back row resolves nobody.
+    expect((await lookup).userId).toBeNull();
+  });
 });
 
 describe("the explicit link operation", () => {
@@ -1176,7 +1448,7 @@ describe("the explicit link operation", () => {
       subject: "link-subject",
       userId: "linker",
     });
-    expect(seen).toEqual({ selects: 1, inserts: 1 });
+    expect(seen).toEqual({ selects: 1, inserts: 1, deletes: 0 });
   });
 
   it("returns the standing row when the same user links the same identity again", async () => {
@@ -1195,7 +1467,7 @@ describe("the explicit link operation", () => {
       linkInput({ userId: "linker", sessionJti: "token-a" })
     );
 
-    seen = { selects: 0, inserts: 0 };
+    seen = { selects: 0, inserts: 0, deletes: 0 };
     const again = await service(asLinker).completeExplicitLink(
       pluginIdentityBinding(ACME),
       linkInput({ userId: "linker", sessionJti: "token-a" })
@@ -1203,7 +1475,7 @@ describe("the explicit link operation", () => {
 
     expect(again).toEqual(first);
     // One read to find the standing row, and no write of a second one.
-    expect(seen).toEqual({ selects: 1, inserts: 0 });
+    expect(seen).toEqual({ selects: 1, inserts: 0, deletes: 0 });
     expect(await identitiesOf("linker")).toBe(1);
   });
 
@@ -1323,5 +1595,243 @@ describe("the explicit link operation", () => {
     // The holder keeps what it holds; the linker gained nothing.
     expect(await identitiesOf("holder")).toBe(1);
     expect(await identitiesOf("linker")).toBe(0);
+  });
+});
+
+describe("the listing of a user's identities", () => {
+  it("returns exactly the owner's rows, oldest link first, and nobody else's", async () => {
+    await plantUser("owner");
+    await plantUser("other");
+    await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "first-linked",
+      userId: "owner",
+      address: "person@example.com",
+      createdAt: new Date("2020-01-01T00:00:00Z"),
+    });
+    await plantIdentity({
+      providerKey: "acme-auth:github",
+      issuer: "",
+      subject: "second-linked",
+      userId: "owner",
+      createdAt: new Date("2021-01-01T00:00:00Z"),
+    });
+    // A third identity another account holds: a listing scoped to the owner
+    // leaves it out, whatever it is stored under.
+    await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "someone-elses",
+      userId: "other",
+      createdAt: new Date("2019-01-01T00:00:00Z"),
+    });
+
+    const listed = await service({
+      linkingPolicy: policyEnabling(),
+    }).listExternalIdentities("owner");
+
+    expect(listed.map(identity => identity.subject)).toEqual([
+      "first-linked",
+      "second-linked",
+    ]);
+    expect(listed[0]).toMatchObject({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      address: "person@example.com",
+      userId: "owner",
+    });
+    expect(listed[0].createdAt).toEqual(new Date("2020-01-01T00:00:00Z"));
+    // A listing asks nothing but the one read.
+    expect(seen).toEqual({ selects: 1, inserts: 0, deletes: 0 });
+  });
+
+  it("answers an empty list for a user who holds none", async () => {
+    await plantUser("owner");
+    await plantUser("other");
+    // Another account's identity exists; the owner's listing names none of
+    // it, and no error either: holding nothing is an answer, not a refusal.
+    await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "someone-elses",
+      userId: "other",
+    });
+
+    const listed = await service({
+      linkingPolicy: policyEnabling(),
+    }).listExternalIdentities("owner");
+
+    expect(listed).toEqual([]);
+  });
+});
+
+describe("the unlink of one identity", () => {
+  it("removes the named row and writes nothing else", async () => {
+    await plantUser("owner");
+    const kept = await plantIdentity({
+      providerKey: "acme-auth:github",
+      issuer: "",
+      subject: "kept",
+      userId: "owner",
+    });
+    const removed = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "removed",
+      userId: "owner",
+    });
+
+    // The kept identity's provider is enabled, so it is the account's way in.
+    const unlinker = service({
+      linkingPolicy: policyEnabling("acme-auth:github"),
+    });
+    await unlinker.unlinkExternalIdentity("owner", removed);
+
+    // The named row alone: the sibling keeps its place, and the unlink made
+    // no write of any other kind — its one delete statement, nothing else.
+    expect(seen).toMatchObject({ inserts: 0, deletes: 1 });
+    const held = await unlinker.listExternalIdentities("owner");
+    expect(held.map(identity => identity.id)).toEqual([kept]);
+  });
+
+  it("refuses an identity another user holds, leaving both accounts as they were", async () => {
+    await plantUser("owner", "owner@example.com", {
+      passwordHash: STORED_HASH,
+    });
+    await plantUser("other");
+    const theirs = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "theirs",
+      userId: "other",
+    });
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyEnabling(),
+      }).unlinkExternalIdentity("owner", theirs)
+    );
+
+    // The same refusal a missing identity gets: whose row an id names is
+    // not the caller's to learn from this door. Only the owner's own rows
+    // were read, and nothing was written.
+    expect(error.code).toBe("NOT_FOUND");
+    expect(await identitiesOf("other")).toBe(1);
+    expect(await identitiesOf("owner")).toBe(0);
+    expect(seen).toMatchObject({ inserts: 0, deletes: 0 });
+  });
+
+  it("answers a second unlink of the same identity as a clean not-found", async () => {
+    await plantUser("owner", "owner@example.com", {
+      passwordHash: STORED_HASH,
+    });
+    const removed = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "removed-once",
+      userId: "owner",
+    });
+    const unlinker = service({ linkingPolicy: policyEnabling() });
+    await unlinker.unlinkExternalIdentity("owner", removed);
+
+    const error = await refusalOf(
+      unlinker.unlinkExternalIdentity("owner", removed)
+    );
+
+    expect(error.code).toBe("NOT_FOUND");
+    expect(await identitiesOf("owner")).toBe(0);
+  });
+});
+
+describe("the unlink of the last way in (L8)", () => {
+  it("refuses the only identity of an account with no password", async () => {
+    await plantUser("owner");
+    const only = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "only",
+      userId: "owner",
+    });
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyEnabling("acme-auth:google"),
+      }).unlinkExternalIdentity("owner", only)
+    );
+
+    expect(error.code).toBe("CONFLICT");
+    expect(error.logContext).toMatchObject({ reason: "identity-last-way-in" });
+    expect(await identitiesOf("owner")).toBe(1);
+    expect(seen).toMatchObject({ deletes: 0 });
+  });
+
+  it("refuses when the other identity's provider is disabled", async () => {
+    await plantUser("owner");
+    await plantIdentity({
+      providerKey: "acme-auth:github",
+      issuer: "",
+      subject: "at-a-disabled-provider",
+      userId: "owner",
+    });
+    const target = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "target",
+      userId: "owner",
+    });
+
+    // Only the target's own provider is enabled: the identity left behind
+    // is at a disabled one, which is no way in.
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyEnabling("acme-auth:google"),
+      }).unlinkExternalIdentity("owner", target)
+    );
+
+    expect(error.code).toBe("CONFLICT");
+    expect(await identitiesOf("owner")).toBe(2);
+  });
+
+  it("refuses the only identity of an account whose stored password no sign-in takes", async () => {
+    // A non-empty value that is no hash core's digester recognises signs
+    // nobody in, so it is no way in either.
+    await plantUser("owner", "owner@example.com", {
+      passwordHash: "not-a-password-hash",
+    });
+    const only = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "only",
+      userId: "owner",
+    });
+
+    const error = await refusalOf(
+      service({
+        linkingPolicy: policyEnabling("acme-auth:google"),
+      }).unlinkExternalIdentity("owner", only)
+    );
+
+    expect(error.code).toBe("CONFLICT");
+    expect(await identitiesOf("owner")).toBe(1);
+  });
+
+  it("unlinks the only identity of an account that has a password", async () => {
+    await plantUser("owner", "owner@example.com", {
+      passwordHash: STORED_HASH,
+    });
+    const only = await plantIdentity({
+      providerKey: "acme-auth:google",
+      issuer: GOOGLE_ISSUER,
+      subject: "only",
+      userId: "owner",
+    });
+
+    await service({ linkingPolicy: policyEnabling() }).unlinkExternalIdentity(
+      "owner",
+      only
+    );
+
+    expect(await identitiesOf("owner")).toBe(0);
   });
 });

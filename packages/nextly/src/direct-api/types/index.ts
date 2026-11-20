@@ -90,6 +90,8 @@ export type {
   CreateUserArgs,
   UpdateUserArgs,
   DeleteUserArgs,
+  ListUserIdentitiesArgs,
+  UnlinkIdentityArgs,
 } from "./users";
 
 export type {
@@ -176,8 +178,10 @@ export type {
   EmailLastSentArgs,
   EmailOverdueArgs,
   FindEmailDeliveryByIDArgs,
+  SearchEmailActivityArgs,
   ActivityEntry,
   ActivityPage,
+  AddressSearchPage,
   DeliveryActivity,
   DeliveryDetail,
   QueuedEmailActivity,

@@ -124,6 +124,40 @@ describe("landingPush", () => {
       expect(refused.landed()).toBe(true);
     }
   );
+
+  // MySQL's and SQLite's pipeline says how many statements of a failed apply stay applied: the
+  // push counts as landed exactly when one does, whatever the failure was.
+  const keeping = (statementsKept: number) => (): Promise<PipelineResult> =>
+    Promise.resolve({
+      success: false,
+      statementsExecuted: 0,
+      renamesApplied: 0,
+      statementsKept,
+      error: { code: "DDL_EXECUTION_FAILED", message: "the statement failed" },
+    });
+
+  it.each(["mysql", "sqlite"] as const)(
+    "counts a failed push on %s as landed exactly when its pipeline says a statement stayed",
+    async dialect => {
+      const none = landingPush(keeping(0), dialect);
+      await none.push();
+      expect(none.landed()).toBe(false);
+
+      const some = landingPush(keeping(2), dialect);
+      await some.push();
+      expect(some.landed()).toBe(true);
+    }
+  );
+
+  it("counts a failed push whose apply completed as landed, whatever it says stayed", async () => {
+    const tracked = landingPush(keeping(0), "mysql", {
+      starting: () => {},
+      stopped: () => false,
+      completed: () => true,
+    });
+    await tracked.push();
+    expect(tracked.landed()).toBe(true);
+  });
 });
 
 // A writer's push that says when it failed after changing the database: a failure before keeps

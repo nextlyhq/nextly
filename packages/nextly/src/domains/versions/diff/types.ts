@@ -343,8 +343,17 @@ export type FieldDiff =
 export interface VersionDiff {
   from: number;
   to: number;
-  /** The (single) locale both snapshots belong to; null for unlocalized docs. */
+  /**
+   * The (single) locale both snapshots belong to; null for unlocalized docs.
+   * For a comparison of the shared part, the target version's locale.
+   */
   locale: string | null;
+  /**
+   * `shared` when the comparison is of the shared part: the fields every
+   * language shares, its two versions possibly in two languages. Absent for a
+   * comparison of one language.
+   */
+  part?: "shared";
   /**
    * True when any field node is not "unchanged". Speaks only for the fields
    * the reader may read: see `incomplete`.
