@@ -154,7 +154,8 @@ const PATHS: readonly SavePath[] = [
     registry: "dynamic_collections",
     translatable: false,
     pushRoad: true,
-    // Its registry write and its first ledger write run after the push's own transaction.
+    // Its ledger writes and its registry write run together after the push's own transaction has
+    // committed, so a failure there keeps the change and answers part way.
     notKeptYet: ["registry", "ledger"],
     create: collectionCreate("fbs_posts"),
     save: (_t, fields) =>

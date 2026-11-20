@@ -570,6 +570,58 @@ describe("a baseline comparison's fields", () => {
     client.clear();
   });
 
+  it("keeps the shared part's comparison apart from the same pair in one language", async () => {
+    const { client, ownWrapper } = sharedClient();
+    baselineDiffSpy.mockResolvedValue({
+      ...answer("since-approved"),
+      part: "shared",
+    });
+    diffSpy.mockResolvedValue({
+      ...answer("since-approved"),
+      baseline: undefined,
+    });
+
+    const baseline = renderHook(
+      () =>
+        useBaselineDiff({
+          scope,
+          baseline: "since-approved",
+          to: 5,
+          part: "shared",
+        }),
+      { wrapper: ownWrapper }
+    );
+    await waitFor(() => expect(baseline.result.current.isSuccess).toBe(true));
+    expect(baselineDiffSpy).toHaveBeenCalledWith(scope, "since-approved", {
+      to: 5,
+      part: "shared",
+    });
+
+    // The shared pair is drawn from the shared answer, not asked again.
+    const shared = renderHook(
+      () =>
+        useVersionDiff({
+          scope,
+          from: 3,
+          to: 5,
+          part: "shared",
+          seededBy: "since-approved",
+        }),
+      { wrapper: ownWrapper }
+    );
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(diffSpy).not.toHaveBeenCalled();
+    expect(shared.result.current.data?.part).toBe("shared");
+
+    // The same two versions compared in one language are their own question.
+    renderHook(() => useVersionDiff({ scope, from: 3, to: 5 }), {
+      wrapper: ownWrapper,
+    });
+    await waitFor(() => expect(diffSpy).toHaveBeenCalledTimes(1));
+    expect(diffSpy).toHaveBeenCalledWith(scope, 3, 5, { modifiedOnly: false });
+    client.clear();
+  });
+
   it("still revalidates a frozen baseline's pair on return, against the live schema", async () => {
     const { client, ownWrapper } = sharedClient();
     baselineDiffSpy.mockResolvedValue(answer("last-viewed"));
