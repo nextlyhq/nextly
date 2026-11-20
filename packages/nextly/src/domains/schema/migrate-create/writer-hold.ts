@@ -1087,8 +1087,7 @@ export async function publishHeld(
   const placed: string[] = [];
   const running = () => scope.getStore();
   const command = () => running()?.command ?? "migrate:create";
-  const isMigration = (path: string) => path.endsWith(".sql");
-  const placedMigrations = () => placed.filter(isMigration);
+  const placedMigrations = () => placed.filter(isMigrationFile);
   let moving: string | undefined;
   try {
     await assertWriterHold(migrationsDir);
@@ -1111,15 +1110,6 @@ export async function publishHeld(
   }
 
   /**
-   * The migration file a snapshot at `path` belongs to: the one it is put
-   * in place just before.
-   */
-  function migrationOf(path: string): string | undefined {
-    const at = files.findIndex(file => file.path === path);
-    return files.slice(at + 1).find(file => isMigration(file.path))?.path;
-  }
-
-  /**
    * Removes what this step placed, after `error` stopped it, and throws what
    * the writer is told where a migration file was among them.
    */
@@ -1128,39 +1118,16 @@ export async function publishHeld(
     // A migration file is taken back only from a folder known to be this
     // writer's still. Where it is not, only the snapshots it placed without
     // their files go.
-    const stillHeld = () =>
-      assertWriterHold(migrationsDir).then(
-        () => true,
-        () => false
-      );
-    if (migrationPlaced && !(await stillHeld())) {
-      for (const path of placed) {
-        const own = migrationOf(path);
-        if (isMigration(path) || (own !== undefined && placed.includes(own)))
-          continue;
-        await rm(path, { force: true }).catch(() => undefined);
-      }
+    if (migrationPlaced && !(await holdsStill(migrationsDir))) {
+      await removeLoneSnapshots(files, placed);
       throw leftInPlaceError(command(), placedMigrations(), {
         notPlaced: files
           .map(file => file.path)
-          .filter(path => isMigration(path) && !placed.includes(path)),
+          .filter(path => isMigrationFile(path) && !placed.includes(path)),
         cause: error,
       });
     }
-    const left: string[] = [];
-    for (const path of [...placed].reverse()) {
-      // The snapshot of a migration file that stays, stays with it.
-      const own = isMigration(path) ? undefined : migrationOf(path);
-      if (own !== undefined && left.includes(own)) {
-        left.push(path);
-        continue;
-      }
-      try {
-        await rm(path, { force: true });
-      } catch {
-        left.push(path);
-      }
-    }
+    const left = await removePlaced(files, placed);
     if (!migrationPlaced || moving === undefined) return;
     throw notWrittenError({
       command: command(),
@@ -1170,4 +1137,71 @@ export async function publishHeld(
       cause: error,
     });
   }
+}
+
+/** A migration file, as against the snapshot that goes with it. */
+function isMigrationFile(path: string): boolean {
+  return path.endsWith(".sql");
+}
+
+/**
+ * The migration file a snapshot at `path` belongs to, among `files` in the
+ * order they are put in place: the one it is put in place just before.
+ */
+function migrationOf(
+  files: readonly PreparedFile[],
+  path: string
+): string | undefined {
+  const at = files.findIndex(file => file.path === path);
+  return files.slice(at + 1).find(file => isMigrationFile(file.path))?.path;
+}
+
+/** Whether `migrationsDir` is still this writer's; one it cannot tell is not. */
+function holdsStill(migrationsDir: string): Promise<boolean> {
+  return assertWriterHold(migrationsDir).then(
+    () => true,
+    () => false
+  );
+}
+
+/**
+ * Removes each snapshot of `placed` whose own migration file was not placed,
+ * as far as it can: it counts for nothing without that file.
+ */
+async function removeLoneSnapshots(
+  files: readonly PreparedFile[],
+  placed: readonly string[]
+): Promise<void> {
+  for (const path of placed) {
+    if (isMigrationFile(path)) continue;
+    const own = migrationOf(files, path);
+    if (own !== undefined && placed.includes(own)) continue;
+    await rm(path, { force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Removes each of `placed`, the last placed first, so a migration file goes
+ * before its snapshot, and answers those it could not remove. The snapshot
+ * of a migration file that stays, stays with it and is answered too.
+ */
+async function removePlaced(
+  files: readonly PreparedFile[],
+  placed: readonly string[]
+): Promise<string[]> {
+  const left: string[] = [];
+  for (const path of [...placed].reverse()) {
+    const own = isMigrationFile(path) ? undefined : migrationOf(files, path);
+    const staysWithItsFile = own !== undefined && left.includes(own);
+    if (staysWithItsFile || !(await removed(path))) left.push(path);
+  }
+  return left;
+}
+
+/** Whether the file at `path` is gone. */
+function removed(path: string): Promise<boolean> {
+  return rm(path, { force: true }).then(
+    () => true,
+    () => false
+  );
 }
