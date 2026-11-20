@@ -131,6 +131,27 @@ export function blankWrittenFrom(content: string): string[] {
   ];
 }
 
+/**
+ * The line `migrate:create --blank` has written in every blank migration's header, before a
+ * blank file stated its place and since.
+ */
+export const BLANK_FILE_LINE =
+  "-- This is a blank migration file for custom SQL.";
+
+/**
+ * Whether `content` is a blank migration's: a file for SQL its author writes, which
+ * `migrate:create --blank` pairs with no snapshot. It says so in one of two ways: the header
+ * that states its place (`blankLineHeader`), or the template's own line (`BLANK_FILE_LINE`),
+ * which a file written before blank files stated a place also carries. A generated migration
+ * carries neither.
+ */
+export function isBlankMigration(content: string): boolean {
+  return (
+    placedByHeader(content, "") !== undefined ||
+    content.split(/\r?\n/).includes(BLANK_FILE_LINE)
+  );
+}
+
 /** The columns an element of a table names: an index's, a key's. */
 function columnsNamedBy(element: Record<string, unknown>): string[] {
   const columns = Array.isArray(element.columns) ? element.columns : [];

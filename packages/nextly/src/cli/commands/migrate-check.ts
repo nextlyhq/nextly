@@ -9,7 +9,8 @@
  *      hash recorded in its paired `.snapshot.json` (someone edited
  *      the file after `migrate:create` generated it).
  *   2. MISSING_SNAPSHOT   - A `.sql` file has no paired `.snapshot.json`
- *      (operator deleted the snapshot or the file was added by hand).
+ *      (operator deleted the snapshot or the file was added by hand). A
+ *      blank migration (`isBlankMigration`) has none by design and passes.
  *   3. INVALID_SNAPSHOT   - A `.snapshot.json` file is malformed
  *      (corrupted JSON, hand-edited, or written by a future nextly
  *      version with an incompatible envelope).
@@ -67,6 +68,7 @@ import {
 } from "../../domains/schema/migrate/file-deletions";
 import {
   forkedHistoryError,
+  isBlankMigration,
   unrecordedMerges,
 } from "../../domains/schema/migrate/history-line";
 import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
@@ -388,6 +390,9 @@ export async function runChecks(args: {
     // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
     // rather than flagging them MISSING_SNAPSHOT.
     if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) continue;
+    // A blank migration is its author's SQL, which `migrate:create --blank` pairs with no
+    // snapshot: there is no hash to hold it to, and none missing.
+    if (isBlankMigration(sqlContent)) continue;
     let result;
     try {
       result = await verifyMigrationHash(metaDir, sqlName, sqlContent);

@@ -9,7 +9,10 @@ import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
-import { HISTORY_FORKED_REASON } from "../../../domains/schema/migrate/history-line";
+import {
+  BLANK_FILE_LINE,
+  HISTORY_FORKED_REASON,
+} from "../../../domains/schema/migrate/history-line";
 import {
   WRITER_HOLD_HELD_REASON,
   WRITER_HOLD_LOST_REASON,
@@ -1307,8 +1310,9 @@ export function migrationSnapshotMissing(
 ): CliError {
   return new CliError("MISSING_SNAPSHOT", {
     what: `\`${sqlName}\` has no paired snapshot file in ${metaDir}.`,
-    why: `Nothing is at \`${sqlName.replace(/\.sql$/, "")}.snapshot.json\`, which \`migrate:create\` writes beside every migration; a migration generated before it wrote snapshots has none.`,
-    next: "Either delete it, or re-create it with `nextly migrate:create --blank` and copy the SQL across.",
+    why: `Nothing is at \`${sqlName.replace(/\.sql$/, "")}.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.`,
+    // A file already applied keeps its name: under a new one the database would run it again.
+    next: `Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, add the line \`${BLANK_FILE_LINE}\` to its header instead, then accept the edit with \`nextly migrate:resolve --applied ${sqlName} --skip-verify\` on every database that has applied it.`,
   });
 }
 
