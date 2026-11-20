@@ -694,6 +694,24 @@ curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries" \
   -d '{"where":{"status":{"equals":"draft"}},"data":{"status":"archived","_overwrite":true}}'
 ```
 
+### Schema changes that replace a field
+
+A schema change sent to `PATCH /admin/api/collections/{slug}` or `PATCH /admin/api/singles/{slug}/schema` that removes one field and adds another of the same type is never taken for a rename by guesswork. The request says which it is, in `renames`, by field name:
+
+```json
+{
+  "fields": [{ "name": "headline", "type": "text" }],
+  "renames": [{ "from": "heading", "to": "headline", "choice": "rename" }]
+}
+```
+
+- `"rename"` keeps the field's values under its new name.
+- `"drop_and_add"` drops the old field and its values and adds the new one empty.
+
+A change that makes such a pair without answering it is refused before anything is written, with `FIELD_RENAME_UNANSWERED`, naming both fields. A rename is one field at a time: a `"rename"` answer for two fields replaced at once is refused with `FIELD_RENAME_NOT_OFFERED`, and a shared field can't be renamed into a translated one in the same change (`FIELD_RENAME_JOINS_TRANSLATION`). `"drop_and_add"` is refused for two fields stored in one place, one column or one many-to-many junction table both name (`FIELD_RENAME_SAME_COLUMN`).
+
+A field group's rows are kept when its field is removed, or dropped with `"drop_and_add"`: they remain until the field group or the entity is deleted.
+
 ### Singles
 
 List metadata for every registered single:
