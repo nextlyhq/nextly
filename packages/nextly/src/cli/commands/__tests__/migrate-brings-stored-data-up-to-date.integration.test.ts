@@ -49,6 +49,10 @@ import { toCliError } from "../../errors";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+
+// `nextly migrate` as every installation runs it: per-language storage (`storage-layout`).
+perLanguageStorageSuite();
 
 type LoadedConfig = Parameters<typeof MergeSetupResultIntoConfig>[0];
 type Row = Record<string, unknown>;
@@ -238,7 +242,8 @@ describe.each(getConfiguredTestDialects())(
         dialect === "sqlite" ? String(Date.now()) : "CURRENT_TIMESTAMP";
       const box = JSON.stringify({ label: "front door", pin });
       await sql(
-        `INSERT INTO ${id(TABLE)} (${id("id")}, ${id("title")}, ${id("slug")}, ${id("box")}, ${id("created_at")}, ${id("updated_at")}) VALUES ('entry-1', 'first', 'first', '${box}', ${now}, ${now})`
+        // The translatable title is kept per language, off the main table; the entry needs none.
+        `INSERT INTO ${id(TABLE)} (${id("id")}, ${id("slug")}, ${id("box")}, ${id("created_at")}, ${id("updated_at")}) VALUES ('entry-1', 'first', '${box}', ${now}, ${now})`
       );
       state.config = configWith(true);
       await capture("summary");
@@ -256,8 +261,9 @@ describe.each(getConfiguredTestDialects())(
 
     /** Whether the second migration has applied: the column it adds is there. */
     async function summaryColumnExists(): Promise<boolean> {
+      // A translatable field, kept per language: its column is in the per-language table.
       try {
-        await sql(`SELECT ${id("summary")} FROM ${id(TABLE)}`);
+        await sql(`SELECT ${id("summary")} FROM ${id(`${TABLE}_locales`)}`);
         return true;
       } catch {
         return false;
@@ -290,9 +296,9 @@ describe.each(getConfiguredTestDialects())(
     it("under --step, which is not checked beforehand, refuses once the last migration has applied, and says so", async () => {
       await siteHoldingAPlainPassword("plain-pin");
 
-      // One migration is waiting, so this run applies the last and reaches
-      // the data steps.
-      const refusal = await migrate({ step: 1 }).then(
+      // Two migrations are waiting (the column and the per-language table it joins), so this run
+      // applies the last and reaches the data steps.
+      const refusal = await migrate({ step: 2 }).then(
         () => undefined,
         (error: unknown) => error
       );

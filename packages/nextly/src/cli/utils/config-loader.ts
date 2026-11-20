@@ -33,7 +33,6 @@ import { assertOpensIn } from "../../collections/config/opens-in";
 import type { NextlyServiceConfig } from "../../di/register";
 import { emailRetentionAfterTransform } from "../../domains/email/retention-config";
 import { judgeFieldGroupCyclesAtStart } from "../../domains/field-groups/field-group-cycles";
-import { adoptPerLanguageStorage } from "../../domains/i18n/per-language-storage";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -824,10 +823,6 @@ async function loadConfigInternal(
       // entities are DEFERRED (candidate Builder/UI-schema targets) rather than
       // thrown, so a plugin may extend/relate to a Builder-made collection
       // (P8/D3/R2).
-      // The configuration's per-language storage choice, adopted before the fold judges a
-      // transform of another plugin's entity by where its fields keep their values. The same
-      // adoption runs again once the config is installed, and agrees.
-      adoptPerLanguageStorage(config.perLanguageStorage);
       const folded = applyPluginSchemaContributionsDeferred(
         transformedConfig,
         transformedPlugins
@@ -1103,15 +1098,16 @@ function configFileFor(options: LoadConfigOptions): string | undefined {
 export async function loadConfig(
   options: LoadConfigOptions = {}
 ): Promise<LoadConfigResult> {
-  // A cached default, given where no configuration file was found, is no answer to a caller that
+  // The cache answers only for the file this call would read itself: one from another project,
+  // or from a file since removed, is read again, whatever the caller does without one. And a
+  // cached default, given where no configuration file was found, is no answer to a caller that
   // refuses to act without one: it is asked again, and refused.
-  // Nor is one from another project, or from a file since removed: the file this call would
-  // read must be the one the cache holds.
-  const cachedDefaultRefused =
-    options.missing === "refuse" &&
-    (cachedConfig?.configPath === undefined ||
-      cachedConfig.configPath !== configFileFor(options));
-  if (cachedConfig && !options.watch && !cachedDefaultRefused) {
+  const wanted = configFileFor(options);
+  const cachedElsewhere =
+    cachedConfig !== null &&
+    (cachedConfig.configPath !== wanted ||
+      (wanted === undefined && options.missing === "refuse"));
+  if (cachedConfig && !options.watch && !cachedElsewhere) {
     debugLog(options, "Returning cached config");
     return cachedConfig;
   }
@@ -1132,9 +1128,6 @@ export async function loadConfig(
     // pipeline both read the active value, so `migrate` cannot end up applying
     // DDL to `public` while the application it is migrating runs in `cms`.
     publishConfiguredPostgresSchema(loaded.config);
-    // Likewise its per-language storage choice, so a command's DDL lays tables out as the site
-    // does. A booted site already chose and keeps its choice.
-    adoptPerLanguageStorage(loaded.config.perLanguageStorage);
     return loaded;
   });
 

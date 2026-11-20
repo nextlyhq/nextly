@@ -306,9 +306,14 @@ describe("a save over a standing record that cannot be read", () => {
     const save = withSaveRecords(() =>
       recordSaveStarted({
         // Asked for its handle and dialect, which the mocked version read takes, and for SQLite's
-        // busy timeout, which each try of the record's insert sets and puts back.
+        // busy timeout, which each try of the record's insert sets and puts back. Its handle reads
+        // no other entity's record, so only this entity's row is in question.
         adapter: {
-          getDrizzle: () => ({}),
+          getDrizzle: () => ({
+            select: () => ({
+              from: () => ({ where: () => Promise.resolve([]) }),
+            }),
+          }),
           getCapabilities: () => ({ dialect: "sqlite" }),
           executeQuery: () => Promise.resolve([{ timeout: 0 }]),
         } as unknown as DrizzleAdapter,

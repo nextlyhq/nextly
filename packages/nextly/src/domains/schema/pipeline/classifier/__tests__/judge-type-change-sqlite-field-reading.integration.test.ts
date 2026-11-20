@@ -377,4 +377,149 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
       { id: "r2", value: "true" },
     ]);
   });
+
+  it("does not ask a field's own validate, which reads its entry, of a value judged alone", async () => {
+    // The function is right about a whole entry. Asked with this one value as the entry, it
+    // would refuse every row, and a consent would then clear values the field accepts.
+    await create({ type: "text" }, { r1: "5", r2: "12" });
+    const change = await judged(
+      {
+        type: "number",
+        validate: (_value: unknown, { data }: { data: { title?: unknown } }) =>
+          data.title === "T" ? true : "Needs its title.",
+      },
+      { type: "text" }
+    );
+    expect(change.judgement.class).toBe("safe");
+    expect(change.cleared).toEqual([]);
+  });
+
+  it("blocks values a unique index of several columns would hold twice once the new type reads them", async () => {
+    // "1" and " 1" differ as text and are one number. With the same title they are one pair to
+    // the index of (value, title); r3 reads as 1 too, under another title, and is no repeat.
+    await create({ type: "text" }, { r1: "1", r2: " 1", r3: "1", r4: "2" });
+    sqlite.prepare(`UPDATE "${TABLE}" SET title = 'U' WHERE id = 'r3'`).run();
+    const change = await judged({ type: "number" }, { type: "text" }, [
+      { fields: ["value", "title"], unique: true },
+    ]);
+    expect(change.judgement.class).toBe("blocked");
+    expect(rowsOf(change)).toContainEqual([
+      "repeated",
+      "blocked",
+      ["r1", "r2"],
+    ]);
+  });
+
+  it("blocks two values to be cleared that a unique index of several columns would hold twice", async () => {
+    // The rebuild copies both "maybe" values into the new column, and builds the index, before
+    // the consent clears either.
+    await create({ type: "text" }, { r1: "maybe", r2: "maybe" });
+    const change = await judged({ type: "checkbox" }, { type: "text" }, [
+      { fields: ["value", "title"], unique: true },
+    ]);
+    expect(change.judgement.class).toBe("blocked");
+    expect(rowsOf(change)).toContainEqual([
+      "repeated",
+      "blocked",
+      ["r1", "r2"],
+    ]);
+  });
+
+  it("blocks values to be cleared that the rebuild keeps as one number under a unique index of several columns", async () => {
+    // Both are refused by the field's maximum and consented to be cleared, but the rebuild keeps
+    // "100" and " 100" as the integer 100 and makes the index before the consent clears either.
+    await create({ type: "text" }, { r1: "100", r2: " 100" });
+    const change = await judged({ type: "number", max: 50 }, { type: "text" }, [
+      { fields: ["value", "title"], unique: true },
+    ]);
+    expect(change.judgement.class).toBe("blocked");
+    expect(rowsOf(change)).toContainEqual([
+      "repeated",
+      "blocked",
+      ["r1", "r2"],
+    ]);
+  });
+
+  it("lets values one number under different titles through a unique index of both columns", async () => {
+    await create({ type: "text" }, { r1: "1", r2: " 1" });
+    sqlite.prepare(`UPDATE "${TABLE}" SET title = 'U' WHERE id = 'r2'`).run();
+    const change = await judged({ type: "number" }, { type: "text" }, [
+      { fields: ["value", "title"], unique: true },
+    ]);
+    expect(change.judgement.class).toBe("safe");
+  });
+
+  it("clears every consented column before it fails, naming each column's rows written since", async () => {
+    // Two columns converted by one rebuild, each consented to. A late value in the first must not
+    // leave the second's consented values where they were: no later run offers to clear them.
+    await create({ type: "text" }, { r1: null, r2: "maybe", r3: null });
+    sqlite.prepare(`UPDATE "${TABLE}" SET title = NULL WHERE id = 'r3'`).run();
+    const change = await judged({ type: "checkbox" }, { type: "text" });
+    await rebuildAs({ type: "checkbox" });
+    sqlite
+      .prepare(
+        `UPDATE "${TABLE}" SET value = 'perhaps', title = 'Late' WHERE id = 'r3'`
+      )
+      .run();
+
+    const first = lossyEventOf(change);
+    if (first.lossy?.fieldReadings === undefined) {
+      throw new Error("the change was judged without its fields");
+    }
+    // The same rebuild's other column: `title`, a text that became a checkbox too, its consent
+    // naming the two rows that held "T".
+    const second: TypeChangeEvent = {
+      ...first,
+      id: `type_change:${TABLE}.title`,
+      columnName: "title",
+      lossy: {
+        ...first.lossy,
+        cleared: [{ id: "r1" }, { id: "r2" }],
+        fieldReadings: {
+          ...first.lossy.fieldReadings,
+          previous: [
+            { name: "title", type: "text" },
+            { name: "value", type: "text" },
+          ] as never,
+          next: [
+            { name: "title", type: "checkbox" },
+            { name: "value", type: "checkbox" },
+          ] as never,
+          field: "title",
+        },
+      },
+    };
+    await expect(
+      clearConsentedValues({
+        tx: db,
+        dialect: "sqlite",
+        events: [first, second],
+        clearing: [first.id, second.id],
+      })
+    ).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          {
+            path: `schema.${TABLE}.value`,
+            code: "CONVERSION_LEFT_A_LATER_VALUE",
+            message: expect.stringMatching(/cannot read: r3\./) as unknown,
+          },
+          {
+            path: `schema.${TABLE}.title`,
+            code: "CONVERSION_LEFT_A_LATER_VALUE",
+            message: expect.stringMatching(/cannot read: r3\./) as unknown,
+          },
+        ],
+      },
+    });
+    expect(
+      sqlite
+        .prepare(`SELECT id, title, value FROM "${TABLE}" ORDER BY id`)
+        .all()
+    ).toEqual([
+      { id: "r1", title: null, value: null },
+      { id: "r2", title: null, value: null },
+      { id: "r3", title: "Late", value: "perhaps" },
+    ]);
+  });
 });

@@ -56,6 +56,7 @@ import {
   refuseNewCollectionIndexNamesTaken,
 } from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
+import { fieldsDroppedFromRow } from "../../schema/services/translated-drops";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { loadUiSchema } from "../../schema/ui-schema/loader";
 import { withSystemTextFields } from "../system-text-fields";
@@ -1344,6 +1345,26 @@ export class CollectionMetadataService extends BaseService {
         renameResolutions: updateArtifacts.pushAnswers.renameResolutions,
         eventResolutions: [],
         legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
+        // An update's request is its own consent to every field it drops, as its own drops are
+        // answered: a translated field's values in the translations table included, which the
+        // push asks by name before the companion's step drops them (`unconfirmedTranslatedDrops`).
+        confirmedBeside: {
+          tableName: before.tableName,
+          byFieldName: Object.fromEntries(
+            fieldsDroppedFromRow({
+              tableName: before.tableName,
+              builtBy: "collection",
+              dialect: this.dialect,
+              oldFields: beforeFields,
+              newFields: updateArtifacts.metadataUpdates.fields ?? beforeFields,
+              wasLocalized,
+              isLocalized:
+                body.localized !== undefined
+                  ? body.localized === true
+                  : wasLocalized,
+            }).map(field => [field.name, { action: "confirm_drop" as const }])
+          ),
+        },
         fills: updateArtifacts.pushAnswers.fills,
         // The save detects its own renames; every other pair is a drop and an add.
         dropAndAddUnansweredRenames: true,

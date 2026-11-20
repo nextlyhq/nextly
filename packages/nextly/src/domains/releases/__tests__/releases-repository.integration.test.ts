@@ -27,6 +27,12 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { RevalidationIntent } from "../../../revalidation/types";
+import {
+  COMPONENT_WALK_RELEASES,
+  dueComponentsHolding,
+} from "../component-hold";
+import { RELEASE_MEMBERS_TABLE } from "../release-tables";
 import {
   ReleasesRepository,
   documentRefKey,
@@ -109,6 +115,156 @@ describe.each(getConfiguredTestDialects())(
         limit: 2,
       });
       expect(recent.map(row => row.title)).toEqual(["Latest", "Later"]);
+    });
+
+    it("flushes the documents of many releases with one read of their members and one flush", async () => {
+      // A held component's releases are flushed together: read release by release, the members
+      // and the flushes grow with the component, which a pass repeats each time it is held.
+      const app = await boot(dialect);
+      const flush = vi.fn((_intents: RevalidationIntent[]) => {});
+      const repo = new ReleasesRepository(app.adapter, { flush });
+      const ids: string[] = [];
+      for (const entryId of ["e0", "e1", "e2"]) {
+        const release = await repo.createRelease({ title: entryId });
+        await repo.addMember(
+          { releaseId: release.id, action: "publish", ...ref(entryId) },
+          ANY_EDITABLE_STATE
+        );
+        ids.push(release.id);
+      }
+      flush.mockClear();
+      const select = vi.spyOn(app.adapter, "select");
+
+      await repo.revalidateReleases(ids);
+
+      expect(
+        select.mock.calls.filter(([table]) => table === RELEASE_MEMBERS_TABLE)
+      ).toHaveLength(1);
+      expect(flush).toHaveBeenCalledTimes(1);
+      // The one flush names every release's document.
+      const flushed = JSON.stringify(flush.mock.calls[0]?.[0]);
+      for (const entryId of ["e0", "e1", "e2"]) {
+        expect(flushed).toContain(entryId);
+      }
+    });
+
+    it("reads no more than the bound plus one of the due releases holding a document a walk reaches", async () => {
+      // A bridge document held by more due releases than one component may hold: the walk only
+      // needs to learn that it is past the bound, not to read every release holding it.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      const holders = COMPONENT_WALK_RELEASES + 20;
+      for (let i = 0; i < holders; i += 1) {
+        const release = await repo.createRelease({ title: `R${i}` });
+        await repo.addMember(
+          { releaseId: release.id, action: "publish", ...ref("bridge") },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
+      }
+      const select = vi.spyOn(app.adapter, "select");
+
+      const reached = await dueComponentsHolding(
+        repo,
+        [{ scopeKind: "collection", scopeSlug: "posts", entryId: "bridge" }],
+        new Date()
+      );
+
+      // Past the bound, as before, and with nothing of it planned.
+      expect(reached.unbounded.map(document => document.entryId)).toEqual([
+        "bridge",
+      ]);
+      expect(reached.releases).toEqual([]);
+      const memberRows = (
+        await Promise.all(
+          select.mock.calls.map(async ([table], index) =>
+            table === RELEASE_MEMBERS_TABLE
+              ? ((await select.mock.results[index]?.value) as unknown[])
+              : []
+          )
+        )
+      ).flat();
+      expect(memberRows.length).toBeGreaterThan(0);
+      expect(memberRows.length).toBeLessThanOrEqual(
+        COMPONENT_WALK_RELEASES + 1
+      );
+    }, 180_000);
+
+    it("counts each due release holding a document once toward the bound, however many of its languages it holds", async () => {
+      // Three releases, each holding the document in two languages: six rows, three releases,
+      // within a bound of five.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      for (let i = 0; i < 3; i += 1) {
+        const release = await repo.createRelease({ title: `R${i}` });
+        for (const locale of ["en", "es"]) {
+          await repo.addMember(
+            {
+              releaseId: release.id,
+              action: "publish",
+              ...ref("bridge", locale),
+            },
+            ANY_EDITABLE_STATE
+          );
+        }
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
+      }
+
+      const held = await repo.dueHoldersOf(
+        [{ scopeKind: "collection", scopeSlug: "posts", entryId: "bridge" }],
+        new Date(),
+        5
+      );
+
+      expect(held.overflow).toEqual([]);
+      expect(held.holding).toHaveLength(3);
+      expect(held.holding.flatMap(({ members }) => members)).toHaveLength(6);
+    });
+
+    it("reads a document past the bound no further than the bound plus one, wherever its page starts", async () => {
+      // `a` comes first and takes a row of the first page, so `bridge`'s count is one short of
+      // the bound when that page ends; the next page needs one row of it, not a full page.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      const holding = async (entryId: string) => {
+        const release = await repo.createRelease({ title: entryId });
+        await repo.addMember(
+          { releaseId: release.id, action: "publish", ...ref(entryId) },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
+      };
+      await holding("a");
+      for (let i = 0; i < 12; i += 1) await holding("bridge");
+      const select = vi.spyOn(app.adapter, "select");
+
+      const held = await repo.dueHoldersOf(
+        ["a", "bridge"].map(entryId => ({
+          scopeKind: "collection" as const,
+          scopeSlug: "posts",
+          entryId,
+        })),
+        new Date(),
+        5
+      );
+
+      expect(held.overflow.map(document => document.entryId)).toEqual([
+        "bridge",
+      ]);
+      const bridgeRows = (
+        await Promise.all(
+          select.mock.calls.map(async ([table], index) =>
+            table === RELEASE_MEMBERS_TABLE
+              ? ((await select.mock.results[index]?.value) as {
+                  entryId: string;
+                }[])
+              : []
+          )
+        )
+      )
+        .flat()
+        .filter(row => row.entryId === "bridge");
+      expect(bridgeRows.length).toBeLessThanOrEqual(6);
     });
 
     it("keeps an unscheduled draft out of BOTH ends of the timeline", async () => {

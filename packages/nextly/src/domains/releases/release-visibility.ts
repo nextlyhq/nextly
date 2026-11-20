@@ -60,7 +60,7 @@ export interface ReleaseVisibility {
 export interface RevealSource {
   findDueDecisions(input: RevealQuery): Promise<ReleaseDecisions>;
   /** The reads that walk the components of the documents decided, to plan (`withoutHeld`). */
-  scheduledMembersFor: ReleasesRepository["scheduledMembersFor"];
+  dueHoldersOf: ReleasesRepository["dueHoldersOf"];
   listMembersOf: ReleasesRepository["listMembersOf"];
 }
 

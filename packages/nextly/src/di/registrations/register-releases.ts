@@ -57,6 +57,30 @@ import {
 } from "./release-document-checks";
 import type { RegistrationContext } from "./types";
 
+/**
+ * The releases repository as the install wires it: with the registered revalidator, and the
+ * opt-out and extra tags a release's flush must honour. The one construction every caller that
+ * moves or flushes a release takes, the service's and the drain job's alike, so neither can flush
+ * less than the other.
+ */
+export function wiredReleasesRepository(
+  adapter: RegistrationContext["adapter"]
+): ReleasesRepository {
+  return new ReleasesRepository(
+    adapter,
+    container.has("cacheRevalidator")
+      ? container.get<CacheRevalidator>("cacheRevalidator")
+      : undefined,
+    // The opt-out and extra tags a release's flush must honour, read as a
+    // language change reads them; none where the registered revalidator
+    // flushes nothing (no Next runtime, the CLI), so those read no registry.
+    async () =>
+      languageChangeContentCache().revalidator()
+        ? registryRevalidateConfigs()
+        : { collections: [], singles: [] }
+  );
+}
+
 export function registerReleaseServices({
   adapter,
   logger,
@@ -81,19 +105,7 @@ export function registerReleaseServices({
         // stays cached with no transition bound and keeps serving pre-release
         // content past the instant. The repository takes it optionally, which is
         // exactly why omitting it here would have been silent.
-        repository: new ReleasesRepository(
-          adapter,
-          container.has("cacheRevalidator")
-            ? container.get<CacheRevalidator>("cacheRevalidator")
-            : undefined,
-          // The opt-out and extra tags a release's flush must honour, read as a
-          // language change reads them; none where the registered revalidator
-          // flushes nothing (no Next runtime, the CLI), so those read no registry.
-          async () =>
-            languageChangeContentCache().revalidator()
-              ? registryRevalidateConfigs()
-              : { collections: [], singles: [] }
-        ),
+        repository: wiredReleasesRepository(adapter),
 
         // The system resource, whose three authorities are seeded by
         // `permission-seed-service`. `hasPermission` fails CLOSED — it returns

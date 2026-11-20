@@ -1,9 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
 import { workingDraftLocale } from "../working-draft-locale";
 
+// A case that stands in for an earlier release's layout leaves the one every installation runs.
+afterEach(() => _resetPerLanguageStorage());
+
 describe("workingDraftLocale", () => {
-  it("is null for an unlocalized document, whatever locale was requested", () => {
+  it("is null for an unlocalized document, whatever locale was requested (an earlier release's layout)", () => {
+    setPerLanguageStorage(false);
     // The key has to be stable across requests: a later read or publish
     // arriving under a different locale must find the same draft.
     expect(

@@ -84,6 +84,11 @@ import {
   reconcileCore,
 } from "../../domains/schema/migrate/core-reconcile";
 import {
+  checkCompanionFiles,
+  judgeCompanionFiles,
+  warnOfSnapshotlessFile,
+} from "../../domains/schema/migrate/companion-drift";
+import {
   consentToCover,
   countDeletions,
   describeDeletion,
@@ -218,6 +223,13 @@ import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { danglingReferences } from "../../domains/schema/migrate/sqlite-foreign-keys";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import {
+  endsTheRun,
+  isStoppedAtPoint,
+  reachStopPoint,
+  withStopPoints,
+  type StopPointHook,
+} from "../../domains/schema/migrate/stop-points";
+import {
   adoptUniqueIndexesAlreadyThere,
   type AdoptedUniqueIndex,
   refuseUniqueIndexesOverRepeats,
@@ -326,6 +338,7 @@ import {
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
 import { storedDataOfRun } from "./stored-data-of-run";
+import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
@@ -742,6 +755,8 @@ export async function runMigrate(
       logger,
       backupConfirmed: options.backupConfirmed === true,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+      // The site the data steps bring an earlier release's content in step with.
+      site: upgradeSiteOf(configResult.config),
     });
 
     const ended = await moveEarlierRecords({
@@ -1301,6 +1316,13 @@ export interface MigrateCoreDeps {
   /** Seam for tests; defaults to the real metadata reconciliation. */
   reconcileMetadataFn?: typeof reconcileMigrationMetadata;
   /**
+   * For tests: called at each named point the run reaches (`stop-points.ts`): before and after
+   * each statement of a file, once a file is recorded applied, as a dropped entity's registry row
+   * goes, once the registry write commits, and as what a dropped entity left goes. One that throws
+   * fails the run there.
+   */
+  stopAt?: StopPointHook;
+  /**
    * What the run does with the registry rows the migrations record:
    * `write` (the default, for `nextly migrate` and the production boot
    * step) brings each to the newest applied snapshot; `insert-missing`
@@ -1599,6 +1621,24 @@ export async function previewMigrate(args: {
     dialect
   )) {
     logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
+  }
+  // The translations tables a real run checks before its first file, judged the same way.
+  const { refusal: companionRefusal } = await judgeCompanionFiles({
+    db,
+    dialect,
+    applied: listed.filter(each => each.done).map(each => each.file),
+    pending: listed.filter(each => !each.done).map(each => each.file),
+    runs: new Set(pendingFiles.map(file => file.name)),
+    snapshotOf: name =>
+      loadTargetSnapshot(resolve(args.migrationsDir, "meta"), name),
+  });
+  if (companionRefusal !== undefined) {
+    logger.info(
+      `  ✖ a real run would refuse ${companionRefusal.migration}.sql: the translations table ${companionRefusal.table} lacks what the migrations record of it`
+    );
+    for (const item of companionRefusal.items) {
+      logger.info(`      ${item.kind} ${item.detail}`);
+    }
   }
   await previewOldBuilderFiles({ ...args, logger });
   if (hasLedger) await previewChangedFiles(rows, args, logger);
@@ -2737,6 +2777,11 @@ async function addDocumentColumnsFor(deps: MigrateCoreDeps): Promise<void> {
 export async function migrateCore(
   deps: MigrateCoreDeps
 ): Promise<MigrateCoreResult> {
+  // A test's stop points (`stopAt`), installed for this run alone: the run itself goes on below.
+  if (deps.stopAt !== undefined) {
+    const { stopAt, ...run } = deps;
+    return withStopPoints(stopAt, () => migrateCore(run));
+  }
   // Refused HERE rather than in `runMigrate`, because this function is also
   // reached from `runMigrationsOnBoot` and from boot-apply. A refusal in the
   // command alone would let a production boot apply migrations that silently
@@ -2872,14 +2917,22 @@ export async function migrateCore(
       debug: (m: string) => deps.logger.debug(m),
     },
   });
+  /**
+   * The registry rows of the files that applied before one failed with `error`, except after a
+   * test's stop at a point (`stop-points.ts`), which ends the run where it stands.
+   */
+  const recordMetadataAfter = async (error: unknown): Promise<void> => {
+    if (!isStoppedAtPoint(error)) await recordMetadata();
+  };
   const recordMetadata = async (): Promise<void> => {
     deps.logger.info("Phase 3: recording migration metadata...");
     try {
       metadata = await reconcileMetadata(metadataArgs());
     } catch (error) {
       // A run that lost the schema lock stops here: it is not a bookkeeping
-      // failure to warn about and carry on from into Phase 4's writes.
-      if (isSchemaLockLost(error)) throw error;
+      // failure to warn about and carry on from into Phase 4's writes. Nor is
+      // a test's stop at a point (`stop-points.ts`).
+      if (endsTheRun(error)) throw error;
       // The whole pass failed, so nothing was read: say so in the result
       // rather than returning zeroes that read like "nothing needed doing".
       metadata = {
@@ -2920,6 +2973,15 @@ export async function migrateCore(
           await assertSchemaLockHeld();
           await deps.markOrphanedPermissions?.(scope, applied.name);
         };
+  /**
+   * What follows an applied app migration: its orphaned permissions marked, then the point a test
+   * stops the run at once the file and that are done (`stop-points.ts`), since a later run passes
+   * over a recorded file and nothing of it may be left for one.
+   */
+  const afterApplied = async (applied: AppliedAppMigration): Promise<void> => {
+    await markOrphans?.(applied);
+    await reachStopPoint(`${applied.name}.sql: recorded applied`);
+  };
   const dz = deps.adapter as unknown as DrizzleAdapter;
   /**
    * Store the registry record on `tx` at the point the database is now at,
@@ -3205,13 +3267,13 @@ export async function migrateCore(
           runFiles,
           judgedFiles,
           firstRun.beforeApply,
-          markOrphans
+          afterApplied
         ));
       } catch (error) {
         // A file failed after earlier ones applied: their registry rows are
         // still written, from the newest snapshot that did apply, before the
         // failure ends the run.
-        await recordMetadata();
+        await recordMetadataAfter(error);
         throw error;
       }
 
@@ -5149,6 +5211,18 @@ export async function runFileMigrations(args: {
     all.filter(m => plan.runs.has(m)),
     args.judged
   );
+  // The translations tables the pending companion files are about, compared with what the
+  // migrations around this point record of them, before any file applies: a table or column
+  // both the last applied and the newest pending snapshot name, and the database lacks, is
+  // drift and ends the run here.
+  const companions = await checkCompanionFiles({
+    db,
+    dialect,
+    applied: all.filter(m => plan.done.has(m)),
+    pending: all.filter(m => !plan.done.has(m)),
+    runs: new Set(all.filter(m => plan.runs.has(m)).map(m => m.name)),
+    snapshotOf: name => loadTargetSnapshot(metaDir, name),
+  });
 
   // The last file this run applied, which a run that lost the schema lock names, so the operator
   // knows where the database stands.
@@ -5259,9 +5333,12 @@ export async function runFileMigrations(args: {
         return executeSql(...statement);
       };
       if (!target) {
-        // No paired snapshot (hand-written migration): run verbatim + record.
-        logger.warn(
-          `No snapshot for ${filename}; applying verbatim without drift checks.`
+        // No paired snapshot: run verbatim + record. A hand-written file is said to have no
+        // drift check; a companion file had its table checked before the run's first file.
+        warnOfSnapshotlessFile(
+          message => logger.warn(message),
+          filename,
+          companions
         );
         // With no snapshot to place the database, a failed attempt that may
         // have left statements applied is refused here as the reconcile
@@ -5418,6 +5495,7 @@ export async function runFileMigrations(args: {
               : [],
         }),
       });
+      // The file and its ledger row have committed (`stop-points.ts`).
       applied++;
       lastApplied = filename;
       appliedFiles.push(filename);

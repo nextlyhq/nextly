@@ -34,6 +34,13 @@ export interface LaidOutEntity {
   tableName: string;
   fields: readonly { name?: string; type: string; localized?: boolean }[];
   localized?: unknown;
+  /** Whether it is Draft/Published: whether a translated one keeps a status per language. */
+  status?: boolean;
+  /**
+   * Whether the Schema Builder made it, read from its registry row: a column is described as its
+   * creator built it. Absent for one the configuration declares, which code built.
+   */
+  builderOwned?: boolean;
 }
 
 /**
@@ -103,6 +110,48 @@ function translatableColumns(
   return spec ? spec.columns.map(column => column.name) : [];
 }
 
+/** Each of `entities` with the translatable columns it has, leaving out one that has none. */
+function withTranslatableColumns(
+  entities: readonly LaidOutEntity[],
+  dialect: SupportedDialect
+): { entity: LaidOutEntity; columns: string[] }[] {
+  return entities
+    .map(entity => ({ entity, columns: translatableColumns(entity, dialect) }))
+    .filter(({ columns }) => columns.length > 0);
+}
+
+/**
+ * Each of `entities` whose main table still holds translatable columns, with those columns
+ * (`onMain`): what per-language storage keeps in the entity's per-language table instead. Every
+ * entity keeps its translatable values per language under it, a translatable one too: one that
+ * gains `localized: true` in the same deployment still holds them on its main table. An entity
+ * whose table does not exist yet is laid out per language when it is created, so it is not one.
+ *
+ * The one answer to "what still has to move": the boot refuses a site whose database holds any,
+ * and `nextly upgrade` moves exactly these.
+ */
+export async function valuesKeptOnMain(
+  adapter: LayoutAdapter,
+  entities: readonly LaidOutEntity[]
+): Promise<{ entity: LaidOutEntity; onMain: string[] }[]> {
+  const candidates = withTranslatableColumns(entities, adapter.dialect);
+  if (candidates.length === 0) return [];
+  // How this server compares names, read once: the catalog reports them in its own spelling.
+  const rules = await readIdentifierCaseRules(adapter);
+  // The columns alone: the question compares columns and nothing else.
+  const snapshot = await introspectLiveColumns(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    candidates.map(({ entity }) => entity.tableName)
+  );
+  return candidates.flatMap(({ entity, columns }) => {
+    const live = liveTable(snapshot.tables, entity.tableName, rules);
+    if (!live) return [];
+    const onMain = columnsIn(live, columns, rules);
+    return onMain.length > 0 ? [{ entity, onMain }] : [];
+  });
+}
+
 /**
  * Refuses the boot when the database keeps an entity not marked translatable in the other layout
  * than the setting chooses, naming each one and its columns.
@@ -120,36 +169,21 @@ export async function refuseMixedStorage(
   entities: readonly LaidOutEntity[],
   perLanguage = true
 ): Promise<void> {
-  // With the setting on every entity keeps its translatable values per language, a translatable
-  // one too: one that gains `localized: true` in the same deployment still holds them on its main
-  // table. With it off a translatable entity keeps them per language as it always has.
-  const candidates = entities
-    .filter(entity => perLanguage || entity.localized !== true)
-    .map(entity => ({
-      entity,
-      columns: translatableColumns(entity, adapter.dialect),
-    }))
-    .filter(({ columns }) => columns.length > 0);
-  if (candidates.length === 0) return;
-  // How this server compares names, read once: the catalog reports them in its own spelling.
-  const rules = await readIdentifierCaseRules(adapter);
   if (!perLanguage) {
-    await refuseValuesKeptPerLanguage(adapter, candidates, rules);
+    // With it off a translatable entity keeps them per language as it always has.
+    const candidates = withTranslatableColumns(
+      entities.filter(entity => entity.localized !== true),
+      adapter.dialect
+    );
+    if (candidates.length === 0) return;
+    await refuseValuesKeptPerLanguage(
+      adapter,
+      candidates,
+      await readIdentifierCaseRules(adapter)
+    );
     return;
   }
-
-  // The columns alone: the refusal compares columns and nothing else.
-  const snapshot = await introspectLiveColumns(
-    adapter.getDrizzle(),
-    adapter.dialect,
-    candidates.map(({ entity }) => entity.tableName)
-  );
-  const found = candidates.flatMap(({ entity, columns }) => {
-    const live = liveTable(snapshot.tables, entity.tableName, rules);
-    if (!live) return [];
-    const onMain = columnsIn(live, columns, rules);
-    return onMain.length > 0 ? [{ entity, onMain }] : [];
-  });
+  const found = await valuesKeptOnMain(adapter, entities);
   if (found.length === 0) return;
 
   const named = found
@@ -161,9 +195,9 @@ export async function refuseMixedStorage(
   throw new NextlyError({
     code: "NEXTLY_PER_LANGUAGE_STORAGE_MIXED",
     publicMessage:
-      `experimental.perLanguageStorage is on, but this database still keeps translatable values ` +
-      `on the main tables of ${named}. A site never serves both layouts: turn the setting off ` +
-      `until those values are stored per language.`,
+      `This site keeps every translatable field per language, but this database still keeps ` +
+      `translatable values on the main tables of ${named}. A site never serves both layouts: ` +
+      `run \`nextly migrate\`, whose data steps move those values per language, then restart.`,
     logContext: {
       entities: found.map(({ entity, onMain }) => ({
         kind: entity.kind,
@@ -272,7 +306,7 @@ export async function refuseUndeclaredLanguages(
   throw new NextlyError({
     code: "NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED",
     publicMessage:
-      `experimental.perLanguageStorage is on and this site declares no languages, so it would ` +
+      `This site keeps every translatable field per language and declares no languages, so it would ` +
       `serve its content in "${implicitLocale}" alone, but this database holds translations in ` +
       `${named}. Put the localization block back, or add these languages in Settings, then ` +
       `restart.`,
