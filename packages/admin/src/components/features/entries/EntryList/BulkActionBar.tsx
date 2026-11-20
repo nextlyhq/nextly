@@ -73,6 +73,8 @@ export interface BulkActionBarProps {
     submit?: () => void;
     assign?: () => void;
     sendBack?: () => void;
+    /** Whether a move is on its way: each move is held back until it is answered. */
+    pending?: boolean;
   };
 }
 
@@ -164,17 +166,32 @@ export function BulkActionBar({
         {moves && (
           <>
             {moves.submit && (
-              <Button variant="outline" size="sm" onClick={moves.submit}>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={moves.pending === true}
+                onClick={moves.submit}
+              >
                 Submit for review
               </Button>
             )}
             {moves.assign && (
-              <Button variant="outline" size="sm" onClick={moves.assign}>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={moves.pending === true}
+                onClick={moves.assign}
+              >
                 Assign…
               </Button>
             )}
             {moves.sendBack && (
-              <Button variant="outline" size="sm" onClick={moves.sendBack}>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={moves.pending === true}
+                onClick={moves.sendBack}
+              >
                 Send back…
               </Button>
             )}

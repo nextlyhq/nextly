@@ -8,10 +8,12 @@
  * @experimental
  */
 
-import type { JSX } from "react";
+import { Button } from "@nextlyhq/ui";
+import { useState, type JSX } from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { useWaitingForMe } from "@admin/hooks/queries/useWaitingForMe";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 
 /** Rows on one page of the view. */
 const PAGE_SIZE = 50;
@@ -29,10 +31,10 @@ function submittedOn(iso: string): string {
 }
 
 export function WaitingForMyReview(): JSX.Element {
-  const { rows, total, totalCapped, isLoading } = useWaitingForMe({
-    page: 1,
-    limit: PAGE_SIZE,
-  });
+  // The page shown: every page of the waiting work is reachable, a page at a time.
+  const [page, setPage] = useState(1);
+  const { rows, total, totalCapped, hasNext, hasPrev, isLoading, error } =
+    useWaitingForMe({ page, limit: PAGE_SIZE });
 
   return (
     <div className="space-y-4 p-6">
@@ -46,7 +48,15 @@ export function WaitingForMyReview(): JSX.Element {
         </p>
       </div>
 
-      {!isLoading && rows.length === 0 ? (
+      {/* A list that could not be read says so, never that nothing waits. */}
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {apiErrorMessage(
+            error,
+            "What waits for your review couldn't be read."
+          )}
+        </p>
+      ) : !isLoading && rows.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           Nothing waits for your review.
         </p>
@@ -102,6 +112,32 @@ export function WaitingForMyReview(): JSX.Element {
               </tbody>
             </table>
           </div>
+          {hasPrev || hasNext ? (
+            <nav
+              aria-label="Waiting pages"
+              className="flex items-center justify-between"
+            >
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasPrev}
+                onClick={() => setPage(current => Math.max(1, current - 1))}
+              >
+                Previous
+              </Button>
+              <span className="text-sm text-muted-foreground">Page {page}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!hasNext}
+                onClick={() => setPage(current => current + 1)}
+              >
+                Next
+              </Button>
+            </nav>
+          ) : null}
         </>
       )}
     </div>

@@ -85,14 +85,16 @@ const row = (id: string, title: string, stage: string, revision: number) => ({
   },
 });
 
-function renderTable(): void {
-  render(
+const FIRST_PAGE = [
+  row("n1", "First note", "draft", 0),
+  row("n2", "Second note", "review", 3),
+];
+
+function table_(entries: ReturnType<typeof row>[]) {
+  return (
     <EntryTable
       collection={notes}
-      entries={[
-        row("n1", "First note", "draft", 0),
-        row("n2", "Second note", "review", 3),
-      ]}
+      entries={entries}
       pagination={{ page: 0, limit: 10, total: 2, totalPages: 1 }}
       onPageChange={vi.fn()}
       onLimitChange={vi.fn()}
@@ -104,6 +106,10 @@ function renderTable(): void {
       onBulkDelete={vi.fn()}
     />
   );
+}
+
+function renderTable(entries = FIRST_PAGE) {
+  return render(table_(entries));
 }
 
 const table = () =>
@@ -150,12 +156,12 @@ describe("EntryTable: the workflow's bulk moves", () => {
       documents: [
         {
           document: { collection: "notes", id: "n1" },
-          parts: "all",
+          parts: [null],
           seen: [{ part: null, revision: 0, version: "v-n1" }],
         },
         {
           document: { collection: "notes", id: "n2" },
-          parts: "all",
+          parts: [null],
           seen: [{ part: null, revision: 3, version: "v-n2" }],
         },
       ],
@@ -175,5 +181,57 @@ describe("EntryTable: the workflow's bulk moves", () => {
     canFor.mockImplementation(() => false);
     renderTable();
     expect(table().queryAllByRole("checkbox")).toHaveLength(0);
+  });
+
+  it("moves a selection carried from an earlier page as that page showed it", async () => {
+    canFor.mockImplementation(slug => slug === "update-notes");
+    stepMany.mockResolvedValue({
+      items: [{ id: "n1" }, { id: "n2" }],
+      errors: [],
+    });
+    const user = userEvent.setup();
+    const view = renderTable();
+
+    await user.click(table().getByRole("checkbox", { name: "Select all" }));
+    // The next page: other rows on screen, the first page's still selected.
+    view.rerender(table_([row("n3", "Third note", "draft", 1)]));
+    const bar = screen.getByRole("region", { name: "Bulk actions" });
+    await user.click(
+      within(bar).getByRole("button", { name: "Submit for review" })
+    );
+
+    expect(stepMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        documents: [
+          expect.objectContaining({
+            document: { collection: "notes", id: "n1" },
+            seen: [{ part: null, revision: 0, version: "v-n1" }],
+          }),
+          expect.objectContaining({
+            document: { collection: "notes", id: "n2" },
+            seen: [{ part: null, revision: 3, version: "v-n2" }],
+          }),
+        ],
+      })
+    );
+  });
+
+  it("holds every move back while one is on its way", async () => {
+    canFor.mockImplementation(slug => slug === "update-notes");
+    stepMany.mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    renderTable();
+
+    await user.click(table().getByRole("checkbox", { name: "Select all" }));
+    const bar = screen.getByRole("region", { name: "Bulk actions" });
+    await user.click(
+      within(bar).getByRole("button", { name: "Submit for review" })
+    );
+
+    expect(
+      within(bar).getByRole("button", { name: "Submit for review" })
+    ).toBeDisabled();
+    expect(within(bar).getByRole("button", { name: "Assign…" })).toBeDisabled();
+    expect(stepMany).toHaveBeenCalledTimes(1);
   });
 });

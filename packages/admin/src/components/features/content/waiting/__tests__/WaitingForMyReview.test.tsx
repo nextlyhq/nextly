@@ -4,6 +4,7 @@
  * where it lives, its stage, whom it waits for and when it was submitted. With nothing waiting it
  * says so; with more waiting than one read counts, the count is a floor.
  */
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
@@ -14,7 +15,7 @@ const { waiting } = vi.hoisted(() => ({
   waiting: vi.fn(),
 }));
 vi.mock("@admin/hooks/queries/useWaitingForMe", () => ({
-  useWaitingForMe: () => waiting(),
+  useWaitingForMe: (args: { page: number; limit: number }) => waiting(args),
 }));
 
 const rows = [
@@ -88,5 +89,49 @@ describe("WaitingForMyReview", () => {
     render(<WaitingForMyReview />);
 
     expect(screen.getByText("1000+ waiting")).toBeInTheDocument();
+  });
+
+  it("says a list it could not read failed, never that nothing waits", () => {
+    waiting.mockReturnValue({
+      rows: [],
+      total: 0,
+      totalCapped: false,
+      hasNext: false,
+      hasPrev: false,
+      isLoading: false,
+      error: new Error("The server is unavailable."),
+    });
+    render(<WaitingForMyReview />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The server is unavailable."
+    );
+    expect(
+      screen.queryByText("Nothing waits for your review.")
+    ).not.toBeInTheDocument();
+  });
+
+  it("reaches every page of the waiting work", async () => {
+    waiting.mockImplementation(({ page }: { page: number }) => ({
+      rows: page === 1 ? [rows[0]] : [rows[1]],
+      total: 2,
+      totalCapped: false,
+      hasNext: page === 1,
+      hasPrev: page > 1,
+      isLoading: false,
+      error: null,
+    }));
+    const user = userEvent.setup();
+    render(<WaitingForMyReview />);
+
+    expect(
+      screen.getByRole("link", { name: "Pricing FAQ" })
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(waiting).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 2 })
+    );
+    expect(screen.getByRole("link", { name: "Home" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
   });
 });

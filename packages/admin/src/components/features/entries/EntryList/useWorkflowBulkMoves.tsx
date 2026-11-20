@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import { useState, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX } from "react";
 
 import { waitingKeys } from "@admin/hooks/queries/useWaitingForMe";
 import { useCurrentUserId } from "@admin/hooks/useCurrentUserId";
@@ -56,10 +56,14 @@ export interface BulkMoveResult {
 
 /** The moves the bar offers over `selected`, the dialogs they open, and the last move's result. */
 export interface WorkflowBulkMoves {
-  movesFor: (
-    selected: readonly string[]
-  ) =>
-    | { submit?: () => void; assign?: () => void; sendBack?: () => void }
+  movesFor: (selected: readonly string[]) =>
+    | {
+        submit?: () => void;
+        assign?: () => void;
+        sendBack?: () => void;
+        /** Whether a move is on its way: the bar offers no second one until it is answered. */
+        pending: boolean;
+      }
     | undefined;
   result: BulkMoveResult | null;
   dialogs: JSX.Element;
@@ -86,19 +90,31 @@ export function useWorkflowBulkMoves(args: {
   );
   const [assigning, setAssigning] = useState<readonly string[] | null>(null);
   const steps = bulkMoveSteps(collection.workflow?.steps ?? []);
-  const rowOf = (id: string) => rows.find(row => rowId(row) === id);
+  // Each row as the list last showed it, kept across pages: a selection carried from an earlier
+  // page is moved as that page showed it, not left without what it saw.
+  const shownRows = useRef(new Map<string, EntryRow>());
+  useEffect(() => {
+    for (const row of rows) shownRows.current.set(rowId(row), row);
+  }, [rows]);
+  const rowOf = (id: string) => shownRows.current.get(id);
 
-  /** Each selected document as a move names it: every part, as its row showed it. */
+  /**
+   * Each selected document as a move names it: the parts its row showed the reader, and no
+   * other (a language the read withheld is not the reader's to move), each as it was shown.
+   */
   const documentsOf = (ids: readonly string[]): StepManyDocument[] =>
-    ids.map(id => ({
-      document: { collection: collection.slug, id },
-      parts: "all",
-      seen: rowReviewParts(rowOf(id) ?? {}).map(part => ({
-        part: part.part,
-        revision: part.revision,
-        version: part.version ?? "",
-      })),
-    }));
+    ids.map(id => {
+      const shown = rowReviewParts(rowOf(id) ?? {});
+      return {
+        document: { collection: collection.slug, id },
+        parts: shown.map(part => part.part),
+        seen: shown.map(part => ({
+          part: part.part,
+          revision: part.revision,
+          version: part.version ?? "",
+        })),
+      };
+    });
 
   /** Runs one move, says what it did, and reads the lists again. */
   const run = async (
@@ -145,6 +161,7 @@ export function useWorkflowBulkMoves(args: {
     const ids = [...selected];
     const submitStep = steps.submit;
     return {
+      pending,
       ...(submitStep
         ? {
             submit: () =>

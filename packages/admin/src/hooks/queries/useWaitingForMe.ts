@@ -12,9 +12,9 @@
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 
 import { waitingForWords } from "@admin/components/features/entries/review/review-words";
-import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useEveryNavCollection } from "@admin/hooks/queries/useCollections";
 import { useEverySingle } from "@admin/hooks/queries/useSingles";
+import { documentAddress } from "@admin/lib/navigation/document-address";
 import {
   fetchWaitingForMe,
   fetchWaitingScope,
@@ -66,13 +66,19 @@ function waitingRow(
   return {
     key: `${scopeKind}:${scopeSlug}:${entryId}:${item.part ?? "-"}`,
     title: item.title ?? "Untitled",
-    href:
+    // The shared rule for a document's address, in the part's own language, so the editor opens
+    // the copy awaiting review rather than the default language's.
+    href: documentAddress(
       scopeKind === "single"
-        ? buildRoute(ROUTES.SINGLE_EDIT, { slug: scopeSlug })
-        : buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, {
-            slug: scopeSlug,
-            id: entryId,
-          }),
+        ? { kind: "single", slug: scopeSlug }
+        : { kind: "collection", slug: scopeSlug, id: entryId },
+      undefined,
+      {
+        canUpdate: false,
+        ...(item.part === null ? {} : { locale: item.part }),
+      },
+      []
+    ),
     where: item.part === null ? label : `${label} (${item.part})`,
     stage: item.stageLabel,
     waitingFor: waitingForWords(item.waitingFor) ?? "No one",
@@ -91,7 +97,12 @@ export function useWaitingForMe({
   rows: WaitingRow[];
   total: number;
   totalCapped: boolean;
+  /** Whether a next or an earlier page exists, as the list read says. */
+  hasNext: boolean;
+  hasPrev: boolean;
   isLoading: boolean;
+  /** Why the list could not be read, once its retries are spent; null while it is read or was. */
+  error: Error | null;
 } {
   const query = useQuery({
     queryKey: waitingKeys.page(page, limit),
@@ -116,6 +127,9 @@ export function useWaitingForMe({
     rows: (query.data?.items ?? []).map(item => waitingRow(item, labels)),
     total: query.data?.meta.total ?? 0,
     totalCapped: query.data?.meta.totalCapped === true,
+    hasNext: query.data?.meta.hasNext === true,
+    hasPrev: query.data?.meta.hasPrev === true,
     isLoading: query.isLoading,
+    error: query.error ?? null,
   };
 }
