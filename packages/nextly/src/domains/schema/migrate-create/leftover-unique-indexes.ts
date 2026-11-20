@@ -17,7 +17,13 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { DropIndexOp, Operation, TableSpec } from "../pipeline/diff/types";
+import type {
+  DropIndexOp,
+  Operation,
+  RenameColumnOp,
+  TableSpec,
+} from "../pipeline/diff/types";
+import { canQuoteIdent } from "../pipeline/sql-templates/identifier-quoting";
 import { generateStatements } from "../pipeline/sql-templates/index";
 import { guardedIndexDrop } from "../pipeline/sql-templates/mysql-live-restate";
 
@@ -39,8 +45,11 @@ export interface LeftoverUniqueIndex {
 
 /**
  * The drops of Nextly's own unique index for a column that stays in its table and is no longer
- * held unique there: a field that stops being unique. A column the table drops or renames, or
- * still holds unique by an index it declares, is not one.
+ * held unique there: a field that stops being unique. The column is followed through a rename the
+ * same change makes, since the index Nextly drops names it as it was and the table it leaves names
+ * it as it becomes; an index follows its column through a rename, so an older one would otherwise
+ * keep the renamed column unique. A column the table drops, or still holds unique by an index it
+ * declares, is not one. (`migrate:create` renames columns, never tables.)
  */
 function uniqueStopping(
   operations: readonly Operation[],
@@ -49,7 +58,14 @@ function uniqueStopping(
   return operations.filter((op): op is DropIndexOp => {
     if (op.type !== "drop_index") return false;
     if (!op.index.unique || op.index.columns.length !== 1) return false;
-    const column = op.index.columns[0];
+    const live = op.index.columns[0];
+    const column =
+      operations.find(
+        (rename): rename is RenameColumnOp =>
+          rename.type === "rename_column" &&
+          rename.tableName === op.tableName &&
+          rename.fromColumn === live
+      )?.toColumn ?? live;
     const table = desired.find(spec => spec.name === op.tableName);
     if (table === undefined) return false;
     if (!table.columns.some(spec => spec.name === column)) return false;
@@ -60,6 +76,17 @@ function uniqueStopping(
         index.columns[0] === column
     );
   });
+}
+
+/**
+ * Whether `name`, read from the database, is Nextly's own index `own`. PostgreSQL keeps a quoted
+ * name's case, so a legacy `"UQ_DC_POSTS_CODE"` beside Nextly's `uq_dc_posts_code` is another
+ * index; MySQL and SQLite fold an index name's case, so there it is the same one.
+ */
+function isOwn(name: string, own: string, dialect: SupportedDialect): boolean {
+  return dialect === "postgresql"
+    ? name === own
+    : name.toLowerCase() === own.toLowerCase();
 }
 
 /** The statements that drop `index` on `table` only where it stands. */
@@ -120,10 +147,22 @@ export async function leftoverUniqueDrops(args: {
       );
       continue;
     }
-    const own = op.index.name.toLowerCase();
     for (const name of live.get(column) ?? []) {
       // No name: the primary key, or SQLite's index for an inline UNIQUE, which no statement drops.
-      if (name === null || name.toLowerCase() === own) continue;
+      if (name === null || isOwn(name, op.index.name, args.dialect)) continue;
+      // A name holding the dialect's quote is a valid name no statement here can spell: said, for
+      // the person to drop by hand, rather than refused part-way through writing the file.
+      if (
+        !canQuoteIdent(name, args.dialect) ||
+        !canQuoteIdent(op.tableName, args.dialect)
+      ) {
+        args.warn(
+          `${op.tableName} holds ${column} unique under the index ${name} as well, a name ` +
+            `this migration cannot write. Drop that index by hand where it stands, or ${column} ` +
+            `stays unique there.`
+        );
+        continue;
+      }
       statements.push(...guardedDrop(args.dialect, op.tableName, column, name));
       dropped.push({ table: op.tableName, column, index: name });
     }
@@ -136,7 +175,8 @@ export function leftoverUniqueNotice(dropped: LeftoverUniqueIndex): string {
   return (
     `Drops the unique index ${dropped.index} on ${dropped.table}(${dropped.column}) as well as ` +
     `Nextly's own: ${dropped.column} is no longer unique, and that index still holds it so. ` +
-    `Nextly did not name it, so it may be one you made. It is dropped only where it exists.`
+    `Nextly did not name it, so it may be one you made. The file drops it by name: on each ` +
+    `database it runs on, an index of that name is dropped where one exists, and nothing where none does.`
   );
 }
 

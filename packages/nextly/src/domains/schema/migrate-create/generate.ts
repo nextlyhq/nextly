@@ -1182,6 +1182,20 @@ export async function generateMigration(
     args.resolutions ?? [],
     desiredSnapshot.tables
   );
+  // 7'. A field that stops being unique on an older table that also holds its column unique under
+  //     a name Nextly did not make: that index is dropped too, by name and only where it stands, so
+  //     every database the file runs on ends with the column no longer unique. Named to the run,
+  //     since it may be one the user made. Dropped after the operations, Nextly's own drop and a
+  //     rename among them, and before any rows are filled: a fill writes one value into every row
+  //     it settles, which an index still holding the column unique refuses. Nothing goes back on the
+  //     way down: Nextly's own index makes the column unique again.
+  const leftoverDrops = await leftoverUniqueStatements({
+    operations,
+    desired: desiredSnapshot.tables,
+    dialect: args.dialect,
+    read: args.liveUniqueIndexes,
+    onWarning: args.onWarning,
+  });
   const sqlStatements = [
     ...generateStatements(
       settled.operations,
@@ -1192,6 +1206,7 @@ export async function generateMigration(
         heldSettings
       )
     ),
+    ...leftoverDrops,
     ...(args.resolutions ?? []).map(r => resolutionStatement(r, args.dialect)),
     ...generateStatements(
       settled.tighten,
@@ -1199,20 +1214,6 @@ export async function generateMigration(
       tablesWithSettingsHeldBack(desiredSnapshot.tables, heldSettings)
     ),
   ];
-  // 7'. A field that stops being unique on an older table that also holds its column unique under
-  //     a name Nextly did not make: that index is dropped too, by name and only where it stands, so
-  //     every database the file runs on ends with the column no longer unique. Named to the run,
-  //     since it may be one the user made. Nothing goes back on the way down: Nextly's own index
-  //     makes the column unique again.
-  sqlStatements.push(
-    ...(await leftoverUniqueStatements({
-      operations,
-      desired: desiredSnapshot.tables,
-      dialect: args.dialect,
-      read: args.liveUniqueIndexes,
-      onWarning: args.onWarning,
-    }))
-  );
 
   // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
   // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
