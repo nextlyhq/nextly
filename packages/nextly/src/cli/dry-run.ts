@@ -51,7 +51,15 @@ export interface DryRunPlan {
   /** Why the real run would refuse, each as the real run would say it. */
   refusals?: readonly string[];
   /** What the dry run cannot show, such as a plugin hook it does not run. */
-  notes?: readonly string[];
+  notes?: readonly string[] /**
+   * What a command that moves content lists of it, beyond the changes: what will move, what
+   * conflicts and how the real run settles it, and what an editor should check afterwards.
+   */;
+  report?: {
+    move: readonly string[];
+    conflicts: readonly string[];
+    check: readonly string[];
+  };
 }
 
 /** The lines a dry run prints for `plan`, the last saying nothing changed. */
@@ -61,6 +69,20 @@ export function dryRunLines(plan: DryRunPlan): string[] {
   );
   if (lines.length === 0 && (plan.refusals ?? []).length === 0) {
     lines.push("Nothing would change.");
+  }
+  // Each list under its heading, every item on its own line, an empty one said to be empty.
+  if (plan.report) {
+    const sections = [
+      ["Would move:", plan.report.move],
+      ["Conflicts, and how a real run settles them:", plan.report.conflicts],
+      ["An editor should check:", plan.report.check],
+    ] as const;
+    for (const [heading, items] of sections) {
+      lines.push(heading);
+      lines.push(
+        ...(items.length > 0 ? items.map(item => `  - ${item}`) : ["  (none)"])
+      );
+    }
   }
   for (const reason of plan.refusals ?? []) {
     lines.push(`A real run would refuse: ${reason}`);

@@ -53,6 +53,8 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await current?.destroy();
   current = undefined;
+  // A case standing in for an earlier release leaves the layout every installation runs behind it.
+  _resetPerLanguageStorage();
 });
 
 /**
@@ -713,6 +715,8 @@ describe.each(getConfiguredTestDialects())(
           ],
         };
         try {
+          // An earlier release's layout, which kept translatable values on the main tables.
+          setPerLanguageStorage(false);
           const before = await createTestNextly({
             ...site,
             adapter: await onFile(),
@@ -734,6 +738,8 @@ describe.each(getConfiguredTestDialects())(
           expect(made.success, JSON.stringify(made)).toBe(true);
           vi.stubEnv("NODE_ENV", "test");
           await before.destroy();
+          // This release keeps every translatable field per language.
+          _resetPerLanguageStorage();
 
           let refused: unknown;
           try {
@@ -820,6 +826,86 @@ describe.each(getConfiguredTestDialects())(
           ).toBe(true);
           expect((refused as Error).message).toMatch(/"de"/);
           expect((refused as Error).message).toMatch(/localization block/);
+        } finally {
+          _resetEnvCache();
+          rmSync(folder, { recursive: true, force: true });
+        }
+      }
+    );
+
+    // The same refusal reads the Schema Builder's entities too: a collection known only from its
+    // registry row keeps translations the implicit language would hide as surely as a declared
+    // one. The configuration's own collection holds no other language, so only the Builder's
+    // translations can refuse the boot.
+    it.runIf(dialect === "sqlite")(
+      "refuses to boot in the implicit language over a Schema Builder collection's translations",
+      async () => {
+        const folder = mkdtempSync(join(tmpdir(), "nextly-per-language-"));
+        const url = `file:${join(folder, "site.db")}`;
+        vi.stubEnv("DB_DIALECT", "sqlite");
+        vi.stubEnv("DATABASE_URL", url);
+        _resetEnvCache();
+        const onFile = async () =>
+          createAdapter({ type: "sqlite", url } as Parameters<
+            typeof createAdapter
+          >[0]);
+        const site = {
+          collections: [
+            defineCollection({
+              slug: "articles",
+              fields: [text({ name: "headline" })],
+            }),
+          ],
+        };
+        try {
+          const before = await createTestNextly({
+            ...site,
+            adapter: await onFile(),
+            localization: { locales: ["en", "de"], defaultLocale: "en" },
+          });
+          vi.stubEnv("NODE_ENV", "development");
+          const handler = before.getService(
+            "collectionsHandler"
+          ) as unknown as {
+            createCollection(
+              data: Record<string, unknown>
+            ): Promise<{ success: boolean }>;
+          };
+          const made = await handler.createCollection({
+            name: "posts",
+            label: "Post",
+            fields: [{ name: "heading", type: "text" }],
+          });
+          expect(made.success, JSON.stringify(made)).toBe(true);
+          vi.stubEnv("NODE_ENV", "test");
+          const created = await before.nextly.create({
+            collection: "posts",
+            data: { heading: "Hello" },
+          });
+          await before.nextly.update({
+            collection: "posts",
+            id: (created.item as { id: string }).id,
+            locale: "de",
+            data: { heading: "Hallo", _overwrite: true },
+          });
+          await before.destroy();
+
+          let refused: unknown;
+          try {
+            current = await createTestNextly({
+              ...site,
+              adapter: await onFile(),
+            });
+          } catch (error) {
+            refused = error;
+          }
+          expect(
+            NextlyError.isCode(
+              refused,
+              "NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED"
+            )
+          ).toBe(true);
+          expect((refused as Error).message).toMatch(/"de"/);
         } finally {
           _resetEnvCache();
           rmSync(folder, { recursive: true, force: true });
@@ -920,8 +1006,8 @@ describe.each(getConfiguredTestDialects())(
           const id = (created.item as { id: string }).id;
           await before.destroy();
 
-          // A new process starts with the setting unchosen, as this one did before its first boot.
-          setPerLanguageStorage(false);
+          // A new process starts with the layout every installation runs, as this one did.
+          _resetPerLanguageStorage();
           current = await createTestNextly({
             ...site,
             adapter: await onFile(),
@@ -978,6 +1064,8 @@ describe.each(getConfiguredTestDialects())(
           await before.destroy();
 
           let refused: unknown;
+          // An earlier release's process, which read translatable values from the main tables.
+          setPerLanguageStorage(false);
           try {
             current = await createTestNextly({
               collections,

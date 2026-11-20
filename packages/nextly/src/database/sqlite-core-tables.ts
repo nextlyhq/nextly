@@ -486,6 +486,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_review_states" ("scope_kind", "scope_slug", "entry_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_review_states_stage_idx"
       ON "nextly_review_states" ("scope_kind", "scope_slug", "stage")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_review_states_waiting_idx"
+      ON "nextly_review_states" ("scope_kind", "scope_slug", "stage", "entered_at", "part_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_review_states_assignee_idx"
       ON "nextly_review_states" ("assignee_kind", "assignee_id")`,
     // Where each translated value came from, per field and language. Columns
@@ -659,6 +661,9 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_release_members" ("release_id", "single_slot")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_doc_idx"
       ON "nextly_release_members" ("scope_kind", "scope_slug", "entry_id", "locale")`,
+    // The walk of shared documents' pages, in document then id order (`dueHoldersOf`).
+    `CREATE INDEX IF NOT EXISTS "nextly_release_members_doc_walk_idx"
+      ON "nextly_release_members" ("scope_kind", "scope_slug", "entry_id", "id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_release_idx"
       ON "nextly_release_members" ("release_id")`,
     // Version pins. Columns match schemas/version-pins/sqlite.ts.

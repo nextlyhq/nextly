@@ -23,12 +23,13 @@
 // to do is a finished run; a failure exits 1.
 
 import { mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { underNaming } from "../../field-groups/services/field-group-storage-names";
 import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
@@ -79,7 +80,7 @@ import type {
 } from "../../i18n/migration/types";
 import {
   companionMigrationPath,
-  writeCompanionMigrationFile,
+  prepareCompanionMigrationFile,
   type WriteCompanionMigrationOpts,
 } from "../../i18n/migration/write-migration-file";
 import {
@@ -91,6 +92,7 @@ import { resolveSingleTableName } from "../../singles/services/resolve-single-ta
 import type { Deletion } from "../migrate/data-loss-consent";
 import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
 import { mergedBy } from "../migrate/history-line";
+import { compareMigrationBaseNames } from "../migrate/migration-order";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -196,8 +198,10 @@ import {
 import {
   assertWriterHold,
   holdInBuilderChange,
+  prepareAll,
   prepareWhole,
   publishHeld,
+  type PreparedFile,
   startMovedError,
   underWriterHold,
 } from "./writer-hold";
@@ -1488,7 +1492,10 @@ export async function generateMigration(
       ),
       entities: coveredEntitiesOf(
         args,
-        previous === null ? undefined : previous.data.entities
+        previous === null ? undefined : previous.data.entities,
+        previous === null
+          ? undefined
+          : new Set(previous.data.snapshot.tables.map(table => table.name))
       ),
       translationMoves: [
         ...(args.valueMoves ?? []),
@@ -1551,10 +1558,11 @@ export async function generateMigration(
 
   const { sqlPath, snapshotPath } = await writeMigrationPair(args, {
     startedFrom: startOf(previous),
-    companions: () =>
-      companionFiles.map(({ spec, opts }) =>
-        writeCompanionMigrationFile(args.migrationsDir, spec, opts)
-      ),
+    companions: companionFiles.map(
+      ({ spec, opts }) =>
+        () =>
+          prepareCompanionMigrationFile(args.migrationsDir, spec, opts)
+    ),
     metaDir,
     now,
     sqlContent,
@@ -1905,10 +1913,10 @@ interface MigrationPair {
   /** The snapshot file the run started from (`startOf`), checked again as it writes. */
   startedFrom: string | undefined | null;
   /**
-   * Writes the run's companion migration files, once its own file is in
-   * place, and answers their paths. Absent where the run has none.
+   * Prepares each of the run's companion migration files, to be put in place
+   * with its own in one step. Absent where the run has none.
    */
-  companions?: () => string[];
+  companions?: ReadonlyArray<() => Promise<PreparedFile>>;
   sqlContent: string;
   written: NextlySchemaSnapshot;
   contributions: Parameters<typeof prepareSnapshot>[4];
@@ -1916,6 +1924,33 @@ interface MigrationPair {
   permissions: Parameters<typeof prepareSnapshot>[6];
   metaDir: string;
   now: Date;
+}
+
+/**
+ * A migration's prepared files in the order `nextly migrate` runs them, which
+ * is the order they are put in place: the companions named before the
+ * migration file (at `sqlPath`), its snapshot and then the file itself, and
+ * the companions named after it.
+ */
+function inRunOrder(
+  files: readonly PreparedFile[],
+  sqlPath: string
+): PreparedFile[] {
+  // By the rule the run itself sorts by, on the names it sorts.
+  const nameOf = (path: string) => basename(path, ".sql");
+  const isCompanion = (file: PreparedFile) =>
+    file.path.endsWith(".sql") && file.path !== sqlPath;
+  const runsFirst = (file: PreparedFile) =>
+    compareMigrationBaseNames(nameOf(file.path), nameOf(sqlPath)) < 0;
+  const companions = files
+    .filter(isCompanion)
+    .sort((a, b) => compareMigrationBaseNames(nameOf(a.path), nameOf(b.path)));
+  return [
+    ...companions.filter(runsFirst),
+    ...files.filter(file => !file.path.endsWith(".sql")),
+    ...files.filter(file => file.path === sqlPath),
+    ...companions.filter(file => !runsFirst(file)),
+  ];
 }
 
 /**
@@ -1932,38 +1967,41 @@ async function writeMigrationPair(
   // Where `writeSnapshot` puts it, by the writer's own rule.
   const snapshotPath = snapshotPathOf(pair.metaDir, baseName);
   if (args.dryRun === true) return { sqlPath, snapshotPath };
-  // As the folder's holder (`publishHeld`): both files written in full
-  // aside, the last checks made, then the snapshot put in place and the file
-  // after it, since a reader counts a migration from its `.sql` and so never
-  // finds one whose snapshot is still to come. The companions follow in the
-  // same step, so an overtaken writer adds none after its successor.
+  // As the folder's holder (`publishHeld`): every file written in full
+  // aside, the companions with the pair, so one that cannot be written leaves
+  // no migration without it. The last checks are made, then each is put in
+  // place in the order `nextly migrate` runs them (`inRunOrder`), the
+  // snapshot just before its file: a reader counts a migration from its
+  // `.sql` and so never finds one whose snapshot is still to come, and what
+  // is in the folder part-way is the start of the run, never a companion
+  // ahead of the table it points to.
   const publish = () =>
     publishHeld(
       args.migrationsDir,
       async () => {
         await mkdir(args.migrationsDir, { recursive: true });
-        return [
-          await prepareSnapshot(
-            pair.metaDir,
-            baseName,
-            pair.written,
-            pair.sqlContent,
-            pair.contributions,
-            pair.entities,
-            pair.permissions,
-            await lineFrom(args.migrationsDir, pair.startedFrom)
-          ),
-          await prepareWhole(sqlPath, pair.sqlContent),
-        ];
+        const files = await prepareAll([
+          () => prepareWhole(sqlPath, pair.sqlContent),
+          async () =>
+            prepareSnapshot(
+              pair.metaDir,
+              baseName,
+              pair.written,
+              pair.sqlContent,
+              pair.contributions,
+              pair.entities,
+              pair.permissions,
+              await lineFrom(args.migrationsDir, pair.startedFrom)
+            ),
+          ...(pair.companions ?? []),
+        ]);
+        return inRunOrder(files, sqlPath);
       },
       {
         // Still from the newest snapshot: one written since would make this a
         // second migration from the one it started at.
         stillCurrent: () =>
           refuseMovedFrom(args.migrationsDir, pair.startedFrom),
-        ...(pair.companions === undefined
-          ? {}
-          : { alongside: pair.companions }),
       }
     );
   // Under the hold the running writer has, or one taken here for a caller
@@ -4129,7 +4167,8 @@ function provenanceOf(entry: RecordedEntitySettings): string {
  */
 export function coveredEntitiesOf(
   args: GenerateArgs,
-  recorded: EntitySettingsRecord | undefined
+  recorded: EntitySettingsRecord | undefined,
+  recordedTables?: ReadonlySet<string>
 ): CoveredEntity[] {
   const of = (
     kind: CoveredEntity["kind"],
@@ -4187,6 +4226,25 @@ export function coveredEntitiesOf(
     ),
     ...of("single", args.singles, recorded?.singles, (slug, dbName) =>
       resolveSingleTableName({ slug, dbName })
+    ),
+    // A field group's table is the one its record names (an earlier release let it choose one),
+    // else the one its slug gives, under the naming the last snapshot records it by: after the
+    // field-group storage migration, `fg_` in place of `comp_`.
+    ...of(
+      "fieldGroup",
+      args.components,
+      recorded?.fieldGroups,
+      (slug, dbName) => {
+        // A table an earlier release let the field group name keeps that name through the
+        // storage migration.
+        if (dbName !== undefined) return dbName;
+        const legacy = resolveComponentTableName(slug);
+        const current = underNaming("current", legacy);
+        return recordedTables?.has(legacy) !== true &&
+          recordedTables?.has(current) === true
+          ? current
+          : legacy;
+      }
     ),
   ];
 }

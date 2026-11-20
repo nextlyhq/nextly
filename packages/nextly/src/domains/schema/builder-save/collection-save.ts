@@ -209,6 +209,7 @@ import { nextSteps, partlyAppliedChange } from "./landing-push";
 import {
   openSaveRecords,
   recordSaveStarted,
+  refuseBesideLeftSaves,
   withSaveRecords,
   type StartedSave,
 } from "./save-in-progress";
@@ -1210,6 +1211,19 @@ async function writeSave(
 }> {
   if (options.historyChecked !== true) await checkSaveHistory(deps);
   const plan = await planSave(deps, save);
+  const after = serializeUiSchema(plan.next);
+  // A save left part-way refuses this one before anything is written, the work the caller does
+  // first (`beforeWrite`) included: a save refused as not started has written nothing. Its own
+  // entity's record too, where that record refuses it; the same save again goes on, told by the
+  // definition it writes.
+  await refuseBesideLeftSaves({
+    adapter: deps.adapter,
+    projectRoot: deps.projectRoot,
+    kind: kindOf(save).kind,
+    slug: save.slug,
+    definitionAfter: after,
+    notify: line => deps.logger.warn(line),
+  });
   // Each field whose type the save changes is judged over the values its column holds, before any
   // file is written: a blocked change, or a lossy one not consented to, refuses the save.
   await refuseSaveTypeChanges(deps, save, plan.table);
@@ -1235,7 +1249,6 @@ async function writeSave(
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
-  const after = serializeUiSchema(plan.next);
   // The moment the save's files are named for, fixed before the record so the record can say it:
   // a settle after a stop takes a file the record had not named yet only where it is of this one.
   const filesAt = save.now ?? new Date();

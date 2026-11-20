@@ -54,7 +54,8 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
       [],
       false,
       false,
-      undefined
+      undefined,
+      "banner"
     );
   });
 
@@ -81,7 +82,8 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
       [],
       false,
       false,
-      undefined
+      undefined,
+      "ok"
     );
   });
 
@@ -98,7 +100,8 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
       [],
       true,
       false,
-      undefined
+      undefined,
+      "a"
     );
   });
 
@@ -110,7 +113,14 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_collections", register);
 
-    expect(register).toHaveBeenCalledWith("dc_a", [], true, false, undefined);
+    expect(register).toHaveBeenCalledWith(
+      "dc_a",
+      [],
+      true,
+      false,
+      undefined,
+      "a"
+    );
   });
 
   it("forwards hasStatus=false for legacy rows without a status field", async () => {
@@ -122,7 +132,14 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_collections", register);
 
-    expect(register).toHaveBeenCalledWith("dc_a", [], false, false, undefined);
+    expect(register).toHaveBeenCalledWith(
+      "dc_a",
+      [],
+      false,
+      false,
+      undefined,
+      "a"
+    );
   });
 
   it("forwards localized=true when localized=1 (sqlite)", async () => {
@@ -138,7 +155,8 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
       [],
       false,
       true,
-      undefined
+      undefined,
+      "pages"
     );
   });
 
@@ -161,7 +179,8 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
       [],
       true,
       true,
-      undefined
+      undefined,
+      "pages"
     );
   });
 
@@ -173,7 +192,14 @@ describe("loadDynamicTables — empty-fields rows still register", () => {
 
     await loadDynamicTables(adapter, "dynamic_collections", register);
 
-    expect(register).toHaveBeenCalledWith("dc_a", [], false, false, undefined);
+    expect(register).toHaveBeenCalledWith(
+      "dc_a",
+      [],
+      false,
+      false,
+      undefined,
+      "a"
+    );
   });
 });
 
@@ -367,7 +393,8 @@ describe("loadDynamicTables — fault tolerance", () => {
       [],
       true,
       false,
-      undefined
+      undefined,
+      "pages"
     );
   });
 });
@@ -430,7 +457,8 @@ describe("loadDynamicTables — the field-group registry is resolved, not assume
       [{ name: "heading", type: "text" }],
       false,
       false,
-      undefined
+      undefined,
+      "hero"
     );
     expect(selected.join("\n")).toContain(MIGRATION_TARGET.registryTable);
   });

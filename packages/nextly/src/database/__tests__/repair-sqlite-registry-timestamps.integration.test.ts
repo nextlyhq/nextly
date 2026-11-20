@@ -9,7 +9,7 @@
  * - Archived translations marked unresolved while their owner's row read as created far in the
  *   future go back to unknown for the corrected address alone, and the labelling then gives them
  *   their owner's kind.
- * - `nextly migrate`'s registry phase ends with the repair.
+ * - `nextly migrate`'s registry phase runs the repair.
  * - A start repairs once, and a later start sends no statement for it.
  */
 import { mkdtempSync, rmSync } from "node:fs";
@@ -261,7 +261,7 @@ describe("the SQLite registries' timestamps", () => {
     expect((await kinds()).rsrt_old).toBe("collection");
   });
 
-  it("`nextly migrate`'s registry phase ends with the repair", async () => {
+  it("`nextly migrate`'s registry phase runs the repair", async () => {
     await seedOlderRows();
     const migrations = mkdtempSync(join(tmpdir(), "nextly-rsrt-migrations-"));
     try {
