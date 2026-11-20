@@ -72,6 +72,7 @@ import {
 } from "./registry-history";
 import { removeRegistryRow } from "./registry-row-removal";
 import type { RegistrySource } from "./registry-source";
+import { reachStopPoint } from "./stop-points";
 import { topLevelFieldNames } from "./top-level-field-names";
 
 export interface RegistryWriteDeps {
@@ -335,6 +336,7 @@ async function removeRows(
         // step has no savepoint to undo them, so a removal that fails fails
         // the registry write it is part of, which then leaves them all.
         await removeRegistryRow({ tx, view, tables }, kind, slug);
+        await reachStopPoint(`${kind} ${slug}: removed registryRow`);
         result.removed.push(`${kind} ${slug}`);
       }
       return result.removed.length;

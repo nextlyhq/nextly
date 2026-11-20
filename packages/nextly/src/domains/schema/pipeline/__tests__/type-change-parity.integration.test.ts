@@ -4,11 +4,14 @@
  * agree they give one verdict; where they differ, on purpose, the table names both, so a drift of
  * either rule fails here. The Builder's
  * comes from the per-value judge its save asks before anything runs (`judgeFieldTypeChanges`);
- * `db:sync`'s from the repair rule the real pipeline hands its classifier for a code-first apply
- * (`judgeConversion`), captured as the classifier receives it.
+ * `db:sync`'s from the rule the real pipeline hands its classifier for a code-first apply
+ * (`judgeConversion`), captured as the classifier receives it: the repair rule, and that same
+ * per-value judge beside it on every database, asked with the fields the registry records for the
+ * entity.
  *
  * Over the changes both rules judge: text to number, a long text to a short one, a number's width,
- * text to a checkbox and text to a date (`CASES`, which says why each difference is there).
+ * text to a checkbox and text to a date, a list or JSON to text, a number to text, and text to a
+ * unique email (`CASES`, which says why each difference is there).
  *
  * Against real databases: SQLite in memory, and PostgreSQL and MySQL where their URLs are set,
  * each in a table of this file's own prefix.
@@ -88,18 +91,27 @@ const agree = (verdict: Verdict): Pinned => ({
 /**
  * Where the two differ, the reason is one of these, each on purpose:
  *
- * - On SQLite no conversion runs and a column keeps any value, so db:sync's column rule finds every
- *   value kept, and plans no type change at all where the column's storage is the same (a long text
- *   to a short one); the Builder's judge reads each value as the new field reads it, and a "maybe"
- *   is no checkbox, a "nope" no date, 1.5 no whole number, and a text over the field's length one
- *   its own validation refuses.
+ * - On SQLite no conversion runs and a column keeps any value, so db:sync's column rule alone
+ *   would find every value kept. It therefore also asks the Builder's judge, which reads each
+ *   value as the new field reads it, and takes the worse of the two: a "maybe" is no checkbox, a
+ *   "nope" no date and 1.5 no whole number for either. The one difference left is a change that
+ *   keeps the column's storage (a long text to a short one): db:sync plans no type change there,
+ *   so it judges nothing, while the Builder's judge finds a text over the field's length one its
+ *   own validation refuses.
  * - On PostgreSQL and MySQL, text to an integer, a boolean or a timestamp, and a fraction to an
  *   integer, are no conversion Nextly runs, so db:sync's rule blocks the pair whatever the values
  *   and names no row; the Builder's judge reads each value, so a column whose every value converts
  *   goes ahead, and one holding a value that does not names its row.
  * - A value the Builder reads in a new form no save writes yet is blocked by it on every database
- *   (`needs-rewrite`): a stored "true" read as a checkbox, an ISO text read as a date. Only a text
- *   that is a number's canonical writing, or a value whose text is its reading, goes ahead.
+ *   (`needs-rewrite`): a stored "true" read as a checkbox, an ISO text read as a date, a list's or
+ *   JSON's writing read as a text. Only a text that is a number's canonical writing, or a value
+ *   whose text is its reading, goes ahead.
+ * - db:sync asks the Builder's judge on PostgreSQL and MySQL too, so where its column rule finds a
+ *   change safe and the Builder's judge does not, db:sync refuses it as well: two texts a unique
+ *   column's MySQL collation holds as one ("a@b.co" and "A@b.co").
+ * - A number becoming a text is safe for the Builder on every database, and blocked by db:sync:
+ *   on PostgreSQL and MySQL as no conversion Nextly runs, on SQLite naming each row. Pinned as it
+ *   stands today; the push converting such a pair is later work.
  */
 const CASES: ParityCase[] = [
   {
@@ -145,7 +157,7 @@ const CASES: ParityCase[] = [
     to: { type: "number" },
     values: { r1: "2", r2: "1.5" },
     pinned: {
-      sqlite: { builder: v("blocked", "r2"), sync: v("safe") },
+      sqlite: agree(v("blocked", "r2")),
       postgresql: { builder: v("blocked", "r2"), sync: v("blocked") },
       mysql: { builder: v("blocked", "r2"), sync: v("blocked") },
     },
@@ -156,7 +168,7 @@ const CASES: ParityCase[] = [
     to: { type: "checkbox" },
     values: { r1: "true", r2: "maybe" },
     pinned: {
-      sqlite: { builder: v("blocked", "r1", "r2"), sync: v("safe") },
+      sqlite: agree(v("blocked", "r1", "r2")),
       postgresql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
       mysql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
     },
@@ -167,9 +179,55 @@ const CASES: ParityCase[] = [
     to: { type: "date" },
     values: { r1: "2024-01-02T03:04:05.000Z", r2: "nope" },
     pinned: {
-      sqlite: { builder: v("blocked", "r1", "r2"), sync: v("safe") },
+      sqlite: agree(v("blocked", "r1", "r2")),
       postgresql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
       mysql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
+    },
+  },
+  {
+    name: "a list to text, one item and an empty list",
+    from: { type: "chips" },
+    to: { type: "text" },
+    values: { r1: '["a"]', r2: "[]" },
+    pinned: {
+      // Both are kept as text on SQLite, so db:sync plans no type change there.
+      sqlite: { builder: v("blocked", "r1", "r2"), sync: null },
+      postgresql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
+      mysql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
+    },
+  },
+  {
+    name: "JSON to text, an object",
+    from: { type: "json" },
+    to: { type: "text" },
+    values: { r1: '{"a":1}' },
+    pinned: {
+      sqlite: { builder: v("safe"), sync: null },
+      postgresql: { builder: v("blocked", "r1"), sync: v("blocked") },
+      mysql: { builder: v("blocked", "r1"), sync: v("blocked") },
+    },
+  },
+  {
+    name: "a number to text",
+    from: { type: "number" },
+    to: { type: "text" },
+    values: { r1: "7", r2: "12" },
+    pinned: {
+      sqlite: { builder: v("safe"), sync: v("blocked", "r1", "r2") },
+      postgresql: { builder: v("safe"), sync: v("blocked") },
+      mysql: { builder: v("safe"), sync: v("blocked") },
+    },
+  },
+  {
+    name: "text to a unique email, two values equal but for case",
+    from: { type: "text" },
+    to: { type: "email", unique: true },
+    values: { r1: "a@b.co", r2: "A@b.co" },
+    pinned: {
+      // Only MySQL's collation holds the two as one value; elsewhere the column type is unchanged.
+      sqlite: { builder: v("safe"), sync: null },
+      postgresql: { builder: v("safe"), sync: null },
+      mysql: agree(v("blocked", "r1", "r2")),
     },
   },
 ];
@@ -247,6 +305,8 @@ async function syncVerdict(target: Target, table: string, parity: ParityCase) {
         slug: table,
         tableName: table,
         fields: fieldsOf(parity.to) as never,
+        // What the registry records of the entity before the apply, as `db:sync` reads it.
+        recordedFields: fieldsOf(parity.from) as never,
         builderOwned: true,
       },
     },

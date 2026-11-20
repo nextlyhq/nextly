@@ -190,7 +190,7 @@ describe("generateCollectionUpdate and sibling fields kept under stored names", 
           path: "fields",
           code: "FIELD_NAME_DUPLICATE",
           message:
-            "Collection 'posts': fields 'metaTitle' and 'metaTitle' at the top level have the same name. Rename one of them.",
+            "Collection 'posts': fields 'metaTitle' and 'metaTitle' at the top level share the column 'meta_title'. Rename one of them so each has its own column.",
         },
       ],
     });

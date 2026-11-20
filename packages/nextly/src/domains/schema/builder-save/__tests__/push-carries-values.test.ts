@@ -233,6 +233,35 @@ describe("pushCarriesValues", () => {
       ).toBe(false);
     });
 
+    it("runs the file for a required field moved out of a group onto the row, its values coming from the group", async () => {
+      const group = (fields: FieldDefinition[]) =>
+        ({ name: "meta", type: "group", fields }) as unknown as FieldDefinition;
+      const outOfGroup = (moved?: { from: string[]; to: string[] }[]) =>
+        save({
+          oldFields: [group([field("tagline", { required: true })])],
+          newFields: [field("tagline", { required: true }), group([])],
+          singleRow: {
+            renamedTo: [],
+            fills,
+            holdsRow: () => Promise.resolve(true),
+          },
+          ...(moved === undefined ? {} : { moved }),
+        });
+      // Without the move it reads as a field new to the row, which the push fills.
+      expect(await pushCarriesValues(outOfGroup())).toBe(true);
+      expect(
+        await pushCarriesValues(
+          outOfGroup([{ from: ["meta", "tagline"], to: ["tagline"] }])
+        )
+      ).toBe(false);
+      // A hint whose path stays on the row moves nothing, so the row is still filled by the push.
+      expect(
+        await pushCarriesValues(
+          outOfGroup([{ from: ["tagline"], to: ["tagline"] }])
+        )
+      ).toBe(true);
+    });
+
     it("runs the file for a field renamed onto a required one, its column keeping its value", async () => {
       expect(
         await pushCarriesValues(
