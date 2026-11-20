@@ -169,6 +169,7 @@ import {
   readForeignKeyTargets,
   readIndexColumns,
   readIndexUniqueness,
+  readUniqueIndexesByColumn,
   uniqueIndexNames,
 } from "../pipeline/live-table-facts";
 import { assertDeleteWithinThreshold } from "../pipeline/pre-cleanup/executor";
@@ -3107,6 +3108,10 @@ async function generateFor(
       appLanguageOrder() ??
       deps.config.localization?.locales.map(locale => locale.code),
     onWarning: message => deps.logger.warn(message),
+    // An older unique index still holding a column whose field stops being unique, read from this
+    // database, so the file drops it too and every database it runs on ends the same.
+    liveUniqueIndexes: tableName =>
+      readUniqueIndexesByColumn(deps.adapter.getDrizzle(), dialect, tableName),
     scope: {
       kind: kindOf(args.save).kind,
       slug: args.save.slug,

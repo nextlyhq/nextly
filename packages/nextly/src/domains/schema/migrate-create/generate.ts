@@ -175,6 +175,10 @@ import {
 } from "./format-file";
 import { withIndexesLiftedForTextWidenings } from "./indexed-text-widening";
 import {
+  leftoverUniqueStatements,
+  type LiveUniqueIndexes,
+} from "./leftover-unique-indexes";
+import {
   fileStatements,
   judgedDeletions,
   mainFileStatements,
@@ -470,6 +474,13 @@ export interface GenerateArgs {
   liveCompanionColumns?:
     | ((tableName: string) => Promise<readonly string[]>)
     | undefined;
+  /**
+   * The unique indexes the database the file is written against holds, by column. Read only for a
+   * column whose field stops being unique, so the file also drops an older unique index still
+   * holding it under a name Nextly did not make (`leftoverUniqueDrops`), and the run names it
+   * through `onWarning`. Absent, the file drops only Nextly's own index.
+   */
+  liveUniqueIndexes?: LiveUniqueIndexes;
   /**
    * Override the timestamp for tests. Production callers omit and get
    * `new Date()`.
@@ -1187,6 +1198,20 @@ export async function generateMigration(
     args.resolutions ?? [],
     desiredSnapshot.tables
   );
+  // 7'. A field that stops being unique on an older table that also holds its column unique under
+  //     a name Nextly did not make: that index is dropped too, by name and only where it stands, so
+  //     every database the file runs on ends with the column no longer unique. Named to the run,
+  //     since it may be one the user made. Dropped after the operations, Nextly's own drop and a
+  //     rename among them, and before any rows are filled: a fill writes one value into every row
+  //     it settles, which an index still holding the column unique refuses. Nothing goes back on the
+  //     way down: Nextly's own index makes the column unique again.
+  const leftoverDrops = await leftoverUniqueStatements({
+    operations,
+    desired: desiredSnapshot.tables,
+    dialect: args.dialect,
+    read: args.liveUniqueIndexes,
+    onWarning: args.onWarning,
+  });
   // A column a move fills from its group is filled by the statements appended after these, so a
   // table either list rebuilds holds it nullable until then, as its own add does.
   const refilled = columnKeysOf(args.refilledColumns);
@@ -1203,6 +1228,7 @@ export async function generateMigration(
         heldSettings
       )
     ),
+    ...leftoverDrops,
     ...(args.resolutions ?? []).map(r => resolutionStatement(r, args.dialect)),
     ...generateStatements(
       settled.tighten,
