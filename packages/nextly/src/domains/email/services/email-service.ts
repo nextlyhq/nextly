@@ -2137,7 +2137,15 @@ export class EmailService extends BaseService {
     by: { userId: string | null; actor?: RequestActor | null }
   ): Promise<{ id: string; state: string }> {
     const result = await cancelQueuedEmailAsPerson(this.adapter, id, by.userId);
-    await this.recordQueuedActivity("cancel", id, by.actor);
+    // One in flight keeps its state: its message is cleared, as a request
+    // that takes effect if that attempt fails.
+    const inFlight = result.state === "sending";
+    await this.recordQueuedActivity(
+      inFlight ? "cancel-request" : "cancel",
+      id,
+      inFlight ? ["message"] : ["state", "message"],
+      by.actor
+    );
     return result;
   }
 
@@ -2155,9 +2163,18 @@ export class EmailService extends BaseService {
     id: string,
     by: { actor?: RequestActor | null }
   ): Promise<{ id: string; state: string }> {
-    const result = await retryQueuedEmailAsPerson(this.adapter, id);
-    await this.recordQueuedActivity("retry", id, by.actor);
-    return result;
+    const retried = await retryQueuedEmailAsPerson(this.adapter, id);
+    // A failed email waits again; a waiting or sending one has its next
+    // attempt brought forward.
+    await this.recordQueuedActivity(
+      "retry",
+      id,
+      retried.from === "failed"
+        ? ["state", "nextAttemptAt"]
+        : ["nextAttemptAt"],
+      by.actor
+    );
+    return { id: retried.id, state: retried.state };
   }
 
   /**
@@ -2168,10 +2185,16 @@ export class EmailService extends BaseService {
   private async recordQueuedActivity(
     operation: QueuedEmailOperation,
     queuedId: string,
+    changedFields: readonly string[],
     actor: RequestActor | null | undefined
   ): Promise<void> {
     try {
-      await recordQueuedEmailActivity({ operation, queuedId, actor });
+      await recordQueuedEmailActivity({
+        operation,
+        queuedId,
+        changedFields,
+        actor,
+      });
     } catch (error) {
       this.logger.error("Failed to record a queued email's activity", {
         operation,

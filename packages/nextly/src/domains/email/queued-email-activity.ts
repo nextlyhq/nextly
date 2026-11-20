@@ -14,8 +14,11 @@ import { recordSettingsActivity } from "../audit/record-settings-activity";
 
 import { EMAIL_DELIVERY_ACTIVITY_COLLECTION } from "./address-search-activity";
 
-/** What a person did to a queued email. */
-export type QueuedEmailOperation = "retry" | "cancel";
+/**
+ * What a person did to a queued email: a retry, a cancel, or a cancel that
+ * reached an attempt in flight and is a request until that attempt ends.
+ */
+export type QueuedEmailOperation = "retry" | "cancel" | "cancel-request";
 
 /**
  * Record that `actor` retried or cancelled queued email `queuedId`. An actor
@@ -27,6 +30,8 @@ export type QueuedEmailOperation = "retry" | "cancel";
 export async function recordQueuedEmailActivity(input: {
   operation: QueuedEmailOperation;
   queuedId: string;
+  /** What the action changed, by name, never by value. */
+  changedFields: readonly string[];
   actor: RequestActor | null | undefined;
 }): Promise<void> {
   await recordSettingsActivity({
@@ -34,9 +39,7 @@ export async function recordQueuedEmailActivity(input: {
     collection: EMAIL_DELIVERY_ACTIVITY_COLLECTION,
     entityId: input.queuedId,
     entityTitle: "Queued email",
-    // The state is what changed: `changedFields` makes an update worth an
-    // entry, and the operation says which way.
-    changedFields: ["state"],
+    changedFields: input.changedFields,
     metadata: { operation: input.operation },
     actor: input.actor,
   });
