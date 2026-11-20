@@ -1,12 +1,16 @@
 /**
- * A collection update (`updateCollection`) in development applies its change with the schema push,
- * which commits on its own transaction, then records the save's migration files applied in the
- * ledger. The collection's registry row is written in that same recording transaction, after the
- * ledger rows, so the two commit or roll back together.
+ * A collection update (`updateCollection`) in development runs its own migration file, as the
+ * schema dialog's save does, and records it applied in the ledger. The collection's registry row is
+ * written in the file's own transaction, after its ledger row, so the change, the ledger row and the
+ * registry row commit or roll back together: where the registry write fails, the update is taken
+ * back whole and answered as the failure it is.
  *
- * Where the registry write fails, the ledger rows go back with it and the files are kept, recorded
- * applied nowhere. The pushed change stays in the database, so the update answers that it failed
- * part way, naming the kept file and the steps that finish it, and never that it was applied.
+ * An update that carries values across its change (a field filled from a stated default, say) keeps
+ * the schema push, which commits on its own transaction, then records the save's files applied. The
+ * registry row is written in that recording transaction, after the ledger rows. Where the registry
+ * write fails, the ledger rows go back with it and the files are kept, recorded applied nowhere. The
+ * pushed change stays in the database, so the update answers that it failed part way, naming the
+ * kept file and the steps that finish it, and never that it was applied.
  *
  * A collection service with no Builder save writer (`setBuilderSave` never called) pushes the change
  * and writes the file itself. If the table is then not found, it answers that the update failed and
@@ -29,6 +33,7 @@ import {
 import type { ServiceContainer } from "../../../../services";
 import { clearRegistryRowCache } from "../../../dynamic-collections/services/collection-row-cache";
 import { SchemaEventsRepository } from "../../../schema/events/schema-events-repository";
+import { PushSchemaPipeline } from "../../../schema/pipeline/pushschema-pipeline";
 import { writeRegistryRows } from "../../../schema/schema-version";
 import { isWebhookRecordingEnabled } from "../../../webhooks/recording-policy";
 
@@ -38,6 +43,11 @@ const SLUG = "cur_posts";
 const TABLE = `dc_${SLUG}`;
 const BEFORE = [{ name: "heading", type: "text" }];
 const AFTER = [...BEFORE, { name: "extra", type: "text" }];
+// A field filled from its stated default over the rows already there, which keeps the push.
+const FILLED = [
+  ...BEFORE,
+  { name: "extra", type: "text", default: "new", options: { variant: "short" } },
+];
 
 let current: TestNextly | undefined;
 
@@ -203,14 +213,17 @@ describeEachDialect("a collection update's registry write", dialect => {
       );
   }
 
-  it("records the files and the row together when nothing fails", async () => {
+  it("runs its own file, recording it and the row together, when nothing fails", async () => {
     const t = await boot();
     const before = await recorded(t);
     const filesBefore = migrationFiles(t);
+    const pushed = vi.spyOn(PushSchemaPipeline.prototype, "apply");
 
     const { failed, said } = await update();
 
     expect(failed, `the update failed: ${said}`).toBe(false);
+    // The update's file carried the change, not the push.
+    expect(pushed, "the push").not.toHaveBeenCalled();
     const written = migrationFiles(t).filter(f => !filesBefore.includes(f));
     expect(written.length, "the update's files").toBeGreaterThan(0);
     const applied = await appliedFiles(t);
@@ -229,13 +242,83 @@ describeEachDialect("a collection update's registry write", dialect => {
     expect(await columnsOf(t)).toContain("extra");
   });
 
-  it("answers that it failed part way, its files kept and recorded nowhere, when the registry write fails", async () => {
+  it("keeps the push for a field filled from a stated default, filling the rows already there", async () => {
+    const t = await boot();
+    const handler = t.getService("collectionsHandler") as unknown as {
+      getEntryService(): {
+        createEntry(
+          params: Record<string, unknown>,
+          data: Record<string, unknown>
+        ): Promise<{ success: boolean }>;
+      };
+    };
+    const entry = await handler
+      .getEntryService()
+      .createEntry(
+        { collectionName: SLUG, overrideAccess: true },
+        { heading: "One" }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+    const pushed = vi.spyOn(PushSchemaPipeline.prototype, "apply");
+
+    const { failed, said } = await update({ fields: FILLED });
+
+    expect(failed, `the update failed: ${said}`).toBe(false);
+    expect(pushed, "the push").toHaveBeenCalled();
+    const rows = await t.adapter.executeQuery<{ extra: unknown }>(
+      `SELECT extra FROM ${TABLE}`
+    );
+    expect(rows.map(row => row.extra)).toEqual(["new"]);
+  });
+
+  // MySQL commits a file's DDL statement by statement, so there is no transaction for the whole
+  // update to be taken back in.
+  it.skipIf(dialect === "mysql")(
+    "takes the whole update back, nothing applied, when the registry write fails on its file's road",
+    async () => {
+      // Counted first, on an update without a failure: the last is the write in the file's
+      // transaction.
+      let writes: number;
+      {
+        const t = await boot();
+        const counted = await countingTrigger(t, 0);
+        const { failed, said } = await update();
+        expect(failed, `the counting update failed: ${said}`).toBe(false);
+        writes = await counted();
+        await shutDown();
+      }
+      // Control: the trigger reaches the update's registry writes.
+      expect(
+        writes,
+        "no registry write of the update was counted"
+      ).toBeGreaterThan(0);
+
+      const t = await boot();
+      const before = await recorded(t);
+      const filesBefore = migrationFiles(t);
+      const appliedBefore = await appliedFiles(t);
+      await countingTrigger(t, writes);
+
+      const { failed, said } = await update();
+
+      expect(failed, `the update answered: ${said}`).toBe(true);
+      expect(said, "the answer").not.toContain("Collection updated");
+      // Nothing is left part way, so there is no kept file to finish.
+      expect(said, "the answer").not.toContain("migrate:resolve");
+      expect(migrationFiles(t), "the migrations folder").toEqual(filesBefore);
+      expect(await appliedFiles(t), "the ledger").toEqual(appliedBefore);
+      expect(await recorded(t), "the registry row").toEqual(before);
+      expect(await columnsOf(t), "the table").not.toContain("extra");
+    }
+  );
+
+  it("answers that it failed part way on the push's road, its files kept and recorded nowhere, when the registry write fails", async () => {
     // Counted first, on an update without a failure: the last is the write after the push.
     let writes: number;
     {
       const t = await boot();
       const counted = await countingTrigger(t, 0);
-      const { failed, said } = await update();
+      const { failed, said } = await update({ fields: FILLED });
       expect(failed, `the counting update failed: ${said}`).toBe(false);
       writes = await counted();
       await shutDown();
@@ -252,7 +335,7 @@ describeEachDialect("a collection update's registry write", dialect => {
     const appliedBefore = await appliedFiles(t);
     await countingTrigger(t, writes);
 
-    const { failed, said } = await update();
+    const { failed, said } = await update({ fields: FILLED });
 
     expect(failed, `the update answered: ${said}`).toBe(true);
     expect(said, "the answer").not.toContain("Collection updated");
