@@ -57,7 +57,10 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { AddressKind } from "../../../shared/address-rule";
-import { holdCollectionOnConnection } from "../../dynamic-collections/services/dynamic-collection-registry-service";
+import {
+  holdCollectionOnConnection,
+  holdCollectionOnSession,
+} from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { statedMoment } from "../../dynamic-collections/services/stated-default";
 import {
@@ -526,11 +529,15 @@ async function writeCollectionSaveOnce(
           buildsWholeTable: options.buildsWholeTable === true,
         });
         // The counts the person confirmed, compared just before the push: no transaction of the
-        // save's holds a push's statements, so nothing is held between the count and the delete.
-        await deletionHoldOfSave(deps, save, written.table)?.compare(
-          deps.adapter.getDrizzle()
+        // save's holds a push's statements, so on MySQL the collection is held from the count
+        // until the push has ended (`comparedThenApplied`).
+        const { appliedBy } = options;
+        const applied = await comparedThenApplied(
+          deps,
+          save,
+          written.table,
+          () => appliedBy()
         );
-        const applied = await options.appliedBy();
         // `"unchanged"`: nothing was pushed (an update of settings alone), so a failure recording
         // the files leaves nothing applied, and they are withdrawn as before any change.
         pushed = applied !== "unchanged";
@@ -563,11 +570,14 @@ async function writeCollectionSaveOnce(
         );
       } else if (options.appliedAfter !== undefined) {
         // The counts the person confirmed, compared just before the change is made here, as before
-        // a push: nothing holds the table between the count and the change's own statements.
-        await deletionHoldOfSave(deps, save, written.table)?.compare(
-          deps.adapter.getDrizzle()
+        // a push, and held the same way on MySQL (`comparedThenApplied`).
+        const { appliedAfter } = options;
+        const applied = await comparedThenApplied(
+          deps,
+          save,
+          written.table,
+          () => appliedAfter()
         );
-        const applied = await options.appliedAfter();
         pushed = true;
         if (applied === "partly-applied") written.started.left();
       }
@@ -4285,6 +4295,61 @@ function triedHoldOf(
       await releasing?.();
     },
   };
+}
+
+/** `apply` under the save's count and hold (`countedThroughApply`), for the save's deletion hold. */
+function comparedThenApplied<T>(
+  deps: CollectionSaveDeps,
+  save: CollectionSave,
+  table: string,
+  apply: () => Promise<T>
+): Promise<T> {
+  return countedThroughApply(
+    deps.adapter,
+    save.slug,
+    deletionHoldOfSave(deps, save, table),
+    apply
+  );
+}
+
+/**
+ * `apply` (a push, or the change a caller makes outside a migration file) once the count of what
+ * it deletes is compared with the one the person confirmed (`DeletionHold.compare`), where there
+ * is a count (`hold`); without one, `apply` alone.
+ *
+ * On MySQL collection `slug` is held first, on a connection of its own, from before the count
+ * until `apply` has ended, however it ended (`holdCollectionOnSession`): `apply` runs on
+ * connections of its own, and an entry write waits at the collection's named locks wherever it
+ * runs, so a write under way at the count is counted, and one sent after it meets the new shape.
+ * On PostgreSQL and SQLite nothing more is held, as before.
+ */
+export async function countedThroughApply<T>(
+  adapter: DrizzleAdapter,
+  slug: string,
+  hold: DeletionHold | undefined,
+  apply: () => Promise<T>
+): Promise<T> {
+  if (hold === undefined) return apply();
+  const compare = () => hold.compare(adapter.getDrizzle());
+  if (adapter.getCapabilities().dialect !== "mysql") {
+    await compare();
+    return apply();
+  }
+  return adapter.withSession(async session => {
+    const { release } = await holdCollectionOnSession(adapter, session, slug);
+    let failed = false;
+    try {
+      await compare();
+      return await apply();
+    } catch (error) {
+      failed = true;
+      throw error;
+    } finally {
+      // After a failure, the failure is what the caller sees.
+      if (failed) await release().catch(() => undefined);
+      else await release();
+    }
+  });
 }
 
 /**

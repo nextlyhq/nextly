@@ -31,7 +31,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import { consoleLogger } from "../../../shared/types";
+import { holdEntityForWrite } from "../../collections/services/entry-write-hold";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
 
 // A gate before each migration file's first statement on the file road (`runWritten` asks the
 // required-column refusal before any statement of the file), outside the file's transaction.
@@ -73,7 +76,8 @@ vi.mock("../builder-save/deletion-counts", async importOriginal => {
     deletionHoldOf: (...args: Parameters<typeof real.deletionHoldOf>) => {
       const hold = real.deletionHoldOf(...args);
       if (hold === undefined) return hold;
-      // Each count the save takes, whole or for one file's tables, pauses at the gate after it.
+      // Each count the save takes, whole, for one file's tables, or before a push, pauses at the
+      // gate after it.
       const gatedAfter =
         (check: (db: unknown) => Promise<void>) => async (db: unknown) => {
           await check(db);
@@ -84,6 +88,8 @@ vi.mock("../builder-save/deletion-counts", async importOriginal => {
         };
       return {
         ...hold,
+        // The push road compares just before the push; the gate follows that count too.
+        compare: gatedAfter(hold.compare),
         check: gatedAfter(hold.check),
         checkIn(changed: readonly string[]) {
           const check = hold.checkIn(changed);
@@ -94,8 +100,25 @@ vi.mock("../builder-save/deletion-counts", async importOriginal => {
   };
 });
 
+// A switch that sends a collection's save down the push road (`pushCarriesValues`), which the push
+// applies rather than the save's file, whatever the change.
+const pushRoad = vi.hoisted(() => ({ forced: false }));
+vi.mock("../builder-save/push-carries-values", async importOriginal => {
+  const real =
+    await importOriginal<
+      typeof import("../builder-save/push-carries-values")
+    >();
+  return {
+    ...real,
+    pushCarriesValues: async (
+      ...args: Parameters<typeof real.pushCarriesValues>
+    ) => pushRoad.forced || real.pushCarriesValues(...args),
+  };
+});
+
 let instance: TestNextly | undefined;
 afterEach(async () => {
+  pushRoad.forced = false;
   fileStart.armed = false;
   afterCount.armed = false;
   // A save a failed case left at a gate goes on, so its transaction ends before the app does.
@@ -178,6 +201,11 @@ describe.each(getConfiguredTestDialects())(
     let next = 0;
     /** An entry written as another session writes it, straight to the table. */
     async function insert(t: TestNextly, note: string | null) {
+      await sql(t, insertStatement(note));
+    }
+
+    /** The statement that writes a new entry, its `note` set or left out. */
+    function insertStatement(note: string | null): string {
       next += 1;
       const id = `r${String(next)}`;
       const cols = [
@@ -202,10 +230,7 @@ describe.each(getConfiguredTestDialects())(
         cols.push("note");
         values.push(`'${note}'`);
       }
-      await sql(
-        t,
-        `INSERT INTO ${q(TABLE)} (${cols.map(q).join(", ")}) VALUES (${values.join(", ")})`
-      );
+      return `INSERT INTO ${q(TABLE)} (${cols.map(q).join(", ")}) VALUES (${values.join(", ")})`;
     }
 
     async function notesHeld(t: TestNextly): Promise<number> {
@@ -476,6 +501,57 @@ describe.each(getConfiguredTestDialects())(
       expect(await hasNoteColumn(t)).toBe(true);
       expect(await notesHeld(t)).toBe(4);
     }, 60_000);
+
+    // The push road holds the collection on MySQL from its count until the push has ended, on a
+    // connection of the save's own, and an entry write waits at its named locks. PostgreSQL holds
+    // nothing on the push road (a stated limit), so there the same write lands at once: the
+    // control that this case tells a held road from one that is not. SQLite's suite runs in
+    // memory, on one connection, where nothing else writes while the save runs.
+    it.skipIf(dialect === "sqlite")(
+      "keeps an entry write sent between the count and the push waiting on MySQL, then writes it to the new shape",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        // The save the other cases make, sent down the push road.
+        pushRoad.forced = true;
+        const { paused, release } = gated(afterCount);
+        const applying = apply(t, 3, REMAINING, {
+          note: { action: "confirm_drop" },
+        }).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        // Where the save ended before its count, what it ended with says why.
+        expect(reached || (await applying)).toBe(true);
+
+        // An entry write sent after the count, before the push, on a connection of its own: the
+        // hold an entry write takes first (`holdEntityForWrite`, the collection's share side on
+        // MySQL, nothing elsewhere), then the row.
+        let landed = false;
+        const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+        const writing = t.adapter
+          .transaction(async tx => {
+            await holdEntityForWrite(tx, SLUG, registry, dialect);
+            await tx.execute(insertStatement(null));
+          })
+          .then(() => {
+            landed = true;
+          });
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        expect(landed).toBe(dialect !== "mysql");
+
+        release();
+        expect(await applying).toBe("applied");
+        await writing;
+        expect(landed).toBe(true);
+        expect(await hasNoteColumn(t)).toBe(false);
+      },
+      60_000
+    );
 
     // PostgreSQL holds the table against writes from the count to the commit. SQLite's suite runs
     // in memory, on one connection. MySQL holds the collection instead (below).

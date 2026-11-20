@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SqlParam,
+  StatementSession,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 import { eq, and, sql, type SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 
 import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
@@ -1035,19 +1040,29 @@ function rowsOnConnection(db: unknown): RowsOn {
 }
 
 /**
- * A deleting save's hold of collection `slug` on MySQL, taken on the migration try's own connection
- * (`db`, the handle the runner gives the try's `before`), as a collection delete holds it
- * (`holdCollectionsIn` for `"update"`): its named locks first, then its registry row `FOR UPDATE`,
- * which waits for every entry write that already read the row for share to commit. An entry write
- * that starts after waits at the named locks until `release`, which runs on the same connection in
- * the try's `settled`. A take that fails releases what it got before it throws.
+ * The rows a query answers on `session`, a connection held for one caller (`withSession`), its
+ * Drizzle query compiled for MySQL as the migration runner compiles one for its session.
  */
-export async function holdCollectionOnConnection(
+function rowsOnSession(session: StatementSession): RowsOn {
+  const compiler = new MySqlDialect();
+  return <T>(query: SQL): Promise<T[]> => {
+    const compiled = compiler.sqlToQuery(query);
+    return session.execute<T>(compiled.sql, compiled.params as SqlParam[]);
+  };
+}
+
+/**
+ * Collection `slug` held as a collection delete holds it (`holdCollectionsIn` for `"update"`), on
+ * the connection `rowsOn` runs on: its named locks first, then its registry row `FOR UPDATE`, which
+ * waits for every entry write that already read the row for share to commit. An entry write that
+ * starts after waits at the named locks until `release`, which must run on the same connection. A
+ * take that fails releases what it got before it throws.
+ */
+async function holdCollectionWith(
   adapter: object,
-  db: unknown,
+  rowsOn: RowsOn,
   slug: string
 ): Promise<{ release: () => Promise<void> }> {
-  const rowsOn = rowsOnConnection(db);
   const named = await takeNamedCollectionLocks(adapter, rowsOn, [slug]);
   try {
     await rowsOn(
@@ -1058,4 +1073,35 @@ export async function holdCollectionOnConnection(
     throw error;
   }
   return named;
+}
+
+/**
+ * A deleting save's hold of collection `slug` on MySQL, on a connection held for it alone
+ * (`session`, from `withSession`, outside any transaction), for a save whose change runs on other
+ * connections (a push): the named locks belong to the server by name, so an entry write waits for
+ * them wherever it runs, and the registry row's lock ends with its statement, so the change may
+ * write the row. Released on `session` by `release` ({@link holdCollectionWith}).
+ */
+export function holdCollectionOnSession(
+  adapter: object,
+  session: StatementSession,
+  slug: string
+): Promise<{ release: () => Promise<void> }> {
+  return holdCollectionWith(adapter, rowsOnSession(session), slug);
+}
+
+/**
+ * A deleting save's hold of collection `slug` on MySQL, taken on the migration try's own connection
+ * (`db`, the handle the runner gives the try's `before`), as a collection delete holds it
+ * (`holdCollectionsIn` for `"update"`): its named locks first, then its registry row `FOR UPDATE`,
+ * which waits for every entry write that already read the row for share to commit. An entry write
+ * that starts after waits at the named locks until `release`, which runs on the same connection in
+ * the try's `settled`. A take that fails releases what it got before it throws.
+ */
+export function holdCollectionOnConnection(
+  adapter: object,
+  db: unknown,
+  slug: string
+): Promise<{ release: () => Promise<void> }> {
+  return holdCollectionWith(adapter, rowsOnConnection(db), slug);
 }
