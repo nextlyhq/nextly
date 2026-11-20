@@ -425,6 +425,44 @@ describe("fileTypeChangesOf", () => {
     expect(retyped[0]?.input.ignore).toBeUndefined();
   });
 
+  // A change of shape whose conversion carries the links guards only the shape: an author's id
+  // wrapped into a list of media ids, or of posts' ids, is a link to another target, judged here.
+  // One whose guard refuses every held link (to or from naming several collections) is the file's.
+  it("judges a change of shape that also changes the targets, unless the file's guard refuses every link", () => {
+    const authorOne = {
+      name: "author",
+      type: "relationship",
+      relationTo: "authors",
+    };
+    const judged = (to: object) =>
+      fileTypeChangesOf(
+        source(
+          record({ collections: { posts: posts(authorOne) } }),
+          record({ collections: { posts: posts(to) } })
+        )
+      );
+
+    for (const to of [
+      { name: "author", type: "upload", relationTo: "media", hasMany: true },
+      {
+        name: "author",
+        type: "relationship",
+        relationTo: "posts",
+        hasMany: true,
+      },
+    ]) {
+      const found = judged(to);
+      expect(found).toHaveLength(1);
+      expect(found[0]?.input.ignore).toBeUndefined();
+    }
+    const several = judged({
+      name: "author",
+      type: "relationship",
+      relationTo: ["authors", "posts"],
+    });
+    expect(several[0]?.input.ignore).toEqual(new Set(["author"]));
+  });
+
   // A relationship becoming an upload keeps one link per row, so the file converts and guards
   // nothing for it: the link to another target is judged here.
   it("judges a relationship becoming an upload, whose links keep their shape", () => {

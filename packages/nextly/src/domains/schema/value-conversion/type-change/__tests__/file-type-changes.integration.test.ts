@@ -36,9 +36,11 @@ import {
 import {
   defineCollection,
   number,
+  relationship,
   select,
   text,
   textarea,
+  upload,
 } from "../../../../../config";
 import { makeTestContext } from "../../../../../database/__tests__/integration/helpers/test-db";
 import { toMinimalEntities } from "../../../migrate-create/config-entities";
@@ -441,6 +443,30 @@ function cases(open: () => { connection: Connection; slug: string }) {
     } else {
       await expect(outcome).resolves.toBeUndefined();
     }
+  });
+
+  // A single relationship to authors made a list of media links: the file's conversion carries
+  // each row's id into a list, a link it now reads as a media item's. That conversion guards the
+  // shape only, so a row holding an author is judged here, and refused, before it runs.
+  it("judges a relationship whose shape and targets the file changes, over a held link", async () => {
+    const { connection, slug, first } = await holding(
+      () => relationship({ name: "heading", relationTo: "authors" }),
+      { r1: "author-1" }
+    );
+    const next = await create(
+      slug,
+      connection.dialect,
+      () => upload({ name: "heading", relationTo: "media", hasMany: true }),
+      2
+    );
+    // The file converts the column itself: the change is the one its conversion carries.
+    expect(next.statements.join("\n")).toMatch(/heading/i);
+
+    await expect(judge(connection, first, next)).rejects.toMatchObject({
+      publicData: {
+        errors: [expect.objectContaining({ path: "fields.heading" })],
+      },
+    });
   });
 
   it("judges nothing for a file with no snapshot before it", async () => {

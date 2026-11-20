@@ -209,13 +209,25 @@ function entitiesByTable(
   );
 }
 
-/** Whether a change is a relationship's change of shape, which the file converts or guards itself. */
+/**
+ * Whether the file guards the whole of a relationship's change itself: a change of shape whose
+ * guard refuses every held link (`requireEmpty`), or one whose conversion carries the links into
+ * the new shape with the same targets. A conversion carrying links to other targets (an author's
+ * id wrapped into a list of media ids) guards only the shape, so the change is judged here.
+ */
 function guardedByTheFile(change: FieldTypeChange): boolean {
-  const was = change.fromType.relation?.kept;
-  const now = change.toType.relation?.kept;
+  const was = change.fromType.relation;
+  const now = change.toType.relation;
   if (was === undefined || now === undefined) return false;
-  if (was === "join" || now === "join") return false;
-  return conversionBetweenShapes(was, now) !== undefined;
+  if (was.kept === "join" || now.kept === "join") return false;
+  const conversion = conversionBetweenShapes(was.kept, now.kept);
+  if (conversion === undefined) return false;
+  if (conversion === "requireEmpty") return true;
+  return (
+    was.upload === now.upload &&
+    was.targets.length === now.targets.length &&
+    was.targets.every((target, i) => target === now.targets[i])
+  );
 }
 
 /**
