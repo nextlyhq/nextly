@@ -71,6 +71,7 @@ import {
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 import { calculateSchemaHash } from "../../services/schema-hash";
+import { loadUiSchema } from "../../ui-schema/loader";
 import { judgeStoppedSave } from "../stopped-save";
 
 // The judgement of what a stopped save applied, watched as it runs: a save that rolled back whole
@@ -836,6 +837,66 @@ describe.each(getConfiguredTestDialects())(
           expect(saved.filter(f => !appliedNow.includes(f))).toEqual([]);
 
           await expectReplayGives(path, after);
+        },
+        300_000
+      );
+
+      // A save whose settings name a field (the title it uses, say) is settled only where the
+      // definition with what landed still holds: one naming a field that did not land is left as
+      // it stopped, for `nextly migrate:resolve`, and the definition still loads.
+      (keepsPartWay(dialect, path) && path.push === true ? it : it.skip)(
+        "whose title names the field that did not land, is not settled, keeps its files and still loads",
+        async () => {
+          const t = await boot();
+          await path.create(t, [text("heading")]);
+          const folderBefore = filesBelow(history());
+          const appliedBefore = await appliedFiles(t);
+          const failed = failStatement(t, adding(path.table, "beta"));
+
+          const outcome = await outcomeOf(
+            dispatchCollections(
+              {} as ServiceContainer,
+              "updateCollection",
+              { collectionName: path.slug },
+              {
+                fields: [text("heading"), text("alpha"), text("beta")],
+                useAsTitle: "beta",
+              }
+            )
+          );
+
+          expect(failed(), "no statement adding `beta` was met").toBe(1);
+          vi.restoreAllMocks();
+          vi.stubEnv("NODE_ENV", "development");
+          // The staging: `alpha`'s statement committed before `beta`'s failed.
+          const live = await liveColumns(t, path.table);
+          expect(live, "`alpha` was not added before `beta` failed").toContain(
+            "alpha"
+          );
+          expect(live).not.toContain("beta");
+          expect(outcome.failed, "the save was reported as going through").toBe(
+            true
+          );
+          if (!outcome.failed) return;
+          // Not settled: the stopped file kept, recorded nowhere, the row as before.
+          const sql = filesBelow(history()).filter(
+            f => f.endsWith(".sql") && !folderBefore.includes(f)
+          );
+          expect(sql, "the save's files").toHaveLength(1);
+          expect(
+            readFileSync(join(history(), sql[0]!), "utf8").split("-- DOWN")[0]
+          ).toMatch(/["`]beta["`]/);
+          expect
+            .soft(await appliedFiles(t), "the ledger")
+            .toEqual(appliedBefore);
+          expect
+            .soft(await registryFields(t, path), "the registry row")
+            .toEqual(["heading"]);
+          // The definition still loads.
+          await expect(
+            loadUiSchema({ projectRoot: basePath, uiSchemaFile: DEFINITION }),
+            "the definition"
+          ).resolves.toBeDefined();
         },
         300_000
       );
