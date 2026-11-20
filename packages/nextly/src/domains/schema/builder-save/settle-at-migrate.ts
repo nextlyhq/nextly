@@ -13,6 +13,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { BusyTableBounds } from "../busy-table/bounds";
 import { commandWriterHold } from "../migrate-create/writer-hold";
 import { withMigrateLock } from "../pipeline/locks";
 
@@ -28,6 +29,10 @@ export interface MigrateSettleArgs {
   migrationsDir: string;
   /** The schema lock's lease, from the configuration. */
   lockTtlSeconds?: number;
+  /** The database the run reaches (`databaseIdentity`): a marker of a save against another stays. */
+  database: string;
+  /** The run's busy-table bounds, from its flags over the environment, for the settle's lock. */
+  busyBounds?: BusyTableBounds;
   logger: SettleDeps["logger"];
 }
 
@@ -93,10 +98,7 @@ export async function settleAfterMigrate(
  * holds them, with a save made outside development judged by its files. Run in a scope of its own,
  * so the hold it takes on the files ends with it.
  */
-async function settleHeld(
-  args: MigrateSettleArgs,
-  only?: ReadonlySet<string>
-) {
+async function settleHeld(args: MigrateSettleArgs, only?: ReadonlySet<string>) {
   const hold = await commandWriterHold({
     migrationsDir: args.migrationsDir,
     command: "nextly migrate",
@@ -112,6 +114,7 @@ async function settleHeld(
           adapter: args.adapter,
           projectRoot: args.projectRoot,
           migrationsDir: args.migrationsDir,
+          database: args.database,
           logger: args.logger,
           keepPending: true,
           byFiles: true,
@@ -123,6 +126,9 @@ async function settleHeld(
         ...(args.lockTtlSeconds === undefined
           ? {}
           : { ttlSeconds: args.lockTtlSeconds }),
+        ...(args.busyBounds === undefined
+          ? {}
+          : { busyBounds: args.busyBounds }),
       }
     );
     return outcome.ran ? outcome.value : [];

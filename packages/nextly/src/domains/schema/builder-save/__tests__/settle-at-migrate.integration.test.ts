@@ -58,6 +58,7 @@ import { recordAlreadyApplied } from "../../migrate/drift-reconcile";
 import { setNonInteractive } from "../../migrate/can-prompt";
 import { newestSnapshotName } from "../../migrate-create/snapshot-io";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
+import { withSchemaLock } from "../../pipeline/schema-lock";
 
 /** The configuration the commands load: the project the instance runs. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -290,10 +291,10 @@ describe.each(getConfiguredTestDialects())(
       }
     }
 
-    const migrate = () =>
+    const migrate = (options: Record<string, unknown> = {}) =>
       command(context =>
         runMigrate(
-          { cwd: basePath, throwOnFailure: true } as Parameters<
+          { cwd: basePath, throwOnFailure: true, ...options } as Parameters<
             typeof runMigrate
           >[0],
           context
@@ -379,6 +380,95 @@ describe.each(getConfiguredTestDialects())(
         expect(await isApplied(t, file), file).toBe(false);
       }
       expect(await liveColumns(t)).not.toContain("alpha");
+    }, 300_000);
+
+    // A marker of a save against another database, with no row here (that database holds it), is
+    // that database's to settle: a run against this one leaves it, so the commands with no
+    // database still refuse there.
+    it("keeps the marker of a save against another database", async () => {
+      await boot();
+      const folder = join(basePath, ".nextly", "save-in-progress");
+      mkdirSync(folder, { recursive: true });
+      const marker = join(folder, `single-${SLUG}-another-database.json`);
+      writeFileSync(
+        marker,
+        JSON.stringify({
+          id: "another-database",
+          kind: "single",
+          slug: SLUG,
+          startedAt: new Date().toISOString(),
+          host: hostname(),
+          database: "0".repeat(32),
+          definitionFile: DEFINITION.replace(/^\.\//, ""),
+          definitionBefore: null,
+          applies: true,
+        })
+      );
+
+      const run = await migrate();
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(existsSync(marker), "the other database's marker").toBe(true);
+    }, 300_000);
+
+    // A file the save wrote that is gone from the folder can be neither run nor withdrawn: the
+    // save is not settled around it, and the run refuses with the record standing.
+    it("refuses a save made outside development whose file is gone from the folder", async () => {
+      const t = await boot();
+      const { written } = await leftSave(t);
+      for (const file of written) rmSync(join(historyDir(), file));
+
+      const run = await migrate();
+
+      expect(run.code, run.said).not.toBeUndefined();
+      expect(run.said).toContain("left part-way");
+      expect(await recordRow(t), "the record stays").toBeDefined();
+    }, 300_000);
+
+    // A consent the command refuses ends the run before its settle changes anything.
+    it("settles nothing when the run's consent is refused", async () => {
+      const t = await boot();
+      const { written, after } = await leftSave(t);
+
+      const run = await migrate({ acceptDataLoss: "a.b.c" });
+
+      expect(run.code, run.said).not.toBeUndefined();
+      expect(run.said).toContain("not a list of tables");
+      expect(await recordRow(t), "the record stays").toBeDefined();
+      expect(sqlFiles()).toEqual(expect.arrayContaining(written));
+      expect(definitionText()).toBe(after);
+    }, 300_000);
+
+    // `--force-unlock` clears a lock a stopped run left before the settle takes it.
+    it("clears a stale lock with --force-unlock before the settle takes it", async () => {
+      const t = await boot();
+      let release!: () => void;
+      const released = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      let holding!: () => void;
+      const held = new Promise<void>(resolve => {
+        holding = resolve;
+      });
+      const holder = withSchemaLock(
+        {
+          adapter: t.adapter as never,
+          command: "test: a run that stopped",
+          whenHeld: "wait",
+        },
+        async () => {
+          holding();
+          await released;
+        }
+      ).catch(() => undefined);
+      await held;
+
+      const run = await migrate({ forceUnlock: true }).finally(async () => {
+        release();
+        await holder;
+      });
+
+      expect(run.code, run.said).toBeUndefined();
     }, 300_000);
 
     it("refuses a production start that migrates, leaving the files and the definition as they are", async () => {

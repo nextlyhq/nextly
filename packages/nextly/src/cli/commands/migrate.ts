@@ -49,6 +49,7 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
+import { databaseIdentity } from "../../domains/schema/builder-save/saved-database";
 import {
   recheckBeforeFiles,
   settleAfterMigrate,
@@ -84,15 +85,15 @@ import {
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { seedAccessOnCommandConnection } from "../../domains/schema/migrate/command-access";
 import {
-  planCoreDeletions,
-  planCoreReconcile,
-  reconcileCore,
-} from "../../domains/schema/migrate/core-reconcile";
-import {
   checkCompanionFiles,
   judgeCompanionFiles,
   warnOfSnapshotlessFile,
 } from "../../domains/schema/migrate/companion-drift";
+import {
+  planCoreDeletions,
+  planCoreReconcile,
+  reconcileCore,
+} from "../../domains/schema/migrate/core-reconcile";
 import {
   consentToCover,
   countDeletions,
@@ -343,12 +344,12 @@ import {
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
 import { storedDataOfRun } from "./stored-data-of-run";
-import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
   judgeCoreDeletions,
 } from "./upgrade-steps/core-upgrade-consent";
+import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 // Re-exported for the callers that import it from this command. Other
 // commands import it from cli/utils, which does not pull this one in.
 export { installRegistryResolver };
@@ -851,6 +852,15 @@ export async function runMigrate(
     // backup nobody confirmed is refused here, before anything changes.
     await storedData.confirmBeforeSchemaChanges(options.step).catch(fail);
 
+    // The consent a deleting file needs, read from the flag and the environment before anything
+    // below changes the project or the database: a value the command refuses ends the run here.
+    const lineConsent = orFail(() => commandLineConsent(options, logger), fail);
+
+    // Clear a stale lock first when --force-unlock is passed (e.g. left by a
+    // crashed prior run), before the settle below takes the lock. Already
+    // cleared where the run moved an earlier release's records, above.
+    await clearStaleLock();
+
     // A Builder save left part-way is settled first, as a development start settles it: its
     // files recorded applied, or withdrawn with its definition put back, and one made outside
     // development judged by its files. What cannot be settled refuses the run before its first
@@ -859,6 +869,13 @@ export async function runMigrate(
       adapter: adapter as unknown as DrizzleAdapter,
       projectRoot: cwd,
       migrationsDir: appMigrationsDir,
+      // The database this run reaches, so a marker of a save against another one stays.
+      database: databaseIdentity(
+        dbValidation.databaseUrl,
+        configResult.config.db.postgres?.schema
+      ),
+      // The run's busy-table bounds, from its flags, for the settle's lock too.
+      busyBounds: bounds,
       ...(configResult.config.db.migrateLockTtlSeconds === undefined
         ? {}
         : { lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds }),
@@ -878,11 +895,6 @@ export async function runMigrate(
     const dz = adapter as unknown as DrizzleAdapter & {
       tableExists: (n: string) => Promise<boolean>;
     };
-
-    // Clear a stale lock first when --force-unlock is passed (e.g. left by a
-    // crashed prior run), then proceed with the normal migrate. Already
-    // cleared where the run moved an earlier release's records, above.
-    await clearStaleLock();
 
     // Every entity as the registry records it before any file applies, so the companion pass
     // after the migrations can tell a field this run newly translates from one translated before.
@@ -960,7 +972,7 @@ export async function runMigrate(
         // by the run's one consent (`--accept-data-loss`, with
         // NEXTLY_ALLOW_CORE_DESTRUCTIVE honoured as deprecated for Nextly's own
         // tables), never by a boolean of its own.
-        ...commandLineConsent(options, logger),
+        ...lineConsent,
         dropRetiredAuthTables,
         allowDropNonEmptyRetired,
         ensureLedger: () => ensureSchemaEventsTable(dz),

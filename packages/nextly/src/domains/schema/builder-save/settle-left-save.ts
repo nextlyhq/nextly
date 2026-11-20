@@ -403,6 +403,14 @@ async function settleByFiles(
   if (unclear.length > 0) {
     return stays(`${unclear.join(", ")} cannot be told as its own or not`);
   }
+  // A file the save named that is gone from the folder can be neither run nor withdrawn, and
+  // whether it applied cannot be read from it: the save is not settled around it.
+  const missing = (record.files ?? []).filter(name => !files.includes(name));
+  if (missing.length > 0) {
+    return stays(
+      `${missing.join(", ")}, which it wrote, is gone from the migration folder`
+    );
+  }
   const applied = await appliedOf(repo, files);
   if (applied.length > 0) {
     return stays(`${applied.join(", ")} is applied here already`);
