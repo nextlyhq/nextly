@@ -59,7 +59,11 @@ import {
   settleLeftSaves,
   type SettledSave,
 } from "../settle-left-save";
-import { recordSaveStarted, withSaveRecords } from "../save-in-progress";
+import {
+  recordSaveStarted,
+  refuseBesideLeftSaves,
+  withSaveRecords,
+} from "../save-in-progress";
 import { settleRegistryWriter } from "../settle-registry";
 
 /** Where the save is stopped, and how to let it go. Shared with the module mocks below. */
@@ -2105,34 +2109,21 @@ describe.each(getConfiguredTestDialects())(
       );
       expect((await settle(t)).map(s => s.outcome)).toEqual(["left"]);
 
-      // The gate a save meets as it records its start, asked directly: the stopped save still
-      // holds this process's exclusion, which a save through the dispatcher would meet first.
+      // The refusal every Builder save meets before it writes anything (`writeSave`), asked
+      // directly: the stopped save still holds this process's exclusion, which a save through the
+      // dispatcher would meet first.
       const answer = await answerOf(
-        withSaveRecords(() =>
-          recordSaveStarted({
-            adapter: t.adapter,
-            projectRoot: basePath,
-            kind: "single",
-            slug: "settle_other",
-            definitionFile: join(basePath, DEFINITION),
-            definitionBefore: definitionText() ?? undefined,
-            definitionAfter: "{}",
-            database: undefined,
-            notify: () => undefined,
-          })
-        )
+        refuseBesideLeftSaves({
+          adapter: t.adapter,
+          projectRoot: basePath,
+          kind: "single",
+          slug: "settle_other",
+          notify: () => undefined,
+        })
       );
 
       expect(answer).toContain(`"${SLUG}"`);
       expect(answer).toContain("left part-way");
-      expect(
-        (
-          await new MetaService(t.adapter, consoleLogger).getEntry(
-            "builder-save-in-progress:single:settle_other"
-          )
-        ).present,
-        "no record of the refused save"
-      ).toBe(false);
     }, 300_000);
 
     // A save beside another entity's left save is refused before anything is written, the work its
