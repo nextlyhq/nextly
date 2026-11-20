@@ -195,6 +195,42 @@ describe("an invalid configuration, given to every command that reads its entiti
   }, 300_000);
 });
 
+/** A collection and a field group with distinct slugs and tables, whose generated type is one. */
+const ONE_GENERATED_TYPE = {
+  collections: [
+    { slug: "seo-field-group", fields: [{ name: "title", type: "text" }] },
+  ],
+  fieldGroups: [{ slug: "seo", fields: [{ name: "summary", type: "text" }] }],
+};
+
+describe("two entities whose names give one generated type, given to every command that reads its entities", () => {
+  it("is refused alike by each, naming both and the type, writing nothing", async () => {
+    writeFileSync(join(dir, "nextly.config.ts"), "export default {};\n");
+    exported.config = ONE_GENERATED_TYPE;
+    const wrong: string[] = [];
+
+    for (const args of READ_ENTITIES) {
+      const ran = await run(args);
+      const name = args.join(" ");
+      const first = ran.stderr.trim().split("\n")[0] ?? "";
+
+      if (ran.status !== 1) wrong.push(`${name}: exit ${String(ran.status)}`);
+      if (
+        !ran.stderr.includes("CONFIG_INVALID") ||
+        !ran.stderr.includes("SeoFieldGroup") ||
+        !ran.stderr.includes("seo-field-group")
+      ) {
+        wrong.push(`${name}: ${first}`);
+      }
+      const left = readdirSync(dir).filter(file => file !== "nextly.config.ts");
+      if (left.length > 0) wrong.push(`${name}: wrote ${left.join(", ")}`);
+    }
+
+    expect(wrong).toEqual([]);
+    expect(existsSync(join(dir, "site.db"))).toBe(false);
+  }, 300_000);
+});
+
 describe("a project with no configuration file", () => {
   it("is refused by every command that reads its entities, naming where it looked", async () => {
     const wrong: string[] = [];
