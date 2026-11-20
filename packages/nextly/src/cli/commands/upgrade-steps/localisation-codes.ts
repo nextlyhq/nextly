@@ -266,21 +266,18 @@ function keptUnderBoth(
 }
 
 /**
- * The conversions whose old code some row still holds, refused where a document holds both
- * spellings: what a run has left to do.
+ * Every conversion the site has: each configured code written the earlier way, and each older
+ * spelling the rows still hold that a configuration already corrected to the standard code no
+ * longer names, found as the start finds them and converted the same way.
  */
-async function conversionsToRun(
-  context: UpgradeStepContext
+async function conversionsOfSite(
+  context: UpgradeStepContext,
+  tables: readonly string[]
 ): Promise<CodeConversion[]> {
-  const adapter = context.adapter as unknown as DrizzleAdapter;
   const configured = (await configuredLanguages(context)).codes;
-  const written = conversionsOf(configured);
-  const tables = await translationTables(context);
-  // The older spellings the rows still hold, which a configuration already corrected to the
-  // standard code no longer names: found as the start finds them, and converted the same way.
-  const conversions = [...written];
+  const conversions = conversionsOf(configured);
   for (const stored of await storedOlderSpellings(
-    adapter,
+    context.adapter as unknown as DrizzleAdapter,
     tables,
     configured.map(code => standardLanguageCode(code) ?? code)
   )) {
@@ -288,11 +285,19 @@ async function conversionsToRun(
       conversions.push(stored);
     }
   }
-  if (conversions.length === 0) return [];
-  // Rewriting a version's languages writes the newer columns: only on a history laid out for them.
-  await assertVersionHistoryReady(context);
-  // Two older spellings of one code (`pt_BR` and `PT_br`) both become that code, so each pair is
-  // checked against the other as well as against the code itself, before any row is written.
+  return conversions;
+}
+
+/**
+ * Refuses two older spellings of one code (`pt_BR` and `PT_br`) kept for the same thing: both
+ * become that code, so each pair is checked against the other as well as against the code itself,
+ * before any row is written.
+ */
+async function refuseSpellingsMeeting(
+  context: UpgradeStepContext,
+  tables: readonly string[],
+  conversions: readonly CodeConversion[]
+): Promise<void> {
   for (const [index, one] of conversions.entries()) {
     for (const other of conversions.slice(index + 1)) {
       if (other.to !== one.to) continue;
@@ -303,6 +308,22 @@ async function conversionsToRun(
       if (meeting.length > 0) throw keptUnderBoth(one, meeting, other.from);
     }
   }
+}
+
+/**
+ * The conversions whose old code some row still holds, refused where a document holds both
+ * spellings: what a run has left to do.
+ */
+async function conversionsToRun(
+  context: UpgradeStepContext
+): Promise<CodeConversion[]> {
+  const adapter = context.adapter as unknown as DrizzleAdapter;
+  const tables = await translationTables(context);
+  const conversions = await conversionsOfSite(context, tables);
+  if (conversions.length === 0) return [];
+  // Rewriting a version's languages writes the newer columns: only on a history laid out for them.
+  await assertVersionHistoryReady(context);
+  await refuseSpellingsMeeting(context, tables, conversions);
   const pending: CodeConversion[] = [];
   for (const conversion of conversions) {
     // Every conversion is checked before any row is written, so one that would collide stops

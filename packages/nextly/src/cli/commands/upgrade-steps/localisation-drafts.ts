@@ -203,6 +203,74 @@ function languageValueTie(
   return { field: key, earlier: earlier.from, later: from };
 }
 
+/** What one document's drafts become, as they are read oldest save first. */
+interface SplitState {
+  shared: Map<string, { value: unknown; from: string; at: number }>;
+  languages: Map<string, Record<string, unknown>>;
+  conflicts: SharedConflict[];
+  ties: SharedConflict[];
+  languageOrigins: LanguageOrigins;
+}
+
+/**
+ * Records a shared edit of `key` saved `at` (from `from`): a later save's value replaces an earlier
+ * one, and where they differ the disagreement is recorded, as a tie where both were saved at the
+ * same moment, since the order the rows were read in would then pick the value kept.
+ */
+function recordSharedEdit(
+  state: SplitState,
+  key: string,
+  value: unknown,
+  from: string,
+  at: number
+): void {
+  const earlier = state.shared.get(key);
+  if (earlier && !sameSharedValue(earlier.value, value)) {
+    const conflict = { field: key, earlier: earlier.from, later: from };
+    if (earlier.at === at) state.ties.push(conflict);
+    else state.conflicts.push(conflict);
+  }
+  state.shared.set(key, { value, from, at });
+}
+
+/** Reads one draft into `state`: each language value under its language, each shared edit as one. */
+function readDraft(
+  state: SplitState,
+  document: DocumentToSplit,
+  live: Record<string, unknown> | undefined,
+  defaultLocale: string,
+  draft: VersionRow
+): void {
+  const snapshot = snapshotRecord(draft.snapshot);
+  // A draft under no language that holds only shared values is already the shared draft: its
+  // values were saved as shared edits, so each is kept as one.
+  const alreadyShared =
+    draft.locale === null && !holdsAny(snapshot, document.keys.language);
+  const slot = draft.locale ?? defaultLocale;
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (document.keys.language.has(key)) {
+      const tie = languageValueTie(
+        state.languageOrigins,
+        slot,
+        key,
+        value,
+        draft
+      );
+      if (tie) state.ties.push(tie);
+      state.languages.set(slot, { ...state.languages.get(slot), [key]: value });
+      continue;
+    }
+    if (!isSharedEdit(document, live, alreadyShared, key, value)) continue;
+    recordSharedEdit(
+      state,
+      key,
+      value,
+      alreadyShared ? "shared" : slot,
+      savedAt(draft)
+    );
+  }
+}
+
 /**
  * Split one document's drafts against its live row (`live`, by column): oldest save first, so a
  * later save's shared value replaces an earlier one, each such disagreement recorded.
@@ -212,48 +280,24 @@ function splitDrafts(
   live: Record<string, unknown> | undefined,
   defaultLocale: string
 ): SplitDrafts {
-  const shared = new Map<
-    string,
-    { value: unknown; from: string; at: number }
-  >();
-  const languages = new Map<string, Record<string, unknown>>();
-  const conflicts: SharedConflict[] = [];
-  const ties: SharedConflict[] = [];
-  const languageOrigins: LanguageOrigins = new Map();
+  const state: SplitState = {
+    shared: new Map(),
+    languages: new Map(),
+    conflicts: [],
+    ties: [],
+    languageOrigins: new Map(),
+  };
   const ordered = [...document.drafts].sort((a, b) => savedAt(a) - savedAt(b));
   for (const draft of ordered) {
-    const snapshot = snapshotRecord(draft.snapshot);
-    // A draft under no language that holds only shared values is already the shared draft: its
-    // values were saved as shared edits, so each is kept as one.
-    const alreadyShared =
-      draft.locale === null && !holdsAny(snapshot, document.keys.language);
-    const slot = draft.locale ?? defaultLocale;
-    for (const [key, value] of Object.entries(snapshot)) {
-      if (document.keys.language.has(key)) {
-        const tie = languageValueTie(languageOrigins, slot, key, value, draft);
-        if (tie) ties.push(tie);
-        languages.set(slot, { ...languages.get(slot), [key]: value });
-        continue;
-      }
-      if (!isSharedEdit(document, live, alreadyShared, key, value)) continue;
-      const earlier = shared.get(key);
-      const from = alreadyShared ? "shared" : slot;
-      if (earlier && !sameSharedValue(earlier.value, value)) {
-        const conflict = { field: key, earlier: earlier.from, later: from };
-        // Saved at the same moment: the order the rows were read in would pick the value kept.
-        if (earlier.at === savedAt(draft)) ties.push(conflict);
-        else conflicts.push(conflict);
-      }
-      shared.set(key, { value, from, at: savedAt(draft) });
-    }
+    readDraft(state, document, live, defaultLocale, draft);
   }
   return {
     shared: Object.fromEntries(
-      [...shared].map(([key, { value }]) => [key, value])
+      [...state.shared].map(([key, { value }]) => [key, value])
     ),
-    languages,
-    conflicts,
-    ties,
+    languages: state.languages,
+    conflicts: state.conflicts,
+    ties: state.ties,
   };
 }
 
