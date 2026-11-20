@@ -84,17 +84,11 @@ export interface SettledSave {
   /** What the settle could not do, to say to whoever is told: a definition edited since, say. */
   notes: string[];
   /**
-   * Why the record of a save settled "all" still stands, where it does: `registry-row` where the
-   * entity has no registry row to bring up (a create stopped before writing it), which a start's
-   * registration from snapshots makes; `saved-definition` where the record keeps no saved
-   * definition it can read, so its row cannot be brought up here at all. Absent where the record
-   * cleared, and for the other outcomes.
+   * Set where a save settled "all" keeps its record because the record holds no saved definition
+   * it can read: the entity's registry row may stand stale, and nothing here can bring it up.
    */
-  keptFor?: KeptFor;
+  rowMayBeStale?: true;
 }
-
-/** Why an "all" record stands (`SettledSave.keptFor`). */
-export type KeptFor = "registry-row" | "saved-definition";
 
 /** What the settle works with. */
 export interface SettleDeps {
@@ -301,7 +295,7 @@ async function settleLeftSave(
   record: LeftSave
 ): Promise<SettledSave> {
   const notes: string[] = [];
-  const kept: { for?: KeptFor } = {};
+  const kept: { rowMayBeStale?: true } = {};
   const outcome = await settledOutcome(deps, record, notes, kept);
   return {
     id: record.id,
@@ -309,19 +303,19 @@ async function settleLeftSave(
     slug: record.slug,
     outcome,
     notes,
-    ...(kept.for === undefined ? {} : { keptFor: kept.for }),
+    ...kept,
   };
 }
 
 /**
- * What `settleLeftSave` did, with what it could not do added to `notes`, and why an "all" record
- * stands set in `kept`.
+ * What `settleLeftSave` did, with what it could not do added to `notes`, and in `kept` whether an
+ * "all" record stays over a registry row that may stand stale.
  */
 async function settledOutcome(
   deps: SettleDeps,
   record: LeftSave,
   notes: string[],
-  kept: { for?: KeptFor }
+  kept: { rowMayBeStale?: true }
 ): Promise<SettledOutcome> {
   if (record.applies !== true) {
     // Made outside development, the save left its files for `nextly migrate`: its tables stand
@@ -502,7 +496,8 @@ async function settlePending(
 
 /**
  * A save that applied whole: its files recorded applied, its registry row brought up. Where its
- * record has to stay, `kept` says why, so a start holds back what the row's state would mislead.
+ * record stays over a row it cannot bring up, `kept` says so, and a start holds back what that row
+ * would mislead.
  */
 async function settleAll(
   deps: SettleDeps,
@@ -510,7 +505,7 @@ async function settleAll(
   record: LeftSave,
   files: readonly string[],
   notes: string[],
-  kept: { for?: KeptFor }
+  kept: { rowMayBeStale?: true }
 ): Promise<SettledOutcome> {
   for (const filename of files) {
     if (!(await repo.isFileApplied(filename))) {
@@ -540,7 +535,7 @@ async function settleAll(
     notes.push(
       "the saved definition is not kept; the registry row is left as it is"
     );
-    kept.for = "saved-definition";
+    kept.rowMayBeStale = true;
     return "all";
   }
   // Every kind's row, a collection's included, is brought up the one way: the registry tables
@@ -554,7 +549,6 @@ async function settleAll(
       `A Builder save of the ${described(record)} applied whole before it stopped, and its files are now recorded applied, but it has no registry row to bring up. Its record stays.`
     );
     notes.push("no registry row to bring up");
-    kept.for = "registry-row";
     return "all";
   }
   await clearSettledSave(deps.adapter, deps.projectRoot, record);

@@ -1884,36 +1884,6 @@ describe.each(getConfiguredTestDialects())(
       expect(reloads.count, "the start's code-first reload ran").toBe(0);
     }, 300_000);
 
-    // A create that applied whole and stopped before its registry row was written: the settle makes
-    // no row, but the start's registration from snapshots does, so the start registers and then
-    // settles the record again, bringing the row up and clearing it.
-    it("clears the record of a create stopped before its row once the start has registered it", async () => {
-      const t = await boot();
-      await created(t);
-      await stoppedAtClear(t, [text("heading"), text("alpha")]);
-      // The row as a create stopped before writing it leaves it: not there.
-      await t.adapter.delete("dynamic_singles", {
-        and: [{ column: "slug", op: "=", value: SLUG }],
-      });
-      lockPassesThrough.on = true;
-      bootFolder.dir = HISTORY_DIR();
-      migrateStep.watch = true;
-      migrateStep.runsNothing = true;
-      reloads.stub = true;
-
-      await runBootTimeApplyIfDev({ caller: "settle test" });
-
-      expect(
-        migrateStep.registrations,
-        "the start never registered entities from the snapshots"
-      ).toBe(1);
-      expect(await registryFieldNames(t), "the registry row").toEqual([
-        "heading",
-        "alpha",
-      ]);
-      expect(await recordRow(t), "the record clears").toBeUndefined();
-    }, 300_000);
-
     // A collection's save that applied whole, stopped after its files were recorded and before its
     // registry row was written: the settle brings the row up from the saved definition, as it does
     // a Single's, and clears the record.

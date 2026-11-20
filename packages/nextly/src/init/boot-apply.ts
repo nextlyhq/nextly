@@ -77,11 +77,7 @@ export async function runBootTimeApplyIfDev(opts?: {
   const label = callerLabel(opts?.caller);
   try {
     // Steps 0 and 1: settle what an earlier process left, then apply pending SQL migrations.
-    const {
-      registeredByMigrate,
-      held: heldBefore,
-      rowless,
-    } = await settleThenMigrate(label);
+    const { registeredByMigrate, held } = await settleThenMigrate(label);
 
     // Step 1.5: Register collections from migration metadata
     // NOTE: This runs OUTSIDE the migrate lock. Multiple Next.js dev workers may
@@ -91,12 +87,9 @@ export async function runBootTimeApplyIfDev(opts?: {
     // Any metadata-table-to-physical-table mismatch self-heals on next boot.
     // Not while a save stays unsettled: this takes every snapshot as applied, and the ones of
     // the files step 1 held back are not, so an entity would be registered for tables not there.
-    const registeredFromSnapshots = heldBefore
+    const registeredFromSnapshots = held
       ? 0
       : await registerMigrationMetadata(label);
-    // A save that applied whole with no registry row to bring up: the registration above makes the
-    // row, so its record is settled again now, and the start holds while it still stands.
-    const held = heldBefore || (await settleRowlessAgain(label, rowless));
 
     // Migration-created collections and singles need permissions just like
     // code-first ones. Either step may have registered them — the migrate
@@ -235,25 +228,19 @@ export function checkRelationsBeforePlugins(
  * step 1 (`held`): unsettled from the start, or still pending or left once the migrate step has
  * had its run. The start's later schema steps wait while it is held.
  */
-async function settleThenMigrate(label: string): Promise<{
-  registeredByMigrate: number;
-  held: boolean;
-  /** The records of saves that applied whole with no registry row, for after the registration. */
-  rowless: string[];
-}> {
+async function settleThenMigrate(
+  label: string
+): Promise<{ registeredByMigrate: number; held: boolean }> {
   const settled = await settleLeftSavesAtStart(label);
   if (settled.unsettled) {
     consoleLogger.warn(
       `${label} Pending migrations were not applied at this start: a Builder save left part-way is not settled (named above), and its files may be among them. Clear its record by hand as the warning says, then start again.`
     );
     markStartIncomplete();
-    return { registeredByMigrate: 0, held: true, rowless: [] };
+    return { registeredByMigrate: 0, held: true };
   }
   const registeredByMigrate = await applyPendingMigrations(label);
-  const { rowless } = settled;
-  if (settled.pending.length === 0) {
-    return { registeredByMigrate, held: false, rowless };
-  }
+  if (settled.pending.length === 0) return { registeredByMigrate, held: false };
   // A save left pending, settled again now its remaining files have had their run: recorded
   // applied, it is whole and its record clears; still pending (the files this start ran are not
   // the ones it wrote), the record stays, refusing a Builder save until they run.
@@ -267,31 +254,7 @@ async function settleThenMigrate(label: string): Promise<{
   return {
     registeredByMigrate,
     held: again.unsettled || again.pending.length > 0,
-    rowless: [...rowless, ...again.rowless],
   };
-}
-
-/**
- * Settle again, once the start has registered entities from snapshots, the records of saves that
- * applied whole with no registry row to bring up (`rowless`): the registration made the row, so the
- * settle now brings it to the saved shape and clears the record. Answers whether one still stands
- * (or stands unsettled), which holds back the start's code-first reload as a left save does.
- */
-async function settleRowlessAgain(
-  label: string,
-  rowless: readonly string[]
-): Promise<boolean> {
-  if (rowless.length === 0) return false;
-  const again = await settleLeftSavesAtStart(label, rowless);
-  const stands =
-    again.unsettled || again.pending.length > 0 || again.rowless.length > 0;
-  if (stands) {
-    consoleLogger.warn(
-      `${label} A Builder save applied whole before it stopped, but its entity has no registry row even after this start's registration, so its record stays. Start again once the entity's row is there, or clear its record by hand as the warning says.`
-    );
-    markStartIncomplete();
-  }
-  return stands;
 }
 
 /**
@@ -303,15 +266,13 @@ async function settleRowlessAgain(
  * migrations its files may be among. A settle that throws, wherever it stopped, is taken as
  * unsettled too: a record it judged left before the throw would otherwise go unanswered.
  * Also answers the records left pending, kept until their remaining files run; `only` settles
- * those again once the start's migrate step has had its run. And the records of saves that applied
- * whole with no registry row to bring up (`rowless`), settled again once the start has registered
- * entities from snapshots.
+ * those again once the start's migrate step has had its run.
  */
 async function settleLeftSavesAtStart(
   label: string,
   only?: readonly string[]
-): Promise<{ unsettled: boolean; pending: string[]; rowless: string[] }> {
-  const none = { unsettled: false, pending: [], rowless: [] };
+): Promise<{ unsettled: boolean; pending: string[] }> {
+  const none = { unsettled: false, pending: [] };
   try {
     const { container } = await import("../di/container");
     const adapter = container.get<DrizzleAdapter | undefined>("adapter");
@@ -355,29 +316,23 @@ async function settleLeftSavesAtStart(
       }
     );
     // A settle that never ran (the lock not had) says nothing of what stands: taken as unsettled.
-    if (!outcome.ran) return { unsettled: true, pending: [], rowless: [] };
+    if (!outcome.ran) return { unsettled: true, pending: [] };
     return {
       // A save that applied whole whose record stays over a saved definition it cannot read holds
       // the start back as a left one does: its registry row may stand stale, and the start's
       // registration from snapshots inserts only absent rows, so nothing here would correct it.
       unsettled: outcome.value.some(
-        settled =>
-          settled.outcome === "left" || settled.keptFor === "saved-definition"
+        settled => settled.outcome === "left" || settled.rowMayBeStale === true
       ),
       pending: outcome.value
         .filter(settled => settled.outcome === "pending")
-        .map(settled => settled.id),
-      // One with no registry row to bring up does not: the registration makes the row, and the
-      // record is settled again after it (`settleRowlessAgain`).
-      rowless: outcome.value
-        .filter(settled => settled.keptFor === "registry-row")
         .map(settled => settled.id),
     };
   } catch (error) {
     consoleLogger.warn(
       `${label} A Builder save left part-way could not be settled (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start tries again.`
     );
-    return { unsettled: true, pending: [], rowless: [] };
+    return { unsettled: true, pending: [] };
   }
 }
 
