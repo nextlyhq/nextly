@@ -1,13 +1,13 @@
 /**
  * The entry list's review filters, for a collection a workflow holds: by stage, and by review
  * ("Assigned to me", "Waiting for my review", "Changed since approved"). Each is offered as a
- * list filter is (`OfferedListFilter`), so the toolbar draws it, keeps its choice in the URL and
+ * list filter is (`ListFilter`), so the toolbar draws it, keeps its choice in the URL and
  * adds its `where` to the request exactly as it does a plugin's; each `where` is a top-level key
  * the server reads (`_stage`, `_assignedToMe`, `_waitingForMe`, `_changedSinceApproved`).
  *
  * @module components/features/entries/EntryList/workflow-list-filters
  */
-import type { OfferedListFilter } from "./plugin-filters";
+import type { ListFilter } from "./plugin-filters";
 
 /** The stage filter's name: under core's own namespace, which no plugin slug can take. */
 export const STAGE_FILTER = "nextly.review-stage";
@@ -23,7 +23,7 @@ export function workflowListFilters(
     | { stages?: readonly { name: string; label: string }[] }
     | null
     | undefined
-): OfferedListFilter[] {
+): ListFilter[] {
   if (!workflow) return [];
   const stages = workflow.stages ?? [];
   return [

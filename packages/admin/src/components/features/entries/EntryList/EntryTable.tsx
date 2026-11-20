@@ -63,7 +63,7 @@ import {
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
-import type { OfferedListFilter } from "./plugin-filters";
+import type { ListFilter } from "./plugin-filters";
 import type { DeclaredBulkAction } from "./useDeclaredBulkActions";
 import { useEntryBulkActions } from "./useEntryBulkActions";
 import {
@@ -177,7 +177,7 @@ export interface EntryTableProps {
   /** Callback when the language filter changes. */
   onTranslationFilterChange?: (filter: TranslationListFilter | null) => void;
   /** The filters plugins offer this list (`contributes.admin.filters`). */
-  pluginFilters?: readonly OfferedListFilter[];
+  pluginFilters?: readonly ListFilter[];
   /** The option each plugin filter has chosen, by filter name. */
   chosenPluginFilters?: ReadonlyMap<string, string>;
   /** Choose a plugin filter's option, or `null` to clear it. */
@@ -246,7 +246,7 @@ function PluginFilterMenuSections({
   onChange,
   separateFirst,
 }: {
-  filters: readonly OfferedListFilter[];
+  filters: readonly ListFilter[];
   chosen: ReadonlyMap<string, string> | undefined;
   onChange: ((name: string, value: string | null) => void) | undefined;
   /** Whether a section of the list's own comes before the first. */
