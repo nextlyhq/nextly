@@ -34,3 +34,7 @@ A project's migration history now records which names its field groups are kept 
 A snapshot on the current names is written as version 2. Older Nextly CLIs refuse a snapshot version they don't know, so they stop with "upgrade your CLI" rather than read such a history as legacy. Upgrade the CLI in every environment before moving a project's history. Snapshots on the legacy names are written exactly as before.
 
 `nextly migrate` and a production start's migrations also read each field group's stored table when they check translation columns, write a Schema Builder group's registry row, and compile a column the app or a plugin contributes to a group. The Schema Builder's address check names a new group's table under the site's names, as the create does.
+
+When `migrate:create` would drop a removed field group, it now finds what still depends on its `fg_<slug>` table on a history on the current names: an app's foreign key, a plugin's column or index, or a key into its translations table. It refuses the drop by name, as it does on legacy names.
+
+Two histories an earlier release could leave after a site's field groups moved are refused, and each refusal points to `nextly migrate:baseline`. The first is a snapshot that keeps field groups under the current names without recording it (`FIELD_GROUP_HISTORY_NAMES_UNRECORDED`). The second is a field-group table created after the move that still holds `_component_type` while the history records `_field_group_type` (`FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED`).

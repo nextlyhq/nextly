@@ -79,6 +79,12 @@ function groupTable(name: string, typeColumn: string) {
 // says it was renamed would plan against a column the table does not have; one that records the
 // column it holds, as a baseline of the database does, is held to the truth.
 describe("a moved database with a table still on the legacy type column", () => {
+  // The catalog's columns are `database.live`; the adapter only has to carry its dialect.
+  const catalogAdapter = {
+    dialect: "sqlite",
+    getDrizzle: () => ({}),
+  } as unknown as DrizzleAdapter;
+
   beforeEach(() => {
     database.tables = new Map([["hero", "fg_hero"]]);
     database.live = [groupTable("fg_hero", "_component_type")];
@@ -88,7 +94,7 @@ describe("a moved database with a table still on the legacy type column", () => 
     let thrown: unknown;
     try {
       await refuseTypeColumnsHistoryDoesNotRecord({
-        adapter,
+        adapter: catalogAdapter,
         snapshots: [
           {
             fieldGroupNaming: "legacy",
@@ -110,7 +116,7 @@ describe("a moved database with a table still on the legacy type column", () => 
   it("goes on where the history records the column the table holds", async () => {
     await expect(
       refuseTypeColumnsHistoryDoesNotRecord({
-        adapter,
+        adapter: catalogAdapter,
         snapshots: [
           {
             fieldGroupNaming: "current",
@@ -127,7 +133,7 @@ describe("a moved database with a table still on the legacy type column", () => 
     database.registry = "dynamic_components";
     await expect(
       refuseTypeColumnsHistoryDoesNotRecord({
-        adapter,
+        adapter: catalogAdapter,
         snapshots: [
           {
             fieldGroupNaming: "legacy",
