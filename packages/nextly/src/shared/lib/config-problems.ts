@@ -141,13 +141,40 @@ function entryProblems<
   entry: unknown,
   validate: (entry: unknown) => readonly P[],
   systemFields: readonly object[]
-): Array<P | { path: string; code: string; message: string }> {
+): Array<P | ColumnClash> {
   const fields = (entry as { fields?: unknown } | null)?.fields;
   if (systemFields.length === 0 || !Array.isArray(fields)) {
     return [...validate(entry)];
   }
-  // Each system field the call added is matched once: a second copy of one (a setup's own
-  // `{ ...title }`) is the author's, and its column is compared with the system field's below.
+  const { added, authored } = splitSystemFields(fields, systemFields);
+  // Each rule is asked of the fields it is about. The rules about the author's own declarations
+  // (`AUTHORED_RULES`) of the fields the author declared; every other rule, which resolves a
+  // field by its name (an index, the title field, the address field), of the entity as the
+  // commands use it, system fields and all.
+  return [
+    ...validate(entry).filter(problem => !AUTHORED_RULES.has(problem.code)),
+    ...validate({ ...(entry as object), fields: authored }).filter(problem =>
+      AUTHORED_RULES.has(problem.code)
+    ),
+    ...systemColumnClashes(added, authored),
+  ];
+}
+
+/** A field that takes a column a system field holds. */
+interface ColumnClash {
+  path: string;
+  code: string;
+  message: string;
+}
+
+/**
+ * `fields`, split into the system fields the `define*` call added and the author's. Each system
+ * field is matched once: a second copy of one (a setup's own `{ ...title }`) is the author's.
+ */
+function splitSystemFields(
+  fields: readonly unknown[],
+  systemFields: readonly object[]
+): { added: unknown[]; authored: unknown[] } {
   const unmatched = [...systemFields];
   const added: unknown[] = [];
   const authored: unknown[] = [];
@@ -155,35 +182,35 @@ function entryProblems<
     const at = unmatched.findIndex(system => isSystemField(field, [system]));
     if (at === -1) {
       authored.push(field);
-    } else {
-      added.push(field);
-      unmatched.splice(at, 1);
+      continue;
     }
+    added.push(field);
+    unmatched.splice(at, 1);
   }
-  // Each rule is asked of the fields it is about. The rules about the author's own declarations
-  // (`AUTHORED_RULES`) of the fields the author declared; every other rule, which resolves a
-  // field by its name (an index, the title field, the address field), of the entity as the
-  // commands use it, system fields and all.
-  const problems: Array<P | { path: string; code: string; message: string }> = [
-    ...validate(entry).filter(problem => !AUTHORED_RULES.has(problem.code)),
-    ...validate({ ...(entry as object), fields: authored }).filter(problem =>
-      AUTHORED_RULES.has(problem.code)
-    ),
-  ];
+  return { added, authored };
+}
+
+/** Each of `authored` that takes a column one of `added` holds, asked as `defineCollection` asks. */
+function systemColumnClashes(
+  added: readonly unknown[],
+  authored: readonly unknown[]
+): ColumnClash[] {
+  const nameOf = (field: unknown) => String((field as { name?: unknown }).name);
+  const clashes: ColumnClash[] = [];
   for (const system of added) {
     const [column] = columnsDeclaredBy([system as { name?: unknown }]);
     if (column === undefined) continue;
     for (const field of authored) {
       if (!columnsDeclaredBy([field as { name?: unknown }]).has(column))
         continue;
-      problems.push({
+      clashes.push({
         path: "fields",
         code: "FIELD_NAME_DUPLICATE",
-        message: `Field '${String((field as { name?: unknown }).name)}' takes the column '${column}', which the system field '${String((system as { name?: unknown }).name)}' already holds. Rename it.`,
+        message: `Field '${nameOf(field)}' takes the column '${column}', which the system field '${nameOf(system)}' already holds. Rename it.`,
       });
     }
   }
-  return problems;
+  return clashes;
 }
 
 /** `path` within the entity at `kind[index]`, as a path in the whole configuration. */
