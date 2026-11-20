@@ -36,11 +36,48 @@ export interface UpgradeAdapter {
   getCapabilities: () => { dialect: UpgradeDialect };
 }
 
-/** What a step is handed: the database and the command's log. */
+/**
+ * The site a run of the steps brings its database in step with, as its configuration declares it:
+ * its languages and the collections, Singles and components it declares. The Schema Builder's own
+ * entities are read from the database's registries by the steps that need them.
+ */
+export interface UpgradeSite {
+  /**
+   * The site's languages and its default, as `localization` declares them; absent, none. Where the
+   * configuration was read through the loader, each code is in standard form and `olderCodes`
+   * names the ones it wrote the earlier way.
+   */
+  localization?: {
+    locales: readonly (string | { code: string })[];
+    defaultLocale: string;
+    olderCodes?: readonly { from: string; to: string }[];
+  };
+  collections?: readonly { slug: string; fields?: unknown }[];
+  singles?: readonly { slug: string; fields?: unknown }[];
+  fieldGroups?: readonly { slug: string; fields?: unknown }[];
+}
+
+/**
+ * What a step's dry run says beyond its count, in three lists an operator reads before the real
+ * run: what will move, what conflicts (and how the run settles it), and what an editor should
+ * check afterwards. Each entry is one line naming what it is about.
+ */
+export interface UpgradeReport {
+  move: string[];
+  conflicts: string[];
+  check: string[];
+}
+
+/** What a step is handed: the database, the site, and the command's log. */
 export interface UpgradeStepContext {
   adapter: UpgradeAdapter;
   db: unknown;
   dialect: UpgradeDialect;
+  /**
+   * The site's configuration, where the command loaded it: a step that brings content into the
+   * site's model needs its languages and entities. Absent, such a step has nothing to judge by.
+   */
+  site?: UpgradeSite;
   log: (message: string) => void;
   warn: (message: string) => void;
 }
@@ -64,4 +101,10 @@ export interface UpgradeStep {
    * migrate lock the steps are run under.
    */
   run: (context: UpgradeStepContext) => Promise<number>;
+  /**
+   * What the dry run lists of this step's work, beyond its count: read-only, as `pending` is.
+   * A step that moves content names each thing it moves, each conflict and how it is settled,
+   * and what an editor should check.
+   */
+  report?: (context: UpgradeStepContext) => Promise<UpgradeReport>;
 }

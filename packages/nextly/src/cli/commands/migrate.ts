@@ -333,6 +333,7 @@ import {
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
 import { storedDataOfRun } from "./stored-data-of-run";
+import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
@@ -749,6 +750,8 @@ export async function runMigrate(
       logger,
       backupConfirmed: options.backupConfirmed === true,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+      // The site the data steps bring an earlier release's content in step with.
+      site: upgradeSiteOf(configResult.config),
     });
 
     const ended = await moveEarlierRecords({
