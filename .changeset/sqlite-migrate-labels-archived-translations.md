@@ -31,4 +31,6 @@
 
 On SQLite, `nextly migrate` now labels archived translations with the entity that owns them, as it does on PostgreSQL and MySQL. It skipped that on SQLite while registry rows could carry timestamps in milliseconds. The repair of those timestamps now runs first in the same run, so an entity whose registry row a migration file of an earlier release wrote is repaired and has its archived translations labelled by one `nextly migrate`.
 
-If that repair fails, the run stops before it writes the registry rows, as it does when the labelling fails: written anyway, the write would remove the registry row of an entity the applied migrations dropped, and that entity's archived translations could then never be labelled. The next `nextly migrate` repairs, labels and then writes, and the next start runs the registries' repair again.
+If that repair fails, the run warns and the next start runs the registries' repair again. Where the run would label archived translations of unknown kind, it then stops before it writes the registry rows, as it does when the labelling fails: written anyway, the write would remove the registry row of an entity the applied migrations dropped, and that entity's archived translations could then never be labelled. The next `nextly migrate` repairs, labels and then writes. Where it would label nothing, it carries on.
+
+The labelling now leaves the archived translations of an entity whose registry row's creation time cannot be read as a date unlabelled, for a later run, instead of settling them as unresolved for good.

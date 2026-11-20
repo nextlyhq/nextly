@@ -10,7 +10,8 @@
  * took its slug are not the Single's.
  *
  * One pass settles every row it finds: a row whose owner is certain gets that owner's kind, and
- * the rest become {@link UNRESOLVED_ARCHIVE_KIND} for good. Deciding once matters because the
+ * the rest become {@link UNRESOLVED_ARCHIVE_KIND} for good. Only the rows of a slug whose one
+ * holder's creation time cannot be read as a date are left unknown, for a run that can read it. Deciding once matters because the
  * registries change: while a collection and a field group share a slug, their rows are
  * ambiguous, and after the collection is deleted the field group would look like their only
  * owner. Nothing deletes an unresolved row, and a restore names it with the `--kind` that would
@@ -21,7 +22,15 @@
  * @module domains/i18n/migration/label-legacy-archive-rows
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, count, eq, getTableName, inArray, sql } from "drizzle-orm";
+import {
+  and,
+  count,
+  eq,
+  getTableName,
+  inArray,
+  notInArray,
+  sql,
+} from "drizzle-orm";
 import type { AnyColumn, SQL } from "drizzle-orm";
 
 import { loadedDialect } from "../../../database/dialect-tables";
@@ -110,21 +119,27 @@ async function registries(
 /** How many slugs one registry read names, inside every dialect's bound-parameter limit. */
 const SLUGS_PER_READ = 200;
 
+/**
+ * One entity holding a slug, with when it was created as its registry row reads: an invalid date,
+ * or none, where `created_at` holds text that is no date.
+ */
+interface Holder {
+  kind: I18nTransitionKind;
+  createdAt: Date | null;
+}
+
 /** Every entity holding one of `slugs`, with its kind and when it was created. */
 async function holdersOf(
   adapter: LabelArchiveAdapter,
   db: LabelDb,
   slugs: string[]
-): Promise<Map<string, { kind: I18nTransitionKind; createdAt: Date }[]>> {
-  const holders = new Map<
-    string,
-    { kind: I18nTransitionKind; createdAt: Date }[]
-  >();
+): Promise<Map<string, Holder[]>> {
+  const holders = new Map<string, Holder[]>();
   for (const { kind, table } of await registries(adapter)) {
     // A database that never registered an entity of this kind has no table for it, and so no
     // holder of any slug.
     if (!(await adapter.tableExists(getTableName(table)))) continue;
-    const rows: { slug: string; createdAt: Date }[] = [];
+    const rows: { slug: string; createdAt: Date | null }[] = [];
     for (let i = 0; i < slugs.length; i += SLUGS_PER_READ) {
       rows.push(
         ...((await db
@@ -132,7 +147,7 @@ async function holdersOf(
           .from(table)
           .where(inArray(table.slug, slugs.slice(i, i + SLUGS_PER_READ)))) as {
           slug: string;
-          createdAt: Date;
+          createdAt: Date | null;
         }[])
       );
     }
@@ -194,13 +209,33 @@ export interface LegacyLabel {
   createdAt: Date;
 }
 
-/** The label for `slug`, from its holders: only a slug exactly one entity holds is labelled. */
+/**
+ * What the labelling does with `slug`'s unknown rows, from its holders: labels them for the slug's
+ * one holder; leaves them unknown while that holder's creation time cannot be read as a date,
+ * since no row can be judged against it and settling them would be for good; and settles the rest
+ * unresolved.
+ */
+function judgeSlug(
+  holders: Map<string, Holder[]>,
+  slug: string
+): { label: LegacyLabel } | "waits" | "unresolved" {
+  const found = holders.get(slug) ?? [];
+  const holder = found[0];
+  if (found.length !== 1 || holder === undefined) return "unresolved";
+  const { kind, createdAt } = holder;
+  if (!(createdAt instanceof Date) || Number.isNaN(createdAt.getTime())) {
+    return "waits";
+  }
+  return { label: { kind, createdAt } };
+}
+
+/** The label for `slug` (`judgeSlug`), where its rows get one. */
 function labelFrom(
-  holders: Map<string, LegacyLabel[]>,
+  holders: Map<string, Holder[]>,
   slug: string
 ): LegacyLabel | undefined {
-  const found = holders.get(slug) ?? [];
-  return found.length === 1 ? found[0] : undefined;
+  const judged = judgeSlug(holders, slug);
+  return typeof judged === "object" ? judged.label : undefined;
 }
 
 /**
@@ -261,9 +296,12 @@ async function planLegacyArchiveLabels(
 
   const holders = await holdersOf(adapter, db, slugs);
   const planned: PlannedLabel[] = [];
+  const waiting: string[] = [];
   for (const slug of slugs) {
-    const label = labelFrom(holders, slug);
-    if (label === undefined) continue;
+    const judged = judgeSlug(holders, slug);
+    if (judged === "waits") waiting.push(slug);
+    if (typeof judged !== "object") continue;
+    const { label } = judged;
     planned.push({
       kind: label.kind,
       where: and(
@@ -273,8 +311,15 @@ async function planLegacyArchiveLabels(
       ),
     });
   }
-  // Every row this pass did not label stays without an owner, decided now rather than later.
-  planned.push({ kind: UNRESOLVED_ARCHIVE_KIND, where: unknown });
+  // Every row this pass did not label stays without an owner, decided now rather than later,
+  // except the rows of a slug that waits for its holder's creation time to read as a date.
+  planned.push({
+    kind: UNRESOLVED_ARCHIVE_KIND,
+    where: and(
+      unknown,
+      waiting.length === 0 ? undefined : notInArray(archive.collection, waiting)
+    ),
+  });
   return planned;
 }
 
@@ -314,8 +359,31 @@ export async function reopenUnresolvedArchiveRows(
 }
 
 /**
+ * Whether the archive holds a row the labelling would read: one of unknown kind. False where the
+ * database has no archive. An archive from before rows recorded their kind has no column to ask,
+ * and the read fails: its rows all become unknown once the column is added.
+ */
+export async function holdsUnknownArchiveRows(
+  adapter: Pick<LabelArchiveAdapter, "dialect" | "tableExists" | "getDrizzle">
+): Promise<boolean> {
+  const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
+    adapter.dialect
+  );
+  if (!(await adapter.tableExists(getTableName(archive)))) return false;
+  const [row] = (await adapter
+    .getDrizzle<LabelDb>()
+    .select({ n: count() })
+    .from(archive)
+    .where(eq(archive.entityKind, UNKNOWN_ARCHIVE_KIND))) as {
+    n: number | string;
+  }[];
+  return Number(row?.n ?? 0) > 0;
+}
+
+/**
  * Settles the unknown rows: those whose owner the registries identify get its kind, and the rest
- * become unresolved. Idempotent: it reads and writes only rows still unknown, so it can run before
+ * become unresolved, but for those waiting for their holder's creation time to read as a date
+ * (`judgeSlug`). Idempotent: it reads and writes only rows still unknown, so it can run before
  * every read that scopes the archive by kind.
  */
 export async function labelLegacyArchiveRows(

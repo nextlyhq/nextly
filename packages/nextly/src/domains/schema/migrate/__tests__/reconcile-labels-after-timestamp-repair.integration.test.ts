@@ -8,6 +8,12 @@
  * - A repair that fails stops the run before the registry changes, in a run that drops an entity
  *   too, and hands the registries' repair back to the next start; the next run repairs, labels
  *   and only then removes the dropped entity's row.
+ * - A repair that fails where nothing would be labelled (no archived translation of unknown kind,
+ *   or inside a registry write the caller holds open) warns, hands the repair back to the next
+ *   start and carries on.
+ * - A run that lost the schema lock stops before the repair writes anything.
+ * - A holder whose creation time cannot be read as a date leaves its rows unknown, and a run once
+ *   it can labels them.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,6 +40,8 @@ import { ensureSchemaEventsTable } from "../../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { recordedSnapshot } from "../../migrate-create/__tests__/helpers/recorded-snapshot";
 import { EMPTY_SNAPSHOT } from "../../migrate-create/snapshot-io";
+import { isSchemaLockLost } from "../../pipeline/schema-lock";
+import { writeRegistryRows } from "../../schema-version";
 import { buildCollectionMetadataUpsert } from "../../ui-schema/metadata-sql";
 import { reconcileMigrationMetadata } from "../reconcile-metadata";
 
@@ -59,6 +67,20 @@ vi.mock(
     };
   }
 );
+
+/** Whether the run has lost the schema lock, as the pass's next check of it finds. */
+const lock = vi.hoisted(() => ({ lost: false }));
+vi.mock("../../pipeline/schema-lock", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../../pipeline/schema-lock")>();
+  return {
+    ...actual,
+    assertSchemaLockHeld: async () => {
+      if (lock.lost) throw actual.lostLockError("nextly migrate");
+      await actual.assertSchemaLockHeld();
+    },
+  };
+});
 
 const SECONDS = "CAST(strftime('%s','now') AS INTEGER)";
 const SLUG = "rlar_posts";
@@ -156,6 +178,7 @@ describe("nextly migrate's registry phase on SQLite, with a registry row in mill
 
   beforeEach(async () => {
     repair.fails = false;
+    lock.lost = false;
     warnings.length = 0;
     await adapter.executeQuery(
       `DELETE FROM dynamic_collections WHERE slug LIKE 'rlar_%'`
@@ -195,6 +218,38 @@ describe("nextly migrate's registry phase on SQLite, with a registry row in mill
       migrationsDir: migrations,
       logger,
     });
+  const registered = async () =>
+    (
+      await adapter.executeQuery<{ slug: string }>(
+        `SELECT slug FROM dynamic_collections WHERE slug IN ('${SLUG}', '${DROPPED}') ORDER BY slug`
+      )
+    ).map(row => row.slug);
+  const kindOf = async (slug: string) =>
+    (
+      await adapter.executeQuery<{ entity_kind: string }>(
+        `SELECT entity_kind FROM "nextly_i18n_archive" WHERE collection = '${slug}'`
+      )
+    ).map(row => row.entity_kind);
+  /** The dropped collection's registry row, still there: the registry write removes it. */
+  const registerDropped = () =>
+    adapter.executeQuery(
+      buildCollectionMetadataUpsert(
+        { ...declared, slug: DROPPED } as never,
+        "sqlite"
+      )
+    );
+  /** A start that already marked both repairs done. */
+  const markBothRepairsDone = () =>
+    adapter.executeQuery(
+      `INSERT INTO nextly_meta (key, value, updated_at) VALUES ('${TIMESTAMP_REPAIR_META_KEY}', '${JSON.stringify({ at: "2026-11-01T00:00:00.000Z", registries: true })}', unixepoch())`
+    );
+  /** The start's mark as stored. */
+  const mark = async () => {
+    const [row] = await adapter.executeQuery<{ value: string }>(
+      `SELECT value FROM nextly_meta WHERE key = '${TIMESTAMP_REPAIR_META_KEY}'`
+    );
+    return JSON.parse(row.value) as unknown;
+  };
 
   it("repairs the row, then labels its archived translations, in the one run", async () => {
     await archive("unknown", "e1");
@@ -211,34 +266,14 @@ describe("nextly migrate's registry phase on SQLite, with a registry row in mill
   });
 
   it("a repair that fails stops the run before the registry changes, and the next run repairs, labels and writes", async () => {
-    // The dropped collection's registry row, still there: the registry write removes it, and its
-    // archived translations can be labelled only while it is there.
-    await adapter.executeQuery(
-      buildCollectionMetadataUpsert(
-        { ...declared, slug: DROPPED } as never,
-        "sqlite"
-      )
-    );
+    // The dropped collection's archived translations can be labelled only while its registry row
+    // is there.
+    await registerDropped();
     await adapter.executeQuery(
       `INSERT INTO "nextly_i18n_archive" ("collection", "entity_kind", "entry_id", "locale", "field", "value", "archived_at") VALUES ('${DROPPED}', 'unknown', 'd1', 'fr', 'title', 'Salut', unixepoch() + 3600)`
     );
     await archive("unknown", "e1");
-    const registered = async () =>
-      (
-        await adapter.executeQuery<{ slug: string }>(
-          `SELECT slug FROM dynamic_collections WHERE slug IN ('${SLUG}', '${DROPPED}') ORDER BY slug`
-        )
-      ).map(row => row.slug);
-    const kindOf = async (slug: string) =>
-      (
-        await adapter.executeQuery<{ entity_kind: string }>(
-          `SELECT entity_kind FROM "nextly_i18n_archive" WHERE collection = '${slug}'`
-        )
-      ).map(row => row.entity_kind);
-    // A start already marked both repairs done.
-    await adapter.executeQuery(
-      `INSERT INTO nextly_meta (key, value, updated_at) VALUES ('${TIMESTAMP_REPAIR_META_KEY}', '${JSON.stringify({ at: "2026-11-01T00:00:00.000Z", registries: true })}', unixepoch())`
-    );
+    await markBothRepairsDone();
     repair.fails = true;
 
     const outcome = await migrate().then(
@@ -256,10 +291,7 @@ describe("nextly migrate's registry phase on SQLite, with a registry row in mill
       warnings.filter(message => message.includes("milliseconds"))
     ).toHaveLength(1);
     // The mark says the registries' repair is owed again, and the text repair is not.
-    const [mark] = await adapter.executeQuery<{ value: string }>(
-      `SELECT value FROM nextly_meta WHERE key = '${TIMESTAMP_REPAIR_META_KEY}'`
-    );
-    expect(JSON.parse(mark.value)).toBe("2026-11-01T00:00:00.000Z");
+    expect(await mark()).toBe("2026-11-01T00:00:00.000Z");
 
     // The next run, its repair working, labels both collections' rows while the dropped one's
     // registry row is still there, and only then removes that row. Its archived translations,
@@ -269,5 +301,69 @@ describe("nextly migrate's registry phase on SQLite, with a registry row in mill
     expect(await kindOf(SLUG)).toEqual(["collection"]);
     expect(await registered()).toEqual([SLUG]);
     expect(await kindOf(DROPPED)).toEqual([]);
+  });
+
+  it("a repair that fails where no archived translation is of unknown kind warns, and the run goes on", async () => {
+    await registerDropped();
+    await archive("collection", "e1");
+    await markBothRepairsDone();
+    repair.fails = true;
+
+    await migrate();
+    // Nothing waits to be labelled, so the registry write goes ahead: the dropped row goes.
+    expect(await registered()).toEqual([SLUG]);
+    expect(await kindOf(SLUG)).toEqual(["collection"]);
+    expect(
+      warnings.filter(message => message.includes("milliseconds"))
+    ).toHaveLength(1);
+    expect(await mark()).toBe("2026-11-01T00:00:00.000Z");
+  });
+
+  it("a repair that fails inside a registry write the caller holds open warns, and the run goes on unlabelled", async () => {
+    await archive("unknown", "e1");
+    await markBothRepairsDone();
+    repair.fails = true;
+
+    await writeRegistryRows(adapter, () => migrate());
+    // The labelling never runs inside such a write, so the rows wait, unknown, for the next run,
+    // and the mark handed back to the next start is committed with the write.
+    expect(await kindOf(SLUG)).toEqual(["unknown"]);
+    expect(
+      warnings.filter(message => message.includes("milliseconds"))
+    ).toHaveLength(1);
+    expect(await mark()).toBe("2026-11-01T00:00:00.000Z");
+  });
+
+  it("a run that lost the schema lock stops before the repair writes anything", async () => {
+    await archive("unknown", "e1");
+    lock.lost = true;
+
+    const outcome = await migrate().then(
+      () => "completed",
+      (error: unknown) => error
+    );
+    expect(isSchemaLockLost(outcome)).toBe(true);
+    // The registry row is still as the older file wrote it, and nothing was labelled.
+    expect(await createdAt()).toBeGreaterThan(1e11);
+    expect(await kinds()).toEqual(["unknown"]);
+  });
+
+  it("leaves the rows of a holder whose creation time cannot be read unknown, and labels them once it can", async () => {
+    // Text that is no date: the driver reads it back as an invalid one, against which no row
+    // can be judged.
+    await adapter.executeQuery(
+      `UPDATE dynamic_collections SET created_at = 'not a date' WHERE slug = '${SLUG}'`
+    );
+    await archive("unknown", "e1");
+
+    await migrate();
+    // Neither labelled nor settled unresolved for good: the rows wait.
+    expect(await kinds()).toEqual(["unknown"]);
+
+    await adapter.executeQuery(
+      `UPDATE dynamic_collections SET created_at = unixepoch() - 60 WHERE slug = '${SLUG}'`
+    );
+    await migrate();
+    expect(await kinds()).toEqual(["collection"]);
   });
 });

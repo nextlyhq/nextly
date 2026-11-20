@@ -55,7 +55,10 @@ import { CollectionRegistryService } from "../../collections/services/collection
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { ARCHIVE_TABLE } from "../../i18n/migration/entity-translation-rows";
-import { labelLegacyArchiveRows } from "../../i18n/migration/label-legacy-archive-rows";
+import {
+  holdsUnknownArchiveRows,
+  labelLegacyArchiveRows,
+} from "../../i18n/migration/label-legacy-archive-rows";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type {
@@ -402,9 +405,11 @@ export async function reconcileMigrationMetadata(
    * behind keeps the version where it was, and the next run, which writes it,
    * moves the version too.
    */
-  // First, on SQLite, the registries' timestamps: the labelling next reads them.
-  await repairRegistryTimestampsFirst(deps);
-  await labelArchiveWhileRegistered(deps);
+  // First, on SQLite, the registries' timestamps: the labelling next reads them, and is left out
+  // of a run whose repair failed and went on.
+  if (await repairRegistryTimestampsFirst(deps)) {
+    await labelArchiveWhileRegistered(deps);
+  }
   const swept = await writeRegistryRows(
     adapter,
     async tx => {
@@ -488,33 +493,39 @@ export async function reconcileMigrationMetadata(
  * Repairs, on SQLite, the registries' timestamps a migration file of an earlier release wrote in
  * milliseconds (`repairSqliteRegistryTimestamps`), before anything in this pass reads them. Every
  * such row is there already: the run's files have been applied, and this pass's own registry
- * write stores seconds. Nothing on any other dialect.
+ * write stores seconds. Answers whether the times can be relied on: true on any other dialect.
  *
- * It runs on the connection the run holds, so inside a registry write a caller holds open too.
+ * It runs on the connection the run holds, so inside a registry write a caller holds open too,
+ * and only while the run still holds the schema lock, as every write of this pass.
  *
- * A repair that fails stops the pass before the labelling and the registry write, as a labelling
- * that fails does, and for the same reason: labelled by a time that is still wrong, an entity's
- * archived rows would be settled as unresolved for good, and left unlabelled while the write
- * removed the row of an entity this run dropped, they could never be labelled. Nothing of the
- * registry changes, and the next run repairs, labels and writes. The start's mark is told the
- * registries' repair is owed again (`rearmRegistryTimestampRepair`), so a start before that run
- * repairs too.
+ * A repair that fails is said once, and the start's mark is told the registries' repair is owed
+ * again (`rearmRegistryTimestampRepair`), so a start before the next run repairs too. Where this
+ * pass would label archived translations (`labellingOwed`), it then stops before the labelling
+ * and the registry write, as a labelling that fails does, and for the same reason: labelled by a
+ * time that is still wrong, an entity's archived rows would be settled as unresolved for good,
+ * and left unlabelled while the write removed the row of an entity this run dropped, they could
+ * never be labelled. Nothing of the registry changes, and the next run repairs, labels and
+ * writes. Where it would label nothing, the run goes on without the labelling.
  */
 async function repairRegistryTimestampsFirst(
   deps: ReconcileMetadataDeps
-): Promise<void> {
+): Promise<boolean> {
   const { adapter, dialect, logger } = deps;
-  if (dialect !== "sqlite") return;
+  if (dialect !== "sqlite") return true;
+  await assertSchemaLockHeld();
   try {
     await repairSqliteRegistryTimestamps(adapter);
+    return true;
   } catch (error) {
     // A run that lost the schema lock, or a test's stop at a point (`stop-points.ts`), stops with
     // that, as everywhere else in this pass.
     if (endsTheRun(error)) throw error;
+    const stops = await labellingOwed(deps);
+    const reason = error instanceof Error ? error.message : String(error);
     logger.warn(
-      `The registries' timestamps could not be checked for values in milliseconds, so the registry rows were not written and archived translations were not labelled: ${
-        error instanceof Error ? error.message : String(error)
-      }. The next run repairs them, labels and writes.`
+      stops
+        ? `The registries' timestamps could not be checked for values in milliseconds, so the registry rows were not written and archived translations were not labelled: ${reason}. The next run repairs them, labels and writes.`
+        : `The registries' timestamps could not be checked for values in milliseconds: ${reason}. The next run repairs them.`
     );
     // Best effort: a database that cannot be written now is repaired by the next run anyway,
     // and a start before that run is told nothing, which is said.
@@ -525,7 +536,24 @@ async function repairRegistryTimestampsFirst(
         }.`
       );
     });
-    throw error;
+    if (stops) throw error;
+    return false;
+  }
+}
+
+/**
+ * Whether this pass would label archived translations: outside a registry write a caller holds
+ * open (where `labelArchiveWhileRegistered` never labels), with rows of unknown kind in the
+ * archive. An archive that cannot be read is taken to hold them, so a failed repair stops the
+ * pass rather than let the registry write go ahead of rows still to label.
+ */
+async function labellingOwed(deps: ReconcileMetadataDeps): Promise<boolean> {
+  if (registryWriteOpen()) return false;
+  try {
+    return await holdsUnknownArchiveRows(deps.adapter);
+  } catch (error) {
+    if (endsTheRun(error)) throw error;
+    return true;
   }
 }
 
