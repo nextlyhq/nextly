@@ -120,6 +120,16 @@ describe("ReviewSection", () => {
     expect(region?.textContent).toBe("");
   });
 
+  it("can take focus back from a step dialog, as the place a step leaves the person", async () => {
+    fetchSpy.mockResolvedValue(answer(part()));
+
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+
+    expect(section).toHaveAttribute("data-review-focus");
+    expect(section).toHaveAttribute("tabindex", "-1");
+  });
+
   it("says the stage, who it waits for, and the last move", async () => {
     fetchSpy.mockResolvedValue(answer(part()));
     render(<ReviewSection document={post} />);

@@ -88,7 +88,9 @@ export function ReviewSection({
   if (parts.length === 0) return null;
   const titled = parts.length > 1;
   return (
-    <PanelSection title="Review">
+    // Focusable as a whole, so a step that leaves the person no action of their own (one who may
+    // only read and approve has approved) hands focus back here rather than to the page's body.
+    <PanelSection title="Review" focusTarget="data-review-focus">
       <div className="space-y-4">
         {parts.map(part => (
           <PartBlock

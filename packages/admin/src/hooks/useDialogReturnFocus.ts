@@ -42,7 +42,15 @@ export function useDialogReturnFocus(
   };
 }
 
-/** The editor's main action, where a step dialog's focus goes when what opened it is gone. */
+/**
+ * Where a step dialog's focus goes when what opened it is gone: the editor's main action, or,
+ * where a step left the person none (one who may only read and approve has approved), the review
+ * section, which takes focus as a whole. Never the page's body, where a keyboard or screen-reader
+ * user would start again from the top.
+ */
 export function editorMainAction(): HTMLElement | null {
-  return document.querySelector<HTMLElement>('[data-primary="true"]');
+  return (
+    document.querySelector<HTMLElement>('[data-primary="true"]') ??
+    document.querySelector<HTMLElement>("[data-review-focus]")
+  );
 }
