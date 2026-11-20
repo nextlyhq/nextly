@@ -33,8 +33,8 @@ export interface RemovedCollectionSeed {
 /** The configuration entry that compiles back to a removed entity's table. */
 function seedEntry(seed: RemovedCollectionSeed): Record<string, unknown> {
   // A collection's and a Single's `dbName` is the table itself, so the seed has the name the
-  // table has, whatever its slug resolved to when it was created. A field group's table follows
-  // from its slug alone, and the slug read off the table resolves back to it.
+  // table has, whatever its slug resolved to when it was created. A field group's table is the
+  // compile's table map's (`fieldGroupTablesWith`), by its slug.
   return seed.kind === "fieldGroup"
     ? { slug: seed.slug, fields: seed.fields ?? [] }
     : { slug: seed.slug, dbName: seed.tableName, fields: seed.fields ?? [] };
@@ -55,6 +55,13 @@ export async function compileExtensionSchemaWith(input: {
   dialect: SupportedDialect;
   removedCollections: readonly RemovedCollectionSeed[];
   logger: { warn: (message: string) => void };
+  /**
+   * The table each configured field group is stored in, by slug, and the discriminator each
+   * field-group table holds, by table, as the app stream's compile is given them. On a history on
+   * the current names a group's table is `fg_<slug>`, which no slug rule derives.
+   */
+  fieldGroupTables?: ReadonlyMap<string, string>;
+  fieldGroupTypeColumns?: ReadonlyMap<string, string>;
 }): Promise<ExtensionSchemaRecord | null> {
   const { compileExtensionSchema } = await import(
     "../../schema/extension/publish"
@@ -78,8 +85,32 @@ export async function compileExtensionSchemaWith(input: {
       ],
     },
     logger: input.logger,
+    fieldGroupTables: fieldGroupTablesWith(
+      input.fieldGroupTables,
+      input.removedCollections
+    ),
+    ...(input.fieldGroupTypeColumns === undefined
+      ? {}
+      : { fieldGroupTypeColumns: input.fieldGroupTypeColumns }),
   });
   return schema ?? null;
+}
+
+/**
+ * The configured field groups' tables, and each removed field group's under the table it is being
+ * dropped as: the one the history records, `fg_<slug>` on the current names. Seeded under the name
+ * its slug derives, a column or key another owner adds to the recorded table would find no table.
+ */
+function fieldGroupTablesWith(
+  configured: ReadonlyMap<string, string> | undefined,
+  seeds: readonly RemovedCollectionSeed[]
+): ReadonlyMap<string, string> {
+  return new Map([
+    ...(configured ?? []),
+    ...seeds
+      .filter(seed => seed.kind === "fieldGroup")
+      .map(seed => [seed.slug, seed.tableName] as const),
+  ]);
 }
 
 /** The configuration entries of the removed entities of one kind. */

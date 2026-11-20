@@ -28,6 +28,7 @@ import {
   type FieldGroupStorageNames,
 } from "../../field-groups/services/field-group-storage-names";
 import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import { refuseForkedHistory } from "../migrate/history-line";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import {
   judgeBuilderDefinitions,
@@ -56,8 +57,6 @@ import {
   type LatestSnapshot,
   type SnapshotFile,
 } from "./snapshot-io";
-import { refuseForkedHistory } from "../migrate/history-line";
-
 import { templateStartFor } from "./template-start";
 import { holdInBuilderChange } from "./writer-hold";
 
@@ -287,6 +286,21 @@ export async function appMigrationInputs(
           dialect,
           removedCollections: removed,
           logger: { warn: m => logger.warn(m) },
+          // The tables and discriminators the app stream compiles with, a removed group's
+          // among them, so a dependent of `fg_<slug>` is seen on a history on the current names.
+          fieldGroupTables: new Map(
+            components.map(component => [component.slug, component.tableName])
+          ),
+          fieldGroupTypeColumns: recordedTypeColumns(
+            latest?.data.snapshot,
+            [
+              ...components,
+              ...removed
+                .filter(seed => seed.kind === "fieldGroup")
+                .map(seed => ({ tableName: seed.tableName })),
+            ],
+            dialect
+          ),
         }),
     });
   }
