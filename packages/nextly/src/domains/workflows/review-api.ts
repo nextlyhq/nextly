@@ -728,9 +728,9 @@ function waitingScan(
       const fetched: { cursor: ShareCursor; state: ReviewState }[] = [];
       const full = new Set<ShareCursor>();
       let end: ReviewState | undefined;
-      // The window's budget split between the shares still being read, so one window holds at most
-      // `size` states however full both shares are (one a share, where `size` is smaller), and a
-      // request stops at its ceiling rather than reading up to twice it.
+      // The window's budget split between the shares still being read, so neither read fetches
+      // more than its part of `size` (at least one state, plus the one that says whether it is
+      // whole).
       const reading = cursors.filter(cursor => !cursor.done);
       const perShare = Math.max(
         1,
@@ -752,9 +752,14 @@ function waitingScan(
         }
         for (const state of states) fetched.push({ cursor, state });
       }
+      // Never more than `size` states, so a request stops at its ceiling: where the shares' parts
+      // together come to more (each read at least one state), the earliest in the list's order
+      // are kept. What is cut is past the window's last state, so the next window, reading on
+      // from that position, reaches it; and its share is not whole, so the scan goes on.
       const window = fetched
         .filter(each => end === undefined || waitingOrder(each.state, end) <= 0)
-        .sort((a, b) => waitingOrder(a.state, b.state));
+        .sort((a, b) => waitingOrder(a.state, b.state))
+        .slice(0, size);
       const kept = new Set(window);
       for (const cursor of cursors) {
         // Whole when its read fit the window and none of it was cut at the window's end.
