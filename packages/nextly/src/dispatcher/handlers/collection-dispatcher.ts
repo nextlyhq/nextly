@@ -79,7 +79,6 @@ import {
   archiveCollectionFieldsLeavingTranslation,
   checkCollectionTranslationChange,
   collectionChangeCarriesValues,
-  dropCollectionUniquenessLeftOn,
   fieldsAsStored,
   reconcileCollectionCompanionAfterFile,
   recordedFieldsOf,
@@ -1449,16 +1448,11 @@ const COLLECTIONS_METHODS: Record<
                   change,
                   await companionRename()
                 ),
-              // What the file does not reach, as the push does it once it has run: the
-              // translations table brought in step, and a unique index a field that stops being
-              // unique still has under a name the file did not drop.
-              after: async () => {
-                await reconcileCollectionCompanionAfterFile(
+              after: async () =>
+                reconcileCollectionCompanionAfterFile(
                   change,
                   await companionRename()
-                );
-                await dropCollectionUniquenessLeftOn(change);
-              },
+                ),
             },
             slug: p.collectionName,
             collection: writerRowOf(collection),

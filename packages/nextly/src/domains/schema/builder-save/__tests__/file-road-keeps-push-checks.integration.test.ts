@@ -5,11 +5,15 @@
  * - a unique field whose index name an index elsewhere already holds, which the file's
  *   `CREATE UNIQUE INDEX IF NOT EXISTS` would skip, recording the field unique with nothing
  *   enforcing it;
- * - a column of the table no field describes, which the save must not drop with its data;
+ * - a column of the table no field describes, left unanswered, which the save must not drop with
+ *   its data. One the request answers, as a rename onto a field it adds, is not refused as
+ *   undescribed: the history's drift check judges it, as it does any column the history lacks.
  *
- * and does what the push does once it has run: Unique turned off while another unique index covers
- * the column drops that index too, so the column is not left unique while the save records it is
- * not.
+ * One step the push takes once it has run is not the file road's: Unique turned off while another
+ * unique index covers the column, the push drops that index too. The file does not carry that drop,
+ * so a database the file is replayed on keeps the index; dropping it here alone would have this
+ * database accept repeats that database refuses. Pinned below as the gap it is, until the file
+ * carries the drop.
  *
  * Each runs through the collection's schema dialog in development, where an untranslated
  * collection's save runs its file.
@@ -105,8 +109,11 @@ describeEachDialect(
       }
     }
 
-    /** The schema dialog's save of `fields` on `posts`; the refusal, or undefined. */
-    async function dialogSave(fields: unknown[]): Promise<unknown> {
+    /** The schema dialog's save of `fields` on `posts`, with its rename answers; the refusal, or undefined. */
+    async function dialogSave(
+      fields: unknown[],
+      renameResolutions: unknown[] = []
+    ): Promise<unknown> {
       const [row] = await query<{ v: number | string | null }>(
         `SELECT schema_version AS v FROM ${q("dynamic_collections")} WHERE slug = 'posts'`
       );
@@ -116,6 +123,7 @@ describeEachDialect(
         { collectionName: "posts" },
         {
           fields,
+          renameResolutions,
           confirmed: true,
           schemaVersion: Number(row?.v ?? 1),
         }
@@ -165,7 +173,7 @@ describeEachDialect(
       }
     );
 
-    it("refuses a save while a column no field describes is there, keeping it with its data", async () => {
+    it("refuses a save leaving a column no field describes unanswered, keeping it with its data", async () => {
       await collectionWith("posts", [HEADING], [{ heading: "One" }]);
       await query(
         `ALTER TABLE ${q("dc_posts")} ADD COLUMN ${q("legacy_note")} TEXT`
@@ -183,7 +191,44 @@ describeEachDialect(
       expect(kept.map(row => row.note)).toEqual(["kept"]);
     });
 
-    it("drops another unique index covering the column when Unique is turned off, so repeats are accepted", async () => {
+    it("leaves a column no field describes, answered as a rename onto the field it adds, to the history's drift check", async () => {
+      await collectionWith("posts", [HEADING], [{ heading: "One" }]);
+      await query(
+        `ALTER TABLE ${q("dc_posts")} ADD COLUMN ${q("legacy_note")} TEXT`
+      );
+      await query(`UPDATE ${q("dc_posts")} SET ${q("legacy_note")} = 'kept'`);
+      const pushed = vi.spyOn(PushSchemaPipeline.prototype, "apply");
+
+      const refused = await dialogSave(
+        [HEADING, { ...CODE }],
+        [
+          {
+            tableName: "dc_posts",
+            fromColumn: "legacy_note",
+            toColumn: "code",
+            choice: "rename",
+          },
+        ]
+      );
+
+      // Answered, so not refused as left over. The file cannot rename a column its history never
+      // recorded, so the writer's drift check refuses the save, naming the column, with nothing
+      // changed: the column keeps its values for the person to describe or drop.
+      expect(pushed).not.toHaveBeenCalled();
+      expect(told(refused)).not.toContain("COLUMN_NOT_DESCRIBED");
+      expect(told(refused)).toContain("NEXTLY_MIGRATION_DRIFT");
+      expect(told(refused)).toContain("legacy_note");
+      const kept = await query<{ note: string | null }>(
+        `SELECT ${q("legacy_note")} AS note FROM ${q("dc_posts")}`
+      );
+      expect(kept.map(row => row.note)).toEqual(["kept"]);
+      expect(await columnsOf("dc_posts")).not.toContain("code");
+    });
+
+    // The gap, pinned: the file does not carry the drop of a unique index it did not declare, so the
+    // file road leaves it, and the column still refuses repeats here as on any database the file is
+    // replayed on. Once the file carries that drop, both accept them and this is turned round.
+    it("keeps another unique index covering the column when Unique is turned off, as the file leaves it everywhere", async () => {
       await collectionWith(
         "posts",
         [HEADING, { ...CODE, unique: true }],
@@ -193,16 +238,19 @@ describeEachDialect(
         `CREATE UNIQUE INDEX ${q("posts_code_key")} ON ${q("dc_posts")} (${q("code")})`
       );
 
+      const pushed = vi.spyOn(PushSchemaPipeline.prototype, "apply");
+
       expect(await dialogSave([HEADING, { ...CODE }])).toBeUndefined();
 
-      // The column is no longer held unique by either index.
+      // Saved on the file's road; the index it did not declare still holds the column unique.
+      expect(pushed).not.toHaveBeenCalled();
       const repeat = await handler()
         .getEntryService()
         .createEntry(
           { collectionName: "posts", overrideAccess: true },
           { heading: "Two", code: "a" }
         );
-      expect(repeat.success, JSON.stringify(repeat)).toBe(true);
+      expect(repeat.success, JSON.stringify(repeat)).toBe(false);
     });
   }
 );

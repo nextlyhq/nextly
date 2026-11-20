@@ -238,35 +238,35 @@ class AnsweringDispatcher implements PromptDispatcher {
       this.legacyResolutions
     ).dispatch(args);
     if (!result.proceed && this.ownTable !== undefined) {
-      refuseLeftoverColumns(
-        this.slug,
+      const leftover = leftoverColumns(
         this.ownTable,
         args,
         result,
         resolutions
       );
+      if (leftover.length > 0) {
+        throw columnsNotDescribed(this.slug, this.ownTable, leftover);
+      }
     }
     return result;
   }
 }
 
 /**
- * Refuse a save that would drop a column of its own table that no field describes and the save
- * never removed, such as one an install from before removed fields dropped their columns kept,
- * with its data. The push offers it as a drop, or as the old side of a rename, and nothing the
- * save decides answers it, so the push would stop as cancelled; this says which column and how
- * to go on instead, before anything is dropped. Another table's drift is left to the push's own
- * refusal.
- *
- * @throws NextlyError `VALIDATION_ERROR` naming each such column (`COLUMN_NOT_DESCRIBED`)
+ * The columns of the save's own table that a dispatch of its questions left unanswered, once the
+ * answers are applied: each offered as a drop not confirmed exactly once, or as the old side of a
+ * rename neither answered nor taken. Read where the dispatch did not proceed. Such a column, one
+ * the save never removed, such as one an install from before removed fields dropped their columns
+ * kept, would otherwise stop the save as cancelled; the push refuses it naming each
+ * (`columnsNotDescribed`), and a save running its own file reads the same decision. Another table's
+ * drift is left to the push's own refusal.
  */
-function refuseLeftoverColumns(
-  slug: string,
+export function leftoverColumns(
   ownTable: string,
-  args: Parameters<PromptDispatcher["dispatch"]>[0],
+  args: Pick<Parameters<PromptDispatcher["dispatch"]>[0], "candidates" | "events">,
   result: Awaited<ReturnType<PromptDispatcher["dispatch"]>>,
   resolutions: readonly BrowserRenameResolution[]
-): void {
+): string[] {
   // Acknowledged as the browser dispatcher acknowledges a drop: exactly one confirm_drop.
   const confirmations = new Map<string, number>();
   for (const r of result.resolutions) {
@@ -299,8 +299,7 @@ function refuseLeftoverColumns(
       leftover.add(c.fromColumn);
     }
   }
-  if (leftover.size === 0) return;
-  throw columnsNotDescribed(slug, ownTable, [...leftover]);
+  return [...leftover];
 }
 
 /**
@@ -1320,24 +1319,6 @@ export async function refuseCollectionIndexNamesTaken(
 ): Promise<void> {
   const { adapter } = requireSchemaChangeDeps(change.slug);
   await refuseIndexNamesTaken(adapter, collectionAsFileLeavesIt(change));
-}
-
-/**
- * What the push does once it has run (`dropUniquenessLeftOn`), done once a change's own migration
- * file has run: the unique index a field that stops being unique still has under a name the file
- * did not drop is dropped, so the column is no longer held unique while the change records it is
- * not. Done on this database only, as the push does it; the file does not carry it.
- */
-export async function dropCollectionUniquenessLeftOn(
-  change: CollectionSchemaChange
-): Promise<void> {
-  const { adapter } = requireSchemaChangeDeps(change.slug);
-  await dropUniquenessLeftOn(
-    adapter,
-    collectionAsFileLeavesIt(change),
-    (change.collection.fields ?? []) as unknown as FieldDefinition[],
-    change.fields
-  );
 }
 
 /**
