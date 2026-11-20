@@ -19,6 +19,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { CacheRevalidator } from "../../../revalidation/types";
 import { REVIEW_STATES_TABLE } from "../../../schemas/review-states";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { CollectionRegistryService } from "../../collections/services/collection-registry-service";
@@ -135,7 +136,9 @@ function runDuePass(
     lockServer: lockServerOf(t),
   });
   return applyDueReleases({
-    repository: new ReleasesRepository(t.adapter),
+    // With the install's revalidator, as the service's own repository has it, so the run's
+    // flushes reach it.
+    repository: new ReleasesRepository(t.adapter, revalidatorOf(t)),
     mutations: {
       publish: async input => {
         await beforePublish?.(input.ref.entryId);
@@ -170,13 +173,17 @@ function inValues(where: unknown, column: string): unknown[] {
   );
 }
 
+/** The cache revalidator this install flushes through, the one a release's flush reaches. */
+const revalidatorOf = (t: TestNextly): CacheRevalidator =>
+  t.getService("cacheRevalidator") as CacheRevalidator;
+
 /**
- * The releases whose documents the repository flushes from here on, as a reader's cache sees:
- * every flush of the repository goes through `revalidateReleases`.
+ * What the cache revalidator is asked to flush from here on, as text: the flush itself, so a
+ * release's documents appear only once their intent reaches the revalidator.
  */
-function watchFlushes(): () => string[] {
-  const flush = vi.spyOn(ReleasesRepository.prototype, "revalidateReleases");
-  return () => flush.mock.calls.flatMap(([releaseIds]) => [...releaseIds]);
+function watchFlushes(t: TestNextly): () => string {
+  const flush = vi.spyOn(revalidatorOf(t), "flush");
+  return () => JSON.stringify(flush.mock.calls);
 }
 
 /** Takes a part's approval away by writing its review row, as nothing that signals would. */
@@ -628,14 +635,15 @@ describe.each(getConfiguredTestDialects())(
         { and: [{ column: "id", op: "=", value: receipted.id }] }
       );
 
-      const flushed = watchFlushes();
+      const flushed = watchFlushes(t);
 
       await takeStep(t, "pages", waiting, null, "bounce", "Not yet.");
 
       expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
       expect(await stoppedNotices(t, arranged)).toBe(0);
       // Kept scheduled, yet a reader is now shown nothing more of it: its pages are flushed.
-      expect(flushed()).toContain(arranged.releaseId);
+      // The page the step never touched is flushed only by the release's flush.
+      expect(flushed()).toContain(written);
     });
 
     it("leaves a due release scheduled when a pass writes one of its members after the stop judged it", async () => {
@@ -669,13 +677,14 @@ describe.each(getConfiguredTestDialects())(
         );
         return block.apply(this, args);
       });
-      const flushed = watchFlushes();
+      const flushed = watchFlushes(t);
 
       await takeStep(t, "pages", waiting, null, "bounce", "Not yet.");
 
       expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
       expect(await stoppedNotices(t, arranged)).toBe(0);
-      expect(flushed()).toContain(arranged.releaseId);
+      // The page the step never touched is flushed only by the release's flush.
+      expect(flushed()).toContain(written);
     });
 
     it("keeps a component scheduled when a publish it wrote this pass is followed by one the gate refuses for approval", async () => {
@@ -811,7 +820,7 @@ describe.each(getConfiguredTestDialects())(
         { and: [{ column: "id", op: "=", value: receipted.id }] }
       );
       await withdrawSilently(t, "pages", waiting);
-      const flushed = watchFlushes();
+      const flushed = watchFlushes(t);
 
       const pass = await runDuePass(t);
 
@@ -820,7 +829,8 @@ describe.each(getConfiguredTestDialects())(
         "NOT_APPROVED"
       );
       expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
-      expect(flushed()).toContain(arranged.releaseId);
+      // The page the step never touched is flushed only by the release's flush.
+      expect(flushed()).toContain(written);
     });
 
     it("never stops due releases over a publish their plan loses to a later takedown", async () => {
