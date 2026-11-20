@@ -18,7 +18,7 @@
  */
 import * as React from "react";
 
-import { isHTMLElement } from "../dom-kind";
+import { isHTMLElement } from "../canvas/dom-kind";
 
 /** Marks the control that shortens first: the page's title. */
 const TOP_BAR_SHORTENS = "data-topbar-shortens";

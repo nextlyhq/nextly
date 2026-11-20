@@ -235,10 +235,12 @@ export function rowNotes(
       new Set(actionsHeld(row, ownIds)).has("manage")
         ? `This role still holds the retired manage-${row.slug} permission, ` +
             "which gives no access until it is converted. Run nextly " +
-            "upgrade to convert this role; saving this role converts it too."
+            "migrate to convert this role (nextly db:sync in development); " +
+            "saving this role converts it too."
         : `This role inherits the retired manage-${row.slug} permission ` +
             "from a base role, which gives no access until it is converted. " +
-            "Run nextly upgrade, or save the base role, to convert it."
+            "Run nextly migrate (nextly db:sync in development), or save " +
+            "the base role, to convert it."
     );
   }
   if (row.slug === "settings" && !visitors) {

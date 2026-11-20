@@ -399,7 +399,7 @@ function errnoOf(error: unknown): number | undefined {
  * - No native ILIKE (uses LOWER() LIKE workaround)
  * - No native JSONB (uses JSON type)
  * - No array types
- * - Savepoints disabled for safety (MySQL has nested transaction quirks)
+ * - A transaction opened inside another's work joins it flat (its context still takes savepoints)
  *
  * @example
  * ```typescript
@@ -455,6 +455,15 @@ export class MySqlAdapter extends DrizzleAdapter {
   private functionalIndexes: boolean | undefined;
   private enforcesCheckConstraints: boolean | undefined;
   private serverVersion: string | undefined;
+
+  /**
+   * Whether a transaction context sets savepoints, read from the server's
+   * variant at connect. TiDB refuses `SAVEPOINT` before 6.2, and in a
+   * pessimistic transaction unless `tidb_constraint_check_in_place_pessimistic`
+   * is on, so on TiDB the context offers none and its callers run their work
+   * without one. MySQL and the other variants take them.
+   */
+  private takesSavepoints = true;
 
   /**
    * Creates a new MySQL adapter instance.
@@ -566,6 +575,7 @@ export class MySqlAdapter extends DrizzleAdapter {
         // and ignores it, and the variants are not spoken for.
         this.enforcesCheckConstraints = enforcesCheckConstraints;
         this.serverVersion = serverVersion;
+        this.takesSavepoints = variant !== "tidb";
         this.connected = true;
 
         if (this.config.logger?.info) {
@@ -786,9 +796,6 @@ export class MySqlAdapter extends DrizzleAdapter {
    * MySQL transactions support isolation levels. Automatic retry is
    * implemented for deadlocks (error 1213) when `retryCount` is specified.
    *
-   * Note: Savepoints are disabled in this adapter for safety due to
-   * MySQL's quirks with nested transactions.
-   *
    * A call made inside another transaction's work therefore joins it flat,
    * on its connection: its statements are the outer's. Its failure cannot be
    * undone alone, so it fails the whole transaction, even when the outer
@@ -987,7 +994,9 @@ export class MySqlAdapter extends DrizzleAdapter {
    * - No arrays
    * - No native ILIKE
    * - No RETURNING clause
-   * - Savepoints disabled for safety
+   * - No savepoint for a nested transaction: one opened inside another's work
+   *   joins it flat (`joinSteps`), so `supportsSavepoints` is false. The
+   *   transaction context's own savepoint methods are a separate matter.
    */
   getCapabilities(): DatabaseCapabilities {
     return {
@@ -999,7 +1008,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       supportsFts: true, // MySQL has FULLTEXT indexes
       supportsIlike: false, // No native ILIKE, use LOWER() LIKE
       supportsReturning: false, // No RETURNING clause in MySQL
-      supportsSavepoints: false, // Disabled for safety per approved approach
+      supportsSavepoints: false, // A nested transaction joins flat; no savepoint isolates it
       supportsOnConflict: true, // ON DUPLICATE KEY UPDATE
       maxParamsPerQuery: 65535, // MySQL limit
       maxIdentifierLength: 64, // MySQL limit
@@ -1347,10 +1356,6 @@ export class MySqlAdapter extends DrizzleAdapter {
 
   /**
    * Creates a TransactionContext for the given connection.
-   *
-   * @remarks
-   * Note: Savepoint methods are not implemented (set to undefined)
-   * as savepoints are disabled in this adapter per approved approach.
    */
   /**
    * Upsert with the meaning `INSERT … ON CONFLICT (target)` has on PostgreSQL
@@ -1860,10 +1865,17 @@ export class MySqlAdapter extends DrizzleAdapter {
 
       ...this.createTransactionForwarders(txDb),
 
-      // Savepoints disabled per approved approach
-      savepoint: undefined,
-      rollbackToSavepoint: undefined,
-      releaseSavepoint: undefined,
+      // InnoDB's savepoints, on this transaction's connection, so a part of the transaction can be
+      // undone alone (a failed item of a batch, say) and the rest kept, as on PostgreSQL and SQLite.
+      // A transaction opened inside this one's work still joins it flat: see `joinSteps`. Left
+      // undefined on a server that may refuse them (`takesSavepoints`), so a caller runs its work
+      // without one rather than fail on the SAVEPOINT. The effects held for the transaction are
+      // scoped to each savepoint (`contextSavepointMethods`).
+      ...(this.takesSavepoints
+        ? this.contextSavepointMethods(async statement => {
+            await connection.query(statement);
+          })
+        : {}),
     };
   }
 

@@ -531,6 +531,19 @@ describe("FieldGroupRegistryService", () => {
       // On PostgreSQL the teardowns, the drop and the row's removal run in one transaction. The
       // double runs it straight through, each statement reaching the adapter's own doubles, so
       // what ran is asserted below as it would be outside one.
+      const drizzleFindingNoRecord = () => ({
+        ...(ctx.adapter.getDrizzle() as object),
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: () =>
+                Object.assign(Promise.resolve([]), {
+                  for: () => Promise.resolve([]),
+                }),
+            }),
+          }),
+        }),
+      });
       const tx = {
         execute: (sql: string, params?: unknown[]) =>
           ctx.adapter.executeQuery(sql, params),
@@ -538,8 +551,10 @@ describe("FieldGroupRegistryService", () => {
           ctx.adapter.select(table, options),
         delete: (table: string, where: unknown) =>
           ctx.adapter.delete(table, where),
-        drizzleWithRelations: () => ctx.adapter.getDrizzle(),
-        getDrizzle: () => ctx.adapter.getDrizzle(),
+        // The teardown, through the adapter scoped to this transaction, looks the field group's
+        // translation transition record up on it, and finds none: there is nothing to forget.
+        drizzleWithRelations: () => drizzleFindingNoRecord(),
+        getDrizzle: () => drizzleFindingNoRecord(),
       };
       ctx.adapter.transaction = vi.fn(
         async (work: (t: typeof tx) => Promise<unknown>) => work(tx)
@@ -551,10 +566,14 @@ describe("FieldGroupRegistryService", () => {
       await ctx.service.deleteComponent("seo");
 
       expect(ctx.adapter.transaction).toHaveBeenCalledTimes(1);
-      expect(ctx.adapter.executeQuery).toHaveBeenCalled();
-      const sql = ctx.adapter.executeQuery.mock.calls[0][0];
-      expect(sql).toMatch(/DROP TABLE/i);
-      expect(sql).toMatch(/comp_seo/);
+      const statements = ctx.adapter.executeQuery.mock.calls.map(call =>
+        String(call[0])
+      );
+      // The try's wait for a held table is bounded first, on the transaction, by the default
+      // try bound of 5 seconds.
+      expect(statements[0]).toBe("SET LOCAL lock_timeout = '5000ms'");
+      const drop = statements.find(statement => /DROP TABLE/i.test(statement));
+      expect(drop).toMatch(/comp_seo/);
       expect(ctx.adapter.delete).toHaveBeenCalledWith(
         "dynamic_components",
         expect.anything()

@@ -30,6 +30,7 @@ import { useVersionDiff } from "@admin/hooks/queries/useVersions";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type {
   FieldDiff,
+  VersionComparisonPart,
   VersionDiff,
   VersionScope,
 } from "@admin/services/versionApi";
@@ -90,6 +91,8 @@ export interface VersionDiffViewProps {
    * `useVersionDiff`).
    */
   seededBy?: string;
+  /** `shared`: the shared fields alone, compared across languages. */
+  part?: VersionComparisonPart;
 }
 
 function DiffSkeleton() {
@@ -222,6 +225,7 @@ export function VersionDiffView({
   onViewChange,
   onShown,
   seededBy,
+  part,
 }: VersionDiffViewProps): JSX.Element {
   const [remembered, remember] = useChangesLayoutPreference();
   // The address's view wins over the remembered one, so a shared link opens
@@ -239,6 +243,7 @@ export function VersionDiffView({
     to,
     modifiedOnly: false,
     ...(seededBy !== undefined ? { seededBy } : {}),
+    ...(part !== undefined ? { part } : {}),
   });
   const arranged = arrangeFields(diff.data?.fields ?? []);
   const changes = diff.data ? versionChangesOf(diff.data) : null;

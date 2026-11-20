@@ -204,7 +204,12 @@ const SURFACES: ReadonlyArray<{
     name: "a block's toolbar menu",
     open: async page => {
       await selectHeading(page);
-      await page.getByRole("button", { name: "More actions" }).click();
+      // The block toolbar's, on the canvas: the top bar has a "More actions"
+      // of its own, for the editor, which opens a different menu.
+      await page
+        .getByTestId("canvas")
+        .getByRole("button", { name: "More actions" })
+        .click();
       await expect(page.getByRole("menu")).toBeVisible();
     },
   },

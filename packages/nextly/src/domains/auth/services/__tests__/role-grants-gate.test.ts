@@ -170,6 +170,7 @@ const SITES = [
   "domains/auth/services/role/role-mutation-service.ts:moveRoleOffPublicSlug",
   "domains/auth/services/role/role-mutation-service.ts:unlinkPublicRole",
   "domains/auth/services/role/role-mutation-service.ts:updateRole",
+  "domains/workflows/workflow-settings-api.ts:updateWorkflowSettings",
 ];
 
 describe("a change to what a role grants is announced inside the gate", () => {

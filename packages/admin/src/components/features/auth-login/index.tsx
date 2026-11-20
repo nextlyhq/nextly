@@ -202,7 +202,9 @@ function SignUpOffer(): JSX.Element | null {
         Don&apos;t have an account?{" "}
         <Link
           href={ROUTES.REGISTER}
-          className="text-primary cursor-pointer font-medium transition-colors"
+          // In the text colour, underlined: a brand's primary is a fill and
+          // can fall under AA as small text.
+          className="text-foreground underline underline-offset-2 cursor-pointer font-medium transition-colors"
         >
           Sign up
         </Link>

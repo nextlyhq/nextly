@@ -14,6 +14,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  drawnText,
+  nameHoldsDrawnText,
+} from "@admin/__tests__/helpers/label-in-name";
 import { renderWithProviders } from "@admin/__tests__/utils";
 
 vi.mock("@admin/services/mediaApi", () => ({
@@ -100,6 +104,25 @@ describe("the media library sidebar", () => {
       .map(heading => heading.textContent);
     expect(headings).toEqual(["Views", "Folders"]);
     expect(row(/^All media/)).toHaveAttribute("aria-current", "page");
+  });
+
+  // Label in Name: a row draws its name and its count in two spans, and the
+  // check joins their text with nothing between, so "All media" and "12"
+  // would read "All media12", a word the name "All media, 12" never says.
+  it("names every row with the words it draws, its count apart from its name", async () => {
+    renderSidebar();
+    await waitFor(() => expect(row(/^All media, 12$/)).toBeInTheDocument());
+    await waitFor(() => expect(row(/^Brand, 4$/)).toBeInTheDocument());
+
+    const rows = within(nav()).getAllByRole("button", { name: /, \d+$/ });
+    expect(rows.length).toBeGreaterThanOrEqual(5);
+    for (const button of rows) {
+      const name = button.getAttribute("aria-label") ?? "";
+      expect(
+        nameHoldsDrawnText(name, drawnText(button)),
+        `"${name}" against the drawn "${drawnText(button)}"`
+      ).toBe(true);
+    }
   });
 
   it("picks a view across every folder, and a folder clears it", async () => {

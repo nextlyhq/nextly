@@ -1,14 +1,22 @@
 # @nextlyhq/plugin-mcp
 
 **Experimental.** This is the package that exposes a Nextly install to AI agents
-over the [Model Context Protocol](https://modelcontextprotocol.io), read-only.
+over the [Model Context Protocol](https://modelcontextprotocol.io).
 
-It is off by default. A client that connects finds
-a server advertising `tools` and nothing else: no resource and no prompt, and no
-tool that writes. The one tool is `get_initial_context`, which answers what the
-connecting credential may read and how this CMS expects to be asked.
+It is off by default. A client that connects finds a server advertising `tools`
+and nothing else: no resource and no prompt. Its five tools read, and one of
+them also writes, and only to submit for review:
 
-An agent can learn the shape of an install, not its contents.
+- `get_initial_context`: what the connecting credential may read, and how this
+  CMS expects to be asked.
+- `get_workflow`: the review workflow of a collection or Single, its stages and
+  steps.
+- `get_review_state`: where a document stands in review, language by language.
+- `list_waiting_for_review`: what waits for the caller.
+- `submit_for_review`: submit parts of a document for review, with a comment.
+
+No tool approves, requests changes, publishes, publishes without review,
+assigns or changes a workflow. A person reviews what an agent submits.
 
 ## Install
 
@@ -106,7 +114,9 @@ revision removed them.
 
 ## Status
 
-Experimental and read-only: no tool writes.
+Experimental. One tool writes, `submit_for_review`, and it only submits for
+review. See the [MCP plugin docs](https://nextlyhq.com/docs/plugins/mcp) for each
+tool's input and answer.
 
 ## Related packages
 

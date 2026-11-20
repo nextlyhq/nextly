@@ -191,6 +191,8 @@ export function pruneUnderSchemaLock(
     waitMs?: number;
     ttlSeconds?: number;
     logger?: { warn?: (m: string) => void; info?: (m: string) => void };
+    /** The command's busy-table bounds, for a busy SQLite database met while the lock is taken. */
+    busyBounds?: BusyTableBounds;
   } = {}
 ): PruneLock {
   return async work => {
@@ -205,6 +207,9 @@ export function pruneUnderSchemaLock(
         ttlSeconds: options.ttlSeconds,
         releaseOnInterrupt: true,
         logger: options.logger,
+        ...(options.busyBounds === undefined
+          ? {}
+          : { busyBounds: options.busyBounds }),
       }
     );
     // Only a wait given `isSettled` ends without running, and this one is not.
@@ -704,6 +709,8 @@ export async function runPruneCommand(
   const dbValidation = requireDatabaseEnv(logger);
 
   const configResult = await loadConfig({
+    // Reads the app's entities: with no configuration file it refuses rather than act on none.
+    missing: "refuse",
     configPath: options.config,
     cwd: options.cwd,
   });
@@ -783,6 +790,7 @@ export async function runPruneCommand(
           warn: message => logger.warn(message),
           info: message => logger.info(message),
         },
+        busyBounds: bounds,
       }),
       // Compiled here, not published: this command serves nothing, and only
       // reads what the configured plugins and the app declare.

@@ -1,0 +1,25 @@
+---
+title: UPGRADE_PACKAGE_CANNOT_MOVE
+description: "A Nextly package of the project cannot move to the release `nextly upgrade` was moving to, so no package was moved."
+---
+
+## Cause
+
+A Nextly package of the project cannot move to the release `nextly upgrade` was moving to, so no package was moved.
+
+Nextly's packages version together, so `nextly upgrade` moves every one a project declares or none. Before it changes anything it checks that each has the release on the registry. It stops here when one does not, or when one is declared by something the registry cannot answer: a workspace link, a folder, a git address. The message names each such package.
+
+## Fix
+
+- Name a release every package has: `nextly upgrade <version>`.
+- Declare the package by a version in `package.json`, or move it yourself if it is linked on purpose.
+
+## Example
+
+```text
+✗ Not every Nextly package of this project can move to 0.0.2-alpha.79.
+  Why:  Nextly's packages version together, so `nextly upgrade` moves all of them or none. Nothing was changed. These cannot move:
+          @nextlyhq/plugin-seo is declared as `workspace:*`, which is not a version of the registry.
+  Next: Name a release every package has (`nextly upgrade <version>`), or declare the package by a version in `package.json`.
+  Docs: https://nextlyhq.com/docs/cli/errors/upgrade-package-cannot-move  (UPGRADE_PACKAGE_CANNOT_MOVE)
+```

@@ -60,7 +60,10 @@ import {
   type VersionedSiteStyle,
 } from "./site-settings";
 import { siteBreakpoints } from "./site-style";
-import { checkStoredBreakpoints } from "./site-style-record";
+import {
+  checkStoredBreakpoints,
+  configuredClassesOver,
+} from "./site-style-record";
 import { isStaleVersion } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 
@@ -247,7 +250,8 @@ async function planUndo(
     site?.form === "site"
       ? restoreClasses(
           Array.isArray(tier) ? tier : [],
-          removal.defaults?.classes ?? [],
+          // As the strip met them: across the range the site stores.
+          configuredClassesOver(removal.defaults, stored.tokens),
           site.fragment,
           ids
         ).value

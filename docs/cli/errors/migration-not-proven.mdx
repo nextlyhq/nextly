@@ -9,7 +9,7 @@ A pending migration's schema is already in the database, but its snapshot does n
 
 The database can reach a migration's end without the migration running, for example after `nextly db:sync` on a shared database. `nextly migrate` then records the file as applied without running it, but only when its snapshot proves the file's whole effect:
 
-- every statement changes only what the snapshot records: tables, columns, indexes, constraints and foreign keys. A statement that reads or writes rows (an `UPDATE` that backfills a column, for example) or that changes anything else (a trigger, a view, a function, a sequence, an extension or a grant) is not shown by the snapshot, and the database must stand as each statement leaves it: an index it can use, a constraint it has validated, a key the database assigns where the file's table has one (`serial`, an identity column, `AUTO_INCREMENT`);
+- every statement changes only what the snapshot records: tables, columns, indexes, constraints and foreign keys. A statement that reads or writes rows (an `UPDATE` that backfills a column, for example) or that changes anything else (a trigger, a view, a function, a sequence, an extension or a grant) is not shown by the snapshot, and the database must stand as each statement leaves it: an index it can use, a constraint it has validated, a key the database assigns where the file's table has one (`serial`, an identity column, `AUTO_INCREMENT`), a MySQL check enforced as the file declares it, a PostgreSQL foreign key with the deferrability the file declares, an index built by the default method, and on SQLite an `AUTOINCREMENT` counter that covers the table's rows. An index statement that states a direction, a NULL order or a method is not shown by the snapshot;
 - on MySQL, a column the file restates with `MODIFY` or `CHANGE` holds nothing the statement would reset. Such a statement restates the whole column, so running it puts back a collation, comment, visibility, `ON UPDATE`, `AUTO_INCREMENT` or generated expression set on the column by hand. A `MODIFY` or `CHANGE` that states any of these itself, or a position (`FIRST`, `AFTER`), is not shown by the snapshot;
 - the file's checksum matches the one recorded with its snapshot when `nextly migrate:create` wrote it, so it has not been edited since;
 - it has no attempt that failed or recorded no outcome.
@@ -18,7 +18,7 @@ If any of these fails, recording the file would skip work the database may not h
 
 A migration whose database stands where it starts always runs, data statements included.
 
-The proof reads the schema, not the rows. Where a file converts a column's values as it changes the column's type (PostgreSQL's `USING "price"::integer`), or fills a new column with a default, a database already at the file's end is recorded as it is: the values it holds, converted or filled another way, are kept.
+The proof reads the schema, not the rows. Where a file converts a column's values as it changes the column's type (PostgreSQL's `USING "price"::integer`), or fills a new column with a default, a database already at the file's end is recorded as it is: the values it holds, converted or filled another way, are kept. A sequence left behind by a `serial` column whose default the same file later drops is not compared, on SQLite a foreign key's deferrability is not read, and the direction of an index's keys is not compared.
 
 ## Fix
 

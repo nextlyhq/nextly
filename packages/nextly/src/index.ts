@@ -279,6 +279,8 @@ export type {
   CreateUserArgs,
   UpdateUserArgs,
   DeleteUserArgs,
+  ListUserIdentitiesArgs,
+  UnlinkIdentityArgs,
   // Media types
   UploadFileData,
   UploadMediaArgs,
@@ -358,8 +360,10 @@ export type {
   EmailLastSentArgs,
   EmailOverdueArgs,
   FindEmailDeliveryByIDArgs,
+  SearchEmailActivityArgs,
   ActivityEntry,
   ActivityPage,
+  AddressSearchPage,
   DeliveryActivity,
   DeliveryDetail,
   QueuedEmailActivity,
@@ -367,6 +371,10 @@ export type {
   QueuedEmailOverdue,
   TemplatesLastSent,
 } from "./direct-api/types";
+
+// What `users.listIdentities` lists: one linked identity, as the account's
+// listing answers it.
+export type { ListedExternalIdentity } from "./domains/auth/services/identity-service";
 
 // Email templates (experimental). Template data takes lists and objects;
 // a template escapes every value it writes, except pre-rendered HTML that

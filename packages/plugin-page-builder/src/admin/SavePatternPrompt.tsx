@@ -34,6 +34,8 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { toastMutationResult } from "@nextlyhq/plugin-sdk/admin";
 import * as React from "react";
 
+import type { CopySourceAddress } from "../library-contract";
+
 import { subjectOf } from "./library-dialog";
 import { usePatternLibrary } from "./pattern-library-client";
 import { useSavePattern } from "./save-pattern-client";
@@ -73,6 +75,11 @@ export interface SavePatternPromptProps {
    * saves this: the snapshot would store a binding to a setting never made.
    */
   currentDocument?: () => BlockDocument;
+  /**
+   * The stored entry the document is, where it is one, named with the save
+   * so the custom CSS it already holds is no change to the saved section.
+   */
+  source?: CopySourceAddress;
 }
 
 /**
@@ -93,6 +100,7 @@ export function SavePatternPrompt({
   returnFocusTo,
   beforeSave,
   currentDocument,
+  source,
 }: SavePatternPromptProps): React.JSX.Element | null {
   if (document === null) return null;
   return (
@@ -103,6 +111,7 @@ export function SavePatternPrompt({
       returnFocusTo={returnFocusTo}
       beforeSave={beforeSave}
       currentDocument={currentDocument}
+      source={source}
     />
   );
 }
@@ -115,6 +124,7 @@ function SavePatternForm({
   returnFocusTo,
   beforeSave,
   currentDocument,
+  source,
 }: Omit<SavePatternPromptProps, "document"> & {
   document: BlockDocument;
 }): React.JSX.Element {
@@ -161,7 +171,12 @@ function SavePatternForm({
         refused.current && currentDocument !== undefined
           ? currentDocument()
           : saving.document;
-      const answered = await writer.save(stored, saving.selectedIds, fields);
+      const answered = await writer.save(
+        stored,
+        saving.selectedIds,
+        fields,
+        source
+      );
       if (answered === undefined) return false;
       toastMutationResult("Saved to Saved sections", answered.warnings);
       return true;
@@ -169,7 +184,7 @@ function SavePatternForm({
     // `saving` is in here even though it never changes: a snapshot taken once
     // at mount is stable by construction, and stating it is cheaper than a
     // suppression that would also hide the next dependency somebody forgets.
-    [writer, saving, beforeSave, currentDocument]
+    [writer, saving, beforeSave, currentDocument, source]
   );
 
   return (

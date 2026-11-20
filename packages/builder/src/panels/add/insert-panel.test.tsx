@@ -25,6 +25,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -43,7 +44,7 @@ import { NoticeSinkProvider } from "../../shell/builder-notices";
 import { InsertPanel } from "./insert-panel";
 import { besidePanel } from "./insert-panel-summon";
 import type { EditorState } from "../../editor-state";
-import { EMPTY_SELECTION } from "../../selection";
+import { EMPTY_SELECTION } from "../../canvas/selection";
 import { chromeStylesheetSource } from "../../styles/chrome-stylesheet";
 
 // The command primitives observe their list box to size it, and jsdom
@@ -720,7 +721,9 @@ describe("InsertPanel", () => {
       }
     );
 
-    expect(screen.getByText(/No blocks match/)).toBeTruthy();
+    expect(
+      within(screen.getByRole("listbox")).getByText(/No blocks match/)
+    ).toBeTruthy();
   });
 
   it("keeps what the place refuses in view, says why, and inserts none of it", () => {
@@ -989,7 +992,9 @@ describe("the panel's frame", () => {
         .getAttribute("placeholder")
     ).toBe("Search saved sections");
     // An empty tab says so once, in the tab's own name.
-    expect(screen.getByText("No saved sections yet.")).toBeTruthy();
+    expect(
+      within(screen.getByRole("listbox")).getByText("No saved sections yet.")
+    ).toBeTruthy();
   });
 
   it("draws the library's categories by name, a plugin's as written, and a block with none under More blocks", () => {
@@ -1661,7 +1666,9 @@ describe("the grid, and the popover that describes a tile", () => {
     fireEvent.change(search(), { target: { value: "nothing matches this" } });
 
     expect(popover()).toBeNull();
-    expect(screen.getByText(/No blocks match/)).toBeTruthy();
+    expect(
+      within(screen.getByRole("listbox")).getByText(/No blocks match/)
+    ).toBeTruthy();
   });
 });
 
@@ -2183,8 +2190,13 @@ describe("when the library was cut, or could not be read", () => {
   });
 
   /** The notices, or none: they are status regions, so that is how they are found. */
+  /** The library's notices: not the list's own line for "nothing matched". */
   function notices(): HTMLElement[] {
-    return screen.queryAllByRole("status");
+    return screen
+      .queryAllByRole("status")
+      .filter(
+        status => status.getAttribute("data-slot") !== "command-empty-status"
+      );
   }
 
   it("says nothing when every tier arrived whole, or is still arriving", () => {

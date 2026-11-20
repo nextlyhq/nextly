@@ -223,6 +223,46 @@ describe("the blocks field's judgement of a write's page code", () => {
     expect(cssRefused(await validate(withCss, {}))).toBe(true);
   });
 
+  it("reads each stored form once for every check of one publish", async () => {
+    // A class the site no longer defines, which the stored page holds: the
+    // class check reads the stored forms to see it is no new reference, and
+    // the page code and CSS checks read them to see nothing changed there.
+    const held = {
+      ...doc(),
+      nodes: [
+        {
+          id: "t1",
+          type: "core/text",
+          version: 1,
+          props: { text: "Hi" },
+          classes: ["c-gone"],
+        },
+      ],
+    };
+    const reads: string[] = [];
+    const counted = write(caller(false), { published: held, draft: held });
+    const readStored = counted.readStored;
+    counted.readStored = async target => {
+      reads.push(String(target.form));
+      return readStored(target);
+    };
+    const result = await validate(held, {
+      write: counted,
+      status: "published",
+      setup: {
+        ...composition,
+        siteDefinitions: async () => ({
+          classIds: new Set<string>(),
+          breakpointIds: new Set(["base"]),
+        }),
+      },
+    });
+    // CONTROL: the held class, the code and the CSS all pass, so every check
+    // ran to the end and none was refused before reading.
+    expect(result).toBe(true);
+    expect(reads.sort()).toEqual(["draft", "published"]);
+  });
+
   it("keeps code only on a page, not on a template or a pattern", async () => {
     for (const kind of ["template", "pattern", "component"]) {
       const stored = { published: doc(undefined, kind) };

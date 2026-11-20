@@ -1229,7 +1229,37 @@ describe("@nextly/adapter-mysql", () => {
       });
     });
 
-    it("should not have savepoint methods", async () => {
+    it("sets, rolls back to and releases a savepoint on the transaction's connection", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      await adapter.transaction(async tx => {
+        await tx.savepoint!("nextly_item`1");
+        await tx.rollbackToSavepoint!("nextly_item`1");
+        await tx.releaseSavepoint!("nextly_item`1");
+      });
+
+      expect(mockConnection.query).toHaveBeenCalledWith(
+        "SAVEPOINT `nextly_item``1`"
+      );
+      expect(mockConnection.query).toHaveBeenCalledWith(
+        "ROLLBACK TO SAVEPOINT `nextly_item``1`"
+      );
+      expect(mockConnection.query).toHaveBeenCalledWith(
+        "RELEASE SAVEPOINT `nextly_item``1`"
+      );
+    });
+
+    it("offers no savepoint methods on a TiDB transaction, which may refuse them", async () => {
+      mockConnection.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql.toLowerCase().includes("version()")
+            ? [[{ version: "8.0.11-TiDB-v8.5.1" }], []]
+            : [[], []]
+        )
+      );
       const adapter = createMySqlAdapter({
         url: "mysql://localhost:3306/test",
       });
@@ -1269,6 +1299,21 @@ describe("@nextly/adapter-mysql", () => {
       expect(capabilities.maxIdentifierLength).toBe(64);
       // Not known before connect: the server's version decides it.
       expect(capabilities.sharedRowLock).toBeUndefined();
+    });
+
+    // `supportsSavepoints` means a nested transaction is isolated by a
+    // savepoint, which MySQL's flat join is not, whatever savepoints the
+    // transaction context itself takes.
+    it("reports no savepoints for nested transactions once connected, though its context takes them", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      expect(adapter.getCapabilities().supportsSavepoints).toBe(false);
+      await adapter.transaction(async tx => {
+        expect(typeof tx.savepoint).toBe("function");
+      });
     });
 
     it.each([

@@ -11,6 +11,7 @@
  */
 import type { ValidationIssue } from "../validation";
 
+import { isColourOrder } from "./colour-order";
 import { type DtcgNode, isPlainObject, issue } from "./dtcg-format";
 import { siteTextIssues } from "./site-text";
 import { resolveTokenPrefix, type SiteTokenSet } from "./site-tokens";
@@ -41,9 +42,6 @@ export function siteDataOf(set: SiteTokenSet): DtcgNode | undefined {
   };
   return Object.keys(data).length === 0 ? undefined : data;
 }
-
-/** The longest colour order read: the site holds no more variables. */
-const MAX_ORDER = 10_000;
 
 /** The site data a file keeps, each part checked, or `undefined` for none. */
 export function readSiteData(
@@ -79,14 +77,9 @@ const PARTS: readonly (readonly [
   readable: (value: unknown) => boolean,
 ])[] = [
   ["siteText", "Site text", value => siteTextIssues(value).length === 0],
-  [
-    "order",
-    "The colour order",
-    value =>
-      Array.isArray(value) &&
-      value.length <= MAX_ORDER &&
-      value.every(entry => typeof entry === "string"),
-  ],
+  // By the rule the stored site style is held to, so an order the save
+  // would refuse is skipped here and the rest of the import still lands.
+  ["order", "The colour order", isColourOrder],
   ["fluidRange", "The fluid range", isFluidRange],
   [
     "builtInColoursShown",

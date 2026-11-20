@@ -52,7 +52,6 @@ import {
 } from "./limits";
 import { boundedLimit } from "./measure-bytes";
 import { isPlainRecord } from "./plain-record";
-import { withSettingDefaults } from "./setting-defaults";
 import type {
   ComponentLookup,
   ComponentUnresolvedReason,
@@ -65,6 +64,7 @@ import {
   surveyHost,
 } from "./resolve-instances-run";
 import { inlineForest } from "./resolve-instances-walk";
+import { withSettingDefaults } from "./setting-defaults";
 
 export { COMPONENT_UNRESOLVED_REASONS } from "./resolve-instances-contract";
 export type {

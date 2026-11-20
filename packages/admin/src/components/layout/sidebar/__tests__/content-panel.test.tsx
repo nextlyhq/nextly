@@ -20,6 +20,10 @@ import {
   forgetPerson,
   resetDeviceMemoryForTests,
 } from "@admin/lib/device-memory/device-memory";
+import {
+  drawnText,
+  nameHoldsDrawnText,
+} from "@admin/__tests__/helpers/label-in-name";
 import type { AdminBranding } from "@admin/types/branding";
 
 type FixtureCollection = {
@@ -213,10 +217,10 @@ describe("ContentPanel", () => {
     renderPanel();
 
     expect(outline()).toEqual([
-      "Collections2",
+      "Collections 2",
       "Authors",
       "Posts",
-      "Singles2",
+      "Singles 2",
       "Footer",
       "Homepage",
     ]);
@@ -268,7 +272,7 @@ describe("ContentPanel", () => {
     renderPanel();
 
     expect(outline()).toEqual([
-      "Collections5",
+      "Collections 5",
       // Marketing's first collection (order 10) comes before Shop's (20).
       "Marketing",
       "Case Studies",
@@ -279,7 +283,7 @@ describe("ContentPanel", () => {
       // The ungrouped last; naming the built-in section is naming no group.
       "Posts",
       "Pages",
-      "Singles2",
+      "Singles 2",
       "Footer",
       "Homepage",
     ]);
@@ -311,9 +315,9 @@ describe("ContentPanel", () => {
     );
 
     expect(outline()).toEqual([
-      "Collections1",
+      "Collections 1",
       "Authors",
-      "Singles1",
+      "Singles 1",
       "Homepage",
     ]);
     expect(screen.getByRole("status")).toBeEmptyDOMElement();
@@ -331,7 +335,22 @@ describe("ContentPanel", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Nothing matches “pricing”."
     );
-    expect(outline()).toEqual(["Collections0", "Singles0"]);
+    expect(outline()).toEqual(["Collections 0", "Singles 0"]);
+  });
+
+  // Label in Name: the heading draws its label and its count in two spans,
+  // and the check joins their text with nothing between, so "Collections"
+  // and "2" would read "Collections2", a word the name never says.
+  it("names each heading with the words it draws, its count apart from its label", () => {
+    renderPanel();
+    for (const label of ["Collections", "Singles"]) {
+      const button = heading(label);
+      const name = button.getAttribute("aria-label") ?? "";
+      expect(
+        nameHoldsDrawnText(name, drawnText(button)),
+        `"${name}" against the drawn "${drawnText(button)}"`
+      ).toBe(true);
+    }
   });
 
   it("draws no count on a heading whose list is still arriving, and names it without one", () => {
@@ -428,11 +447,11 @@ describe("ContentPanel", () => {
     ).toHaveAttribute("aria-expanded", "false");
     expect(heading("Collections")).toHaveAttribute("aria-expanded", "true");
     expect(outline()).toEqual([
-      "Collections3",
+      "Collections 3",
       "Shop",
       "Authors",
       "Posts",
-      "Singles2",
+      "Singles 2",
     ]);
     second.unmount();
 
@@ -486,19 +505,19 @@ describe("ContentPanel", () => {
   it("shows a reader of Singles alone no Collections heading", () => {
     renderPanel({ hasCollections: false });
 
-    expect(outline()).toEqual(["Singles2", "Footer", "Homepage"]);
+    expect(outline()).toEqual(["Singles 2", "Footer", "Homepage"]);
   });
 
   it("shows a reader of collections alone no Singles heading", () => {
     renderPanel({ hasSingles: false });
 
-    expect(outline()).toEqual(["Collections2", "Authors", "Posts"]);
+    expect(outline()).toEqual(["Collections 2", "Authors", "Posts"]);
   });
 
   it("drops a heading whose kind turned out to list nothing", () => {
     lists.singles = [];
     renderPanel();
 
-    expect(outline()).toEqual(["Collections2", "Authors", "Posts"]);
+    expect(outline()).toEqual(["Collections 2", "Authors", "Posts"]);
   });
 });

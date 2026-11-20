@@ -399,8 +399,7 @@ test.describe("block styles in the Styles tab", () => {
     const hidden = styleWrite(page);
     await menu.getByRole("menuitem", { name: "Hide" }).click();
     await hidden;
-    await expect(styleRow(page, "Text")).toHaveAttribute(
-      "aria-label",
+    await expect(styleRow(page, "Text")).toHaveAccessibleName(
       /^Text, hidden, built-in/
     );
     expect(
@@ -433,21 +432,16 @@ test.describe("block styles in the Styles tab", () => {
     await openEditorWith(page, [button("bs-plain", "Plain")], "bs-plain");
     await openStyles(page);
     // The block's own style carries ★ until another does.
-    await expect(styleRow(page, "Primary")).toHaveAttribute(
-      "aria-label",
+    await expect(styleRow(page, "Primary")).toHaveAccessibleName(
       /^Primary, default/
     );
     const moved = styleWrite(page);
     await chooseFromMenu(page, "Outline", "Set as default ★");
     await moved;
-    await expect(styleRow(page, "Outline")).toHaveAttribute(
-      "aria-label",
+    await expect(styleRow(page, "Outline")).toHaveAccessibleName(
       /^Outline, default/
     );
-    await expect(styleRow(page, "Primary")).toHaveAttribute(
-      "aria-label",
-      "Primary"
-    );
+    await expect(styleRow(page, "Primary")).toHaveAccessibleName("Primary");
     expect(
       (await storedClasses(page.request))
         .filter(entry => entry.starred === true)
@@ -478,9 +472,13 @@ test.describe("block styles in the Styles tab", () => {
     const tabTo = async (name: RegExp): Promise<void> => {
       await page.getByRole("searchbox", { name: "Search Design" }).focus();
       for (let presses = 0; presses < 80; presses += 1) {
+        // A row is named by its own hidden text, which starts with its
+        // name; anything else by its label or its text.
         const focused = await page.evaluate(
           () =>
             document.activeElement?.getAttribute("aria-label") ??
+            document.activeElement?.querySelector(":scope > .nx-sr-only")
+              ?.textContent ??
             document.activeElement?.textContent ??
             ""
         );

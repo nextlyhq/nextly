@@ -406,28 +406,36 @@ export interface TransactionContext {
   ): Promise<T>;
 
   /**
-   * Create a savepoint (PostgreSQL, SQLite only).
+   * Create a savepoint (PostgreSQL, SQLite, MySQL; undefined on TiDB).
    *
    * @remarks
-   * Savepoints allow partial rollback within a transaction.
-   * Not supported on MySQL.
+   * Savepoints allow partial rollback within a transaction. Undefined where
+   * the server may refuse them: TiDB refuses `SAVEPOINT` before 6.2, and in a
+   * pessimistic transaction unless in-place constraint checks are on. On
+   * MySQL a nested `transaction()` still joins flat, without one
+   * (`DatabaseCapabilities.supportsSavepoints`).
    *
    * @param name - Savepoint name
    */
   savepoint?(name: string): Promise<void>;
 
   /**
-   * Rollback to a savepoint (PostgreSQL, SQLite only).
+   * Rollback to a savepoint (PostgreSQL, SQLite, MySQL; undefined on TiDB).
    *
    * @remarks
-   * Discards all changes made after the savepoint was created.
+   * Discards all changes made after the savepoint was created, and drops the
+   * adapter's `afterCommit` effects registered since then, as a rolled-back
+   * nested transaction's are dropped. The `afterRollback` effects registered
+   * since then run once the outermost transaction ends, committed or rolled
+   * back: the changes they compensate for are undone either way. Each runs
+   * once.
    *
    * @param name - Savepoint name
    */
   rollbackToSavepoint?(name: string): Promise<void>;
 
   /**
-   * Release a savepoint (PostgreSQL, SQLite only).
+   * Release a savepoint (PostgreSQL, SQLite, MySQL; undefined on TiDB).
    *
    * @remarks
    * Commits the savepoint, making its changes permanent within the transaction.

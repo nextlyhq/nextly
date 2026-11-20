@@ -35,21 +35,21 @@ import {
   ENTRY_CONTENT_NOTE_ATTRIBUTE,
 } from "@nextlyhq/blocks-react";
 
+import { GALLERY_BLOCK } from "../inspector/content/gallery-pictures";
+import { CANVAS_ROOT_CLASS } from "../shell-state";
+
 import {
   QUESTION_ROOM_ATTRIBUTE,
   QUESTION_ROOM_PROPERTY,
-} from "../accordion-questions";
-import { GALLERY_BLOCK } from "../gallery-pictures";
-import { CANVAS_ROOT_CLASS } from "../shell-state";
-
+} from "./accordion-questions";
 import { APPEAR_REPLAY_RULES } from "./appear-replay";
 import { DEVICE_HIDDEN_ATTRIBUTE } from "./canvas-device-hidden";
-import { PAGE_PLACEHOLDER_ATTRIBUTE } from "./page-placeholder";
 import {
   EMPTY_CONTAINER_SELECTOR,
   EMPTY_DISCLOSURE_SELECTOR,
   EMPTY_TEXT_SELECTOR,
 } from "./empty-slot";
+import { PAGE_PLACEHOLDER_ATTRIBUTE } from "./page-placeholder";
 
 const ROOT = `.${CANVAS_ROOT_CLASS}`;
 
@@ -737,6 +737,20 @@ ${EMPTY_LIST}[data-nx-list-visitors]:not([data-nx-list-still])::before {
 
 .nx-canvas-region__content {
   opacity: var(--nx-builder-region-opacity, 0.6);
+}
+
+/* The region's name, heard and not drawn: the editor's own hidden-text rule
+   does not reach the canvas, so the frame says it here. */
+.nx-canvas-region__name {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border-width: 0;
 }
 
 /* Where the region meets the page: a quiet line. */

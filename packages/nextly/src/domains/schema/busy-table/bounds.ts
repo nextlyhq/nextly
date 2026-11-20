@@ -9,8 +9,9 @@
  * defaults of 5 and 90 seconds. A value outside its range is refused before anything changes, on
  * every database alike; no value turns the bound off.
  *
- * These bound only the wait for a busy table, never the wait for the schema lock itself, which has
- * its own minute.
+ * These bound the wait for a busy table, never the wait for a schema lock another run holds,
+ * which has its own minute. On SQLite, where a connection with a write open holds the whole
+ * database, they also bound the wait for it while the schema lock is taken.
  *
  * @module domains/schema/busy-table/bounds
  */
@@ -82,7 +83,7 @@ function seconds(
   throw NextlyError.invalidInput({
     message:
       `${source.name} is ${JSON.stringify(source.value)}, which is not a whole number of seconds ` +
-      `from ${range}. It bounds the wait for a busy table, not for the schema lock. Nothing was ` +
+      `from ${range}. It bounds the wait for a busy table, not for a schema lock another run holds. Nothing was ` +
       "changed.",
     logContext: { reason: "busy-table-bound-invalid", setting: source.name },
   });

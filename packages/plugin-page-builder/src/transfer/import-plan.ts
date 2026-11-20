@@ -33,6 +33,8 @@ import { createHash } from "node:crypto";
 import {
   COMPONENT_INSTANCE_TYPE,
   MAX_BREAKPOINTS_PER_AXIS,
+  remapTokenReferences,
+  resolveTokenPrefix,
   sameJsonValue,
   tokenDisplayLabel,
   tokenIdentity,
@@ -41,6 +43,7 @@ import {
   type BreakpointSet,
   type NamedClass,
   type SiteToken,
+  type TokenRemap,
 } from "@nextlyhq/blocks-engine";
 
 import { rewriteClass, type ReferenceMaps } from "./import-rewrite";
@@ -95,6 +98,11 @@ export interface ImportSite {
   readonly items: Readonly<Record<TransferKind, ExistingItems>>;
   readonly classes: readonly NamedClass[];
   readonly tokens: readonly SiteToken[];
+  /**
+   * The prefix this site writes its variables under, which every `var()` of
+   * one of the file's variables is pointed at.
+   */
+  readonly tokenPrefix: string;
   readonly breakpoints: BreakpointSet;
   /** By the file's media id. */
   readonly media: ReadonlyMap<string, ExistingMedia>;
@@ -138,8 +146,14 @@ export interface ImportPlan {
       readonly slug: string;
     }[];
   };
+  /**
+   * The file's variables: where each lands here and the prefixes their
+   * custom properties are written under (`remap`, one per import, which every
+   * value the import writes is read through), and the new ones, their values
+   * already pointed here.
+   */
   readonly tokens: {
-    readonly map: ReadonlyMap<string, string>;
+    readonly remap: TokenRemap;
     readonly create: readonly SiteToken[];
   };
   /** Kept breakpoints only, file id to the site's. */
@@ -234,7 +248,12 @@ export function planImport(
   const order = componentOrder(file, items.component, ledger.problems);
   // Variables and breakpoints first: a shared style is the same as one here
   // only once what its styles name is mapped as the import maps it.
-  const tokens = planTokens(file.tokens, site.tokens, ledger);
+  const tokens = planTokens(file.tokens, site.tokens, ledger, {
+    // A file that doesn't name its prefix was written under the default, as
+    // a design token file without one is read.
+    from: resolveTokenPrefix(file.tokenPrefix).prefix,
+    to: site.tokenPrefix,
+  });
   const breakpoints = planBreakpoints(
     file,
     site,
@@ -243,7 +262,7 @@ export function planImport(
     ledger.problems
   );
   const classes = planClasses(file.classes, site.classes, ledger, {
-    tokens: tokens.map,
+    tokens: tokens.remap,
     breakpoints: breakpoints.map,
   });
   const media = planMedia(file, site, ledger);
@@ -428,12 +447,88 @@ function planClasses(
   return { map, create };
 }
 
-/** Variables: reused when identical, else added, renamed or pointed at one here. */
+/**
+ * Variables: reused when identical, else added, renamed or pointed at one
+ * here. Each new one's value names the others as the import writes them.
+ *
+ * A value is compared as the import would write it, which depends on where
+ * the variables it names land: a shadow naming a colour the import renames
+ * is not the shadow here naming this site's colour. So the variables are
+ * settled again against where the last round put each one, until no round
+ * moves any, and for no more rounds than there are variables: each round
+ * can only follow a rename the last one made.
+ */
 function planTokens(
   listed: readonly SiteToken[],
   own: readonly SiteToken[],
-  ledger: Ledger
+  ledger: Ledger,
+  prefixes: Pick<TokenRemap, "from" | "to">
 ): ImportPlan["tokens"] {
+  const identities = listed.map(tokenIdentity);
+  const remapBy = (ids: ReadonlyMap<string, string>): TokenRemap => ({
+    ids,
+    identities,
+    ...prefixes,
+  });
+  // First as if every variable kept its own identity: its `var()`s under
+  // this site's prefix only.
+  let against: ReadonlyMap<string, string> = new Map();
+  let settled = settleTokens(listed, own, ledger, remapBy(against));
+  for (
+    let round = 0;
+    round < listed.length && !sameLandings(identities, settled.map, against);
+    round += 1
+  ) {
+    against = settled.map;
+    settled = settleTokens(listed, own, ledger, remapBy(against));
+  }
+  ledger.added.push(...settled.ledger.added);
+  ledger.reused.push(...settled.ledger.reused);
+  ledger.conflicts.push(...settled.ledger.conflicts);
+  const remap = remapBy(settled.map);
+  return {
+    remap,
+    // Their values point at the variables they name as those land here.
+    create: settled.create.map(token => ({
+      ...token,
+      values: remapTokenReferences(token.values, remap),
+    })),
+  };
+}
+
+/** Whether two maps land every identity at the same place. */
+function sameLandings(
+  identities: readonly string[],
+  left: ReadonlyMap<string, string>,
+  right: ReadonlyMap<string, string>
+): boolean {
+  return identities.every(
+    identity =>
+      (left.get(identity) ?? identity) === (right.get(identity) ?? identity)
+  );
+}
+
+/**
+ * One round of {@link planTokens}: each variable settled with its value
+ * compared as `compared` writes it, into a ledger of its own.
+ */
+function settleTokens(
+  listed: readonly SiteToken[],
+  own: readonly SiteToken[],
+  ledger: Ledger,
+  compared: TokenRemap
+): {
+  map: Map<string, string>;
+  create: SiteToken[];
+  ledger: Ledger;
+} {
+  const round: Ledger = {
+    added: [],
+    reused: [],
+    conflicts: [],
+    problems: [],
+    choiceOf: ledger.choiceOf,
+  };
   const map = new Map<string, string>();
   const create: SiteToken[] = [];
   const identities = new Set(own.map(tokenIdentity));
@@ -443,10 +538,10 @@ function planTokens(
     if (
       clash !== undefined &&
       clash.kind === token.kind &&
-      sameJsonValue(clash.values, token.values)
+      sameJsonValue(clash.values, remapTokenReferences(token.values, compared))
     ) {
       map.set(identity, identity);
-      ledger.reused.push({
+      round.reused.push({
         kind: "token",
         fileId: identity,
         name: tokenDisplayLabel(token),
@@ -459,7 +554,7 @@ function planTokens(
       map.set(identity, identity);
       identities.add(identity);
       create.push(token);
-      ledger.added.push({
+      round.added.push({
         kind: "token",
         fileId: identity,
         name: tokenDisplayLabel(token),
@@ -472,7 +567,7 @@ function planTokens(
     const existing = { id: identity, name: tokenDisplayLabel(clash) };
     if (
       settle(
-        ledger,
+        round,
         "token",
         identity,
         tokenDisplayLabel(token),
@@ -490,7 +585,7 @@ function planTokens(
     delete (copy as { id?: string }).id;
     create.push(copy);
   }
-  return { map, create };
+  return { map, create, ledger: round };
 }
 
 /** Media: reused when identical, else uploaded, renamed or pointed at one here. */
@@ -812,6 +907,8 @@ function fingerprintOf(
   const { added, conflicts, reused } = ledger;
   const judged = {
     breakpoints: site.breakpoints,
+    // What the import writes names this site's variables under it.
+    tokenPrefix: site.tokenPrefix,
     mayAddBreakpoints: site.mayAddBreakpoints,
     added: added.map(entry => [entry.kind, entry.fileId, entry.name]),
     // The choice in force too: an apply choosing otherwise than the

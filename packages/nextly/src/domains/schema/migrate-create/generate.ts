@@ -29,6 +29,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
 import { carriedDefinition } from "../../i18n/migration/carried-definition";
@@ -88,6 +89,8 @@ import {
 } from "../../i18n/per-language-storage";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import type { Deletion } from "../migrate/data-loss-consent";
+import { coveredEntity, type CoveredEntity } from "../migrate/entity-coverage";
+import { mergedBy } from "../migrate/history-line";
 import { migrationCompanionSwitches } from "../pipeline/companion-shape-switches";
 import {
   buildDesiredTableFromComponentFields,
@@ -129,6 +132,7 @@ import {
   columnsDeclaredBy,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -1482,6 +1486,10 @@ export async function generateMigration(
         args,
         previous === null ? undefined : previous.data.entities
       ),
+      entities: coveredEntitiesOf(
+        args,
+        previous === null ? undefined : previous.data.entities
+      ),
       translationMoves: [
         ...(args.valueMoves ?? []),
         ...companionPlans.flatMap(({ plan: { kind, spec } }) =>
@@ -1601,6 +1609,22 @@ function startOf(
   previous: NonNullable<GenerateArgs["previous"]> | null
 ): string | undefined | null {
   return previous === null ? undefined : (previous.filename ?? null);
+}
+
+/**
+ * Where a migration's snapshot places it in the project's line, from the
+ * snapshot file its run started from (`startOf`): its parent is that
+ * migration (none for a run that started from none), and it records a merge
+ * of every other branch end in the folder as it is written (`mergedBy`).
+ * Nothing is recorded where the run cannot say what it started from.
+ */
+async function lineFrom(
+  migrationsDir: string,
+  startedFrom: string | undefined | null
+): Promise<{ parent: string | null; merges: string[] } | undefined> {
+  if (startedFrom === null) return undefined;
+  const parent = startedFrom?.replace(/\.snapshot\.json$/, "") ?? null;
+  return { parent, merges: await mergedBy(migrationsDir, parent) };
 }
 
 /**
@@ -1926,7 +1950,8 @@ async function writeMigrationPair(
             pair.sqlContent,
             pair.contributions,
             pair.entities,
-            pair.permissions
+            pair.permissions,
+            await lineFrom(args.migrationsDir, pair.startedFrom)
           ),
           await prepareWhole(sqlPath, pair.sqlContent),
         ];
@@ -3664,6 +3689,19 @@ export function buildDesiredSnapshotFromConfig(
 ): NextlySchemaSnapshot {
   const tables: TableSpec[] = [];
   const kept = columnsByTable(existing ?? { tables: [] }, dialect);
+  // Each field group's discriminator, read off the table as the last migration recorded it: the
+  // storage migration renames a group's column whatever its table is called, so the name alone
+  // cannot say which one an existing table has (`chooseTypeColumns`).
+  const recordedTypeColumns = chooseTypeColumns(
+    (existing?.tables ?? []).map(table => ({
+      table: table.name,
+      columns: table.columns.map(column => column.name),
+    })),
+    components.map(component => component.tableName),
+    dialect === "mysql"
+      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+      : identifierCaseRules({ dialect })
+  );
   for (const entity of collections) {
     const c = withKeptScopeFields("collection", entity, kept);
     // Why: forward the entity's Draft/Published flag so the snapshot
@@ -3717,6 +3755,9 @@ export function buildDesiredSnapshotFromConfig(
         buildDesiredTableFromComponentFields(c.tableName, c.fields, dialect, {
           builtBy: columnOriginOf(c, "fieldGroup"),
           localized: storesPerLanguage(c),
+          // The discriminator the table carries as the last migration left it, and for a table
+          // no migration has made yet, the one it is created with under its name.
+          typeColumn: recordedTypeColumns.get(c.tableName),
         }),
         c,
         "fieldGroup",
@@ -4064,6 +4105,89 @@ function removedEntitiesOf(
       slug,
       table: resolveComponentTableName(slug),
     })),
+  ];
+}
+
+/**
+ * Where an entity comes from, as its registry row will say: the provenance its declaration
+ * records (`plugin:<name>` for a plugin's), else the source its record was written under.
+ */
+function provenanceOf(entry: RecordedEntitySettings): string {
+  const declared = entry.settings.source;
+  return typeof declared === "string" ? declared : entry.source;
+}
+
+/**
+ * The collections and Singles a migration is planned against, each with every table it owns
+ * (`coveredEntity`): those the config declares, by the table it gives them, and those the latest
+ * snapshot records, by the table their recorded declaration names (its `dbName`, else its slug).
+ * A declared entity's fields are the config's and the snapshot's together, so a junction whose
+ * field the config just removed is still known as the entity's; and one whose recorded table
+ * differs from its declared one is also known by the recorded table, which the migration drops,
+ * with the recorded fields, which then belong to that table alone. A plugin's entity, or Nextly's
+ * own, is kept `excluded`, so its main table is still no other entity's.
+ */
+export function coveredEntitiesOf(
+  args: GenerateArgs,
+  recorded: EntitySettingsRecord | undefined
+): CoveredEntity[] {
+  const of = (
+    kind: CoveredEntity["kind"],
+    declared: readonly MinimalConfigEntity[],
+    record: Record<string, RecordedEntitySettings> | undefined,
+    tableOf: (slug: string, dbName: string | undefined) => string
+  ): CoveredEntity[] => {
+    const fieldsOf = (entry: RecordedEntitySettings | undefined): unknown[] =>
+      Array.isArray(entry?.settings.fields) ? entry.settings.fields : [];
+    const recordedTable = (slug: string, entry: RecordedEntitySettings) => {
+      const dbName = entry.settings.dbName;
+      return tableOf(slug, typeof dbName === "string" ? dbName : undefined);
+    };
+    const entities = declared.map(entity => {
+      // The recorded fields join the declared ones only under the same table: under a new one,
+      // the recorded declaration is the old table's, kept below as the entity that owns what the
+      // old table's fields name, as the registry row `nextly migrate` reads still does.
+      const entry = record?.[entity.slug];
+      const sameTable =
+        entry !== undefined &&
+        recordedTable(entity.slug, entry).toLowerCase() ===
+          entity.tableName.toLowerCase();
+      return coveredEntity({
+        kind,
+        slug: entity.slug,
+        tableName: entity.tableName,
+        fields: [...entity.fields, ...(sameTable ? fieldsOf(entry) : [])],
+        ...(entity.settings === undefined
+          ? {}
+          : { source: provenanceOf(entity.settings) }),
+      });
+    });
+    for (const [slug, entry] of Object.entries(record ?? {})) {
+      const table = recordedTable(slug, entry);
+      const current = declared.find(entity => entity.slug === slug);
+      if (current?.tableName.toLowerCase() === table.toLowerCase()) continue;
+      entities.push(
+        coveredEntity({
+          kind,
+          slug,
+          tableName: table,
+          fields: fieldsOf(entry),
+          source: provenanceOf(entry),
+        })
+      );
+    }
+    return entities;
+  };
+  return [
+    ...of(
+      "collection",
+      args.collections,
+      recorded?.collections,
+      (slug, dbName) => resolveCollectionTableName(slug, dbName)
+    ),
+    ...of("single", args.singles, recorded?.singles, (slug, dbName) =>
+      resolveSingleTableName({ slug, dbName })
+    ),
   ];
 }
 

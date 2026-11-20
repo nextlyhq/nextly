@@ -10,6 +10,7 @@
  *
  * @module style/fluid-value
  */
+import { isPlainRecord } from "../plain-record";
 
 /** The page widths a fluid size grows across, in px. */
 export interface FluidRangeWidths {
@@ -24,6 +25,29 @@ export const DEFAULT_FLUID_RANGE: FluidRangeWidths = { min: 360, max: 1280 };
 export interface FluidSizes {
   readonly small: number;
   readonly large: number;
+}
+
+/**
+ * Whether a value is one of a fluid size's sizes: a finite number of px above
+ * zero. The one bound: "Fluid…" takes what passes it, and a reader of stored
+ * sizes refuses what fails it, so the two never disagree about a size.
+ */
+export function isFluidSize(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * Whether a value is a fluid size's two sizes, as "Fluid…" stores them:
+ * `small` and `large`, each {@link isFluidSize}, and nothing else. Either may
+ * be the larger, since text may shrink on wide screens.
+ */
+export function isFluidSizes(value: unknown): value is FluidSizes {
+  return (
+    isPlainRecord(value) &&
+    Object.keys(value).every(key => key === "small" || key === "large") &&
+    isFluidSize(value.small) &&
+    isFluidSize(value.large)
+  );
 }
 
 /** px as rem, to four places: a site's root size scales what it writes. */

@@ -1437,6 +1437,42 @@ export class CollectionEntryService extends BaseService {
     return result;
   }
 
+  /**
+   * @experimental Create an entry that copies a stored one, reading the
+   * source as the caller first; see the bulk service's `createFromSource`.
+   * Server-only: no REST route reaches it.
+   */
+  async createEntryFromSource(
+    params: Parameters<CollectionBulkService["createFromSource"]>[0] & {
+      /** Skip cache revalidation for this write (the outbox drain still runs). */
+      disableRevalidate?: boolean;
+    }
+  ) {
+    // Judged in the languages a duplicate is: the copy writes `locale` and
+    // reads the source there, falling back as a read of it does.
+    const result = await withRuleLanguage(
+      readLanguagesFor(this.localization, params.locale),
+      () => this.bulkService.createFromSource(params)
+    );
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
+    return result;
+  }
+
+  /**
+   * @experimental {@link createEntryFromSource} on the caller's transaction:
+   * the source is read and the entry created on `tx`, so a dry run rolled
+   * back after it judges the copy exactly as the create itself.
+   */
+  async createEntryFromSourceInTransaction(
+    tx: TransactionContext,
+    params: Parameters<CollectionBulkService["createFromSource"]>[0]
+  ): Promise<CollectionServiceResult<unknown>> {
+    return withRuleLanguage(
+      readLanguagesFor(this.localization, params.locale),
+      () => this.bulkService.createFromSource(params, tx)
+    );
+  }
+
   // Phase 4.5: bulk methods carry full records on update (caller needs
   // the post-mutation values) and minimal {id} records on delete.
   async bulkDeleteEntries(params: {

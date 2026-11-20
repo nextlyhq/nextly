@@ -45,6 +45,8 @@ import { getAdapterFromDI, getLoggerFromDI } from "./di";
  */
 const loadCollectionSave = () =>
   import("../../domains/schema/builder-save/collection-save");
+const loadStoppedSave = () =>
+  import("../../domains/schema/builder-save/stopped-save");
 const loadEntitySave = () =>
   import("../../domains/schema/builder-save/entity-save");
 
@@ -127,12 +129,24 @@ export async function writeBuilderSchemaChange(
    * `registry`, the caller's registry write for the save, runs inside the last file's
    * transaction, after its ledger row, so the change and the row the registry keeps of it commit
    * or roll back together, and a failed write leaves the save as it was. On every other road the
-   * caller writes it after this returns.
+   * caller writes it after this returns. It is handed the fields the row records: the save's, or,
+   * where the file stops part way and is settled to what of it applied, those that applied.
    */
   fileRoad?: {
     pushWhen: () => Promise<boolean>;
     afterFile: () => Promise<void>;
-    registry?: () => Promise<void>;
+    /**
+     * The questions the push asks before it changes anything, asked of the save's file where it
+     * runs instead, before anything is written: a rename the request does not answer, or a drop it
+     * does not confirm, refuses the save as the push refuses it (`refuseUnansweredDialogQuestions`).
+     */
+    questions?: (moved: readonly string[]) => Promise<void>;
+    registry?: (fields: readonly FieldDefinition[]) => Promise<void>;
+    /**
+     * After `registry`, for a file that stopped part way and was settled to what applied: what
+     * the caller does after an apply (its runtime tables), given the fields the row recorded.
+     */
+    settled?: (fields: readonly FieldDefinition[]) => void;
   }
 ): Promise<{ registryWritten: boolean }> {
   // Asked at most once: it reads the live table.
@@ -169,13 +183,39 @@ export async function writeBuilderSchemaChange(
     }).save,
     change.moves
   );
+  // Outside development the push runs after the files are written (`appliedAfter`) and asks only of
+  // the main table's columns, while the translations table's and the link tables' drops follow it:
+  // the questions are asked there too, before anything is written, as the collection's road asks.
+  // They are told the columns the save's planned moves carry into a group, which are not drops.
+  if (runsFile || !deps.applies) {
+    const questions = fileRoad?.questions;
+    if (questions !== undefined) {
+      const { movedColumnsOf } = await loadCollectionSave();
+      await questions(movedColumnsOf(deps, save, change.table));
+    }
+  }
   const { writeEntitySave } = await loadEntitySave();
   if (runsFile) {
+    const registry = fileRoad.registry;
+    const { appliedFieldsOf } = await loadStoppedSave();
     await writeEntitySave(deps, save, apply, {
       runsFile: true,
-      ...(fileRoad.registry === undefined
+      ...(registry === undefined
         ? {}
-        : { inLastTransaction: fileRoad.registry }),
+        : {
+            inLastTransaction: () => registry(change.fields),
+            // A file that stops part way is settled to what of it applied: the row then records
+            // the fields as far as the database holds them.
+            onSettled: async report => {
+              const applied = appliedFieldsOf(
+                change.stored.fields as unknown as FieldDefinition[],
+                change.fields,
+                report
+              );
+              await registry(applied);
+              fileRoad.settled?.(applied);
+            },
+          }),
     });
     await fileRoad.afterFile();
     return { registryWritten: fileRoad.registry !== undefined };
@@ -190,7 +230,11 @@ export async function writeBuilderSchemaChange(
     }
   });
   const written = await writeEntitySave(deps, save, pushed.appliedBy);
-  pushed.throwIfFailed(written?.files ?? []);
+  pushed.throwIfFailed(
+    written?.files ?? [],
+    written?.checked,
+    written?.settleFailure
+  );
   return { registryWritten: false };
 }
 

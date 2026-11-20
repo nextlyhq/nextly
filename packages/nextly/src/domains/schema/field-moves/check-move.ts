@@ -28,8 +28,10 @@ import { builderColumnIsUnique, toSnakeCase } from "../field-rules";
 import {
   classifyFieldKind,
   fieldProducesColumn,
+  getColumnDescriptor,
   isTextStorageKind,
 } from "../services/field-column-descriptor";
+import { sameRelationTarget } from "../services/relationship-key-target";
 
 /** Where a field's values are: a column of their own, or a key inside a container's JSON column. */
 export type StoragePlace =
@@ -218,11 +220,6 @@ export function checkMove(
   };
 }
 
-/** What a relationship relates to, as its definition names it; undefined for any other field. */
-function relationTargetOf(field: FieldDefinition): unknown {
-  return (field as { relationTo?: unknown }).relationTo;
-}
-
 /** The refusal of a field whose storage changes with the move, or that has no column to move. */
 function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
   if (from.field.type !== to.field.type || !sameStorage(from.field, to.field)) {
@@ -232,11 +229,9 @@ function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
     );
   }
   // A relationship's stored ids name entries of the collection it relates to: moved while that
-  // changes, each would name an entry of a collection it was never chosen from.
-  if (
-    JSON.stringify(relationTargetOf(from.field)) !==
-    JSON.stringify(relationTargetOf(to.field))
-  ) {
+  // changes, each would name an entry of a collection it was never chosen from. The target is
+  // read as reads take it, `relationTo` before `options.target` (`sameRelationTarget`).
+  if (!sameRelationTarget(from.field, to.field)) {
     return refuse(
       "type-changed",
       `${label(to.field)} is moved and changes what it relates to in the same save. Move it and change what it relates to in separate saves.`
@@ -332,7 +327,24 @@ function valuesRefusal(
 function sameStorage(before: FieldDefinition, after: FieldDefinition): boolean {
   const a = classifyFieldKind(before, "collection");
   const b = classifyFieldKind(after, "collection");
+  if (a === "decimal" && b === "decimal") return sameDecimalSize(before, after);
   return a === b || (isTextStorageKind(a) && isTextStorageKind(b));
+}
+
+/**
+ * Whether two decimal fields keep the same digits, with the defaults the column takes where one
+ * states none: a copy into a column with fewer would round each value, as the column's own
+ * descriptor sizes it.
+ */
+function sameDecimalSize(
+  before: FieldDefinition,
+  after: FieldDefinition
+): boolean {
+  const size = (field: FieldDefinition) => {
+    const column = getColumnDescriptor(field, "postgresql", "collection");
+    return `${column?.precision},${column?.scale}`;
+  };
+  return size(before) === size(after);
 }
 
 /**

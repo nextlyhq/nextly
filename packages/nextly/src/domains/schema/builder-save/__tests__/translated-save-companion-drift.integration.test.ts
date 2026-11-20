@@ -368,44 +368,22 @@ for (const dialect of getConfiguredTestDialects()) {
           `CREATE INDEX ${q(titleIndex())} ON ${q(companion)} (${q("title")}${dialect === "mysql" ? "(191)" : ""})`
         );
 
-      it.skipIf(dialect === "mysql")(
-        "is refused as drift before anything changes, when a translated field gains Unique over an index already under its name",
-        async () => {
-          await kind.create();
-          const companion = `${kind.table}_locales`;
-          await plantPlainTitleIndex(companion);
-          const main = await definitionOf(kind.table);
-          const translations = await definitionOf(companion);
+      // On MySQL a text field made unique changes its column's type, which keeps the save on the
+      // push; the push is judged before it runs as the file is, so it is refused the same way.
+      it("is refused as drift before anything changes, when a translated field gains Unique over an index already under its name", async () => {
+        await kind.create();
+        const companion = `${kind.table}_locales`;
+        await plantPlainTitleIndex(companion);
+        const main = await definitionOf(kind.table);
+        const translations = await definitionOf(companion);
 
-          await expect(kind.save(t, UNIQUE)).rejects.toMatchObject({
-            code: "NEXTLY_MIGRATION_DRIFT",
-          });
+        await expect(kind.save(t, UNIQUE)).rejects.toMatchObject({
+          code: "NEXTLY_MIGRATION_DRIFT",
+        });
 
-          expect(await definitionOf(kind.table)).toEqual(main);
-          expect(await definitionOf(companion)).toEqual(translations);
-        }
-      );
-
-      // On MySQL a text field made unique changes its column's type (a key needs a bounded
-      // column), which keeps the save on the push. The push reads the live indexes, and replaces
-      // one under the wanted name that holds nothing unique.
-      it.runIf(dialect === "mysql")(
-        "replaces a plain index already under its name, when a translated field gains Unique on the push",
-        async () => {
-          await kind.create();
-          const companion = `${kind.table}_locales`;
-          await plantPlainTitleIndex(companion);
-
-          await kind.save(t, UNIQUE);
-
-          const indexes = await readIndexUniqueness(
-            t.adapter.getDrizzle(),
-            dialect,
-            companion
-          );
-          expect(indexes.get(titleIndex())?.unique).toBe(true);
-        }
-      );
+        expect(await definitionOf(kind.table)).toEqual(main);
+        expect(await definitionOf(companion)).toEqual(translations);
+      });
     }
   );
 }

@@ -470,8 +470,8 @@ const SIZES_SAVEPOINT = "nextly_retired_sizes";
  * A drop of the column after that ask fails this read with a missing column,
  * read as no sizes, as the pooled reader reads it. On PostgreSQL that failure
  * aborts the whole transaction, so the read runs under a savepoint wherever
- * the transaction has them and only the savepoint is rolled back. MySQL has
- * none here, and a failed statement there does not end its transaction.
+ * the transaction has them and only the savepoint is rolled back. Where it
+ * has none (TiDB), a failed statement does not end the transaction either.
  */
 export async function retiredSizesOnTransaction(
   tx: SizesTransaction,

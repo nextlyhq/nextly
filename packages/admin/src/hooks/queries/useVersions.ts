@@ -28,6 +28,7 @@ import {
   versionApi,
   type DocumentEventListResponse,
   type SetVersionLabelResponse,
+  type VersionComparisonPart,
   type VersionDetail,
   type VersionDiff,
   type VersionListResponse,
@@ -116,12 +117,15 @@ export const versionKeys = {
   // No language is `null` in the key, not a word: a language code is whatever
   // the app configures, so any word could also be a code, and that language
   // would be answered with the default part's comparison.
+  // A comparison of the shared part carries it, so its answer never stands
+  // for the same baseline's answer in one language.
   baselineDiff: (
     scope: VersionScope,
     baseline: string,
     to: number | undefined,
     locale: string | undefined,
-    visit: number | undefined
+    visit: number | undefined,
+    part?: VersionComparisonPart
   ): readonly unknown[] =>
     [
       ...versionKeys.documentDiffs(scope),
@@ -129,20 +133,25 @@ export const versionKeys = {
       to ?? "auto",
       locale ?? null,
       ...(visit !== undefined ? [`visit-${visit}`] : []),
+      ...(part !== undefined ? [`part-${part}`] : []),
     ] as const,
   // A diff is identified by the document (scope), the ordered version pair
   // (from, to), and whether unchanged fields are filtered out (modifiedOnly).
-  // The result also depends on the live schema, which the query treats as
-  // always stale rather than fold into the key (see useVersionDiff).
+  // A comparison of the shared part carries it before the pair: the same two
+  // versions compare other fields there. The result also depends on the live
+  // schema, which the query treats as always stale rather than fold into the
+  // key (see useVersionDiff).
   diff: (
     scope: VersionScope,
     from: number,
     to: number,
-    modifiedOnly: boolean
+    modifiedOnly: boolean,
+    part?: VersionComparisonPart
   ): readonly ["versions", "diff", ...string[], number, number, boolean] =>
     [
       ...versionKeys.diffs(),
       ...scopeKey(scope),
+      ...(part !== undefined ? [`part-${part}`] : []),
       from,
       to,
       modifiedOnly,
@@ -290,6 +299,8 @@ export interface UseVersionDiffOptions {
   to: number | null;
   /** Return only changed fields. */
   modifiedOnly?: boolean;
+  /** `shared`: the shared fields alone, across languages. */
+  part?: VersionComparisonPart;
   enabled?: boolean;
   /**
    * The baseline whose answer fills this pair's comparison
@@ -316,6 +327,7 @@ export function useVersionDiff({
   from,
   to,
   modifiedOnly = false,
+  part,
   enabled = true,
   seededBy,
 }: UseVersionDiffOptions): UseQueryResult<VersionDiff, Error> {
@@ -329,13 +341,16 @@ export function useVersionDiff({
     queryKey:
       from === null || to === null
         ? ([...versionKeys.diffs(), "none"] as const)
-        : versionKeys.diff(scope, from, to, modifiedOnly),
+        : versionKeys.diff(scope, from, to, modifiedOnly, part),
     queryFn: () => {
       // Guarded by `enabled`; this is defence against a direct queryFn call.
       if (from === null || to === null) {
         throw new Error("Two version numbers are required");
       }
-      return versionApi.diff(scope, from, to, { modifiedOnly });
+      return versionApi.diff(scope, from, to, {
+        modifiedOnly,
+        ...(part !== undefined ? { part } : {}),
+      });
     },
     enabled: enabled && from !== null && to !== null && isAddressable(scope),
     staleTime: 0,
@@ -411,18 +426,22 @@ function pairComparisonOf(answer: VersionDiff): VersionDiff {
  *
  * `locale` is the language the server pairs in when `to` is absent, and is
  * part of the key, so one language's answer never stands for another's.
+ * `part: "shared"` compares the shared fields across languages instead, and is
+ * part of the key too, and of the pair's comparison it fills.
  */
 export function useBaselineDiff({
   scope,
   baseline,
   to,
   locale,
+  part,
   enabled = true,
 }: {
   scope: VersionScope;
   baseline: string | null;
   to?: number;
   locale?: string;
+  part?: VersionComparisonPart;
   enabled?: boolean;
 }): UseQueryResult<VersionDiff, Error> {
   const queryClient = useQueryClient();
@@ -442,7 +461,8 @@ export function useBaselineDiff({
             baseline,
             to,
             locale,
-            resolvedOnce ? visit : undefined
+            resolvedOnce ? visit : undefined,
+            part
           ),
     queryFn: async () => {
       // Guarded by `enabled`; this is defence against a direct queryFn call.
@@ -450,11 +470,12 @@ export function useBaselineDiff({
       const answer = await versionApi.diffFromBaseline(scope, baseline, {
         ...(to !== undefined ? { to } : {}),
         ...(locale !== undefined ? { locale } : {}),
+        ...(part !== undefined ? { part } : {}),
       });
       // Every field is in the answer, as in the pair's own comparison of
       // every field (see above).
       queryClient.setQueryData(
-        versionKeys.diff(scope, answer.from, answer.to, false),
+        versionKeys.diff(scope, answer.from, answer.to, false, part),
         pairComparisonOf(answer)
       );
       return answer;

@@ -28,6 +28,8 @@ let registry: { assertRelationsResolve(): void } = {
 
 const appAdapter = {
   dialect: "sqlite",
+  // Read by the start's settle as it takes its lock, as every adapter reports it.
+  getCapabilities: () => ({ dialect: "sqlite" }),
   getDrizzle: () => ({}),
   executeQuery: async () => [],
   tableExists: async () => true,
@@ -41,6 +43,22 @@ vi.mock("../../cli/utils/config-loader", () => ({
   }),
 }));
 vi.mock("../../cli/commands/migrate", () => ({ migrateCore: vi.fn() }));
+// A start with no Builder save left part-way: the settle before the migrate step has nothing to
+// hold it back, and takes its lock on an adapter this double does not give one to. These cases are
+// about the order of the start's later steps.
+vi.mock("../../domains/schema/builder-save/settle-left-save", () => ({
+  settleLeftSaves: async () => [],
+}));
+vi.mock("../../domains/schema/pipeline/locks", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../domains/schema/pipeline/locks")
+  >()),
+  withMigrateLock: async (
+    _adapter: unknown,
+    _dialect: unknown,
+    work: () => Promise<unknown>
+  ) => ({ ran: true, value: await work() }),
+}));
 vi.mock("../../cli/utils/adapter", () => ({
   validateDatabaseEnv: () => ({ valid: true, errors: [] }),
 }));

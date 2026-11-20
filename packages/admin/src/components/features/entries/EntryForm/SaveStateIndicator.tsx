@@ -8,8 +8,8 @@
  * is a safety net, not a save, and its line now lives in the tooltip of the
  * state it qualifies.
  *
- * Its width is reserved whatever it says, so moving between states never
- * shifts the controls beside it.
+ * Its width is reserved whatever state it shows, so moving between states
+ * never shifts the controls beside it; with no state to show it takes no room.
  *
  * @module components/features/entries/EntryForm/SaveStateIndicator
  */
@@ -533,13 +533,18 @@ export function SaveStateIndicator({
   const view = saveIndicatorView(saveState, recovery, stored, offerInChip);
 
   return (
-    // The reserved width: the widest state, "Not saved" with its Retry, fits
-    // in it, so no state moves what follows it on the status line. Started at
-    // the line's start, under the title it reports on, and labelled at every
-    // width: the status line has the room a phone's action row did not.
+    // The reserved width, while a state shows: the widest state, "Not saved"
+    // with its Retry, fits in it, so no state moves what follows it on the
+    // status line. With nothing to say it is not drawn at all, so it holds no
+    // width and the line spends no gap on it. Started at the line's start,
+    // under the title it reports on, and labelled at every width: the status
+    // line has the room a phone's action row did not.
     <div
       className={cn(
-        "flex min-w-[11rem] items-center justify-start gap-1.5 text-muted-foreground in-data-[state-compact]:@max-lg/toolbar:min-w-fit",
+        "items-center justify-start gap-1.5 text-muted-foreground",
+        view === null
+          ? "hidden"
+          : "flex min-w-[11rem] in-data-[state-compact]:@max-lg/toolbar:min-w-fit",
         className
       )}
       data-testid="save-state-indicator"

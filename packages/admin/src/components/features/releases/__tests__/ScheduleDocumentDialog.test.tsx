@@ -12,6 +12,10 @@
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  drawnText,
+  nameHoldsDrawnText,
+} from "@admin/__tests__/helpers/label-in-name";
 import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
 
 import { SCHEDULE_OUTCOME_ATTRIBUTE } from "../dialog-opener";
@@ -134,6 +138,23 @@ describe("what the dialog opens on", () => {
       /^Goes live .+ · in \d+ (hours|day)$/
     );
     expect(submit().disabled).toBe(false);
+  });
+
+  // Label in Name: the control draws the zone and its offset ("UTC", "GMT"),
+  // which the check joins with nothing between. Its name, read from the
+  // label and the parts it points at, holds both, in the order drawn.
+  it("names the time zone control with what it draws: the zone, then its offset", () => {
+    open();
+    const zone = screen.getByRole("button", { name: /time zone/i });
+    const name = (zone.getAttribute("aria-labelledby") ?? "")
+      .split(/\s+/)
+      .map(id => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(name).toMatch(/^Time zone /);
+    expect(
+      nameHoldsDrawnText(name, drawnText(zone)),
+      `"${name}" against the drawn "${drawnText(zone)}"`
+    ).toBe(true);
   });
 
   it("names the release after the document", () => {

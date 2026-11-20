@@ -25,11 +25,12 @@ const base = {
 
 describe("planEntityMoves", () => {
   it("copies a field into an existing group before the file drops its column, and back on the way down", () => {
+    // A name no system column holds: the table takes `title` back for itself once it is free.
     const planned = planEntityMoves({
       ...base,
-      before: [text("title"), group("meta", [])],
-      after: [group("meta", [text("title")])],
-      moves: [{ from: ["title"], to: ["meta", "title"] }],
+      before: [text("subtitle"), group("meta", [])],
+      after: [group("meta", [text("subtitle")])],
+      moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
     });
     // An empty column carried as JSON null (over any stale key), then the copy.
     expect(planned.up.first).toHaveLength(2);
@@ -41,23 +42,64 @@ describe("planEntityMoves", () => {
     // Down: the file re-adds the column first; the value comes back after it, and the key goes.
     expect(planned.down.first).toEqual([]);
     expect(planned.down.last.join("\n")).toContain(
-      `SET "title" = json_extract`
+      `SET "subtitle" = json_extract`
     );
     expect(planned.down.last.join("\n")).toContain(`json_remove`);
     expect(planned.movedColumns).toEqual([
-      { table: "dc_posts", column: "title", into: "meta" },
+      { table: "dc_posts", column: "subtitle", into: "meta" },
     ]);
+  });
+
+  it("stops the way back first where the column it restores is required and an entry holds no value", () => {
+    const planned = planEntityMoves({
+      ...base,
+      before: [text("subtitle", { required: true }), group("meta", [])],
+      after: [group("meta", [text("subtitle", { required: true })])],
+      moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
+    });
+    expect(planned.down.first.join("\n")).toContain(
+      `"nextly_unfilled_subtitle" ("needs_a_value_subtitle" INTEGER NOT NULL)`
+    );
+    // An optional field asks for no such stop.
+    const optional = planEntityMoves({
+      ...base,
+      before: [text("subtitle"), group("meta", [])],
+      after: [group("meta", [text("subtitle")])],
+      moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
+    });
+    expect(optional.down.first).toEqual([]);
+  });
+
+  it("leaves a group the way back restores as required with its empty object, not NULL", () => {
+    // Required before the save and optional after: the way back makes it required again first.
+    const planned = planEntityMoves({
+      ...base,
+      before: [text("subtitle"), group("meta", [], { required: true })],
+      after: [group("meta", [text("subtitle")])],
+      moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
+    });
+    expect(planned.down.last.join("\n")).not.toContain(`SET "meta" = NULL`);
+    const optional = planEntityMoves({
+      ...base,
+      before: [text("subtitle"), group("meta", [])],
+      after: [group("meta", [text("subtitle")], { required: true })],
+      moves: [{ from: ["subtitle"], to: ["meta", "subtitle"] }],
+    });
+    expect(optional.down.last.join("\n")).toContain(`SET "meta" = NULL`);
   });
 
   it("copies a field out of a group after the file adds its column, then clears the key", () => {
     const planned = planEntityMoves({
       ...base,
-      before: [group("meta", [text("title")])],
-      after: [text("title"), group("meta", [])],
-      moves: [{ from: ["meta", "title"], to: ["title"] }],
+      // A name no system column holds: the table's own `title` is refused as a destination.
+      before: [group("meta", [text("subtitle")])],
+      after: [text("subtitle"), group("meta", [])],
+      moves: [{ from: ["meta", "subtitle"], to: ["subtitle"] }],
     });
     expect(planned.up.first).toEqual([]);
-    expect(planned.up.last.join("\n")).toContain(`SET "title" = json_extract`);
+    expect(planned.up.last.join("\n")).toContain(
+      `SET "subtitle" = json_extract`
+    );
     expect(planned.up.last.join("\n")).toContain(`json_remove`);
     // Down: before the file's down drops the column again, its value goes back into the group.
     expect(planned.down.first.join("\n")).toContain(`SET "meta" = json_set`);
@@ -500,6 +542,212 @@ describe("planEntityMoves", () => {
         moves: [{ from: ["a", "title"], to: ["d", "title"] }],
       })
     ).not.toThrow();
+  });
+
+  it("refuses moving into a group a top-level field the entity's admin settings name", () => {
+    // The definition file holds the admin settings beside the fields, and is read again only
+    // where they name a top-level field: one moved into a group would leave it unreadable.
+    const moveHeadline = (admin: {
+      useAsTitle?: string;
+      defaultColumns?: string[];
+    }) =>
+      planEntityMoves({
+        ...base,
+        before: [text("headline"), group("meta", [])],
+        after: [group("meta", [text("headline")])],
+        moves: [{ from: ["headline"], to: ["meta", "headline"] }],
+        admin,
+      });
+    for (const admin of [
+      { useAsTitle: "headline" },
+      { defaultColumns: ["slug", "headline"] },
+    ]) {
+      expect(() => moveHeadline(admin)).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: expect.stringContaining(
+                  "headline is named in the admin settings"
+                ),
+              }),
+            ],
+          },
+        })
+      );
+    }
+    expect(() =>
+      moveHeadline({ useAsTitle: "slug", defaultColumns: ["slug"] })
+    ).not.toThrow();
+  });
+
+  it("refuses moving into a group a top-level field an enabled stored hook names", () => {
+    // The executor hands a hook its stored config, whose settings name top-level fields.
+    const moveSummary = (
+      hooks: {
+        hookId: string;
+        enabled: boolean;
+        config: Record<string, unknown>;
+      }[]
+    ) =>
+      planEntityMoves({
+        ...base,
+        before: [text("summary"), group("meta", [])],
+        after: [group("meta", [text("summary")])],
+        moves: [{ from: ["summary"], to: ["meta", "summary"] }],
+        hooks,
+      });
+    expect(() =>
+      moveSummary([
+        {
+          hookId: "auto-slug",
+          enabled: true,
+          config: { sourceField: "summary", targetField: "slug" },
+        },
+      ])
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message:
+                "summary is named by the Auto-generate Slug hook (sourceField), which reads and writes only top-level fields. Update the hook first, then move summary.",
+            }),
+          ],
+        },
+      })
+    );
+    // A disabled hook, one the executor does not know, and one naming another field run nothing.
+    expect(() =>
+      moveSummary([
+        {
+          hookId: "auto-slug",
+          enabled: false,
+          config: { sourceField: "summary" },
+        },
+        { hookId: "not-a-hook", enabled: true, config: { field: "summary" } },
+        {
+          hookId: "unique-validation",
+          enabled: true,
+          config: { field: "slug" },
+        },
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses a move into a group off the title or slug column the table then keeps for itself", () => {
+    for (const name of ["title", "slug"]) {
+      expect(
+        () =>
+          planEntityMoves({
+            ...base,
+            before: [text(name), group("meta", [])],
+            after: [group("meta", [text(name)])],
+            moves: [{ from: [name], to: ["meta", name] }],
+          }),
+        name
+      ).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: `${name} leaves the ${name} column, which every entry keeps for its own ${name} once no field is named ${name}. Rename ${name} first, then move it into the group.`,
+              }),
+            ],
+          },
+        })
+      );
+    }
+  });
+
+  it("refuses a move out of a group onto the title or slug every entry keeps while no field takes it", () => {
+    // With no top-level field of the name, the table keeps its own `title` and `slug` columns.
+    for (const name of ["title", "slug"]) {
+      const moveOut = (before: FieldDefinition[]) =>
+        planEntityMoves({
+          ...base,
+          before,
+          after: [text(name), group("meta", [])],
+          moves: [{ from: ["meta", name], to: [name] }],
+        });
+      expect(() => moveOut([group("meta", [text(name)])]), name).toThrow(
+        expect.objectContaining({
+          publicData: {
+            errors: [
+              expect.objectContaining({
+                code: "FIELD_MOVE_REFUSED",
+                message: `Every entry already keeps its own ${name} while no field is named ${name}, and moving ${name} there would write over it. Rename ${name} inside the group first, then move it out.`,
+              }),
+            ],
+          },
+        })
+      );
+    }
+    // A column no system column holds moves as before.
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [group("meta", [text("summary")])],
+        after: [text("summary"), group("meta", [])],
+        moves: [{ from: ["meta", "summary"], to: ["summary"] }],
+      })
+    ).not.toThrow();
+  });
+
+  it("writes nothing for a move whose group only changes its spelling, keeping the same column and key", () => {
+    // `seoMeta` and `seo_meta` are one column: copying the key onto itself, then clearing the
+    // place it left, would delete every value.
+    const planned = planEntityMoves({
+      ...base,
+      before: [group("seoMeta", [text("summary")])],
+      after: [group("seo_meta", [text("summary")])],
+      moves: [{ from: ["seoMeta", "summary"], to: ["seo_meta", "summary"] }],
+    });
+    expect([
+      ...planned.up.first,
+      ...planned.up.last,
+      ...planned.down.first,
+      ...planned.down.last,
+    ]).toEqual([]);
+    expect(planned.movedColumns).toEqual([]);
+    expect(planned.refilledColumns).toEqual([]);
+    // A key that does change within the column still moves.
+    const nested = planEntityMoves({
+      ...base,
+      before: [group("meta", [group("inner", [text("summary")])])],
+      after: [group("meta", [group("inner", []), text("summary")])],
+      moves: [{ from: ["meta", "inner", "summary"], to: ["meta", "summary"] }],
+    });
+    expect(nested.up.first.length + nested.up.last.length).toBeGreaterThan(0);
+  });
+
+  it("refuses a group that takes the column of a JSON field it replaces, under a name of another spelling", () => {
+    // `seoMeta` and `seo_meta` share one column: the JSON field's keys would stay in the group.
+    const json = (name: string) =>
+      ({ name, label: name, type: "json" }) as FieldDefinition;
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), json("seoMeta")],
+        after: [group("seo_meta", [text("title")])],
+        moves: [{ from: ["title"], to: ["seo_meta", "title"] }],
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringContaining(
+                "seo_meta was not a group before this save"
+              ),
+            }),
+          ],
+        },
+      })
+    );
   });
 
   it("refuses a move whose name another field also arrives with, which no move pairs", () => {

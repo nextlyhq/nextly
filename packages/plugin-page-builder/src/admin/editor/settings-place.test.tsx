@@ -16,13 +16,16 @@ const who = vi.hoisted(() => ({
   own: undefined as string | undefined,
 }));
 
+/** The admin's answer, one value while the document is the same, as it is. */
+const IDENTITY = vi.hoisted(() => ({
+  kind: "collection",
+  slug: "templates",
+  documentId: "t1",
+}));
+
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useCurrentUserId: () => who.userId,
-  useDocumentIdentity: () => ({
-    kind: "collection",
-    slug: "templates",
-    documentId: "t1",
-  }),
+  useDocumentIdentity: () => IDENTITY,
 }));
 vi.mock("./template-preview-strip", () => ({
   useTemplateCollection: () => who.drawn,
@@ -98,6 +101,33 @@ describe("the Settings place", () => {
       );
       expect(result.current).toBeNull();
     }
+  });
+
+  it("is one value across renders that change nothing in it, and a new one for an edit", () => {
+    // Page settings is handed the place and drawn again only for a new one,
+    // so a render beside it, a block selected, must hand it the same.
+    const { editor: e } = editor("page");
+    const control = {} as never;
+    const { result, rerender } = renderHook(
+      ({ ed }: { ed: typeof e }) => useSettingsPlace(ed, control, "page"),
+      { initialProps: { ed: e } }
+    );
+    const first = result.current;
+    // The control: there is a place to keep.
+    expect(first).not.toBeNull();
+
+    rerender({ ed: e });
+    rerender({ ed: e });
+    expect(result.current).toBe(first);
+
+    // An edit hands the editor a new document, which the tabs show.
+    const edited = {
+      ...e,
+      document: { ...e.document, settings: { seo: { title: ["Edited"] } } },
+    } as typeof e;
+    rerender({ ed: edited });
+    expect(result.current).not.toBe(first);
+    expect(result.current?.tabProps.seo.value).toEqual({ title: ["Edited"] });
   });
 
   it("holds its context while who is looking is not known", () => {

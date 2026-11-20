@@ -17,7 +17,7 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, getTableColumns, isTable, sql } from "drizzle-orm";
+import { and, eq, getColumns, isTable, sql } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import { isUniqueViolation } from "../../../database/errors";
@@ -176,7 +176,7 @@ export function markNonTextFields(
 ): LocalizedFieldRef[] {
   const nonText = new Set(
     isTable(table)
-      ? Object.values(getTableColumns(table))
+      ? Object.values(getColumns(table))
           // Drizzle spells a text column's data type `string` alone; a
           // decimal is `string numeric`, and every other type names its own.
           .filter(column => column.dataType !== "string")

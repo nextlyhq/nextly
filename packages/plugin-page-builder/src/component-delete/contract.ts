@@ -97,12 +97,15 @@ export interface DocumentList {
 
 /**
  * Why a document was, or would be, left as it is. See `LeftReason` in
- * `host-rewrite/contract`, whose values these are.
+ * `host-rewrite/contract`, whose values these are, and one more the delete's
+ * own check tells apart: `not-permitted-to-publish`, a person who may change
+ * the document but not publish it, where its live copy is what changes.
  */
 export type LeftDocumentReason =
   | "refused"
   | "pending-draft"
   | "not-permitted"
+  | "not-permitted-to-publish"
   | "unreadable"
   | "unaddressable"
   | "changed"

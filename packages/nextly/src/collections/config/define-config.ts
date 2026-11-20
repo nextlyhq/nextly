@@ -6,9 +6,12 @@
  * singles, and configuring TypeScript/database output paths.
  *
  * Type definitions and the pure sanitization step live in
- * `src/shared/types/config.ts`. This file keeps the validation logic
- * (duplicate slugs, field groups placed in a cycle, user-field constraints)
- * and re-exports the types for backwards compatibility.
+ * `src/shared/types/config.ts`. This file keeps the validation that throws
+ * (user-field constraints, localization, workflows) and re-exports the types
+ * for backwards compatibility. The rules across entities (one slug each, one
+ * table per field group, one Single per address, no cycle among field groups)
+ * are judged where the configuration is loaded or the site starts
+ * with every other problem in it.
  *
  * @module collections/config/define-config
  * @since 1.0.0
@@ -32,13 +35,9 @@
  * ```
  */
 
-import { assertNoFieldGroupCycleInCode } from "../../domains/field-groups/field-group-cycles";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { validateLanguageAddressRule } from "../../domains/i18n/language-addresses";
-import { assertConfiguredPublicAddresses } from "../../domains/public-addresses/distinct-public-addresses";
-import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { workflowAttachmentsOf } from "../../domains/workflows/attachments";
-import { NextlyError } from "../../errors";
 import type {
   DeclaredWidgetsRecord,
   WidgetsOfPlugins,
@@ -81,122 +80,15 @@ export { sanitizeConfig } from "../../shared/types/config";
 /**
  * Validate a raw Nextly configuration.
  *
- * Runs slug uniqueness checks across collections/singles/components,
- * field groups placed in a cycle (at any depth), and user-field constraints.
- * Returns nothing — throws on validation failure.
+ * Judges user-field constraints, localization and workflows, and throws on a
+ * failure. The rules across entities are not judged here (see the module note).
  */
 function validateNextlyConfig(config: NextlyConfig): void {
-  const collections = config.collections ?? [];
-  const slugs = new Set<string>();
-
-  for (const collection of collections) {
-    const slug = collection.slug.toLowerCase();
-
-    if (slugs.has(slug)) {
-      throw new Error(
-        `Duplicate collection slug: '${collection.slug}'. ` +
-          `Each collection must have a unique slug.`
-      );
-    }
-
-    slugs.add(slug);
-  }
-
-  const singles = config.singles ?? [];
-
-  for (const single of singles) {
-    const slug = single.slug.toLowerCase();
-
-    if (slugs.has(slug)) {
-      const isCollectionConflict = collections.some(
-        c => c.slug.toLowerCase() === slug
-      );
-
-      if (isCollectionConflict) {
-        throw new Error(
-          `Single slug '${single.slug}' conflicts with a Collection slug. ` +
-            `Singles and Collections must have unique slugs.`
-        );
-      } else {
-        throw new Error(
-          `Duplicate Single slug: '${single.slug}'. ` +
-            `Each Single must have a unique slug.`
-        );
-      }
-    }
-
-    slugs.add(slug);
-  }
-
-  // Each Single is one page at one address, so two at the same address are
-  // refused here, naming both, as the boot refuses them once plugins join.
-  assertConfiguredPublicAddresses(config);
-
+  // The rules across entities (one slug each, one table per field group, one Single per address,
+  // no cycle among field groups) are judged with every other problem where the configuration is
+  // loaded or started (`crossEntityProblems`), not here: a throw here, while the configuration
+  // file is imported, would stop before them.
   assertNoLegacyFieldGroupKey(config, "defineConfig");
-
-  const components = config.fieldGroups ?? [];
-  const componentTables = new Map<string, string>();
-
-  for (const comp of components) {
-    const slug = comp.slug.toLowerCase();
-
-    if (slugs.has(slug)) {
-      const isCollectionConflict = collections.some(
-        c => c.slug.toLowerCase() === slug
-      );
-      const isSingleConflict = singles.some(s => s.slug.toLowerCase() === slug);
-
-      if (isCollectionConflict) {
-        throw new Error(
-          `Component slug '${comp.slug}' conflicts with a Collection slug. ` +
-            `Components, Collections, and Singles must have unique slugs.`
-        );
-      } else if (isSingleConflict) {
-        throw new Error(
-          `Component slug '${comp.slug}' conflicts with a Single slug. ` +
-            `Components, Collections, and Singles must have unique slugs.`
-        );
-      } else {
-        throw new Error(
-          `Duplicate Component slug: '${comp.slug}'. ` +
-            `Each Component must have a unique slug.`
-        );
-      }
-    }
-
-    slugs.add(slug);
-
-    // Distinct slugs can still derive one table: the resolver collapses
-    // separator runs, so `foo-bar` and `foo--bar` both become `comp_foo_bar`.
-    // Caught here rather than at the unique index on `dynamic_components`,
-    // which would surface as an opaque database error on the second write.
-    const tableName = resolveComponentTableName(comp.slug);
-    const collidingSlug = componentTables.get(tableName);
-    if (collidingSlug !== undefined) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "fieldGroups",
-            code: "COMPONENT_TABLE_COLLISION",
-            message:
-              `Component slugs '${collidingSlug}' and '${comp.slug}' both resolve ` +
-              `to the table '${tableName}'. Choose slugs that differ by more ` +
-              `than their separators.`,
-          },
-        ],
-        logContext: {
-          reason: "component-table-collision",
-          slugs: [collidingSlug, comp.slug],
-          tableName,
-        },
-      });
-    }
-    componentTables.set(tableName, comp.slug);
-  }
-
-  if (components.length > 0) {
-    assertNoFieldGroupCycleInCode(components);
-  }
 
   if (config.users) {
     // Plugin field types this config declares for the users surface, with the
@@ -293,11 +185,13 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
  * and returns a fully normalized config object.
  *
  * **Validation:**
- * - Checks for duplicate collection slugs
- * - Checks for duplicate single slugs
- * - Checks for slug conflicts between collections and singles
- * - Refuses field groups placed in a cycle; nesting has no depth limit
- * - Validates user-field constraints
+ * - Validates user-field constraints, localization and workflows (throws)
+ * - Does NOT judge the rules across entities: duplicate slugs, a field
+ *   group's table collision, two Singles at one address and field groups
+ *   placed in a cycle are reported, with every other problem, where the
+ *   configuration is loaded (every command) or the site starts, which refuse
+ *   it. To judge a configuration, load it with any command that reads its
+ *   entities, such as `nextly migrate:check`, which reports every problem.
  *
  * **Defaults Applied (via sanitizeConfig):**
  * - `collections`: `[]`
@@ -313,7 +207,7 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
  *
  * @param config - The Nextly configuration object
  * @returns Normalized configuration with all defaults applied
- * @throws Error if configuration is invalid (e.g., duplicate slugs)
+ * @throws Error if a rule it judges fails (e.g., an invalid users block)
  */
 export function defineConfig<
   // `| []` asks for the list as a tuple, so a plugin typed `any` stays one element rather than

@@ -21,7 +21,10 @@ import {
   type ReadRules,
 } from "../resolver/provider";
 import { readSeoRules } from "../settings/rules";
-import { structuredDataFromSettings } from "../settings/structured-data-rules";
+import {
+  structuredDataFromSettings,
+  type ReadStructuredDataSettings,
+} from "../settings/structured-data-rules";
 
 import {
   buildStructuredData,
@@ -66,6 +69,8 @@ export interface StructuredDataReaders {
   readRules?: ReadRules;
   /** The structured data rules beneath the SEO settings, as the page reads them. */
   readStructuredDataRules?: ReadStructuredDataRules;
+  /** The SEO settings' structured data facts: read afresh when not given. */
+  readStructuredDataSettings?: ReadStructuredDataSettings;
 }
 
 /**
@@ -85,7 +90,8 @@ export async function pageStructuredData(
     readers.readRules ?? readSeoRules
   ).resolve(input);
   const readStructured = structuredDataFromSettings(
-    readers.readStructuredDataRules ?? noStructuredDataRules
+    readers.readStructuredDataRules ?? noStructuredDataRules,
+    readers.readStructuredDataSettings
   );
   return buildStructuredData(
     ctx,

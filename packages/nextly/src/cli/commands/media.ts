@@ -1,10 +1,9 @@
-import { existsSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
-import { config as loadEnvFile } from "dotenv";
 
 import {
   storedKeysOn,
@@ -38,7 +37,7 @@ import type { IStorageAdapter } from "../../storage/types";
 import { createContext } from "../context";
 import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { plannedOrRefused } from "../dry-run-refusal";
-import { environmentFilesRead } from "../environment";
+import { environmentFilesRead, readFurtherEnvironment } from "../environment";
 import { exitWithError, printCliError, type CliError } from "../errors";
 import {
   mediaApplyOutsideProject,
@@ -395,7 +394,8 @@ const REINDEX_USAGE: ProjectGuard = {
  * another project's. So from another directory a command with a `guard`, one
  * that changes the database or what it describes, is refused, and a listing
  * warns naming each environment file the run read there; the project's own
- * `.env` sets what nothing has set yet.
+ * environment files, the ones Next.js reads for the run's mode, set what
+ * nothing has set yet.
  */
 function enterProject(
   cwd: string,
@@ -416,8 +416,8 @@ function enterProject(
         `The environment was read from ${loaded.join(", ")}, not from ${cwd}, so the database it names may be another project's.`
       );
     }
-    const projectEnv = path.join(cwd, ".env");
-    if (existsSync(projectEnv)) loadEnvFile({ path: projectEnv });
+    // The project's own files, read as the CLI reads the folder it runs in.
+    readFurtherEnvironment(cwd);
   }
   process.chdir(cwd);
 }
@@ -432,13 +432,15 @@ async function projectConfig(
   cwd: string,
   configPath: string | undefined,
   guard: ProjectGuard | null,
-  logger: Logger
+  logger: Logger,
+  /** `"refuse"` where the command reads the app's entities (`LoadConfigOptions.missing`). */
+  missing: "defaults" | "refuse" = "defaults"
 ): Promise<Awaited<ReturnType<typeof loadConfig>>> {
   if (guard) assertConfigInside(cwd, configPath, guard);
   enterProject(cwd, guard, logger);
   // The loader discovers the config from the project; a path is passed
   // only when one was given.
-  const loaded = await loadConfig({ configPath, cwd });
+  const loaded = await loadConfig({ configPath, cwd, missing });
   // The file the loader read, as discovery found it too: a project's own
   // config can be a link to another project's.
   if (guard) assertConfigInside(cwd, loaded.configPath, guard);
@@ -594,7 +596,9 @@ export async function mediaReindexUsageAction(
       // loaded config and sets up no media storage, so the two stay separate.
       // fallow-ignore-next-line code-duplication
       REINDEX_USAGE,
-      context.logger
+      context.logger,
+      // It rewrites the record from the configured collections, so a missing configuration refuses.
+      "refuse"
     );
     const db = databaseEnvOrThrow();
     if (cmdOptions.dryRun === true) {

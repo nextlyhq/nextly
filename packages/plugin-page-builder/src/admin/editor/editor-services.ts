@@ -12,8 +12,8 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 import type { ComponentProps } from "react";
 
-import { bindingFieldsReader, unbindPlanner } from "../binding-fields-client";
 import { copyEmbedThumbnail } from "../../embed-thumbnail/client";
+import { bindingFieldsReader, unbindPlanner } from "../binding-fields-client";
 import { readEditorForm, readEditorForms } from "../editor-forms-client";
 import { findEntries } from "../entries-client";
 import { findLinkTargets, findLinkTargetsIn } from "../link-targets-client";

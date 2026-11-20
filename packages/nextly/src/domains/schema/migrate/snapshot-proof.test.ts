@@ -19,10 +19,7 @@ import {
   refuseUnlessProven,
   statementsShownBySnapshot,
 } from "./snapshot-proof";
-import type {
-  LiveSchema,
-  LiveSchemaWithColumnFacts,
-} from "./statement-judgement";
+import type { LiveSchemaWithColumnFacts } from "./statement-judgement";
 
 const posts = (
   ...columns: string[]
@@ -495,6 +492,10 @@ describe("proveStatements: rows a statement fills with its default", () => {
     settingsReadable: () => true,
     generatesKey: () => true,
     identityMode: () => undefined,
+    checkEnforced: () => true,
+    keyDeferrability: () => "not",
+    indexShape: () => "plain",
+    counterCovers: () => true,
   };
 
   /** The statuses `proveStatements` gives, with `nulls` NULL rows in every column it counts. */
@@ -566,7 +567,7 @@ describe("proveStatements: rows a statement fills with its default", () => {
 
   it("passes a rebuild's copy of the table's own rows, counting the columns it leaves to their defaults", async () => {
     // At the file's end the twin is gone and the table stands in its place.
-    const live: LiveSchema = {
+    const live: LiveSchemaWithColumnFacts = {
       ...everything,
       hasTable: name => !name.startsWith("__new_"),
     };
@@ -680,6 +681,10 @@ describe("constraints a file adds that the database holds but does not enforce",
               settingsReadable: () => true,
               generatesKey: () => true,
               identityMode: () => undefined,
+              checkEnforced: () => true,
+              keyDeferrability: () => "not",
+              indexShape: () => "plain",
+              counterCovers: () => true,
             },
             nullsIn: () => Promise.resolve(0),
           },
@@ -732,12 +737,27 @@ const liveWith = (facts: {
   identity?: "always" | "by-default";
   /** A column the database no longer has: the earlier name of one a `CHANGE` renamed. */
   gone?: string;
+  /** Whether every check the database holds is enforced. */
+  enforced?: boolean;
+  /** How every foreign key the database holds defers its check. */
+  deferrability?: "not" | "immediate" | "deferred";
+  /** How every index the database holds is built; `null` for one the read did not find. */
+  index?: "plain" | "other" | null;
+  /** Whether every AUTOINCREMENT counter covers its table's rows. */
+  counter?: boolean;
+  /** Whether every constraint the database holds is validated. */
+  validated?: boolean;
 }): LiveSchemaWithColumnFacts => ({
   hasTable: () => true,
   hasColumn: (_table, column) => column !== facts.gone,
   hasIndex: () => true,
   hasConstraint: () => true,
-  usable: () => true,
+  usable: () => facts.validated ?? true,
+  checkEnforced: () => facts.enforced ?? true,
+  keyDeferrability: () => facts.deferrability ?? "not",
+  indexShape: () =>
+    facts.index === null ? undefined : (facts.index ?? "plain"),
+  counterCovers: () => facts.counter ?? true,
   untrackedSettings: () => facts.settings ?? [],
   settingsReadable: () => facts.readable ?? true,
   generatesKey: () => facts.generatesKey ?? true,
@@ -1290,5 +1310,248 @@ describe("rows dangling through one of two keys between the same tables", () => 
     expect(danglingOnAddedKeys(between, [unnamed])).toEqual([unnamed]);
     const unread = { ...unnamed, columns: [] };
     expect(danglingOnAddedKeys(between, [unread])).toEqual([unread]);
+  });
+});
+
+describe("what a hand-made database can hold under the names a file writes", () => {
+  const one = async (
+    statement: string,
+    dialect: SupportedDialect,
+    facts: Parameters<typeof liveWith>[0],
+    later: string[] = []
+  ) =>
+    (await statusesAgainst([statement, ...later], dialect, liveWith(facts)))[0];
+
+  it("a constraint a file validates must be validated in the database", async () => {
+    const VALIDATE =
+      'ALTER TABLE "dc_posts" VALIDATE CONSTRAINT "dc_posts_author_fk"';
+    expect(await one(VALIDATE, "postgresql", { validated: false })).toBe(
+      "not-done"
+    );
+    expect(await one(VALIDATE, "postgresql", { validated: true })).toBe(
+      "shown"
+    );
+    // One a later statement of the file drops is not asked about.
+    expect(
+      await one(VALIDATE, "postgresql", { validated: false }, [
+        'ALTER TABLE "dc_posts" DROP CONSTRAINT "dc_posts_author_fk"',
+      ])
+    ).toBe("shown");
+  });
+
+  it("a MySQL check is held to the enforcement the file declares", async () => {
+    const ADD =
+      "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_title_ck` CHECK (`title` <> '')";
+    for (const [statement, enforced, status] of [
+      [ADD, true, "shown"],
+      // Altered by hand to NOT ENFORCED under the file's name: there, and checking nothing.
+      [ADD, false, "not-done"],
+      [`${ADD} NOT ENFORCED`, false, "shown"],
+      [`${ADD} NOT ENFORCED`, true, "not-done"],
+      [`${ADD} ENFORCED`, false, "not-done"],
+      [
+        "CREATE TABLE `dc_posts` (`id` varchar(36) PRIMARY KEY, `title` text, CONSTRAINT `dc_posts_title_ck` CHECK (`title` <> ''))",
+        false,
+        "not-done",
+      ],
+    ] as const) {
+      expect(await one(statement, "mysql", { enforced }), statement).toBe(
+        status
+      );
+    }
+    // One a later statement of the file drops is not asked about, and the table is followed.
+    expect(
+      await one(ADD, "mysql", { enforced: false }, [
+        "ALTER TABLE `dc_posts` DROP CHECK `dc_posts_title_ck`",
+      ])
+    ).toBe("shown");
+  });
+
+  it("a PostgreSQL foreign key is held to the deferrability the file declares", async () => {
+    const ADD =
+      'ALTER TABLE "dc_posts" ADD CONSTRAINT "dc_posts_author_fk" FOREIGN KEY ("title") REFERENCES "dc_posts" ("id")';
+    for (const [tail, live, status] of [
+      ["", "not", "shown"],
+      // Made by hand DEFERRABLE under the file's name.
+      ["", "immediate", "not-done"],
+      ["", "deferred", "not-done"],
+      [" NOT DEFERRABLE", "not", "shown"],
+      [" DEFERRABLE", "immediate", "shown"],
+      [" DEFERRABLE INITIALLY IMMEDIATE", "immediate", "shown"],
+      [" DEFERRABLE INITIALLY DEFERRED", "deferred", "shown"],
+      [" DEFERRABLE INITIALLY DEFERRED", "immediate", "not-done"],
+      [" DEFERRABLE", "not", "not-done"],
+      // Deferrable without the word: `INITIALLY DEFERRED` alone makes it so.
+      [" INITIALLY DEFERRED", "deferred", "shown"],
+    ] as const) {
+      expect(
+        await one(`${ADD}${tail}`, "postgresql", { deferrability: live }),
+        `${tail} against ${live}`
+      ).toBe(status);
+    }
+    // MySQL has no deferrable keys, and SQLite's are not read: neither is asked.
+    expect(
+      await one(
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_author_fk` FOREIGN KEY (`title`) REFERENCES `dc_posts` (`id`)",
+        "mysql",
+        { deferrability: "deferred" }
+      )
+    ).toBe("shown");
+  });
+
+  it("an index a file creates must be a plain one in the database", async () => {
+    const CREATE = 'CREATE INDEX "dc_posts_slug_idx" ON "dc_posts" ("slug")';
+    const ADD = "ALTER TABLE `dc_posts` ADD INDEX `dc_posts_slug_idx` (`slug`)";
+    for (const [statement, dialect] of [
+      [CREATE, "postgresql"],
+      [CREATE, "sqlite"],
+      [ADD, "mysql"],
+      [
+        "CREATE UNIQUE INDEX `dc_posts_slug_idx` ON `dc_posts` (`slug`)",
+        "mysql",
+      ],
+      [
+        "ALTER TABLE `dc_posts` ADD UNIQUE `dc_posts_slug_idx` (`slug`)",
+        "mysql",
+      ],
+      [
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `dc_posts_slug_idx` UNIQUE (`slug`)",
+        "mysql",
+      ],
+    ] as const) {
+      expect(await one(statement, dialect, { index: "plain" }), statement).toBe(
+        "shown"
+      );
+      // Made by hand under the file's name by another method.
+      expect(await one(statement, dialect, { index: "other" }), statement).toBe(
+        "not-done"
+      );
+      // One the read did not find is not taken for a plain one.
+      expect(await one(statement, dialect, { index: null }), statement).toBe(
+        "not-done"
+      );
+    }
+    // One a later statement of the file drops is not asked about.
+    expect(
+      await one(CREATE, "postgresql", { index: "other" }, [
+        'DROP INDEX "dc_posts_slug_idx"',
+      ])
+    ).toBe("shown");
+    // The same name dropped on another table is another index.
+    expect(
+      await one(ADD, "mysql", { index: "other" }, [
+        "ALTER TABLE `dc_pages` DROP INDEX `dc_posts_slug_idx`",
+      ])
+    ).toBe("not-done");
+    // An index a later statement renames is asked about under its last name.
+    const asked: string[] = [];
+    await statusesAgainst(
+      [
+        ADD,
+        "ALTER TABLE `dc_posts` RENAME INDEX `dc_posts_slug_idx` TO `renamed`",
+      ],
+      "mysql",
+      {
+        ...liveWith({}),
+        hasIndex: (name: string) => name !== "dc_posts_slug_idx",
+        indexShape: (table, name) => {
+          asked.push(`${table}.${name}`);
+          return "plain";
+        },
+      }
+    );
+    expect(asked).toEqual(["dc_posts.renamed"]);
+  });
+
+  it("an index statement that states a direction, a NULL order or a method is not shown", () => {
+    for (const [statement, dialect] of [
+      ['CREATE INDEX "i" ON "dc_posts" ("slug" DESC)', "postgresql"],
+      ['CREATE INDEX "i" ON "dc_posts" ("slug" NULLS FIRST)', "postgresql"],
+      ['CREATE INDEX "i" ON "dc_posts" USING hash ("slug")', "postgresql"],
+      ['CREATE INDEX "i" ON "dc_posts" ("slug" DESC)', "sqlite"],
+      ["CREATE INDEX `i` ON `dc_posts` (`slug` DESC)", "mysql"],
+      ["CREATE INDEX `i` USING HASH ON `dc_posts` (`slug`)", "mysql"],
+      ["CREATE FULLTEXT INDEX `i` ON `dc_posts` (`slug`)", "mysql"],
+      ["ALTER TABLE `dc_posts` ADD INDEX `i` (`slug` DESC)", "mysql"],
+      ["ALTER TABLE `dc_posts` ADD INDEX `i` USING HASH (`slug`)", "mysql"],
+      [
+        "ALTER TABLE `dc_posts` ADD CONSTRAINT `i` UNIQUE (`slug` DESC)",
+        "mysql",
+      ],
+    ] as const) {
+      expect(shown(statement, dialect), statement).toBe(false);
+    }
+    // The plain statements the generator writes stay shown, a key prefix and a predicate included.
+    for (const [statement, dialect] of [
+      ['CREATE INDEX IF NOT EXISTS "i" ON "dc_posts" ("slug")', "postgresql"],
+      ['CREATE INDEX "i" ON "dc_posts" USING btree ("slug")', "postgresql"],
+      [
+        'CREATE UNIQUE INDEX "i" ON "dc_posts" ("slug") WHERE "slug" IS NOT NULL',
+        "postgresql",
+      ],
+      ['CREATE INDEX "i" ON "dc_posts" ((lower("slug")))', "postgresql"],
+      ["CREATE INDEX `i` ON `dc_posts` (`slug`(191))", "mysql"],
+      ["ALTER TABLE `dc_posts` ADD UNIQUE INDEX `i` (`slug`)", "mysql"],
+    ] as const) {
+      expect(shown(statement, dialect), statement).toBe(true);
+    }
+  });
+
+  it("a SQLite rebuild's sequence carry needs a counter that covers the table's rows", async () => {
+    const REBUILD = [
+      "INSERT INTO sqlite_sequence (name, seq) SELECT '__new_dc_posts', seq FROM sqlite_sequence WHERE name = 'dc_posts'",
+      'CREATE TABLE "__new_dc_posts" ("id" text NOT NULL, "title" text, "slug" text)',
+      'INSERT INTO "__new_dc_posts" ("id", "title") SELECT "id", "title" FROM "dc_posts"',
+      'DROP TABLE "dc_posts"',
+      'ALTER TABLE "__new_dc_posts" RENAME TO "dc_posts"',
+    ];
+    const asked: string[] = [];
+    const live = (covers: boolean): LiveSchemaWithColumnFacts => ({
+      ...liveWith({}),
+      counterCovers: table => {
+        asked.push(table);
+        return covers;
+      },
+    });
+    expect((await statusesAgainst(REBUILD, "sqlite", live(false)))[0]).toBe(
+      "not-done"
+    );
+    expect((await statusesAgainst(REBUILD, "sqlite", live(true)))[0]).toBe(
+      "shown"
+    );
+    // Asked of the table the counter is carried for, under the name the file leaves it with.
+    expect(new Set(asked)).toEqual(new Set(["dc_posts"]));
+  });
+
+  it("a same-name foreign key of another shape counts as one the file adds", () => {
+    const key = (referencesTable: string) => ({
+      name: "fk_dc_posts_author",
+      columns: ["author"],
+      referencesTable,
+      referencesColumns: ["id"],
+      onDelete: "no action" as const,
+      onUpdate: "no action" as const,
+    });
+    const retargeted = {
+      before: { tables: [{ ...posts("title"), foreignKeys: [key("users")] }] },
+      target: {
+        tables: [{ ...posts("title"), foreignKeys: [key("accounts")] }],
+      },
+    };
+    const dangling = {
+      table: "dc_posts",
+      parent: "accounts",
+      rows: 2,
+      columns: ["author"],
+      referencesColumns: ["id"],
+    };
+    expect(danglingOnAddedKeys(retargeted, [dangling])).toEqual([dangling]);
+    // The same key on both sides is not the file's.
+    expect(
+      danglingOnAddedKeys(
+        { before: retargeted.target, target: retargeted.target },
+        [dangling]
+      )
+    ).toEqual([]);
   });
 });

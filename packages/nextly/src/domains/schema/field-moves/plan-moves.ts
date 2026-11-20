@@ -18,6 +18,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors/nextly-error";
+import { getPrebuiltHook } from "../../../hooks/prebuilt";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { asRowBackedRelationFields } from "../../field-groups/services/field-group-utils";
 import {
@@ -25,6 +26,7 @@ import {
   fieldProducesColumn,
   fieldsStoredOnRow,
   getColumnDescriptor,
+  systemColumnsForFields,
   toSnakeCase,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
@@ -34,9 +36,16 @@ import {
   placeOf,
   type FieldMoveRequest,
   type PlannedMove,
+  type StoragePlace,
 } from "./check-move";
 import { fieldsThatLeft } from "./move-candidates";
-import { moveDataStatements, type MoveColumn } from "./move-statements";
+import {
+  emptiedContainers,
+  mediaUsePathStatement,
+  missingValuesStop,
+  moveDataStatements,
+  type MoveColumn,
+} from "./move-statements";
 
 /** Statements for the start and the end of one direction of a migration file. */
 interface Placed {
@@ -63,6 +72,10 @@ export interface EntityMoves {
     required: boolean;
     /** The column's kind, which says what a value from the group must be to be read into it. */
     kind: MoveColumn["kind"];
+    /** The column's SQL type and a decimal's digits, which bound what it keeps (`keptValuesOf`). */
+    columnType: string;
+    precision?: number;
+    scale?: number;
     /** Where the values come from: the group's column and the keys inside it. */
     source: { column: string; keys: readonly string[] };
   }[];
@@ -92,29 +105,118 @@ function rowColumns(fields: readonly FieldDefinition[]): Set<string> {
 /** Where a planned move's statements go in the file, in each direction. */
 function placed(
   move: PlannedMove,
-  target: MoveColumn
+  target: MoveColumn,
+  beside: Beside
 ): { up: Placed; down: Placed } {
-  const up = moveDataStatements(move, target);
-  const down = moveDataStatements({ from: move.to, to: move.from }, target);
+  const forth = moveDataStatements(move, target);
+  const back = moveDataStatements({ from: move.to, to: move.from }, target);
+  const way = {
+    up: [...forth.copy, ...forth.clearSource, ...beside.up],
+    down: [...back.copy, ...back.clearSource, ...beside.undo, ...beside.down],
+  };
+  // Each way's stop on a value the copy would not keep runs first, before the file changes
+  // anything: on MySQL, whose schema changes stand as they run, a later stop would leave them.
   if (move.from.kind === "column") {
     // Into a group: copied before the column is dropped; back after the way down adds it again.
     return {
-      up: { first: up.copy, last: [] },
-      down: { first: [], last: [...down.copy, ...down.clearSource] },
+      up: { first: [...forth.stop, ...way.up], last: [] },
+      down: { first: [...back.stop, ...beside.downFirst], last: way.down },
     };
   }
   if (move.to.kind === "column") {
     // Out of a group: copied after the column is added; back before the way down drops it.
     return {
-      up: { first: [], last: [...up.copy, ...up.clearSource] },
-      down: { first: down.copy, last: [] },
+      up: { first: [...forth.stop, ...beside.first], last: way.up },
+      down: { first: [...back.stop, ...way.down], last: [] },
     };
   }
   // Between two groups, whose columns stand throughout.
   return {
-    up: { first: [...up.copy, ...up.clearSource], last: [] },
-    down: { first: [...down.copy, ...down.clearSource], last: [] },
+    up: { first: way.up, last: [] },
+    down: { first: way.down, last: [] },
   };
+}
+
+/**
+ * What a move's statements carry beside its values: the media library's record of each use moved
+ * with the field's path, both ways, and on the way back from a group, the containers the way in
+ * made, removed again once empty (`emptiedContainers`).
+ */
+interface Beside {
+  up: string[];
+  down: string[];
+  undo: string[];
+  /** Stops run first on the way up: a required field's entries without a value. */
+  first: string[];
+  /** The same stop on the way back, where the column it restores is required. */
+  downFirst: string[];
+}
+
+function besideOf(
+  move: PlannedMove,
+  request: FieldMoveRequest,
+  target: MoveColumn,
+  args: {
+    before: readonly FieldDefinition[];
+    mediaUses?: { kind: "collection" | "single"; slug: string };
+    filledColumns?: readonly string[];
+  }
+): Beside {
+  const uses = args.mediaUses;
+  const { from, to } = move;
+  // A field required where it moves out to needs a value on every entry of the database the file
+  // runs on, unless the save fills the column first.
+  const first =
+    from.kind === "json" &&
+    to.kind === "column" &&
+    (move.field as { required?: unknown }).required === true &&
+    !(args.filledColumns ?? []).includes(to.column)
+      ? missingValuesStop(target, from, to.column)
+      : [];
+  // The way back restores the definition before the save: its column is required again where
+  // the field was, and the group is nullable where it was, whatever this save made of either.
+  const downFirst =
+    from.kind === "column" &&
+    to.kind === "json" &&
+    rowFieldIsRequired(args.before, from.column)
+      ? missingValuesStop(target, to, from.column)
+      : [];
+  const undo =
+    to.kind === "json"
+      ? emptiedContainers(
+          to,
+          target,
+          !rowFieldIsRequired(args.before, to.column, "group")
+        )
+      : [];
+  return {
+    up: uses
+      ? [mediaUsePathStatement(target.dialect, uses, request.from, request.to)]
+      : [],
+    down: uses
+      ? [mediaUsePathStatement(target.dialect, uses, request.to, request.from)]
+      : [],
+    undo,
+    first,
+    downFirst,
+  };
+}
+
+/**
+ * Whether the field on the row whose column is `column` (a group, with `kind`) is required, so its
+ * column is never NULL.
+ */
+function rowFieldIsRequired(
+  fields: readonly FieldDefinition[],
+  column: string,
+  kind?: "group"
+): boolean {
+  return fieldsStoredOnRow(fields).some(
+    field =>
+      (kind === undefined || field.type === kind) &&
+      toSnakeCase(field.name) === column &&
+      field.required === true
+  );
 }
 
 /**
@@ -278,7 +380,8 @@ function refuseHoldersNotGroups(
   // Every container on the path, not only the outermost: a nested one changes kind as well.
   const otherKind = (
     list: readonly FieldDefinition[],
-    path: readonly string[]
+    path: readonly string[],
+    column: string
   ): string | undefined =>
     path
       .slice(0, -1)
@@ -287,9 +390,14 @@ function refuseHoldersNotGroups(
         const placed = placeOf(list, prefix);
         return placed !== null && placed.field.type !== "group";
       })
-      ?.join(".");
+      ?.join(".") ??
+    // A field of another kind on the group's column under another spelling (`seoMeta` beside
+    // `seo_meta`): its JSON value stays in the column the group's statements write to.
+    (columnHeldByOtherKind(list, column) ? path[0] : undefined);
   const into =
-    move.to.kind === "json" ? otherKind(fields.before, request.to) : undefined;
+    move.to.kind === "json"
+      ? otherKind(fields.before, request.to, move.to.column)
+      : undefined;
   if (into !== undefined) {
     throw refused(
       request,
@@ -298,7 +406,7 @@ function refuseHoldersNotGroups(
   }
   const outOf =
     move.from.kind === "json"
-      ? otherKind(fields.after, request.from)
+      ? otherKind(fields.after, request.from, move.from.column)
       : undefined;
   if (outOf !== undefined) {
     throw refused(
@@ -306,6 +414,86 @@ function refuseHoldersNotGroups(
       `${outOf} is not a group after this save. Move the field out first, then change ${outOf}.`
     );
   }
+}
+
+/** The admin settings that name a top-level field, as the definition file holds them. */
+interface AdminReferences {
+  useAsTitle?: string;
+  defaultColumns?: readonly string[];
+}
+
+/**
+ * Refuses moving into a group a top-level field the admin settings name: the definition file
+ * holds them beside the fields and is read only where each names a top-level field, so the save
+ * would leave it unreadable.
+ */
+function refuseNamedByAdmin(
+  request: FieldMoveRequest,
+  admin: AdminReferences | undefined
+): void {
+  if (request.from.length !== 1 || request.to.length === 1) return;
+  const name = request.from[0] ?? "";
+  const setting =
+    admin?.useAsTitle === name
+      ? "useAsTitle"
+      : admin?.defaultColumns?.includes(name) === true
+        ? "defaultColumns"
+        : undefined;
+  if (setting === undefined) return;
+  throw refused(
+    request,
+    `${name} is named in the admin settings (${setting}), which name only top-level fields. Choose another field there first, then move ${name}.`
+  );
+}
+
+/** A hook the entity's definition stores, as the stored-hook executor reads it. */
+interface StoredHookReference {
+  hookId: string;
+  enabled: boolean;
+  config: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Refuses moving into a group a top-level field an enabled stored hook names, as the admin
+ * settings' refusal does: the executor hands each hook its stored config as it stands, and the
+ * hook reads and writes the entry's top-level keys by those names (auto-slug's `sourceField`), so
+ * it would stop finding the field without saying so. A hook the executor does not know is skipped
+ * there, and here.
+ */
+function refuseNamedByHook(
+  request: FieldMoveRequest,
+  hooks: readonly StoredHookReference[] | undefined
+): void {
+  if (request.from.length !== 1 || request.to.length === 1) return;
+  const name = request.from[0] ?? "";
+  for (const stored of hooks ?? []) {
+    const hook = stored.enabled ? getPrebuiltHook(stored.hookId) : undefined;
+    if (hook === undefined) continue;
+    const setting = Object.keys(stored.config).find(
+      key => stored.config[key] === name
+    );
+    if (setting === undefined) continue;
+    throw refused(
+      request,
+      `${name} is named by the ${hook.name} hook (${setting}), which reads and writes only top-level fields. Update the hook first, then move ${name}.`
+    );
+  }
+}
+
+/** Whether a field on the row that is not a group keeps its values in `column`. */
+function columnHeldByOtherKind(
+  fields: readonly FieldDefinition[],
+  column: string
+): boolean {
+  return fieldsStoredOnRow(fields).some(field => {
+    const { name } = field as { name?: unknown };
+    return (
+      field.type !== "group" &&
+      typeof name === "string" &&
+      fieldProducesColumn(field) &&
+      toSnakeCase(name) === column
+    );
+  });
 }
 
 /**
@@ -432,12 +620,16 @@ function moveColumn(
   dialect: SupportedDialect,
   builtBy: ColumnOrigin
 ): MoveColumn {
+  const descriptor = getColumnDescriptor(move.field, dialect, builtBy);
   return {
     table,
     dialect,
     kind: classifyFieldKind(move.field, builtBy),
-    columnType:
-      getColumnDescriptor(move.field, dialect, builtBy)?.dialectType ?? "text",
+    columnType: descriptor?.dialectType ?? "text",
+    ...(descriptor?.precision === undefined
+      ? {}
+      : { precision: descriptor.precision }),
+    ...(descriptor?.scale === undefined ? {} : { scale: descriptor.scale }),
   };
 }
 
@@ -457,6 +649,14 @@ export function planEntityMoves(given: {
   dialect: SupportedDialect;
   /** Which generator made the table: a field group's makes its columns its own way. */
   builtBy?: ColumnOrigin;
+  /** The entity's admin settings after the save, which name top-level fields. */
+  admin?: AdminReferences;
+  /** The hooks the entity's definition stores after the save, whose settings name fields. */
+  hooks?: readonly StoredHookReference[];
+  /** Whose record of media uses the moved fields' paths are kept in, where the entity has one. */
+  mediaUses?: { kind: "collection" | "single"; slug: string };
+  /** The columns the save fills before its copies (a `fill` answer), which need no stop. */
+  filledColumns?: readonly string[];
 }): EntityMoves {
   // A field group's row keeps a many-to-many as a list in a column of its own, where a collection
   // keeps it in a junction table: its fields are judged as its row stores them.
@@ -478,6 +678,19 @@ export function planEntityMoves(given: {
     before: rowColumns(args.before),
     after: rowColumns(args.after),
   };
+  // The system columns the table holds before the save, `title` and `slug` among them while no
+  // field takes their name.
+  // A field group's table keeps its own columns (`_parent_id`, `_order`...), none a field can
+  // take, so no move onto or off one of them is in question there.
+  const systemOf = (fields: readonly FieldDefinition[]): Set<string> =>
+    args.builtBy === "fieldGroup"
+      ? new Set()
+      : new Set(
+          systemColumnsForFields(fields, args.dialect, {
+            builtBy: "collection",
+          }).map(column => column.name)
+        );
+  const system = { before: systemOf(args.before), after: systemOf(args.after) };
   refuseOverlapping(args.moves);
   refuseSameNames(args.moves);
   refuseUnpairedNames(args, args.renames ?? []);
@@ -486,6 +699,8 @@ export function planEntityMoves(given: {
     if (samePath(request.from, request.to)) continue;
     refuseInsideOwnPlace(request);
     refuseUnbound(request);
+    refuseNamedByAdmin(request, args.admin);
+    refuseNamedByHook(request, args.hooks);
     refuseUnmatched(args.before, args.after, request);
     const checked = checkMove(args.before, args.after, request, {
       localized: args.localized,
@@ -497,15 +712,23 @@ export function planEntityMoves(given: {
     refuseRenamedColumns(request, move, args.renames ?? []);
     refuseMadeRequired(request, move, args.before);
     refuseUnplaceable(request, move, columns);
-    // A field moving between places on one level (a group with no name) keeps its column.
+    refuseSystemColumn(request, move, system);
+    // A field moving between places on one level (a group with no name) keeps its column, and
+    // one whose group only changes its spelling (`seoMeta` to `seo_meta`) keeps its column and
+    // key: a copy onto itself, then the clear of the place it left, would delete every value.
     if (move.from.kind === "column" && move.to.kind === "column") continue;
+    if (sameJsonPlace(move.from, move.to)) continue;
     const target = moveColumn(
       move,
       args.table,
       args.dialect,
       args.builtBy ?? "collection"
     );
-    const statements = placed(move, target);
+    const statements = placed(
+      move,
+      target,
+      besideOf(move, request, target, args)
+    );
     for (const way of ["up", "down"] as const) {
       result[way].first.push(...statements[way].first);
       result[way].last.push(...statements[way].last);
@@ -536,6 +759,46 @@ function asFieldGroupRow(
   });
 }
 
+/**
+ * Refuses a move onto or off a column the table keeps for itself while no field takes its name,
+ * such as `title` or `slug`. Out of a group onto one, every entry already holds its own value
+ * there, which the copy would write over. Into a group off one, the table takes the column back
+ * for itself, under the same name.
+ */
+function refuseSystemColumn(
+  request: FieldMoveRequest,
+  move: PlannedMove,
+  system: { before: ReadonlySet<string>; after: ReadonlySet<string> }
+): void {
+  const name = request.from.at(-1) ?? "This field";
+  if (move.to.kind === "column" && system.before.has(move.to.column)) {
+    throw refused(
+      request,
+      `Every entry already keeps its own ${move.to.column} while no field is named ${move.to.column}, and moving ${name} there would write over it. Rename ${name} inside the group first, then move it out.`
+    );
+  }
+  // The other way: a field leaving a column the table takes back for itself once no field is
+  // named so. Its own values would then fill that column again, and the way back would turn them
+  // into the field's type before the group's values reach it.
+  if (move.from.kind === "column" && system.after.has(move.from.column)) {
+    throw refused(
+      request,
+      `${name} leaves the ${move.from.column} column, which every entry keeps for its own ${move.from.column} once no field is named ${move.from.column}. Rename ${name} first, then move it into the group.`
+    );
+  }
+}
+
+/** Whether two places are one key of one JSON column, each read as the database stores it. */
+function sameJsonPlace(a: StoragePlace, b: StoragePlace): boolean {
+  return (
+    a.kind === "json" &&
+    b.kind === "json" &&
+    a.column === b.column &&
+    a.keys.length === b.keys.length &&
+    a.keys.every((key, at) => key === b.keys[at])
+  );
+}
+
 /** The column a move adds and fills from its group, or the one it drops into a group, recorded. */
 function recordColumns(
   result: EntityMoves,
@@ -552,6 +815,11 @@ function recordColumns(
       field: request.to.join("."),
       required: (move.field as { required?: unknown }).required === true,
       kind: target.kind,
+      columnType: target.columnType,
+      ...(target.precision === undefined
+        ? {}
+        : { precision: target.precision }),
+      ...(target.scale === undefined ? {} : { scale: target.scale }),
       source: { column: from.column, keys: from.keys },
     });
   }

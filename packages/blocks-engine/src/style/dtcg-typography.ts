@@ -20,6 +20,16 @@
  * parts the format can't type at all (a letter spacing in `em`) is kept
  * there only.
  *
+ * A text style made with "Fluid…" keeps the two sizes each device's size was
+ * made from (`fluidSizes`) in that copy too, so on import its size goes on
+ * following the site's fluid range. They sit in the extension only: the
+ * typography value carries the size, as a design tool can read it, and
+ * nothing more. On import a device's sizes are kept only beside the size they
+ * make across the fluid range the file states (the default range where it
+ * states none), as a copy of a text style keeps them: sizes beside a size
+ * they don't make would be taken for the ones it was made from, and the size
+ * made again from them.
+ *
  * @module style/dtcg-typography
  */
 import { MAX_NAMED_CLASSES } from "../document";
@@ -30,6 +40,13 @@ import type { TokenKind } from "./catalog-types";
 import { BASE_BREAKPOINT } from "./compile-page-breakpoints";
 import { type DtcgNode, isPlainObject, issue } from "./dtcg-format";
 import { typedValue, type TypedValue } from "./dtcg-values";
+import {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  isFluidSizes,
+  type FluidRangeWidths,
+  type FluidSizes,
+} from "./fluid-value";
 import {
   isUsableNamedClass,
   MAX_NAMED_CLASS_NAME_LENGTH,
@@ -125,22 +142,35 @@ function partToDtcg(
 ): unknown {
   if (isTokenRef(stated)) {
     if (stated.times === undefined) return aliasOf(stated.$token, kind);
-    // A scaled variable has no alias: its value at the factor is written.
+    // A scaled variable has no alias: its value at the factor is written,
+    // typed as the part types a plain value, so one of another type (a size
+    // scaled from a number) or out of the part's range is no value of it,
+    // and the style is kept as Nextly data only.
     const found = context.typed.get(stated.$token);
-    return found === undefined ? undefined : scaled(found.typed, stated.times);
+    const text =
+      found === undefined ? undefined : scaledText(found.typed, stated.times);
+    return text === undefined ? undefined : partValue(text, kind);
   }
   if (typeof stated !== "string" && typeof stated !== "number")
     return undefined;
-  return typedValue({ name: "part", kind, values: { light: String(stated) } })
-    ?.value;
+  return partValue(String(stated), kind);
 }
 
-/** A typed value at a factor: a dimension's or a number's, else nothing. */
-function scaled(typed: TypedValue, times: number): unknown {
+/** CSS text as a value of a part of `kind`, by the format's own typing. */
+function partValue(text: string, kind: TokenKind): unknown {
+  return typedValue({ name: "part", kind, values: { light: text } })?.value;
+}
+
+/** A typed value at a factor, as CSS text: a dimension's or a number's. */
+function scaledText(typed: TypedValue, times: number): string | undefined {
   const value = typed.value;
-  if (typeof value === "number") return value * times;
-  if (isPlainObject(value) && typeof value.value === "number") {
-    return { ...value, value: value.value * times };
+  if (typeof value === "number") return String(value * times);
+  if (
+    isPlainObject(value) &&
+    typeof value.value === "number" &&
+    typeof value.unit === "string"
+  ) {
+    return `${String(value.value * times)}${value.unit}`;
   }
   return undefined;
 }
@@ -154,16 +184,22 @@ export function keptTextStyle(style: NamedClass): DtcgNode {
     orderIndex: style.orderIndex,
     styles: style.styles,
     ...(style.locked === true ? { locked: true } : {}),
+    ...(style.fluidSizes === undefined ? {} : { fluidSizes: style.fluidSizes }),
   };
 }
 
 /**
  * The text styles a file keeps as Nextly data, each one this site can use,
  * in the file's order. One it can't use is named and skipped.
+ *
+ * `statedRange` is the fluid range the file states, `undefined` where it
+ * states none: each style's fluid sizes are judged across it, or across the
+ * default range, the one a site that states none uses.
  */
 export function readTextStyles(
   kept: unknown,
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  statedRange: FluidRangeWidths | undefined
 ): NamedClass[] {
   if (!Array.isArray(kept)) {
     issues.push(
@@ -186,7 +222,14 @@ export function readTextStyles(
       continue;
     }
     ids.add(style.id);
-    read.push(style);
+    read.push(
+      withFluidSizesRead(
+        style,
+        entry as DtcgNode,
+        statedRange ?? DEFAULT_FLUID_RANGE,
+        issues
+      )
+    );
   }
   if (kept.length > MAX_NAMED_CLASSES) {
     issues.push(
@@ -214,6 +257,54 @@ function textStyleOf(entry: unknown): NamedClass | undefined {
   return isUsableNamedClass(style) && valuesStorable(style.styles)
     ? style
     : undefined;
+}
+
+/**
+ * A text style read with the fluid sizes its kept entry states, for each
+ * device whose size at rest is the value its two sizes make across `range`.
+ *
+ * Sizes that can't be read (not a record of pairs each passing the engine's
+ * one bound, `isFluidSizes`) are ignored and said, as a variable's are, and
+ * the style's values arrive as they are. A pair for a device whose size it
+ * doesn't make across `range`, or that has no size, is left out and said:
+ * kept, it would be taken for the one the size was made from, and a change of
+ * the range would make the size again from it. The style itself where the
+ * entry states none.
+ */
+function withFluidSizesRead(
+  style: NamedClass,
+  entry: DtcgNode,
+  range: FluidRangeWidths,
+  issues: ValidationIssue[]
+): NamedClass {
+  const sizes = entry.fluidSizes;
+  if (sizes === undefined) return style;
+  const name = nameOf(entry);
+  if (!isPlainObject(sizes) || !Object.values(sizes).every(isFluidSizes)) {
+    issues.push(
+      issue(
+        `${name}'s fluid sizes could not be read, so they were ignored: its sizes arrive as they are, and won't follow a change of the fluid range.`
+      )
+    );
+    return style;
+  }
+  const atRest = style.styles.base ?? {};
+  // Each pair passed `isFluidSizes` just above.
+  const kept = (Object.entries(sizes) as [string, FluidSizes][]).filter(
+    ([device, made]) =>
+      Object.hasOwn(atRest, device) &&
+      atRest[device]?.fontSize === fluidValue(made, range)
+  );
+  if (kept.length < Object.keys(sizes).length) {
+    issues.push(
+      issue(
+        `${name} keeps its sizes as they are, but its fluid sizes for a size they don't make across the file's fluid range were left out, so that size won't follow a change of the range.`
+      )
+    );
+  }
+  return kept.length === 0
+    ? style
+    : { ...style, fluidSizes: Object.fromEntries(kept) };
 }
 
 /**

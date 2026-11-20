@@ -55,7 +55,14 @@ function moveBetweenItems(event: React.KeyboardEvent<HTMLElement>): void {
   items[next]?.focus();
 }
 
-/** One item: the whole row takes the author to the fix. */
+/**
+ * One item: the whole row takes the author to the fix.
+ *
+ * Named with every word it draws, in the order drawn: what is wrong, the
+ * block, why it matters and what to do, so a speech-input user who says
+ * what they see reaches it (WCAG 2.5.3). Each drawn part is a word apart
+ * from the next, by a space between them that the layout doesn't draw.
+ */
 function FindingItem({
   finding,
   onFix,
@@ -63,17 +70,17 @@ function FindingItem({
   finding: PageFinding;
   onFix: (finding: PageFinding) => void;
 }): React.JSX.Element {
-  const describedBy = React.useId();
-  const name =
+  const what =
     finding.block === undefined
       ? finding.what
       : `${finding.what}: ${finding.block}`;
   const detail = (
-    <span id={describedBy} className="nx-page-checks__detail">
+    <span className="nx-page-checks__detail">
       <span className="nx-page-checks__why">{finding.why}</span>{" "}
       <span className="nx-page-checks__todo">{finding.todo}</span>
     </span>
   );
+  const said = `${finding.why} ${finding.todo}`;
   // A fix outside this editor (a header's block, changed in its own
   // editor): the item is a link there, opened beside the page, as the
   // data meter offers it.
@@ -85,13 +92,13 @@ function FindingItem({
           href={finding.opens.href}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label={`${name}. ${finding.opens.name}`}
-          aria-describedby={describedBy}
+          // Where it goes last, in parentheses: said, and not drawn.
+          aria-label={`${what}. ${finding.opens.text}. ${said} (${finding.opens.name})`}
         >
           <span className="nx-page-checks__what">
-            <span className="nx-page-checks__title">{finding.what}</span>
+            <span className="nx-page-checks__title">{finding.what}</span>{" "}
             <span className="nx-page-checks__block">{finding.opens.text}</span>
-          </span>
+          </span>{" "}
           {detail}
           <ExternalLink aria-hidden="true" className="nx-page-checks__go" />
         </a>
@@ -103,16 +110,18 @@ function FindingItem({
       <button
         type="button"
         className="nx-page-checks__item"
-        aria-label={name}
-        aria-describedby={describedBy}
+        aria-label={`${what}. ${said}`}
         onClick={() => onFix(finding)}
       >
         <span className="nx-page-checks__what">
           <span className="nx-page-checks__title">{finding.what}</span>
           {finding.block === undefined ? null : (
-            <span className="nx-page-checks__block">{finding.block}</span>
+            <>
+              {" "}
+              <span className="nx-page-checks__block">{finding.block}</span>
+            </>
           )}
-        </span>
+        </span>{" "}
         {detail}
         <ChevronRight aria-hidden="true" className="nx-page-checks__go" />
       </button>
