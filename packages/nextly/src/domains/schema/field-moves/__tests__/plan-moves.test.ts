@@ -432,7 +432,7 @@ describe("planEntityMoves", () => {
     );
   });
 
-  it("refuses a move whose values are kept for each language, which this kind of save does not carry yet", () => {
+  it("refuses a move whose values are kept for each language, which these saves do not carry yet", () => {
     expect(() =>
       planEntityMoves({
         ...base,
@@ -661,6 +661,49 @@ describe("planEntityMoves", () => {
         })
       );
     }
+  });
+
+  it("leaves a same-path hint out of the checks of the moves together", () => {
+    // A hint whose path stays the same moves nothing; beside a real move of a field of the same
+    // name in other groups, it must not read as a second move of that name.
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), group("a", [text("title")]), group("b", [])],
+        after: [text("title"), group("a", []), group("b", [text("title")])],
+        moves: [
+          { from: ["title"], to: ["title"] },
+          { from: ["a", "title"], to: ["b", "title"] },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it("asks a field group's table nothing of title or slug, which are its fields' to take there", () => {
+    // A field group's table keeps its own columns (`_parent_id`, `_order`...), none named so.
+    const outOnto = (builtBy: "fieldGroup" | "collection") => () =>
+      planEntityMoves({
+        ...base,
+        builtBy,
+        before: [group("meta", [text("title")])],
+        after: [text("title"), group("meta", [])],
+        moves: [{ from: ["meta", "title"], to: ["title"] }],
+      });
+    expect(outOnto("fieldGroup")).not.toThrow();
+    // A Single's or a collection's table keeps its own title while no field takes it.
+    expect(outOnto("collection")).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringContaining(
+                "Every entry already keeps its own title"
+              ),
+            }),
+          ],
+        },
+      })
+    );
   });
 
   it("refuses a move out of a group onto the title or slug every entry keeps while no field takes it", () => {

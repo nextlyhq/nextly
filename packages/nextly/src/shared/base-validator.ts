@@ -244,10 +244,10 @@ export function validateFieldNameShared(
 
 /**
  * Refuse, for a `define*` call, the pairs of sibling fields the one sibling
- * rule refuses that configuration refused before it (`configuredSiblingClashes`):
- * no entity configured in code can already hold one. The rest wait for the
- * start and the migrate commands, which know the definition the entity last
- * had, so an existing pair keeps working.
+ * rule refuses wherever they are found (`configuredSiblingClashes`): every pair
+ * sharing a stored value, and those configuration refused before the rule. The
+ * rest wait for the start and the migrate commands, which know the definition
+ * the entity last had, so an existing pair sharing nothing keeps working.
  */
 export function validateSiblingFieldsShared(
   kind: SiblingEntityKind,
@@ -256,7 +256,7 @@ export function validateSiblingFieldsShared(
   errors: BaseValidationError[]
 ): void {
   const entity = { kind, slug: typeof slug === "string" ? slug : "" };
-  for (const clash of configuredSiblingClashes(kind, fields)) {
+  for (const clash of configuredSiblingClashes(fields)) {
     errors.push({
       path: "fields",
       message: siblingClashMessage(entity, clash),
