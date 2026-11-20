@@ -363,9 +363,18 @@ describe.each(getConfiguredTestDialects())(
     }, 180_000);
 
     // Plugin modules run before the app's files and may change their tables, which a dry run does
-    // not run: it says the type changes were not checked, rather than listing a clean run.
+    // not run: it says the type changes were not checked, rather than listing a clean run, and
+    // names the file that changes the type, not a hand-written one the run meets first.
     it("says in a dry run that it did not check the type changes behind a pending plugin module", async () => {
       await deployedHolding({ r1: "12", r2: "abc" });
+      handWritten(
+        "touch",
+        `UPDATE ${q(TABLE)} SET ${q("title")} = ${q("title")}`
+      );
+      const typeChanging = readdirSync(join(project, "database", "history"))
+        .filter(file => file.endsWith(".sql"))
+        .sort()
+        .at(-1);
       const notes = defineTable("notes", {
         id: col.id(),
         label: col.shortText(),
@@ -416,9 +425,10 @@ describe.each(getConfiguredTestDialects())(
       await migrate({ dryRun: true });
 
       const lines = said.mock.calls.flat().map(String).join("\n");
-      expect(lines).toMatch(
-        /field type changes in .+\.sql were not checked: plugin modules run first/
+      expect(lines).toContain(
+        `field type changes in ${typeChanging} were not checked: plugin modules run first`
       );
+      expect(lines).not.toMatch(/_z_touch\.sql were not checked/);
       expect(lines).not.toMatch(
         /a real run would refuse it: Collection 'posts'/
       );
@@ -545,6 +555,114 @@ describe.each(getConfiguredTestDialects())(
       ]);
       await rm(site, { recursive: true, force: true });
     }, 240_000);
+    // A change that drops a translated field's per-language unique index has that drop written in
+    // a file ahead of the change's own (`generate.ts`' `beforeMain`). The change is judged before
+    // that file runs, so a refused type change leaves the index in place, not dropped under a
+    // migration that stays blocked.
+    it("judges a change before the file that drops its per-language unique index runs", async () => {
+      const site = await mkdtemp(join(tmpdir(), "migrate-type-change-unique-"));
+      const localization = { locales: ["en", "es"], defaultLocale: "en" };
+      const history = join(site, "database", "history");
+      vi.stubEnv("NODE_ENV", "development");
+      current = await createTestNextly({
+        adapter: (await open()) as never,
+        basePath: site,
+        collections: [],
+        localization,
+        db: { migrationsDir: MIGRATIONS, uiSchemaFile: DEFINITION_FILE },
+      });
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "codes",
+          label: "Codes",
+          localized: true,
+          fields: [
+            { name: "code", type: "text", localized: true, unique: true },
+            { name: "v", type: "text", localized: false },
+          ],
+        }
+      );
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "applySchemaChanges",
+        { collectionName: "codes" },
+        {
+          fields: [
+            { name: "code", type: "text", localized: true },
+            { name: "v", type: "number", localized: false },
+          ],
+          confirmed: true,
+          schemaVersion: 1,
+          localized: true,
+        }
+      );
+      await current.destroy();
+      current = undefined;
+
+      const files = readdirSync(history)
+        .filter(file => file.endsWith(".sql"))
+        .sort();
+      // The create writes a `unique` file adding the index after its own; the change's dropping
+      // file, which names no field it indexes, is the last.
+      const drop = files.findLastIndex(file =>
+        /"kind":"unique"/.test(readFileSync(join(history, file), "utf-8"))
+      );
+      expect(readFileSync(join(history, files[drop]), "utf-8")).not.toMatch(
+        /"unique":\[/
+      );
+      expect(drop).toBeGreaterThan(0);
+      const adapter = await open();
+      run.adapter = adapter;
+      run.config = defineConfig({
+        collections: [],
+        localization,
+        db: {
+          migrationsDir: history,
+          uiSchemaFile: join(site, "schema", "builder.json"),
+        },
+      } as never);
+      setNonInteractive(true);
+      const migrateSite = (options: { step?: number } = {}) =>
+        runMigrate(
+          { cwd: site, quiet: true, throwOnFailure: true, ...options } as never,
+          context
+        ).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+      // Every file before the change's first, then a value no number reads.
+      expect(await migrateSite({ step: drop })).toBe("applied");
+      await adapter.executeQuery(
+        `INSERT INTO ${q("dc_codes")} (${q("id")}, ${q("slug")}, ${q("title")}, ${q("v")}) VALUES ('c1', 'c1', 'T', 'abc')`
+      );
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", "dc_codes.v");
+
+      const refused = await migrateSite();
+
+      expect(NextlyError.is(refused)).toBe(true);
+      expect(
+        (
+          refused as {
+            publicData?: { errors?: { path: string; code: string }[] };
+          }
+        ).publicData?.errors
+      ).toEqual([
+        expect.objectContaining({
+          path: "fields.v",
+          code: "TYPE_CHANGE_LOSES_VALUES",
+        }),
+      ]);
+      // The file dropping the index did not run: nothing of the change did.
+      const recorded = (await adapter.executeQuery(
+        `SELECT ${q("filename")} AS filename FROM ${q("nextly_schema_events")} WHERE ${q("event_type")} = 'file_apply' AND ${q("status")} = 'applied'`
+      )) as Array<{ filename: string }>;
+      expect(recorded.map(row => row.filename)).not.toContain(files[drop]);
+      await rm(site, { recursive: true, force: true });
+    }, 240_000);
+
     // A file whose statements committed while its ledger row was never written (MySQL commits each
     // statement, so a run that stops after them leaves the file unrecorded; so does a release
     // before this judgement): the database already stands at the file's end, and the run records

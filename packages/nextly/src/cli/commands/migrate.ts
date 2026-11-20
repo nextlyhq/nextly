@@ -1607,19 +1607,20 @@ export async function previewMigrate(args: {
     pendingModules.length > 0
   );
   // The field type changes of the first change a real run applies, judged as the run judges them:
-  // only the first, since nothing before a later one is run here.
-  if (pendingFiles.length > 0 && pendingModules.length === 0) {
+  // only the first, since nothing before a later one is run here. Behind pending plugin modules,
+  // which run first and may change the tables these files judge, none is: each change's file is
+  // named as not checked, rather than listed as though nothing would be refused.
+  if (pendingFiles.length > 0) {
     await previewFileTypeChanges(
       listed.map(({ file }) => file),
       pendingFiles,
-      { db, dialect, metaDir: resolve(args.migrationsDir, "meta") },
+      {
+        db,
+        dialect,
+        metaDir: resolve(args.migrationsDir, "meta"),
+        behindModules: pendingModules.length > 0,
+      },
       logger
-    );
-  } else if (pendingFiles.length > 0) {
-    // Plugin modules run first and may change the tables these files judge, which a dry run does
-    // not run: said, rather than listing the files as though nothing would be refused.
-    logger.info(
-      `  ⚠ field type changes in ${pendingFiles[0].name}.sql were not checked: plugin modules run first, so a real run judges them only after those`
     );
   }
   // The translations tables deleted entities left, which a real run judges with its files'
@@ -1942,14 +1943,20 @@ function previewPendingFile(
 async function previewFileTypeChanges(
   files: readonly ParsedMigration[],
   pending: readonly ParsedMigration[],
-  args: { db: unknown; dialect: SupportedDialect; metaDir: string },
+  args: {
+    db: unknown;
+    dialect: SupportedDialect;
+    metaDir: string;
+    /** Plugin modules run first: no change is judged, each is named as not checked. */
+    behindModules: boolean;
+  },
   logger: Pick<CommandContext["logger"], "info">
 ): Promise<void> {
   const runs = new Set(pending);
   let at = files.indexOf(pending[0]);
   if (at < 0) return;
   let before = await newestSnapshotBefore(files, at, args.metaDir);
-  let first = true;
+  let first = !args.behindModules;
   while (at < files.length && runs.has(files[at])) {
     const change = await changeFilesFrom(files, at, args.metaDir, file =>
       runs.has(file)
@@ -1967,7 +1974,9 @@ async function previewFileTypeChanges(
       }
     } else if (fileTypeChangesOf(source).length > 0) {
       logger.info(
-        `  ⚠ field type changes in ${source.filename} are judged when the run reaches it: a dry run does not run the files before it`
+        args.behindModules
+          ? `  ⚠ field type changes in ${source.filename} were not checked: plugin modules run first, so a real run judges them only after those`
+          : `  ⚠ field type changes in ${source.filename} are judged when the run reaches it: a dry run does not run the files before it`
       );
     }
     before = change.target;
@@ -4935,6 +4944,19 @@ const WRITTEN_AHEAD: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Whether `migrate:create` wrote `file` ahead of its change's own file: one of the kinds it always
+ * writes there (`WRITTEN_AHEAD`), or a `unique` file that drops per-language unique indexes, which
+ * runs first of all. A `unique` file that adds them is written after its change, and its header
+ * names the fields it indexes; one that only drops them names none.
+ */
+function writtenAhead(file: ParsedMigration): boolean {
+  const intent = file.localization;
+  if (intent === undefined) return false;
+  if (WRITTEN_AHEAD.has(intent.kind)) return true;
+  return intent.kind === "unique" && intent.spec.unique === undefined;
+}
+
+/**
  * The files one change between two snapshots is written in, from `files[at]`: the companion files
  * `migrate:create` writes ahead of the change's own file, each declaring what it is for
  * (`localization`; a translated field's moves and renames among them), and that file, whose
@@ -4961,12 +4983,11 @@ async function changeFilesFrom(
     if (!within(files[end])) return null;
     const target = await loadTargetSnapshot(metaDir, files[end].name);
     if (target === null) {
-      // Only a companion `migrate:create` writes ahead of its change's own file heads that change.
-      // Any other (one written after its own change's file, as a field leaving translation's
-      // `shared` copy is; a `unique` file, written on either side; a hand-written file) runs before
-      // the next change is judged, never inside it.
-      const kind = files[end].localization?.kind;
-      if (kind === undefined || !WRITTEN_AHEAD.has(kind)) return null;
+      // Only a companion `migrate:create` writes ahead of its change's own file heads that change
+      // (`writtenAhead`). Any other (one written after its own change's file, as a field leaving
+      // translation's `shared` copy and a `unique` file adding indexes are; a hand-written file)
+      // runs before the next change is judged, never inside it.
+      if (!writtenAhead(files[end])) return null;
       continue;
     }
     const written = files.slice(at, end + 1);
