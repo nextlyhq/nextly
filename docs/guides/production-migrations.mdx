@@ -289,7 +289,7 @@ jobs:
 
 If step 2 or 3 fails, step 4 doesn't run.
 
-A blank migration (`nextly migrate:create --blank`) has no snapshot, and `nextly migrate:check` accepts it without one. It recognises a blank file by its `-- Parent:` header line or by the template's line `-- This is a blank migration file for custom SQL.`; keep at least one of them in the file's header, above `-- UP`. Any other file with no snapshot fails the check with [`MISSING_SNAPSHOT`](/docs/cli/errors/missing-snapshot).
+A blank migration (`nextly migrate:create --blank`) has no snapshot, and `nextly migrate:check` accepts it without one. It recognises a blank file by its `-- Parent:` header line or by the template's line `-- This is a blank migration file for custom SQL.`; keep at least one of them in the file's header, above `-- UP`. A localization migration (any file carrying `-- Generated: localization`) is the other file written without a snapshot: `nextly migrate:check` passes it without checking it against one, so the check does not catch an edit to it. Any other file with no snapshot fails the check with [`MISSING_SNAPSHOT`](/docs/cli/errors/missing-snapshot).
 
 **`NEXTLY_APPLIED_BY`** is read by nothing in the current codebase. The `nextly_schema_events` table has an `applied_by` column, but the migration runner does not populate it, so setting this variable has no effect today.
 

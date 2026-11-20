@@ -110,7 +110,7 @@ function variantGlobFor(file: string, migration: string): string {
  * recovery can start. Single quotes suppress every expansion, so only the
  * closing quote itself needs handling.
  */
-function shellQuote(value: string): string {
+export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 

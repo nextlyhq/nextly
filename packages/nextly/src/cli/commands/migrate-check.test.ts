@@ -528,7 +528,7 @@ describe("runChecks (F11 PR 4)", () => {
       expect(message).toContain("(MISSING_SNAPSHOT)");
       expect(message).toContain("nextly migrate:create --blank");
       expect(message).toContain(
-        "nextly migrate:resolve --applied 20260101_120000_001_add_posts --skip-verify"
+        "nextly migrate:resolve --applied '20260101_120000_001_add_posts' --skip-verify"
       );
     });
 
@@ -622,9 +622,29 @@ describe("runChecks (F11 PR 4)", () => {
       const message = String(printed.mock.calls[0]?.[0]);
       expect(message).toContain("(MISSING_SNAPSHOT)");
       expect(message).toContain(
-        "nextly migrate:resolve --applied 20260101_120000_001_seed --skip-verify"
+        "nextly migrate:resolve --applied '20260101_120000_001_seed' --skip-verify"
       );
       expect(message).toContain("delete the file");
+    });
+
+    it("quotes the name in the command it advises, so a name with a space or a quote stays one argument", async () => {
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_owner's seed.sql"),
+        "INSERT INTO foo (id) VALUES ('a');",
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      const message = String(printed.mock.calls[0]?.[0]);
+      expect(message).toContain(
+        "nextly migrate:resolve --applied '20260101_120000_001_owner'\\''s seed' --skip-verify"
+      );
     });
 
     it("holds a generated migration beside a blank one to its snapshot", async () => {

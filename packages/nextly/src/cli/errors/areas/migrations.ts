@@ -10,6 +10,7 @@ import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan
 import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
 import { dialectVariantOf } from "../../../domains/schema/migrate/dialect-variant";
+import { shellQuote } from "../../../domains/schema/migrate/drift-error";
 import {
   BLANK_FILE_LINE,
   HISTORY_FORKED_REASON,
@@ -1309,9 +1310,11 @@ export function migrationSnapshotMissing(
   sqlName: string,
   metaDir: string
 ): CliError {
-  // As `migrate:resolve` finds a file: a dialect's variant by the name its group shares.
-  const resolveName =
-    dialectVariantOf(sqlName)?.baseName ?? sqlName.replace(/\.sql$/, "");
+  // As `migrate:resolve` finds a file: a dialect's variant by the name its group shares. Quoted
+  // as one shell argument, since a hand-added file's name may hold a space or a quote.
+  const resolveName = shellQuote(
+    dialectVariantOf(sqlName)?.baseName ?? sqlName.replace(/\.sql$/, "")
+  );
   return new CliError("MISSING_SNAPSHOT", {
     what: `\`${sqlName}\` has no paired snapshot file in ${metaDir}.`,
     why: `Nothing is at \`${sqlName.replace(/\.sql$/, "")}.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.`,
