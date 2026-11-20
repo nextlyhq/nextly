@@ -11,10 +11,8 @@
  *   options, the public error data, the published filter keys), where a tag counts
  *   when its comment, or the declaration under it, is about a workflow or a review.
  *
- * Until the tags come off, the check is held as an expected failure (`it.fails`): it passes
- * while they are there, and fails the run the moment none is left, which is the signal to turn
- * it into a plain `it` in the same change that removes the last of them. The file count beside
- * it is a plain test throughout, so the scan can never pass by reading nothing.
+ * A tag added back anywhere on that surface fails the run. The file count beside it keeps the
+ * scan from passing by reading nothing.
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -120,7 +118,7 @@ describe("workflows' public surface", () => {
     for (const path of EXCLUDED) expect(scanned).not.toContain(path);
   });
 
-  it.fails("carries no @experimental tag", () => {
+  it("carries no @experimental tag", () => {
     const tags = [
       ...workflowOnly.flatMap(file => tagsIn(file, () => true)),
       ...shared.flatMap(file =>

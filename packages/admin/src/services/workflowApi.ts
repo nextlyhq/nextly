@@ -8,7 +8,6 @@
  * and in the body for a write.
  *
  * @module services/workflowApi
- * @experimental
  */
 
 import { fetcher } from "../lib/api/fetcher";

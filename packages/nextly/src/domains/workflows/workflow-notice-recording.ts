@@ -21,7 +21,7 @@
  * workflows' settings and the collections' names.
  *
  * @module domains/workflows/workflow-notice-recording
- * @experimental Until the notices feature is complete.
+ * Until the notices feature is complete.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";

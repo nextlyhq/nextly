@@ -21,7 +21,6 @@
  * live past it. The next working draft then reads as the stage named for after publishing.
  *
  * @module domains/workflows/workflow-publish-gate
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
@@ -153,8 +152,6 @@ type Bypass =
  * it holds, nor a visitor. The one judgement a publish without review is let through by, and the
  * one the review-state read reports, so the two never disagree. `holds` asks whether a person
  * holds the permission, on the pool unless a transaction is given.
- *
- * @experimental
  */
 export async function mayPublishWithoutReview(
   caller: PublishCaller,
@@ -231,8 +228,6 @@ function refuseEvery(
  *
  * Exported as the one per-part decision a release asks of each part it would publish
  * (`part-approval`), so a release and a publish hold a part for the same reasons.
- *
- * @experimental
  */
 export function holdReason(
   registered: RegisteredWorkflow,
@@ -269,8 +264,6 @@ const SINGLES_GOVERNED = true;
 /**
  * Whether the gate judges a publish of `scope` at all. Exported so a release holds back only what
  * a publish of the same scope would.
- *
- * @experimental
  */
 export function governs(scope: PublishGateQuestion["scope"]): boolean {
   return scope.kind === "collection" || SINGLES_GOVERNED;
@@ -429,8 +422,6 @@ async function judgeOnLock(
  * do not withdraw an approval as they write, so this is the check that holds one to its content.
  * Read on the move's transaction under its lock, or (`read: "pool"`) by a release's check, which
  * writes nothing and is judged again by the publish it leads to.
- *
- * @experimental
  */
 export async function stillApprovedOn(
   tx: VersionsDbApi,
@@ -552,8 +543,6 @@ async function settle(
 /**
  * The workflow's publish gate, registered as `publishGate`. Collections and Singles with no
  * workflow attached are let through as before.
- *
- * @experimental
  */
 export function workflowPublishGate(adapter: DrizzleAdapter): PublishGate {
   return {

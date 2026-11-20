@@ -14,7 +14,6 @@
  * where no workflow is attached.
  *
  * @module components/features/entries/review/ReviewSection
- * @experimental
  */
 
 import { Button } from "@nextlyhq/ui";

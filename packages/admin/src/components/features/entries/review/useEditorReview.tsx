@@ -19,7 +19,6 @@
  * is asked when it is taken, and a refusal is said where it happens.
  *
  * @module components/features/entries/review/useEditorReview
- * @experimental
  */
 
 import { useQueryClient } from "@tanstack/react-query";

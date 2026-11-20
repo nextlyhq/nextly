@@ -9,7 +9,6 @@
  * `nextly build` (`registry.ts`).
  *
  * @module domains/workflows/attachments
- * @experimental
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
@@ -24,8 +23,6 @@ import type { Workflow } from "./types";
 /**
  * A collection or Single as the configuration declares it, with the parts an
  * attachment is judged by.
- *
- * @experimental
  */
 export interface WorkflowTarget {
   slug: string;
@@ -39,8 +36,6 @@ export interface WorkflowTarget {
 /**
  * One workflow's place in the configuration: the workflow and what it is
  * attached to.
- *
- * @experimental
  */
 export interface WorkflowAttachments {
   workflow: Workflow;
@@ -218,8 +213,6 @@ function collect(
  * The configuration's workflows and their attachments, refusing a value that
  * is not a sound workflow and two definitions sharing a slug. Each error
  * names its place (`collections.posts.workflow`).
- *
- * @experimental
  */
 export function workflowAttachmentsOf(config: {
   collections?: readonly WorkflowTarget[];

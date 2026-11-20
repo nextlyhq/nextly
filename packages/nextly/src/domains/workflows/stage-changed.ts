@@ -15,7 +15,6 @@
  * no endpoint and no audit trail, where nothing would read it.
  *
  * @module domains/workflows/stage-changed
- * @experimental
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
@@ -37,8 +36,6 @@ import type { ReviewDocument } from "./review-state-repository";
  * What moved a part: a step; an edit or a changed definition withdrawing an approval; a deploy
  * that renamed its stage, redirected it out of a removed one, or detached the workflow; a discard
  * of its working draft; the recovery command; or a publish closing its review cycle.
- *
- * @experimental
  */
 export type StageChangeCause =
   | "step"
@@ -53,8 +50,6 @@ export type StageChangeCause =
 
 /**
  * One part's change of stage or approval.
- *
- * @experimental
  */
 export interface StageChange {
   document: ReviewDocument;
@@ -126,8 +121,6 @@ function dataOf(change: StageChange): Record<string, unknown> {
  * webhooks outbox, on the move's transaction `tx`: see the module. The gate's inputs are read
  * once, with no database access, so the retention class follows from the same facts that
  * admitted the event.
- *
- * @experimental
  */
 export async function recordStageChanged(
   tx: TransactionContext,
@@ -160,8 +153,6 @@ export async function recordStageChanged(
  * The outbox's actor for an actor as the record of content events keeps it: a person as a user,
  * an API key as itself, and anything the outbox has no kind for (a release, an agent, a
  * plugin-defined person, the system) as the system, as a write's own event records them.
- *
- * @experimental
  */
 export function webhookActorOfEvent(actor: ContentEventActor): WebhookActor {
   if (actor.kind === "person") return { type: "user", id: actor.id };

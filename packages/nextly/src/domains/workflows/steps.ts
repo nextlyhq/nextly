@@ -46,7 +46,6 @@
  *   step and could read every such field.
  *
  * @module domains/workflows/steps
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
@@ -147,8 +146,6 @@ import { readWorkflowSettings } from "./workflow-settings-repository";
  *   recorded as the key's, with its maker (`userId`) as the person accountable for it.
  * - `system`: trusted server code acting as no person. It may take no step of kind approve or
  *   request-changes.
- *
- * @experimental
  */
 export type WorkflowCaller =
   | { kind: "user"; userId: string }
@@ -158,8 +155,6 @@ export type WorkflowCaller =
 /**
  * What the caller was shown of one part: its review-state `revision`, 0 for a part with no review
  * state yet (which reads as the workflow's first stage), and the content version it read.
- *
- * @experimental
  */
 export interface SeenPart {
   /** A language, or null for the shared part. */
@@ -172,7 +167,6 @@ export interface SeenPart {
   version: string;
 }
 
-/** @experimental */
 export interface TakeStepInput {
   document: ReviewDocument;
   /** The step's name in the workflow attached to the document's collection or Single. */
@@ -191,7 +185,7 @@ export interface TakeStepInput {
   caller: WorkflowCaller;
 }
 
-/** A part a step moved. @experimental */
+/** A part a step moved. */
 export interface MovedPart {
   part: string | null;
   from: string;
@@ -200,7 +194,7 @@ export interface MovedPart {
   revision: number;
 }
 
-/** A part a step did not move, and the stage it stays in. @experimental */
+/** A part a step did not move, and the stage it stays in. */
 export interface LeftPart {
   part: string | null;
   stage: string;
@@ -217,7 +211,6 @@ const ASSIGNEE_REFUSAL_CODES = {
   lacksStep: "WORKFLOW_ASSIGNEE_LACKS_STEP",
 } as const;
 
-/** @experimental */
 export type AssigneeRefusalCode =
   (typeof ASSIGNEE_REFUSAL_CODES)[keyof typeof ASSIGNEE_REFUSAL_CODES];
 
@@ -239,7 +232,6 @@ const WORKFLOW_STEP_ERROR_CODES = {
   stepRequired: "WORKFLOW_STEP_REQUIRED",
 } as const;
 
-/** @experimental */
 export interface TakeStepResult {
   step: string;
   moved: MovedPart[];
@@ -256,7 +248,7 @@ export interface TakeStepResult {
   } | null;
 }
 
-/** One part to assign. @experimental */
+/** One part to assign. */
 export interface Assignment {
   document: ReviewDocument;
   part: string | null;
@@ -268,14 +260,12 @@ export interface Assignment {
   dueAt?: Date | null;
 }
 
-/** @experimental */
 export interface AssignInput {
   /** One or many parts, of one or many documents; all are assigned or none is. */
   assignments: readonly Assignment[];
   caller: WorkflowCaller;
 }
 
-/** @experimental */
 export interface AssignResult {
   assigned: Array<{
     document: ReviewDocument;
@@ -355,8 +345,6 @@ function ensureWorkflowContentEventKinds(): void {
  * The content event kind a step of `kind`, or an assignment, is recorded as: `workflow-` and the
  * kind (`workflow-request-changes`, `workflow-assign`). Kind names are kebab-case, so the prefix
  * is joined with a hyphen.
- *
- * @experimental
  */
 export function workflowEventKind(kind: WorkflowStepKind | "assign"): string {
   return WORKFLOW_CONTENT_EVENT_KINDS[kind].name;
@@ -364,8 +352,6 @@ export function workflowEventKind(kind: WorkflowStepKind | "assign"): string {
 
 /**
  * Whether `stage` allows publishing: the one answer a step into it and a publish from it share.
- *
- * @experimental
  */
 export function allowsPublish(workflow: Workflow, stage: string): boolean {
   return workflow.stages.some(
@@ -378,8 +364,6 @@ export function allowsPublish(workflow: Workflow, stage: string): boolean {
  * else `update`. Kept as the action, since a permission's slug cannot be split back into its
  * action and resource (a resource may itself hold a hyphen). Exported so Settings shows the
  * permission each step needs from this one answer.
- *
- * @experimental
  */
 export function stepAction(
   workflow: Workflow,
@@ -393,8 +377,6 @@ export function stepAction(
  * The permission, as stored, a caller needs to take `step` on the collection or Single `slug`:
  * the step's named action (`approve` → `approve-posts`); with none, `publish-<slug>` when the
  * step moves into a stage that allows publishing, and `update-<slug>` otherwise.
- *
- * @experimental
  */
 export function stepPermission(
   workflow: Workflow,
@@ -407,8 +389,6 @@ export function stepPermission(
 /**
  * Whether only a signed-in person may take `step`: a step of kind approve or request-changes,
  * whatever it is named.
- *
- * @experimental
  */
 export function stepNeedsPerson(step: ResolvedWorkflowStep): boolean {
   return step.kind === "approve" || step.kind === "request-changes";
@@ -416,8 +396,6 @@ export function stepNeedsPerson(step: ResolvedWorkflowStep): boolean {
 
 /**
  * The action of `stage`'s primary step, or null for a stage with no step out of it.
- *
- * @experimental
  */
 export function primaryAction(
   workflow: Workflow,
@@ -436,8 +414,6 @@ function assignerActions(workflow: Workflow, stage: string): string[] {
 /**
  * The permission, as stored, a person or role must hold to be assigned a part in `stage`: that of
  * the stage's primary step. Null for a stage with no step out of it.
- *
- * @experimental
  */
 export function assigneePermission(
   workflow: Workflow,
@@ -451,8 +427,6 @@ export function assigneePermission(
 /**
  * The permissions, as stored, any one of which lets a caller assign a part in `stage`:
  * `update-<slug>`, and the permission of the stage's primary step where it is another.
- *
- * @experimental
  */
 export function assignerPermissions(
   workflow: Workflow,
@@ -477,8 +451,6 @@ interface ResolvedCaller {
 /**
  * The actor a workflow caller is decided as: a person's own grants, a key's own scope, or trusted
  * code's. The one resolution steps and reads of review state share.
- *
- * @experimental
  */
 export async function workflowCallerActor(
   adapter: DrizzleAdapter,
@@ -605,8 +577,6 @@ async function defaultReviewer(
  * The parts a step names: each once. For `"all"`, every configured language and the shared part
  * of a collection that keeps translations; the shared part alone of one that does not, whose
  * content and versions belong to no language.
- *
- * @experimental
  */
 export function namedParts(
   parts: TakeStepInput["parts"],
@@ -686,8 +656,6 @@ const seenRevision = (
 
 /**
  * The refusal of a move whose parts changed since they were judged: a step's, or a publish's.
- *
- * @experimental
  */
 export function staleRefusal(parts: (string | null)[]): NextlyError {
   const data: WorkflowRefusalPublicData = { reason: "stale", parts };
@@ -893,8 +861,6 @@ function takenBy(step: ResolvedWorkflowStep, caller: WorkflowCaller): boolean {
  * takes it goes: the kind of caller the step needs (`takenBy`) and the self-approval it refuses of
  * the one who entered the stage (`refusesSelf`). Its permission is asked apart. The one rule the
  * steps a part offers and the work a caller is listed are judged by.
- *
- * @experimental
  */
 export function takesStep(
   step: ResolvedWorkflowStep,
@@ -907,8 +873,6 @@ export function takesStep(
 
 /**
  * The person accountable for what `caller` does: the one a step's self-approval rule asks about.
- *
- * @experimental
  */
 export async function accountableFor(
   adapter: DrizzleAdapter,
@@ -936,8 +900,6 @@ function refusesSelf(
 /**
  * A part as the steps out of its stage are judged for a caller: where it stands, and who brought
  * it there.
- *
- * @experimental
  */
 export interface StepJudgedPart {
   part: string | null;
@@ -953,8 +915,6 @@ export interface StepJudgedPart {
  * request for changes (`takenBy`), and the self-approval a step refuses (`refusesSelf`). What a
  * step checks of the content when taken (the revision and version seen, a comment, fields an
  * approver cannot read) is asked then. Read on the pool.
- *
- * @experimental
  */
 export async function stepsTakeableBy(
   adapter: DrizzleAdapter,
@@ -1806,8 +1766,6 @@ async function hiddenFieldsForbidden(
  * stage that allows publishing loses its approval. An approval pins the version it names
  * (`approved:<part>`), and a step that enters review pins the version the part entered it at
  * (`entered-review:<part>`), so retention keeps both for the comparisons a review shows.
- *
- * @experimental
  */
 export async function takeWorkflowStep(
   adapter: DrizzleAdapter,
@@ -1837,8 +1795,6 @@ export async function takeWorkflowStep(
 /**
  * A submit for review: a step's input whose step, when named, must be of kind `submit`, and when
  * left out is the submit step out of the named parts' stage.
- *
- * @experimental
  */
 export type SubmitInput = Omit<TakeStepInput, "step"> & { step?: string };
 
@@ -1919,8 +1875,6 @@ async function submitStepOut(
  * takes any step, with every precondition it checks. A step of any other kind is refused with
  * `WORKFLOW_STEP_NOT_SUBMIT` before anything is read, so a caller held to submitting cannot
  * approve, request changes or move a part through it.
- *
- * @experimental
  */
 export async function submitForReview(
   adapter: DrizzleAdapter,
@@ -2304,8 +2258,6 @@ async function runAssignment(
  * or super-admin. Else `VALIDATION_ERROR`, one error per refused assignment
  * (`assignments[<i>].assignee`, an assignee refusal code). Nothing is assigned unless everything
  * is; a stale revision is `CONFLICT`, `{ reason: "stale" }`.
- *
- * @experimental
  */
 export async function assignWorkflowParts(
   adapter: DrizzleAdapter,

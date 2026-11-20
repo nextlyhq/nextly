@@ -2720,7 +2720,7 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
 ];
 
 /**
- * The workflow routes, by path and verb (@experimental). Documents are named in the query or the
+ * The workflow routes, by path and verb. Documents are named in the query or the
  * body, as an entry of a collection or a Single, so one route serves both.
  */
 const WORKFLOW_ROUTES: readonly {
@@ -3684,7 +3684,7 @@ export function parseRestRoute(
     if (result) return result;
   }
 
-  // Review state, steps, assignments and settings under a workflow (@experimental).
+  // Review state, steps, assignments and settings under a workflow.
   if (resource === "workflows") {
     const result = parseWorkflowRoutes(
       id,

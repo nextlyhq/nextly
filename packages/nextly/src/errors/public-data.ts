@@ -161,8 +161,6 @@ export type SampleContentPublicData = {
  * review state moved since the caller saw it; or the changed fields an approval would cover that
  * a read rule hides from the reviewer, with who could approve instead. A part is a language, or
  * null for the shared part.
- *
- * @experimental
  */
 export type WorkflowRefusalPublicData =
   | { reason: "no-permission"; permission: string }
@@ -228,8 +226,6 @@ export type VersionRequiredPublicData = {
  * What a submit for review refused over its step tells its caller: the step it named, which is
  * not a submit, or the part named and the stage it stands in, which no submit step leaves. Each
  * is the caller's own word or what a read of the part already tells them.
- *
- * @experimental
  */
 export type WorkflowSubmitPublicData =
   | { step: string }

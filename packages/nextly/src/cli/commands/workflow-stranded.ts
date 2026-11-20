@@ -164,8 +164,6 @@ function storedFields(value: unknown): FieldDefinition[] {
  * tables, and the tables of every collection and Single `workflows` are attached to, read from
  * their registry rows. A move locks each document's own row, and a command has no boot to have
  * registered those tables.
- *
- * @experimental
  */
 export async function installStrandedRunResolver(
   adapter: DrizzleAdapter,
@@ -272,8 +270,6 @@ function dryRunChange(moved: MovedStranded, to: string) {
 /**
  * The dry run of a move: the documents it would take, judged as the move judges them, or, where
  * the move would be refused, the refusal in the words the real run prints. Writes nothing.
- *
- * @experimental
  */
 export async function strandedMoveDryRun(
   run: StrandedRun & MoveOptions

@@ -509,8 +509,6 @@ export interface SingleConfig {
    * needs drafts kept beside the live version: `status` on and drafts enabled
    * in `versions`, or the configuration is refused, saying which is missing.
    * Declaring it changes nothing at runtime yet.
-   *
-   * @experimental
    */
   workflow?: Workflow;
 

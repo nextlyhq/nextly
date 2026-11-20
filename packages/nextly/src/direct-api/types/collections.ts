@@ -27,8 +27,6 @@ import type {
  * read did not ask, for a visitor, and for a collection no workflow holds. `find`'s row type is
  * left as it is, so existing callers keep compiling; a caller that asks for the review state
  * intersects its rows with this (`RowFromCollectionSlug<"posts"> & RowReviewState`).
- *
- * @experimental
  */
 export interface RowReviewState {
   _review?: { parts: RowPartReview[] };
@@ -69,8 +67,6 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
    * Give each row its review state under `_review`: each part where it stands in the
    * collection's workflow, as `workflows.reviewState` places it. Rows of a collection no
    * workflow holds carry none.
-   *
-   * @experimental
    */
   reviewState?: boolean;
 
@@ -848,7 +844,7 @@ export interface PublishArgs<TSlug extends CollectionSlug = CollectionSlug>
   data?: { _rev?: string; _overwrite?: boolean };
   /**
    * A publish made without review, and why: told to the publish gate, which decides whether this
-   * caller may (trusted code may, with a reason), and never stored. @experimental
+   * caller may (trusted code may, with a reason), and never stored.
    */
   withoutReview?: { reason: string };
 }

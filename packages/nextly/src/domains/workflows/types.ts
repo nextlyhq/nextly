@@ -6,13 +6,10 @@
  * name. Stages and steps carry the names the generated types are built from.
  *
  * @module domains/workflows/types
- * @experimental
  */
 
 /**
  * What a step does. The system's rules follow a step's kind, never its name.
- *
- * @experimental
  */
 export const WORKFLOW_STEP_KINDS = [
   "submit",
@@ -21,13 +18,10 @@ export const WORKFLOW_STEP_KINDS = [
   "move",
 ] as const;
 
-/** @experimental */
 export type WorkflowStepKind = (typeof WORKFLOW_STEP_KINDS)[number];
 
 /**
  * A stage a part of a document can be in.
- *
- * @experimental
  */
 export interface WorkflowStage<S extends string = string> {
   /** Its name in code, the generated types and the record. */
@@ -62,8 +56,6 @@ interface ResolvedWorkflowStage<S extends string = string> {
 
 /**
  * A step a person takes to move a part from one stage to another.
- *
- * @experimental
  */
 export interface WorkflowStep<
   S extends string = string,
@@ -104,8 +96,6 @@ export interface WorkflowStep<
 
 /**
  * A workflow as declared.
- *
- * @experimental
  */
 export interface WorkflowInput<
   S extends string = string,
@@ -152,8 +142,6 @@ export interface WorkflowInput<
 /**
  * A step as the system reads it: its `from` always a list, and its comment
  * and self-approval rules decided.
- *
- * @experimental
  */
 export interface ResolvedWorkflowStep<
   S extends string = string,
@@ -173,8 +161,6 @@ export interface ResolvedWorkflowStep<
 /**
  * A validated workflow, with every default decided. What a collection or
  * Single is given in its `workflow` option.
- *
- * @experimental
  */
 export interface Workflow<
   S extends string = string,
@@ -194,10 +180,10 @@ export interface Workflow<
   readonly keepApprovals: boolean;
 }
 
-/** A workflow's stage names. @experimental */
+/** A workflow's stage names. */
 export type WorkflowStageName<W> =
   W extends Workflow<infer S, string> ? S : never;
 
-/** A workflow's step names. @experimental */
+/** A workflow's step names. */
 export type WorkflowStepName<W> =
   W extends Workflow<string, infer T> ? T : never;
