@@ -71,6 +71,7 @@ function inReview(part: string): PartReview {
     part,
     stage: "inReview",
     stageLabel: "In review",
+    stageColour: null,
     publishable: false,
     enteredAt: null,
     enteredBy: null,
@@ -92,6 +93,7 @@ function inReview(part: string): PartReview {
     ],
     waitingFor: null,
     lastMove: null,
+    reviewedVersionNo: null,
   };
 }
 

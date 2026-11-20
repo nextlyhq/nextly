@@ -12,6 +12,7 @@
  * @module plugins/schema/validate-relations
  */
 
+import { typeHasNestedFields } from "../../collections/fields/guards";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { PluginDefinition } from "../plugin-context";
 import {
@@ -27,6 +28,33 @@ interface RelationField {
   name?: string;
   type?: string;
   relationTo?: string | string[];
+  /** The fields a container field holds (`typeHasNestedFields`). */
+  fields?: RelationField[];
+}
+
+/**
+ * Every relationship field among `fields`, those nested in a container field included. Only the
+ * types the field guards name as holding fields (`typeHasNestedFields`) are walked: a plugin's
+ * type may carry a `fields` option of its own, which is not a field list.
+ */
+function relationFieldsOf(
+  fields: readonly RelationField[] | undefined
+): RelationField[] {
+  const found: RelationField[] = [];
+  for (const field of fields ?? []) {
+    if (field.type === "relationship") {
+      found.push(field);
+    } else if (
+      field.type !== undefined &&
+      typeHasNestedFields(field.type) &&
+      Array.isArray(field.fields)
+    ) {
+      // A container whose `fields` is not a list is the configuration's rules' to report
+      // (`GROUP_FIELDS_REQUIRED`, `ARRAY_FIELDS_REQUIRED`), not this walk's to trip over.
+      found.push(...relationFieldsOf(field.fields));
+    }
+  }
+  return found;
 }
 
 interface FieldedEntity {
@@ -64,8 +92,10 @@ export function collectUnresolvedRelationTargets(
 
   const unresolved: UnresolvedRelation[] = [];
   for (const entity of entities) {
-    for (const fieldEntry of entity.fields ?? []) {
-      if (fieldEntry.type !== "relationship" || fieldEntry.relationTo == null) {
+    // Nested ones too: a relationship inside a group or a repeater names its target as one at
+    // the top does.
+    for (const fieldEntry of relationFieldsOf(entity.fields)) {
+      if (fieldEntry.relationTo == null) {
         continue;
       }
       const targets = Array.isArray(fieldEntry.relationTo)

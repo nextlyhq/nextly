@@ -940,6 +940,7 @@ These routes read and move review state for collections and Singles that have a 
       "approval": null,
       "revision": 3,
       "version": "…",
+      "reviewedVersionNo": 12,
       "steps": [
         {
           "name": "clear",
@@ -991,6 +992,7 @@ What the fields mean:
 - **`stageLabel`, `stageColour`:** the stage as Settings shows it: the label and colour saved there, else the code's label and `null`.
 - **`approval`:** `{ versionNo, by, at }` where the part holds an approval, else `null`.
 - **`revision` and `version`:** what a step sends back as what it saw.
+- **`reviewedVersionNo`:** the number of the part's version under review: its newest recorded version, in its language or, for the shared part, in any language. It is what approving the part approves; `null` for a part never saved.
 - **`steps`:** the steps out of the part's stage.
   - **`mayTake`:** whether the caller may take the step on this part. The server judges it with the same checks the step itself makes of who takes it: the step's permission (or the right to edit or publish, where it names none), a signed-in person for an approval or a request for changes (so an API key's is always `false`), and no self-approval where the step refuses it. A step can still be refused when taken, for what the caller saw being out of date, a missing comment, or fields the approver cannot read. Approvals are made by people: trusted server code may take every other step, and sees `mayTake: false` for an approval or a request for changes.
   - **`primary`:** `true` on the stage's primary step (its only step out, or the one marked `primary`), `false` on the others.

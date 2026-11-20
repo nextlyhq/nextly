@@ -123,16 +123,18 @@ function describeCycle(cycle: readonly string[]): string {
   return cycle.join(" → ");
 }
 
+/** The sentence naming `cycle`, for a developer to act on. */
+export function fieldGroupCycleMessage(cycle: readonly string[]): string {
+  return (
+    `Field groups place each other in a cycle: ${describeCycle(cycle)}. ` +
+    `A field group cannot be placed inside itself, directly or through other field groups.`
+  );
+}
+
 function cycleRefusal(cycle: readonly string[], path: string): NextlyError {
   return NextlyError.validation({
     errors: [
-      {
-        path,
-        code: FIELD_GROUP_CYCLE,
-        message:
-          `Field groups place each other in a cycle: ${describeCycle(cycle)}. ` +
-          `A field group cannot be placed inside itself, directly or through other field groups.`,
-      },
+      { path, code: FIELD_GROUP_CYCLE, message: fieldGroupCycleMessage(cycle) },
     ],
     logContext: { reason: "field-group-cycle", cycle },
   });
@@ -145,16 +147,30 @@ function cycleRefusal(cycle: readonly string[], path: string): NextlyError {
 export function assertNoFieldGroupCycleInCode(
   definitions: readonly FieldGroupDefinition[]
 ): void {
+  const [cycle] = fieldGroupCyclesInCode(definitions);
+  if (cycle !== undefined) throw cycleRefusal(cycle, "fieldGroups");
+}
+
+/**
+ * Every cycle among the field groups a configuration defines in code, each slug as written, in
+ * the order the groups are declared: one for each set of groups that place each other, so two
+ * cycles that share no group are both named, and one is not named again from each of its groups.
+ */
+export function fieldGroupCyclesInCode(
+  definitions: readonly FieldGroupDefinition[]
+): string[][] {
   const { edges, written } = placementGraph(definitions);
+  const cycles: string[][] = [];
+  const named = new Set<string>();
   for (const key of edges.keys()) {
     const cycle = shortestWay(edges, key, key);
-    if (cycle !== null) {
-      throw cycleRefusal(
-        cycle.map(k => written.get(k) ?? k),
-        "fieldGroups"
-      );
-    }
+    if (cycle === null) continue;
+    const members = [...new Set(cycle)].sort().join("\u0000");
+    if (named.has(members)) continue;
+    named.add(members);
+    cycles.push(cycle.map(k => written.get(k) ?? k));
   }
+  return cycles;
 }
 
 /** Slugs as their definitions write them. */

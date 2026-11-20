@@ -7,9 +7,11 @@
  * change the database already holds part of. PostgreSQL's and SQLite's push
  * each run in one transaction that a failure rolls back whole; MySQL commits
  * each schema statement as it runs, so there a push that failed may have
- * changed it. Whether a failure changed nothing is known only where the push stopped at
- * its first question, which the pipeline asks before any statement runs
- * (`stoppedBeforeAnyStatement`), or where a busy table's stop says so.
+ * changed it. Whether a failure changed nothing is known where the push's
+ * pipeline says how many of its statements stay applied (`statementsKept`),
+ * where the push stopped at its first question, which the pipeline asks before
+ * any statement runs (`stoppedBeforeAnyStatement`), or where a busy table's
+ * stop says so.
  *
  * @module domains/schema/builder-save/landing-push
  */
@@ -21,10 +23,14 @@ import { withSettleFailure } from "./stopped-save";
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
 
-/** What a push answers: whether it succeeded, and the failure it stopped on. */
+/**
+ * What a push answers: whether it succeeded, the failure it stopped on, and on a failure how many
+ * of the statements it ran stay applied, where its pipeline recorded them (`statementsKept`).
+ */
 interface PushOutcome {
   success: boolean;
   error?: { details?: unknown };
+  statementsKept?: number;
 }
 
 /**
@@ -46,9 +52,12 @@ export interface PushWatch {
  * known to have changed nothing. That is a busy table's stop that says nothing
  * ran (`leftNothing`), or a run refused at its first question (a rename
  * declined, a question unanswered), which the pipeline asks before it runs any
- * statement (`watch.stopped`). Any other failure counts as landed, data-only
- * statements included, so its files are kept: a push that asks no question, or
- * one refused by a check of its own before any statement, keeps them too.
+ * statement (`watch.stopped`). A failed run that says how many of its
+ * statements stay applied (`statementsKept`, which the pipeline records on MySQL
+ * and SQLite as it runs them one at a time) counts as landed exactly when one
+ * does. Any other failure counts as landed, data-only statements included, so
+ * its files are kept: a push that asks no question, or one refused by a check
+ * of its own before any statement, keeps them too.
  *
  * Only what wraps the push itself is judged: a refusal raised before the push
  * runs is never counted as landed.
@@ -77,7 +86,13 @@ export function landingPush<A extends unknown[], R extends PushOutcome>(
         if (failureLanded(error)) landed = true;
         throw error;
       }
-      if (result.success || failureLanded(result.error?.details)) {
+      if (
+        result.success ||
+        watch?.completed?.() === true ||
+        (result.statementsKept === undefined
+          ? failureLanded(result.error?.details)
+          : result.statementsKept > 0)
+      ) {
         landed = true;
       }
       return result;

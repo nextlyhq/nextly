@@ -294,7 +294,10 @@ describe("nextly media orphans, as the CLI runs it", () => {
     ]);
 
     expect(seen.loadedIn).toEqual([dir]);
-    expect(seen.loadConfig).toEqual([{ configPath: undefined, cwd: dir }]);
+    // `orphans` reads the media, not the app's entities: with no configuration file it goes on.
+    expect(seen.loadConfig).toEqual([
+      { configPath: undefined, cwd: dir, missing: "defaults" },
+    ]);
   });
 
   // The CLI reads its environment files from the directory it was run in,
@@ -585,7 +588,10 @@ describe("nextly media orphans, as the CLI runs it", () => {
     );
     // The loader discovers the config from the project; a path is passed
     // only when one was given.
-    expect(seen.loadConfig).toEqual([{ configPath: undefined, cwd: dir }]);
+    // `orphans` reads the media, not the app's entities: with no configuration file it goes on.
+    expect(seen.loadConfig).toEqual([
+      { configPath: undefined, cwd: dir, missing: "defaults" },
+    ]);
   });
 
   it("passes the config path when one is given", async () => {
@@ -601,7 +607,7 @@ describe("nextly media orphans, as the CLI runs it", () => {
     ]);
 
     expect(seen.loadConfig).toEqual([
-      { configPath: "src/nextly.config.ts", cwd: dir },
+      { configPath: "src/nextly.config.ts", cwd: dir, missing: "defaults" },
     ]);
   });
 });

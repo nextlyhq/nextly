@@ -108,11 +108,12 @@ function boolLiteral(value: boolean, dialect: Dialect): string {
 /**
  * "Now" SQL expression per dialect. created_at/updated_at use Drizzle
  * `$defaultFn` (app-level, NO DB default), so a raw INSERT must set them or
- * NOT NULL fails. SQLite stores epoch-ms integers; PG/MySQL use timestamps.
+ * NOT NULL fails. SQLite stores them as unix seconds, which is how the
+ * registries' columns are read (`integer({ mode: "timestamp" })`) and how
+ * every other writer of them writes; PG/MySQL use timestamps.
  */
 function nowExpr(dialect: Dialect): string {
-  if (dialect === "sqlite")
-    return "CAST(strftime('%s','now') AS INTEGER) * 1000";
+  if (dialect === "sqlite") return "CAST(strftime('%s','now') AS INTEGER)";
   if (dialect === "mysql") return "NOW(3)";
   return "now()";
 }

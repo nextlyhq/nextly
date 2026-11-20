@@ -3,10 +3,24 @@
  * editor shows, and what it shows is stored again unchanged, marks, links,
  * chips and line breaks included.
  */
-import { createEditor, type LexicalEditor } from "lexical";
+import {
+  $createRangeSelection,
+  $getRoot,
+  $setSelection,
+  createEditor,
+  type LexicalEditor,
+} from "lexical";
 import { describe, expect, it } from "vitest";
 
-import { $readRuns, $setRuns, RUN_NODES, type Inline } from "../runs";
+import {
+  $readRuns,
+  $selectedLink,
+  $setRuns,
+  $setSelectionLink,
+  RUN_NODES,
+  type Inline,
+  type WrittenLink,
+} from "../runs";
 
 function editor(): LexicalEditor {
   return createEditor({
@@ -68,5 +82,96 @@ describe("a text block's runs in the editor", () => {
 
   it("are empty for an empty block", () => {
     expect(roundTrip([])).toEqual([]);
+  });
+});
+
+/**
+ * Stores `runs`, selects from `from` in the first text node to `to` in the
+ * last, sets the link of that selection and reads the runs back, with the
+ * link the selection reported before the change.
+ */
+function linked(
+  runs: readonly Inline[],
+  from: number,
+  to: number,
+  link: WrittenLink | undefined
+): { runs: Inline[]; before: WrittenLink | undefined } {
+  const e = editor();
+  let before: WrittenLink | undefined;
+  e.update(
+    () => {
+      $setRuns(runs);
+      const texts = $getRoot().getAllTextNodes();
+      const selection = $createRangeSelection();
+      selection.anchor.set(texts[0].getKey(), from, "text");
+      selection.focus.set(texts[texts.length - 1].getKey(), to, "text");
+      $setSelection(selection);
+      before = $selectedLink();
+      $setSelectionLink(link);
+    },
+    { discrete: true }
+  );
+  let out: Inline[] = [];
+  e.getEditorState().read(() => {
+    out = $readRuns();
+  });
+  return { runs: out, before };
+}
+
+describe("a link on the selected text", () => {
+  const shop = { url: "https://shop.example" };
+
+  it("links only what is selected", () => {
+    expect(
+      linked([{ type: "text", text: "Hello world" }], 6, 11, shop).runs
+    ).toEqual([
+      { type: "text", text: "Hello " },
+      { type: "text", text: "world", link: shop },
+    ]);
+  });
+
+  it("links a chip inside the selection, to a variable's address too", () => {
+    const orderUrl = { chip: { variable: "orderUrl" } };
+    expect(
+      linked(
+        [
+          { type: "text", text: "See " },
+          { type: "chip", variable: "order" },
+          { type: "text", text: " now" },
+        ],
+        0,
+        4,
+        orderUrl
+      ).runs
+    ).toEqual([
+      { type: "text", text: "See ", link: orderUrl },
+      { type: "chip", variable: "order", link: orderUrl },
+      { type: "text", text: " now", link: orderUrl },
+    ]);
+  });
+
+  it("unlinks the selection and leaves the rest of the link as it was", () => {
+    const result = linked(
+      [{ type: "text", text: "Hello world", link: shop }],
+      0,
+      5,
+      undefined
+    );
+    expect(result.before).toEqual(shop);
+    expect(result.runs).toEqual([
+      { type: "text", text: "Hello" },
+      { type: "text", text: " world", link: shop },
+    ]);
+  });
+
+  it("changes the selected part of a link to another address", () => {
+    const other = { url: "https://other.example" };
+    expect(
+      linked([{ type: "text", text: "Hello world", link: shop }], 6, 11, other)
+        .runs
+    ).toEqual([
+      { type: "text", text: "Hello ", link: shop },
+      { type: "text", text: "world", link: other },
+    ]);
   });
 });

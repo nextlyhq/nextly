@@ -134,3 +134,135 @@ describe("an app's entity a plugin's setup repairs by renaming it", () => {
     );
   });
 });
+
+describe("a configuration cached from one project", () => {
+  // A long-lived process that loaded one project's configuration is no answer for another
+  // project, which a caller that reads the entities would then act on with the first one's.
+  it("is not given for another project that has none, where the caller refuses one", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    await loadConfig({ cwd: project() });
+    const other = realpathSync(
+      mkdtempSync(join(tmpdir(), "nextly-config-gate-other-"))
+    );
+    made.push(other);
+
+    const refused = await loadConfig({ cwd: other, missing: "refuse" }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      logContext: { reason: "config-missing" },
+    });
+  });
+});
+
+describe("a rule across entities, broken beside another problem", () => {
+  // `defineConfig` judges these across the whole configuration. Each is reported with every other
+  // problem, at its place, rather than stopping the load before them.
+  const text = (name: string) => ({ name, type: "text" });
+  const BAD = { slug: "Blog Posts", fields: [text("title")] };
+  it.each([
+    [
+      "two collections with one slug",
+      {
+        collections: [
+          { slug: "notes", fields: [text("body")] },
+          { slug: "notes", fields: [text("body")] },
+          BAD,
+        ],
+      },
+      ["collections[1].slug", "collections[2].slug"],
+    ],
+    [
+      "two Singles at one address",
+      {
+        collections: [BAD],
+        singles: [
+          { slug: "home", fields: [text("heading")], publicAddress: "/" },
+          { slug: "landing", fields: [text("heading")], publicAddress: "/" },
+        ],
+      },
+      ["collections[0].slug", "singles[1].publicAddress"],
+    ],
+    [
+      "two field groups whose slugs make one table",
+      {
+        collections: [BAD],
+        fieldGroups: [
+          { slug: "foo-bar", fields: [text("a")] },
+          { slug: "foo--bar", fields: [text("a")] },
+        ],
+      },
+      ["collections[0].slug", "fieldGroups[1].slug"],
+    ],
+    [
+      "field groups that place each other in a cycle",
+      {
+        collections: [BAD],
+        fieldGroups: [
+          {
+            slug: "hero",
+            fields: [{ name: "card", type: "component", component: "card" }],
+          },
+          {
+            slug: "card",
+            fields: [{ name: "hero", type: "component", component: "hero" }],
+          },
+        ],
+      },
+      ["collections[0].slug", "fieldGroups[0].fields"],
+    ],
+  ])("as %s, is reported with the rest", async (_, config, expected) => {
+    exported.config = config;
+
+    const refused = await loadConfig({ cwd: project() }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    for (const path of expected)
+      expect(paths, paths.join("\n")).toContain(path);
+  });
+});
+
+describe("a configuration cached from a file named with -c, since removed", () => {
+  // The file `-c` names must still be there for its cached configuration to answer a caller that
+  // refuses a missing one.
+  it("is not given where the caller refuses a missing one", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(join(cwd, "custom.config.mjs"), "export default {};\n");
+    await loadConfig({ cwd, configPath: "custom.config.mjs" });
+    rmSync(join(cwd, "custom.config.mjs"));
+
+    const refused = await loadConfig({
+      cwd,
+      configPath: "custom.config.mjs",
+      missing: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      logContext: { reason: "config-not-found" },
+    });
+  });
+});

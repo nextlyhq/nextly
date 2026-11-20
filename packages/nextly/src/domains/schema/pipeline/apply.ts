@@ -52,6 +52,8 @@ export type ApplyResult =
         details?: unknown;
       };
       partiallyApplied?: boolean;
+      /** As `PipelineResult.statementsKept`: how many statements of the failed apply stay applied. */
+      statementsKept?: number;
       durationMs: number;
     };
 
@@ -64,6 +66,8 @@ export interface PipelineCallResult {
   renamesApplied: number;
   error?: { code: string; message: string; details?: unknown };
   partiallyApplied?: boolean;
+  /** As `PipelineResult.statementsKept`. */
+  statementsKept?: number;
   // F10 PR 6: the pipeline already computes this for journal +
   // notification fan-out; surfacing it here lets the dispatcher
   // build a toast summary without recomputing the diff.
@@ -189,6 +193,9 @@ export function createApplyDesiredSchema(
           details: pipelineResult.error?.details,
         },
         partiallyApplied: pipelineResult.partiallyApplied,
+        ...(pipelineResult.statementsKept === undefined
+          ? {}
+          : { statementsKept: pipelineResult.statementsKept }),
         durationMs: Date.now() - start,
       };
     }

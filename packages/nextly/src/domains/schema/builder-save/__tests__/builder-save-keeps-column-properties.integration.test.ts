@@ -9,10 +9,10 @@
  * be the one before with only the named change applied (`helpers/table-definition.ts`), so a
  * property nobody listed here is held too.
  *
- * Every road a Builder save takes to the database is driven: an untranslated collection's schema
- * dialog, a Single's and a field group's schema dialog, and a Single's settings save run the
- * migration file the save writes where the save moves no values; a collection's settings save and a
- * translated collection's dialog run the development push. A SQLite rebuild that cannot keep what
+ * Every road a Builder save takes to the database is driven: a collection's schema dialog,
+ * translated or not, a Single's and a field group's schema dialog, a Single's settings save and an
+ * untranslated collection's settings save run the migration file the save writes where the save
+ * moves no values. A SQLite rebuild that cannot keep what
  * it would drop must refuse, say why, and leave the table as it was. A file over a default given by
  * hand, which its snapshot does not record, is refused as drift and changes nothing.
  *
@@ -78,19 +78,6 @@ interface Road {
   save(t: TestNextly, fields: Field[], renamed?: string): Promise<unknown>;
 }
 
-/**
- * The known losses of a collection road the push still applies: the push restates the table from
- * its declared schema, and the road keeps it because the file road lacks checks only the push's
- * apply makes (`why`).
- */
-const pushedCollection = (why: string): NonNullable<Road["known"]> =>
-  Object.fromEntries(
-    [RENAME, RENAME_NOT_NULL, HAND_DEFAULT].map(name => [
-      name,
-      { on: ["sqlite", "postgresql", "mysql"] as const, why },
-    ])
-  );
-
 /** The Single both of its roads change. */
 async function createHero(_t: TestNextly, fields: Field[]): Promise<void> {
   await dispatchSingles(
@@ -140,14 +127,9 @@ const ROADS: Road[] = [
       ),
   },
   {
-    name: "a collection's settings save (the push)",
+    name: "a collection's settings save (its migration file)",
     table: "dc_posts",
-    known: pushedCollection(
-      "the update road stays on the push for the checks its apply makes and the file road lacks: " +
-        "index names held elsewhere (refuseIndexNamesTaken), a unique index left under another " +
-        "name (dropUniquenessLeftOn), the part-applied recoveries, keeping or refusing a column " +
-        "no field made, the fills from stated defaults, and a many-to-many made one-to-one unique"
-    ),
+    runsFile: true,
     async create(t, fields) {
       await t
         .getService("collectionService")
@@ -168,12 +150,9 @@ const ROADS: Road[] = [
       ),
   },
   {
-    name: "a translated collection's shared field (the push)",
+    name: "a translated collection's shared field (its migration file)",
     table: "dc_posts",
-    known: pushedCollection(
-      "a translated collection stays on the push until the file road judges its companion " +
-        "against the live one, as the push does"
-    ),
+    runsFile: true,
     async create(t, fields) {
       await t.getService("collectionService").createCollection(
         {
