@@ -284,6 +284,8 @@ describe.each(getConfiguredTestDialects())(
 
     it("takes a person's cancel during an attempt in flight as a request, which ends cancelled if it fails and sent if it succeeds", async () => {
       const t = await boot(dialect);
+      await seedPermissions(t);
+      const person = await account(t, "canceller@example.com");
       for (const outcome of ["fails", "succeeds"] as const) {
         const arrived = latch();
         const held = latch();
@@ -295,8 +297,20 @@ describe.each(getConfiguredTestDialects())(
           where: { and: [{ column: "state", op: "=", value: "sending" }] },
         });
 
-        // A request: the attempt with the provider decides.
-        const asked = await t.nextly.email.cancelQueued({ id: sending.id });
+        // A request: the attempt with the provider decides, recorded as one.
+        const before = (await deliveryEntries(t, dialect)).length;
+        const asked = await t.nextly.email.cancelQueued({
+          id: sending.id,
+          user: { id: person },
+        });
+        const entries = await deliveryEntries(t, dialect);
+        expect(entries).toHaveLength(before + 1);
+        const entry = entries.find(row => row.entryId === sending.id);
+        expect(
+          typeof entry?.metadata === "string"
+            ? JSON.parse(entry.metadata)
+            : entry?.metadata
+        ).toEqual({ operation: "cancel-request", changedFields: ["message"] });
         expect(asked.item).toEqual({ id: sending.id, state: "sending" });
         // And no retry can overtake it.
         await expect(
@@ -376,6 +390,48 @@ describe.each(getConfiguredTestDialects())(
         providerType: "capturing-retry",
         providerOrigin: "stored",
       });
+    });
+
+    it("retries a send whose runner stopped once its job's lease has lapsed, and not before", async () => {
+      const t = await boot(dialect);
+      behaviour.failures = Number.MAX_SAFE_INTEGER;
+      const { id } = await t.nextly.email.queue({ ...message, to: ADA });
+      const [{ jobId }] = await t.adapter.select<{ jobId: string }>(
+        "email_queue",
+        { where: { and: [{ column: "id", op: "=", value: id }] } }
+      );
+      const { emailQueue: queue, nextlyJobs: jobs } =
+        loadedDialect(dialect).tables;
+      const db = t.adapter.getDrizzle() as never as {
+        update(table: unknown): {
+          set(values: unknown): { where(c: unknown): Promise<unknown> };
+        };
+      };
+      // Sending, its job leased by a runner.
+      const lease = (until: Date) =>
+        db
+          .update(jobs)
+          .set({ state: "pending", lockedBy: "runner-1", lockedUntil: until })
+          .where(eq(jobs.id as never, jobId));
+      await db
+        .update(queue)
+        .set({ state: "sending" })
+        .where(eq(queue.id as never, id));
+
+      await lease(new Date(Date.now() + 60 * 60_000));
+      await expect(t.nextly.email.retryQueued({ id })).rejects.toMatchObject({
+        code: "CONFLICT",
+      });
+
+      // The runner stopped and its lease lapsed: due now, taken over.
+      await lease(new Date(Date.now() - 1_000));
+      expect((await t.nextly.email.retryQueued({ id })).item).toEqual({
+        id,
+        state: "sending",
+      });
+      behaviour.failures = 0;
+      await trigger(t);
+      expect(await queued(t, id)).toMatchObject({ state: "sent" });
     });
 
     it("refuses a retry of an email sent, cancelled or cleared, and of none", async () => {
@@ -504,13 +560,19 @@ describe.each(getConfiguredTestDialects())(
             action: "update",
             entryId: failed.id,
             userId: manager,
-            metadata: { operation: "retry", changedFields: ["state"] },
+            metadata: {
+              operation: "retry",
+              changedFields: ["state", "nextAttemptAt"],
+            },
           },
           {
             action: "update",
             entryId: waiting.id,
             userId: manager,
-            metadata: { operation: "cancel", changedFields: ["state"] },
+            metadata: {
+              operation: "cancel",
+              changedFields: ["state", "message"],
+            },
           },
         ].sort((a, b) => a.entryId.localeCompare(b.entryId))
       );
@@ -582,6 +644,14 @@ describe.each(getConfiguredTestDialects())(
         manager
       );
       expect(again.status).toBe(409);
+      // A longer path names no action, and does nothing.
+      const longer = await call(
+        "POST",
+        `email-deliveries/queued/${failed.id}/retry/extra`,
+        manager
+      );
+      expect(longer.status).not.toBe(200);
+      expect((await queued(t, failed.id)).state).toBe("waiting");
       // A GET names no action.
       expect(
         (

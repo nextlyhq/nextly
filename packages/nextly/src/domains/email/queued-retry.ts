@@ -10,8 +10,10 @@
  * - **Failed**, its message still held: it waits again, with a new job due
  *   now, and so with the attempts a new email has. Its last failure stays on
  *   the row until the next attempt replaces it, so it reads as retrying.
- * - **Sending**: refused. The attempt with the provider decides the outcome,
- *   and a second one could send the message twice.
+ * - **Sending**: refused while a runner holds its job's lease: the attempt
+ *   with the provider decides the outcome, and a second one could send the
+ *   message twice. Once that lease has lapsed (its runner stopped), the job
+ *   is made due now, as the job queue would take it over.
  * - **Sent, cancelled, or its message cleared** (sent, erased or pruned):
  *   refused, saying why. Nothing is left to send.
  *
@@ -27,7 +29,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, isNotNull, isNull, lt, or } from "drizzle-orm";
+import { and, eq, gt, isNotNull, isNull, lte, or } from "drizzle-orm";
 
 import { loadedDialect } from "../../database/dialect-tables";
 import { NextlyError } from "../../errors";
@@ -73,23 +75,30 @@ function refused(message: string, id: string, state: string): NextlyError {
 }
 
 /**
- * Retry queued email `id` now, as the module describes. Answers the state
- * it stands in afterwards, which is `waiting`.
+ * What a retry did: the email's id, the state it stands in, and the state it
+ * was retried from, which says what changed (`waiting` or `sending`: its
+ * job's next attempt; `failed`: its state and job).
+ */
+export interface QueuedEmailRetried {
+  id: string;
+  state: "waiting" | "sending";
+  from: "waiting" | "sending" | "failed";
+}
+
+/**
+ * Retry queued email `id` now, as the module describes.
  *
  * @throws {NextlyError} `NOT_FOUND` for no such email; `CONFLICT` for one
- *   sending, sent, cancelled, or whose message was cleared.
+ *   being sent now, sent, cancelled, or whose message was cleared.
  */
 export async function retryQueuedEmailAsPerson(
   adapter: DrizzleAdapter,
   id: string,
   now: Date = new Date()
-): Promise<{ id: string; state: "waiting" }> {
+): Promise<QueuedEmailRetried> {
   const dialect: QueueDialect = adapter.getCapabilities().dialect;
   const { emailQueue: queue, nextlyJobs: jobs } = loadedDialect(dialect).tables;
-  return runAdapterTransaction<
-    { id: string; state: "waiting" },
-    TransactionContext
-  >(
+  return runAdapterTransaction<QueuedEmailRetried, TransactionContext>(
     run => adapter.transaction(ctx => run(ctx)),
     async tx => {
       const db = tx.getDrizzle<RetryDb>();
@@ -109,13 +118,6 @@ export async function retryQueuedEmailAsPerson(
         ? read.for(strength)
         : read)) as RetryRow[];
       if (!row) throw NextlyError.notFound({ logContext: { queuedId: id } });
-      if (row.state === "sending") {
-        throw refused(
-          "This email is being sent now. Retry it once this attempt ends.",
-          row.id,
-          row.state
-        );
-      }
       if (row.state === "sent" || row.state === "cancelled") {
         throw refused(
           "This email has already been sent or cancelled.",
@@ -131,13 +133,15 @@ export async function retryQueuedEmailAsPerson(
         );
       }
 
-      if (row.state === "waiting" && row.jobId !== null) {
+      const from = row.state as QueuedEmailRetried["from"];
+      if ((from === "waiting" || from === "sending") && row.jobId !== null) {
         // Its pending job, made due now, unless a runner holds its lease:
-        // that attempt is about to reach the provider.
+        // that attempt is with the provider, or about to reach it. A lease
+        // ending now is free, as the job queue reads it.
         const claimable = and(
           eq(jobs.id, row.jobId),
           eq(jobs.state, "pending"),
-          or(isNull(jobs.lockedUntil), lt(jobs.lockedUntil, now))
+          or(isNull(jobs.lockedUntil), lte(jobs.lockedUntil, now))
         );
         const [job] = (await db
           .select({ id: jobs.id })
@@ -149,15 +153,18 @@ export async function retryQueuedEmailAsPerson(
             .update(jobs)
             .set({ runAt: null, nextAttemptAt: null, updatedAt: now })
             .where(claimable);
-          return { id: row.id, state: "waiting" };
+          return { id: row.id, state: from, from };
         }
-        if (await jobHeld(db, jobs, row.jobId)) {
-          throw refused(
-            "This email is being sent now. Retry it once this attempt ends.",
-            row.id,
-            "sending"
-          );
-        }
+      }
+      if (
+        from === "sending" ||
+        (row.jobId !== null && (await jobHeld(db, jobs, row.jobId, now)))
+      ) {
+        throw refused(
+          "This email is being sent now. Retry it once this attempt ends.",
+          row.id,
+          "sending"
+        );
       }
 
       // Failed, or waiting on a job that is gone: a new job, due now.
@@ -177,22 +184,28 @@ export async function retryQueuedEmailAsPerson(
           updatedAt: now.getTime(),
         })
         .where(eq(queue.id, row.id));
-      return { id: row.id, state: "waiting" };
+      return { id: row.id, state: "waiting", from };
     }
   );
 }
 
-/** Whether job `id` is held by a runner now: pending and leased. */
+/** Whether job `id` is held by a runner now: pending, under a live lease. */
 async function jobHeld(
   db: RetryDb,
   jobs: ReturnType<typeof loadedDialect>["tables"]["nextlyJobs"],
-  id: string
+  id: string,
+  now: Date
 ): Promise<boolean> {
   const [held] = (await db
     .select({ id: jobs.id })
     .from(jobs)
     .where(
-      and(eq(jobs.id, id), eq(jobs.state, "pending"), isNotNull(jobs.lockedBy))
+      and(
+        eq(jobs.id, id),
+        eq(jobs.state, "pending"),
+        isNotNull(jobs.lockedBy),
+        gt(jobs.lockedUntil, now)
+      )
     )
     .limit(1)) as Array<{ id: string }>;
   return held !== undefined;

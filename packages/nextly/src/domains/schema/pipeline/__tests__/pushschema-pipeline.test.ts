@@ -47,7 +47,7 @@ import type {
   RenameDetector,
 } from "../pushschema-pipeline-interfaces";
 
-import { PushSchemaPipeline } from "../pushschema-pipeline";
+import { PushSchemaPipeline, refusedByDatabase } from "../pushschema-pipeline";
 import type { DesiredSchema } from "../types";
 
 // =============================================================================
@@ -2413,5 +2413,167 @@ describe("PushSchemaPipeline - a MySQL apply that fails after lifting a foreign 
     expect(ran).toEqual([
       expect.stringContaining("ADD CONSTRAINT `fk_cx__items_shelf_id`"),
     ]);
+  });
+});
+
+// A failed apply says how many of its statements stay applied where its dialect keeps them as they
+// run (`statementsKept`): MySQL commits each schema statement as it runs, so the one before the
+// statement that failed stays. PostgreSQL's apply rolls back whole and says nothing. Nor does an
+// apply whose statement failed without the database refusing it: that one may have run.
+describe("how many statements a failed apply keeps", () => {
+  /** The database's refusal of a statement, as the MySQL driver throws it. */
+  const refused = () =>
+    Object.assign(new Error("Unknown column 'nope' in 'field list'"), {
+      code: "ER_BAD_FIELD_ERROR",
+      errno: 1054,
+      sqlState: "42S22",
+    });
+  /** A connection lost while a statement ran, as the MySQL driver throws it: no answer came. */
+  const connectionLost = () =>
+    Object.assign(
+      new Error("Connection lost: The server closed the connection."),
+      {
+        code: "PROTOCOL_CONNECTION_LOST",
+        fatal: true,
+      }
+    );
+
+  const desired: DesiredSchema = {
+    collections: {
+      posts: {
+        slug: "posts",
+        tableName: "dc_posts",
+        fields: [{ name: "body", type: "text" }] as never,
+      },
+    },
+    singles: {},
+    components: {},
+  };
+
+  /** An apply on `dialect` of two statements, the `at`th of which fails with `failure`, from 1. */
+  async function failingAt(
+    dialect: SupportedDialect,
+    at: number,
+    failure: () => Error = refused
+  ) {
+    let sent = 0;
+    const { pipeline } = makePipeline({
+      executor: {
+        executeStatements: vi
+          .fn<DrizzleStatementExecutor["executeStatements"]>()
+          .mockImplementation(async (_tx, statements) => {
+            for (const _statement of statements) {
+              sent += 1;
+              if (sent >= at) throw failure();
+            }
+          }),
+      },
+      pushSchemaImpl: vi
+        .fn<
+          (
+            schema: Record<string, unknown>,
+            db: unknown
+          ) => Promise<{
+            sqlStatements: string[];
+            hints: Array<{ hint: string; statement?: string }>;
+          }>
+        >()
+        .mockResolvedValue({
+          sqlStatements: [
+            "ALTER TABLE `dc_posts` ADD COLUMN `first` text",
+            "ALTER TABLE `dc_posts` ADD COLUMN `second` text",
+          ],
+          hints: [],
+        }),
+      buildDrizzleSchemaImpl: () => ({ dc_posts: { _sentinel: "dc_posts" } }),
+      // A change the executor's statements make, with no step before them that runs one.
+      resolvedOpsOverride: [
+        {
+          type: "change_column_type",
+          tableName: "dc_posts",
+          columnName: "body",
+          fromType: "text",
+          toType: "integer",
+        },
+      ],
+    });
+    const result = await pipeline.apply({
+      desired,
+      db: {},
+      dialect,
+      source: "ui",
+      promptChannel: "browser",
+    });
+    return { result, sent };
+  }
+
+  it("on MySQL counts the statement that ran before the one that failed, and none where the first failed", async () => {
+    const first = await failingAt("mysql", 1);
+    const second = await failingAt("mysql", 2);
+
+    // Positive controls: each apply reached the statement it fails at, and failed there.
+    expect(first.sent).toBe(1);
+    expect(second.sent).toBe(2);
+    expect(first.result.success).toBe(false);
+    expect(second.result.success).toBe(false);
+    expect(first.result.statementsKept).toBe(0);
+    expect(second.result.statementsKept).toBe(1);
+  });
+
+  it("on MySQL says nothing where the connection was lost while a statement ran, which may have run", async () => {
+    const first = await failingAt("mysql", 1, connectionLost);
+    const second = await failingAt("mysql", 2, connectionLost);
+
+    // Positive controls: each apply reached the statement it fails at, and failed there.
+    expect(first.sent).toBe(1);
+    expect(second.sent).toBe(2);
+    expect(first.result.success).toBe(false);
+    expect(second.result.success).toBe(false);
+    expect(first.result.statementsKept).toBeUndefined();
+    expect(second.result.statementsKept).toBeUndefined();
+  });
+
+  it("on PostgreSQL says nothing, as its apply rolls back whole", async () => {
+    const { result } = await failingAt("postgresql", 1);
+
+    expect(result.success).toBe(false);
+    expect(result.statementsKept).toBeUndefined();
+  });
+});
+
+// Whether a failure is the database's answer that it refused a statement (`refusedByDatabase`),
+// which alone says the statement did not run.
+describe("a failure the database refused, and one whose outcome is unknown", () => {
+  const withCode = (code: string, extra: Record<string, unknown> = {}) =>
+    Object.assign(new Error(code), { code, ...extra });
+
+  it("reads each dialect's refusal as refused, under the apply's own wrappers too", () => {
+    expect(
+      refusedByDatabase(withCode("ER_BAD_FIELD_ERROR", { sqlState: "42S22" }))
+    ).toBe(true);
+    expect(refusedByDatabase(withCode("42703"))).toBe(true);
+    expect(refusedByDatabase(withCode("SQLITE_CONSTRAINT_NOTNULL"))).toBe(true);
+    const wrapped = Object.assign(new Error("ddl failed"), {
+      cause: withCode("ER_BAD_FIELD_ERROR"),
+    });
+    expect(refusedByDatabase(wrapped)).toBe(true);
+    expect(
+      refusedByDatabase(
+        NextlyError.internal({ cause: withCode("ER_BAD_FIELD_ERROR") })
+      )
+    ).toBe(true);
+  });
+
+  it("reads a lost connection, a timeout, a socket's code and no code at all as unknown", () => {
+    expect(refusedByDatabase(withCode("PROTOCOL_CONNECTION_LOST"))).toBe(false);
+    expect(refusedByDatabase(withCode("ECONNRESET"))).toBe(false);
+    expect(refusedByDatabase(withCode("EPIPE"))).toBe(false);
+    expect(refusedByDatabase(withCode("ETIMEDOUT"))).toBe(false);
+    // PostgreSQL's statement timeout and a lost connection.
+    expect(refusedByDatabase(withCode("57014"))).toBe(false);
+    expect(refusedByDatabase(withCode("08006"))).toBe(false);
+    expect(refusedByDatabase(new Error("no code"))).toBe(false);
+    // Our own error carries our code, not the database's.
+    expect(refusedByDatabase(NextlyError.internal())).toBe(false);
   });
 });

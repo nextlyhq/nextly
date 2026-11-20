@@ -2239,8 +2239,12 @@ function parseEmailDeliveryRoutes(
   subresource: string | undefined,
   subId: string | undefined,
   httpMethod: string,
-  routeParams: Record<string, string>
+  routeParams: Record<string, string>,
+  additionalParams: readonly string[] = []
 ): ParsedRoute | null {
+  // No route here has a segment past its own: a longer path names none,
+  // rather than doing what the shorter one does.
+  if (additionalParams.length > 0) return null;
   const read = (operation: OperationType, method: string): ParsedRoute => ({
     service: "email",
     operation,
@@ -3665,7 +3669,8 @@ export function parseRestRoute(
       subresource,
       subId,
       httpMethod,
-      routeParams
+      routeParams,
+      additionalParams
     );
     if (result) return result;
   }

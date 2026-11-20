@@ -63,12 +63,10 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
-import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type {
   BrowserRenameResolution,
   LegacyResolutionsBundle,
 } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type {
   DesiredCollection,
@@ -78,7 +76,11 @@ import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-t
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
+  archiveCollectionFieldsLeavingTranslation,
+  checkCollectionTranslationChange,
+  collectionChangeCarriesValues,
   fieldsAsStored,
+  reconcileCollectionCompanionAfterFile,
   recordedFieldsOf,
   refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
@@ -103,7 +105,10 @@ import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlis
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
-import { afterEnclosingCommit } from "../helpers/applied-fields-row";
+import {
+  afterEnclosingCommit,
+  registryInFileTransaction,
+} from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -1248,6 +1253,17 @@ const COLLECTIONS_METHODS: Record<
               await applyCollectionSchemaChange({ ...change, onLanded })
             ).summary;
           });
+          // The checks the change makes over its translations, asked once, where the save runs in
+          // development: the push asks them again itself; the file road asks them here, before
+          // anything is written. The rename they answer carries the companion's values on either.
+          let translationChecked:
+            | ReturnType<typeof checkCollectionTranslationChange>
+            | undefined;
+          const companionRename = () =>
+            (translationChecked ??= checkCollectionTranslationChange(change));
+          // Asked before the writer plans anything, as the push asks them before it plans its
+          // change, so a refusal of a translated field's change is the one either road gives.
+          await companionRename();
           const newSchemaVersion = currentVersion + 1;
           // The registry's row of the save: the fields as stored, the advanced schema version and
           // the translation state this apply ran with, written with the stored version in one
@@ -1355,10 +1371,21 @@ const COLLECTIONS_METHODS: Record<
           };
           const written = await saveThroughWriter({
             // Where the save runs its file, the row is written in the file's own transaction, so a
-            // failed write leaves the save as it was and is answered as the failure it is.
-            registry: storedFields => writeRow(storedFields, false),
+            // failed write leaves the save as it was and is answered as the failure it is. Not where
+            // the translations table is brought in step after the file: the row would then record
+            // the change before that step holds it, so it is written after it, as a Single's is.
+            ...(registryInFileTransaction({
+              wasStored: storesPerLanguage({ localized: wasLocalized }),
+              isStored: isStoredPerLanguage,
+            })
+              ? {
+                  registry: (stored: FieldDefinition[]) =>
+                    writeRow(stored, false),
+                }
+              : {}),
             // A file stopped part way and settled to what applied: this process's tables and the
-            // admin's schema version follow the fields it recorded, as after an apply.
+            // admin's schema version follow the fields it recorded, as after an apply. Asked only
+            // where the registry write runs in the file's transaction.
             settled: storedFields => {
               refreshRuntime(storedFields);
               bumpSchemaVersion();
@@ -1394,25 +1421,31 @@ const COLLECTIONS_METHODS: Record<
                 ),
               }),
             // Whether the push applies the change in development, the writer recording its
-            // migration once the push has run: a translated collection, or one turning
-            // translation on or off, whose push carries its values across the change; and a change
-            // reaching a relation's storage (`reachesRelationStorage`), which the push plans from
-            // the live table, where the file alone, written from the newest snapshot, does not.
+            // migration once the push has run: where it carries values across the change, as a
+            // Single's and a field group's saves ask it (`pushCarriesValues`). Any other change,
+            // a translated collection's included, runs its own file.
             pushWhen: async () =>
-              wasLocalized ||
-              isLocalized ||
-              reachesRelationStorage({
-                before: collection.fields ?? [],
-                after: fields as unknown as FieldDefinition[],
-                liveTable: async () =>
-                  (
-                    await introspectLiveSnapshot(
-                      adapter.getDrizzle(),
-                      dialect,
-                      [tableName]
-                    )
-                  ).tables[0],
-              }),
+              collectionChangeCarriesValues(change, await companionRename()),
+            // A field leaving translation archived before the file runs, and the translations
+            // table brought in step with the main table the file left.
+            fileRoad: {
+              judge: async () =>
+                archiveCollectionFieldsLeavingTranslation(
+                  change,
+                  await companionRename(),
+                  { judgeOnly: true }
+                ),
+              before: async () =>
+                archiveCollectionFieldsLeavingTranslation(
+                  change,
+                  await companionRename()
+                ),
+              after: async () =>
+                reconcileCollectionCompanionAfterFile(
+                  change,
+                  await companionRename()
+                ),
+            },
             slug: p.collectionName,
             collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
@@ -2272,6 +2305,20 @@ async function saveThroughWriter(
      */
     pushWhen?: () => Promise<boolean>;
     /**
+     * What the save does around its own migration file where development runs it rather than the
+     * push: `judge`, the preconditions the push would ask, judged before anything else, the dialog's
+     * questions included; `before`, what is written ahead of the file (a field leaving
+     * translation's archive), once the questions are answered and the writer's own checks have
+     * passed (`beforeWrite`); `after`, what the file does not
+     * reach, brought in step once it ran (a translations table). A failure of `after` leaves the
+     * file recorded applied, as the database stands as it says.
+     */
+    fileRoad?: {
+      judge?: () => Promise<void>;
+      before: () => Promise<void>;
+      after: () => Promise<void>;
+    };
+    /**
      * The caller's registry write for the save, given the fields as stored. Where the writer runs
      * the save's file in development, it runs inside the last file's transaction, after its ledger
      * row, so a failed write leaves the save as it was (`inLastTransaction`); elsewhere the caller
@@ -2307,7 +2354,16 @@ async function saveThroughWriter(
     change.appliedBy !== undefined &&
     prepared.deps.applies &&
     (change.pushWhen === undefined || (await change.pushWhen()));
+  // In the push's order, before anything is written: the change's preconditions first, which say
+  // why a change cannot be made at all; then the push's questions; then the writer's own checks
+  // (its history, its plan, the translations table's drift); and only once all have passed, what
+  // the file road writes ahead of its file (a field leaving translation's archive), so a save
+  // refused by any of them leaves no archive rows behind (`beforeWrite`).
+  const runsFile = prepared.deps.applies && !viaPush;
+  if (runsFile) await change.fileRoad?.judge?.();
   if (!viaPush) await change.questions?.();
+  const archiving = runsFile ? change.fileRoad?.before : undefined;
+  const beforeWrite = archiving === undefined ? {} : { beforeWrite: archiving };
   // Loaded here, where a save runs: the writer brings the migration generator
   // and runner, which a request that writes no field change never needs.
   const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([
@@ -2323,6 +2379,7 @@ async function saveThroughWriter(
       ? { appliedBy: change.appliedBy }
       : inFile
         ? {
+            ...beforeWrite,
             inLastTransaction: () => registry(prepared.fields),
             // A file that stops part way is settled to what of it applied: the row then records
             // the fields as far as the database holds them.
@@ -2336,8 +2393,9 @@ async function saveThroughWriter(
               change.settled?.(applied);
             },
           }
-        : {}
+        : beforeWrite
   );
+  if (runsFile) await change.fileRoad?.after();
   return {
     fields: prepared.fields,
     applied: result.applied,

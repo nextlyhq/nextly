@@ -314,6 +314,18 @@ registerComparisonBaseline({
       : "This is the version you last looked at, so nothing has changed since.",
 });
 
+/**
+ * The shared part's versions: every language's, each named as the shared part (null), since each
+ * language's version carries the fields every language shares. A comparison of the shared part
+ * resolves its pair over these, so its baselines read the shared part's own records (workflows'
+ * `approved:*` pin, the newest publish in any language) rather than one language's.
+ */
+export function sharedPartVersions(
+  versions: readonly PartVersion[]
+): PartVersion[] {
+  return versions.map(version => ({ ...version, locale: null }));
+}
+
 /** What a comparison request names, before its pair is resolved. */
 export interface ComparisonRequest {
   ref: VersionRef;
@@ -337,6 +349,14 @@ export interface ComparisonRequest {
   partIsLive: (part: string | null) => Promise<boolean>;
   /** Whether the document has the Draft/Published lifecycle. */
   lifecycle: boolean;
+  /**
+   * Asked of the target before any baseline is resolved, and of the version a
+   * baseline chose before the pair is returned or refused: a comparison whose
+   * versions span languages (the shared part's) is authorized for each
+   * version's own language, so a refusal never speaks about a language the
+   * caller may not read. Throws to refuse.
+   */
+  authorizeVersion?: (versionNo: number) => Promise<void>;
 }
 
 /** The pair a request resolves to, and the baseline that chose `from`. */
@@ -378,6 +398,7 @@ export async function resolveComparisonPair(
       logContext: { reason: "comparison-no-versions", part },
     });
   }
+  await request.authorizeVersion?.(target);
   const live = await request.partIsLive(part);
   const name =
     request.baseline ??
@@ -393,6 +414,9 @@ export async function resolveComparisonPair(
     lifecycle: request.lifecycle,
   };
   const choice = await chooseComparisonBaseline(name, context);
+  if (choice !== null && "versionNo" in choice) {
+    await request.authorizeVersion?.(choice.versionNo);
+  }
   if (choice !== null && "unavailable" in choice) {
     throw noBaseline(choice.unavailable);
   }
