@@ -911,6 +911,9 @@ The permission reaches every key, the caller's or anyone else's. `update-api-key
 
 `GET /admin/api/api-keys/abilities` is **experimental**: its shape may change while the key form that uses it does. It answers from the same resolution a key's own requests use, so the summary is the permissions the key gets. A collection's or Single's access rule written in code can still refuse a request those permissions allow, and may depend on the entry, so it is not reflected here. A read-only or full-access key follows its creator's permissions, so its answer changes as theirs do.
 
+{/* The section's earlier address, kept so links to it still land here. */}
+<a id="workflows-experimental"></a>
+
 ### Workflows
 
 These routes read and move review state for collections and Singles that have a workflow attached; the [Workflows](/docs/workflows) guide covers defining and attaching one. The routes and their shapes may change while the review screens that use them are finished.
