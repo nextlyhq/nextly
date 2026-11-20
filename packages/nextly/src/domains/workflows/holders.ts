@@ -218,46 +218,67 @@ async function peopleAnswers(
   resource: string
 ): Promise<Map<string, HolderAnswer>> {
   if (isRetiredManage(action, resource)) {
-    // Each plain action's answers, by person.
-    const each: Map<string, HolderAnswer>[] = [];
-    for (const plain of RETIRED_MANAGE_PLAIN_ACTIONS) {
-      each.push(await peopleAnswers(adapter, userIds, plain, resource));
-    }
-    return new Map(
-      [...new Set(userIds)].map(id => [
-        id,
-        each
-          .map(answers => answers.get(id) ?? "not-found")
-          .find(answer => answer !== "holds") ?? "holds",
-      ])
-    );
+    return retiredManageAnswers(adapter, userIds, resource);
   }
   const people = await readPersons(adapter, userIds);
-  const active = [...people.values()].filter(person => person.active);
+  const assigned = await rolesInForceOf(
+    [...people.values()].filter(person => person.active)
+  );
+  const holding = new Set(await rolesHolding(adapter, action, resource));
+  const answers = new Map<string, HolderAnswer>();
+  for (const id of new Set(userIds)) {
+    answers.set(id, personAnswer(people.get(id), assigned, holding));
+  }
+  return answers;
+}
+
+/**
+ * Each person's answer for a retired `manage-` permission: held where each of the plain four it
+ * stood for is held, else the first answer that is not "holds".
+ */
+async function retiredManageAnswers(
+  adapter: DrizzleAdapter,
+  userIds: readonly string[],
+  resource: string
+): Promise<Map<string, HolderAnswer>> {
+  // Each plain action's answers, by person.
+  const each: Map<string, HolderAnswer>[] = [];
+  for (const plain of RETIRED_MANAGE_PLAIN_ACTIONS) {
+    each.push(await peopleAnswers(adapter, userIds, plain, resource));
+  }
+  return new Map(
+    [...new Set(userIds)].map(id => [
+      id,
+      each
+        .map(answers => answers.get(id) ?? "not-found")
+        .find(answer => answer !== "holds") ?? "holds",
+    ])
+  );
+}
+
+/** The roles assigned to each of `people` and in force now, by their stored id, a read per 500. */
+async function rolesInForceOf(
+  people: readonly PersonRow[]
+): Promise<Map<string, ReadonlySet<string>>> {
   const assigned = new Map<string, ReadonlySet<string>>();
-  for (const run of chunks(active.map(person => person.id))) {
+  for (const run of chunks(people.map(person => person.id))) {
     for (const [id, roleIds] of await directRoleIdsOfUsers(run)) {
       assigned.set(id, roleIds);
     }
   }
-  const holding = new Set(await rolesHolding(adapter, action, resource));
-  const answers = new Map<string, HolderAnswer>();
-  for (const id of new Set(userIds)) {
-    const person = people.get(id);
-    answers.set(
-      id,
-      !person
-        ? "not-found"
-        : !person.active
-          ? "deactivated"
-          : [...(assigned.get(person.id) ?? [])].some(roleId =>
-                holding.has(roleId)
-              )
-            ? "holds"
-            : "lacks"
-    );
-  }
-  return answers;
+  return assigned;
+}
+
+/** One person's answer: missing, deactivated, or whether a role of theirs in force holds it. */
+function personAnswer(
+  person: PersonRow | undefined,
+  assigned: ReadonlyMap<string, ReadonlySet<string>>,
+  holding: ReadonlySet<string>
+): HolderAnswer {
+  if (!person) return "not-found";
+  if (!person.active) return "deactivated";
+  const roles = assigned.get(person.id) ?? new Set<string>();
+  return [...roles].some(roleId => holding.has(roleId)) ? "holds" : "lacks";
 }
 
 /**
