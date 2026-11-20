@@ -42,7 +42,6 @@ export const zonedDatesStep: UpgradeStep = {
     (await import("./zoned-dates")).convertZonedDates(context),
 };
 
-
 /** Bringing each configured language code's rows into its standard form. */
 const localisationCodesStep: UpgradeStep = {
   title: "convert language codes to their standard form",
@@ -74,6 +73,20 @@ const localisationValuesStep: UpgradeStep = {
     (await import("./localisation-values")).moveValuesPerLanguage(context),
   report: async context =>
     (await import("./localisation-values")).valuesMoveReport(context),
+};
+
+/**
+ * Bringing repeaters and groups translated whole into one structure across languages, refusing
+ * documents whose languages differ.
+ */
+const localisationStructuresStep: UpgradeStep = {
+  title: "keep one structure for repeaters and groups translated whole",
+  pending: async context =>
+    (await import("./localisation-structures")).structuresToConvert(context),
+  run: async context =>
+    (await import("./localisation-structures")).convertStructures(context),
+  report: async context =>
+    (await import("./localisation-structures")).structuresReport(context),
 };
 
 /** Keeping every pending change by part, split against what is live. */
@@ -111,12 +124,15 @@ const localisationArchiveStep: UpgradeStep = {
  * The steps bringing an earlier release's content into the localisation model, in the order they
  * must run: codes first, so every later step reads and writes the standard code; pending changes
  * keyed before they are split, so the split sees one draft per language; values moved before the
- * drafts are split against them; translations dated last, from the history the steps before left.
+ * drafts are split against them; repeaters and groups translated whole given their one structure
+ * once their values are per language and before drafts are split against it; translations dated
+ * last, from the history the steps before left.
  */
 export const LOCALISATION_DATA_STEPS: readonly UpgradeStep[] = [
   localisationCodesStep,
   localisationKeysStep,
   localisationValuesStep,
+  localisationStructuresStep,
   localisationDraftsStep,
   localisationStampsStep,
   localisationArchiveStep,

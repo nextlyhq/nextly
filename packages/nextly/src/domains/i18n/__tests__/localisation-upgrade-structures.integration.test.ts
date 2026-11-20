@@ -11,6 +11,7 @@
  * rows or order silently replace another's; one that refuses without naming what differs; one that
  * leaves the flag on a stored definition; and one that converts again on a second run.
  */
+import { sql } from "drizzle-orm";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { LOCALISATION_DATA_STEPS } from "../../../cli/commands/upgrade-steps";
@@ -155,12 +156,14 @@ describeEachDialect(
       return id;
     }
 
-    /** The entry's main-table structure of `slides`, as stored. */
+    /**
+     * The entry's main-table structure of `slides`, as stored: read through a statement, as the
+     * upgrade's own connection, which registers no content table, reads it.
+     */
     async function storedStructure(id: string): Promise<unknown> {
-      const [row] = await database!.adapter.select<{ slides: unknown }>(TABLE, {
-        columns: ["slides"],
-        where: { and: [{ column: "id", op: "=", value: id }] },
-      });
+      const [row] = await database!.adapter.queryStatement<{ slides: unknown }>(
+        sql`SELECT ${sql.identifier("slides")} AS ${sql.identifier("slides")} FROM ${sql.identifier(TABLE)} WHERE ${sql.identifier("id")} = ${id}`
+      );
       return parsedValue(row?.slides);
     }
 

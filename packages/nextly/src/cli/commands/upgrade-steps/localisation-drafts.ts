@@ -16,12 +16,23 @@
  * A shared value with no column on the live row (one kept in a table of its own) cannot be told
  * from a copy, so it is kept as an edit: a pending change is never dropped.
  *
+ * A repeater or group that keeps one structure across languages is split too: the text inside
+ * becomes the language's draft, keyed by row id, and the structure becomes part of the shared
+ * draft where it differs from the live one.
+ *
  * @module cli/commands/upgrade-steps/localisation-drafts
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
 import type { LaidOutEntity } from "../../../domains/i18n/per-language-storage-layout";
+import {
+  holdsText,
+  isWholeValue,
+  sameShare,
+  splitSharedStructure,
+  type SharedStructureShape,
+} from "../../../domains/i18n/shared-structure";
 import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { SHARED_PART_ALONE } from "../../../domains/versions/changed-parts";
 import {
@@ -67,14 +78,35 @@ function holdsAny(
 }
 
 /**
+ * Whether a draft's value of a structured field holds more than its part: a language's draft
+ * holding the field's whole value, or one kept under no language holding its text.
+ */
+function structuredKeptWhole(
+  locale: string | null,
+  value: unknown,
+  shape: SharedStructureShape
+): boolean {
+  return locale === null ? holdsText(value, shape) : isWholeValue(value, shape);
+}
+
+/**
  * Whether a working draft holds more than its part: a language's draft holding a shared value,
- * or one kept under no language holding a language's value.
+ * or one kept under no language holding a language's value, or either holding more than its
+ * share of a structured field.
  */
 function keptWhole(draft: VersionRow, keys: PartKeys): boolean {
   const snapshot = snapshotRecord(draft.snapshot);
-  return draft.locale === null
-    ? holdsAny(snapshot, keys.language)
-    : holdsAny(snapshot, keys.shared);
+  const structuredWhole = [...keys.structured].some(
+    ([key, shape]) =>
+      Object.hasOwn(snapshot, key) &&
+      structuredKeptWhole(draft.locale, snapshot[key], shape)
+  );
+  return (
+    structuredWhole ||
+    (draft.locale === null
+      ? holdsAny(snapshot, keys.language)
+      : holdsAny(snapshot, keys.shared))
+  );
 }
 
 /** Every document with a pending change kept whole, entity by entity. */
@@ -158,10 +190,15 @@ function isSharedEdit(
   key: string,
   value: unknown
 ): boolean {
-  if (!document.keys.shared.has(key)) return false;
+  const structured = document.keys.structured.has(key);
+  if (!document.keys.shared.has(key) && !structured) return false;
   if (alreadyShared || !live) return true;
   const column = toSnakeCase(key);
-  return !(column in live && sameSharedValue(live[column], value));
+  if (!(column in live)) return true;
+  // A structure is compared as a structure: a blank value inside reads as an absent one.
+  return structured
+    ? !sameShare(live[column], value)
+    : !sameSharedValue(live[column], value);
 }
 
 /**
@@ -185,13 +222,38 @@ function splitDrafts(
     const snapshot = snapshotRecord(draft.snapshot);
     // A draft under no language that holds only shared values is already the shared draft: its
     // values were saved as shared edits, so each is kept as one.
+    // One holding the text of a structured field is a whole document's, as one holding a
+    // language's value is.
     const alreadyShared =
-      draft.locale === null && !holdsAny(snapshot, document.keys.language);
+      draft.locale === null &&
+      !holdsAny(snapshot, document.keys.language) &&
+      ![...document.keys.structured].some(
+        ([key, shape]) =>
+          Object.hasOwn(snapshot, key) && holdsText(snapshot[key], shape)
+      );
     const slot = draft.locale ?? defaultLocale;
-    for (const [key, value] of Object.entries(snapshot)) {
+    for (const [key, held] of Object.entries(snapshot)) {
+      let value = held;
       if (document.keys.language.has(key)) {
         languages.set(slot, { ...languages.get(slot), [key]: value });
         continue;
+      }
+      // A structured field: its text to the language's draft, by row id; its structure judged
+      // below as a shared value is. A language's draft already holding the text alone keeps it.
+      const shape = document.keys.structured.get(key);
+      if (shape) {
+        if (
+          draft.locale !== null &&
+          !structuredKeptWhole(draft.locale, value, shape)
+        ) {
+          languages.set(slot, { ...languages.get(slot), [key]: value });
+          continue;
+        }
+        const split = splitSharedStructure(value, shape);
+        if (split.overlay !== undefined) {
+          languages.set(slot, { ...languages.get(slot), [key]: split.overlay });
+        }
+        value = split.structure;
       }
       if (!isSharedEdit(document, live, alreadyShared, key, value)) continue;
       const earlier = shared.get(key);
@@ -232,7 +294,7 @@ async function liveRowOf(
   const present = new Set(
     (tables[0]?.columns ?? []).map(column => column.name)
   );
-  const columns = [...document.keys.shared]
+  const columns = [...document.keys.shared, ...document.keys.structured.keys()]
     .map(key => toSnakeCase(key))
     .filter(column => present.has(column));
   if (columns.length === 0) return undefined;
