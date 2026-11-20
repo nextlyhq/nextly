@@ -456,10 +456,18 @@ describe.each(getConfiguredTestDialects())(
           state: "pending",
           lockedBy: "runner-1",
           lockedUntil: new Date(Date.now() - 1_000),
+          // Its attempts spent, as the stopped runner left them.
+          attemptCount: 5,
         })
         .where(eq(jobs.id as never, jobId));
 
       await t.nextly.email.retryQueued({ id });
+      // A fresh set of attempts, as a failed email retried is promised.
+      const [reused] = await t.adapter.select<{ attemptCount: number }>(
+        "nextly_jobs",
+        { where: { and: [{ column: "id", op: "=", value: jobId }] } }
+      );
+      expect(Number(reused.attemptCount)).toBe(0);
       const [row] = await t.adapter.select<{ state: string; jobId: string }>(
         "email_queue",
         { where: { and: [{ column: "id", op: "=", value: id }] } }

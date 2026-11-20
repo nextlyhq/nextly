@@ -126,7 +126,10 @@ export async function retryQueuedEmailAsPerson(
       // and a second job beside it could send the message twice.
       if (
         row.jobId !== null &&
-        (await bringForward(db, jobs, row.jobId, now))
+        (await bringForward(db, jobs, row.jobId, now, {
+          strength,
+          fresh: from === "failed",
+        }))
       ) {
         if (from !== "failed") {
           return {
@@ -212,27 +215,37 @@ function retryableFrom(row: RetryRow): QueuedEmailRetried["from"] {
  * Make pending job `jobId` due now, unless a runner holds its lease: that
  * attempt is with the provider, or about to reach it. A lease ending now is
  * free, as the job queue reads it. Answers whether it was made due.
+ *
+ * The job is read under its row lock on PostgreSQL and MySQL, so no runner
+ * claims it between the read and the write; SQLite runs one transaction at a
+ * time. `fresh` restarts its attempts, for a failed email retried with the
+ * job its stopped runner left pending.
  */
 async function bringForward(
   db: RetryDb,
   jobs: ReturnType<typeof loadedDialect>["tables"]["nextlyJobs"],
   jobId: string,
-  now: Date
+  now: Date,
+  options: { strength: string | null; fresh: boolean }
 ): Promise<boolean> {
   const claimable = and(
     eq(jobs.id, jobId),
     eq(jobs.state, "pending"),
     or(isNull(jobs.lockedUntil), lte(jobs.lockedUntil, now))
   );
-  const [job] = (await db
-    .select({ id: jobs.id })
-    .from(jobs)
-    .where(claimable)
-    .limit(1)) as Array<{ id: string }>;
+  const read = db.select({ id: jobs.id }).from(jobs).where(claimable).limit(1);
+  const [job] = (await (options.strength !== null && read.for
+    ? read.for(options.strength)
+    : read)) as Array<{ id: string }>;
   if (!job) return false;
   await db
     .update(jobs)
-    .set({ runAt: null, nextAttemptAt: null, updatedAt: now })
+    .set({
+      runAt: null,
+      nextAttemptAt: null,
+      ...(options.fresh ? { attemptCount: 0 } : {}),
+      updatedAt: now,
+    })
     .where(claimable);
   return true;
 }
