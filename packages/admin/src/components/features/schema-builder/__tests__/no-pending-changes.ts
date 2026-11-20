@@ -10,6 +10,7 @@ export const NO_PENDING_CHANGES: BuilderPendingChanges = {
   marks: new Map(),
   settingChanges: [],
   saved: [],
+  savedBuiltIns: [],
   canUndo: false,
   canRedo: false,
   undo: () => null,
