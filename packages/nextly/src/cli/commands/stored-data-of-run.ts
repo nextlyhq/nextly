@@ -27,6 +27,7 @@ import {
   firstDataStepWithWork,
   isDataStepsBackupRefusal,
   previewDataSteps,
+  refusalOfSteps,
   runDataSteps,
   type DataStepsDeps,
 } from "./data-steps";
@@ -272,14 +273,17 @@ export function storedDataOfRun(args: {
       if (step !== undefined) return;
       try {
         const before = deps(false);
+        // A refusal of the stored data holds whatever the migrations change, so it is made here,
+        // with nothing changed and before any backup question, by any step: a later step's too,
+        // where an earlier one has work. Anything else is a count taken again after them.
+        const refusal = await refusalOfSteps(
+          before,
+          refusesBeforeSchemaChanges
+        );
+        if (refusal !== undefined) throw refusal;
         await confirmDataStepsBackup(
           before,
-          await firstDataStepWithWork(before).catch((error: unknown) => {
-            // A refusal of the stored data holds whatever the migrations change, so it is made
-            // here, with nothing changed; anything else is a count taken again after them.
-            if (refusesBeforeSchemaChanges(error)) throw error;
-            return undefined;
-          })
+          await firstDataStepWithWork(before).catch(() => undefined)
         );
       } finally {
         // The run goes on with the resolver it started with, so nothing

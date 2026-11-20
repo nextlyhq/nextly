@@ -113,6 +113,28 @@ export async function firstDataStepWithWork(
   return undefined;
 }
 
+/**
+ * The refusal a step's count makes on the database as it stands, read-only and with no lock, as
+ * `refuses` tells a refusal from a count that cannot be read. Every step is counted, past those
+ * with work, as a dry run counts them (`countForPreview`), so a refusal later in the order is made
+ * before an earlier step changes anything. A count that fails for another reason stops the read
+ * there and refuses nothing: the counts after it mean nothing until it can be read.
+ */
+export async function refusalOfSteps(
+  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn" | "site">,
+  refuses: (error: unknown) => boolean
+): Promise<NextlyError | undefined> {
+  const context = stepContext(deps);
+  for (const step of deps.steps) {
+    try {
+      await step.pending(context);
+    } catch (error) {
+      return NextlyError.is(error) && refuses(error) ? error : undefined;
+    }
+  }
+  return undefined;
+}
+
 /** The refusal of steps with work whose backup nobody confirmed, and nobody can be asked about. */
 function backupNotConfirmed(
   command: string,
@@ -257,8 +279,11 @@ export async function previewDataSteps(
     | "site"
   >
 ): Promise<DryRunPlan> {
-  const { withWork, refusal: countRefusal, report } =
-    await countForPreview(deps);
+  const {
+    withWork,
+    refusal: countRefusal,
+    report,
+  } = await countForPreview(deps);
   const [first] = withWork;
   // A step whose count refused is the run's refusal, before any question.
   const outlook =

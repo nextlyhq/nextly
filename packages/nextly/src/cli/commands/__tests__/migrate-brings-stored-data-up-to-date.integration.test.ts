@@ -352,10 +352,13 @@ describe.each(getConfiguredTestDialects())(
       expect(again.join("\n")).not.toContain(STEP);
     }, 240_000);
 
-    // A refusal of the stored data holds whatever the waiting migration changes, so it is made
-    // before that migration applies, and "Nothing was changed" is true of it. Broken, the count
-    // before the migrations swallows it as unreadable and the same refusal comes after them.
-    it("refuses one language stored under two spellings before the waiting migration applies", async () => {
+    /**
+     * A site in English and Portuguese whose entry keeps its Portuguese translation under the
+     * standard code and under the older one an earlier release wrote, one language kept twice,
+     * with a second migration captured and not yet applied. With `pin`, the entry also holds a
+     * password as an earlier release stored it: work for a step that runs before the codes'.
+     */
+    async function siteWithTwoSpellings(pin?: string): Promise<void> {
       const LANGUAGES = ["en", "pt-BR"] as const;
       setNonInteractive(true);
       state.config = configWith(false, LANGUAGES);
@@ -363,11 +366,13 @@ describe.each(getConfiguredTestDialects())(
       await migrate();
       const now =
         dialect === "sqlite" ? String(Date.now()) : "CURRENT_TIMESTAMP";
+      const box =
+        pin === undefined
+          ? "NULL"
+          : `'${JSON.stringify({ label: "front door", pin })}'`;
       await sql(
-        `INSERT INTO ${id(TABLE)} (${id("id")}, ${id("slug")}, ${id("created_at")}, ${id("updated_at")}) VALUES ('entry-1', 'first', ${now}, ${now})`
+        `INSERT INTO ${id(TABLE)} (${id("id")}, ${id("slug")}, ${id("box")}, ${id("created_at")}, ${id("updated_at")}) VALUES ('entry-1', 'first', ${box}, ${now}, ${now})`
       );
-      // The entry's Portuguese translation under the standard code and under the older one an
-      // earlier release wrote: one language kept twice for one entry.
       for (const [locale, title] of [
         ["pt-BR", "olá"],
         ["pt_BR", "olá antes"],
@@ -379,18 +384,45 @@ describe.each(getConfiguredTestDialects())(
       state.config = configWith(true, LANGUAGES);
       await capture("summary");
       expect(await summaryColumnExists()).toBe(false);
+    }
 
-      // Confirmed, so the backup is not what refuses.
-      const refusal = await migrate({ backupConfirmed: true }).then(
+    /** `nextly migrate --backup-confirmed`'s refusal, so the backup is not what refuses. */
+    async function confirmedRefusal(): Promise<unknown> {
+      return migrate({ backupConfirmed: true }).then(
         () => undefined,
         (error: unknown) => error
       );
+    }
+
+    // A refusal of the stored data holds whatever the waiting migration changes, so it is made
+    // before that migration applies, and "Nothing was changed" is true of it. Broken, the count
+    // before the migrations swallows it as unreadable and the same refusal comes after them.
+    it("refuses one language stored under two spellings before the waiting migration applies", async () => {
+      await siteWithTwoSpellings();
+
+      const refusal = await confirmedRefusal();
 
       expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
         true
       );
       expect(messageOf(refusal)).toContain("pt_BR");
       expect(await summaryColumnExists()).toBe(false);
+    }, 240_000);
+
+    // The steps are counted past one with work, so a later step's refusal is made before the
+    // earlier step changes anything. Broken, the count stops at the passwords' step, the
+    // migration applies and the password is hashed, and only then is the run refused.
+    it("refuses the two spellings before anything changes, where an earlier step has work", async () => {
+      await siteWithTwoSpellings("plain-pin");
+      expect(await storedPin()).toBe("plain-pin");
+
+      const refusal = await confirmedRefusal();
+
+      expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
+        true
+      );
+      expect(await summaryColumnExists()).toBe(false);
+      expect(await storedPin()).toBe("plain-pin");
     }, 240_000);
 
     it("lists the work in a dry run and changes nothing", async () => {
