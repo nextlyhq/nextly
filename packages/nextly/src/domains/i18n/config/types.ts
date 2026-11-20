@@ -37,6 +37,12 @@ export interface SanitizedLocalizationConfig {
   locales: ResolvedLocale[];
   defaultLocale: string;
   fallback: boolean;
+  /**
+   * Each configured code written before codes were checked (`pt_BR`), with the standard code it
+   * is read as (`pt-BR`): what the start warns about, and refuses while stored rows still hold the
+   * older spelling. Absent where the configuration writes every code in standard form.
+   */
+  olderCodes?: readonly { from: string; to: string }[];
 }
 
 /**

@@ -412,8 +412,11 @@ describeEachDialect(
       ).toBe("Hola");
     });
 
-    it("answers that a translated Collection was saved only in part when its translations step fails", async () => {
-      const name = "trp_posts";
+    /**
+     * A translated Collection `name` holding one entry with an English and a Spanish heading, its
+     * registry row as seeded.
+     */
+    async function seedTranslatedCollection(name: string) {
       const collections = t.getService("collectionsHandler") as unknown as {
         createCollection(data: Record<string, unknown>): Promise<{
           success: boolean;
@@ -452,7 +455,12 @@ describeEachDialect(
         { heading: "Hola", _overwrite: true }
       );
       expect(spanish.success, JSON.stringify(spanish)).toBe(true);
-      const before = await recorded("dynamic_collections", name);
+      return recorded("dynamic_collections", name);
+    }
+
+    it("answers that a translated Collection was saved only in part when its translations step fails", async () => {
+      const name = "trp_posts";
+      const before = await seedTranslatedCollection(name);
       expect(before.fields, "the Collection as seeded").toEqual([
         "heading",
         "views",
@@ -489,13 +497,12 @@ describeEachDialect(
         message = error instanceof Error ? error.message : String(error);
       }
 
-      const said = `Collection "${name}" was saved only in part: its change landed in the database, but its translations step failed, so the translation records of "heading" were not moved to "title2". Until they are, no language of title2 can be found out of date. A developer can move them with the statements in the server log. `;
-      expect(message?.slice(0, said.length)).toBe(said);
-      // The kept file's steps follow, which bring the registry in step.
-      expect(message, "the steps after it").toContain(
-        "nextly migrate:resolve --applied"
+      // The save runs its own migration file, which is recorded as it ran, so no step is left for
+      // `nextly migrate` and the answer names only the records that stayed.
+      expect(message).toBe(
+        `Collection "${name}" was saved only in part: its change landed in the database, but its translations step failed, so the translation records of "heading" were not moved to "title2". Until they are, no language of title2 can be found out of date. A developer can move them with the statements in the server log.`
       );
-      // The change landed in the database, and the registry row stayed as it was.
+      // The change landed in the database, and the registry row carries it.
       expect(
         await companionColumns(`dc_${name}`),
         "the translations columns"
@@ -503,7 +510,13 @@ describeEachDialect(
       expect(await provenancePaths(name), "the provenance").toContain(
         "heading"
       );
-      expect(await recorded("dynamic_collections", name)).toEqual(before);
+      // Its version moves on with its fields, as a Single's does.
+      const after = await recorded("dynamic_collections", name);
+      expect(after).toEqual({
+        fields: ["title2", "views"],
+        schemaVersion: before.schemaVersion + 1,
+        localized: true,
+      });
       const log = logged().join("\n");
       for (const statement of finishingStatements(
         dialect,
@@ -512,6 +525,100 @@ describeEachDialect(
       )) {
         expect(log, "the server log").toContain(statement);
       }
+
+      // A client still holding the version from before the rename is refused, and the row
+      // stays; one holding the version the rename moved it to saves.
+      const saveAt = (schemaVersion: number) =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: name },
+          {
+            fields: [...RENAMED, { name: "note", type: "text" }],
+            confirmed: true,
+            localized: true,
+            schemaVersion,
+          }
+        );
+      await expect(saveAt(before.schemaVersion)).rejects.toThrow(
+        expect.objectContaining({
+          logContext: expect.objectContaining({
+            expected: before.schemaVersion,
+            actual: after.schemaVersion,
+          }),
+        })
+      );
+      expect(await recorded("dynamic_collections", name)).toEqual(after);
+      await saveAt(after.schemaVersion);
+      expect(await recorded("dynamic_collections", name)).toEqual({
+        fields: ["title2", "views", "note"],
+        schemaVersion: after.schemaVersion + 1,
+        localized: true,
+      });
+    });
+
+    it("records the fields as the save wrote them when a translated Collection's rename stops part way, an answer making a field optional included", async () => {
+      const name = "trp_optional";
+      const before = await seedTranslatedCollection(name);
+      await refuseProvenanceRename(name);
+      captureErrorLog();
+
+      // `views` sent required, with the answer that keeps it optional: the save's file and its
+      // definition hold it optional, and so does the registry row once the rename stops part way.
+      await expect(
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: name },
+          {
+            fields: [
+              { name: "title2", type: "text" },
+              { name: "views", type: "number", required: true },
+            ],
+            confirmed: true,
+            localized: true,
+            renameResolutions: [
+              {
+                tableName: `dc_${name}_locales`,
+                fromColumn: "heading",
+                toColumn: "title2",
+                choice: "rename" as const,
+              },
+            ],
+            eventResolutions: [
+              {
+                kind: "make_optional",
+                eventId: `add_not_null_with_nulls:dc_${name}.views`,
+              },
+            ],
+            schemaVersion: before.schemaVersion,
+          }
+        )
+      ).rejects.toThrow(
+        expect.objectContaining({
+          logContext: expect.objectContaining({
+            reason: "translation-records-not-moved",
+          }),
+        })
+      );
+
+      clearRegistryRowCache();
+      const [row] = await t.adapter.select<Record<string, unknown>>(
+        "dynamic_collections",
+        {
+          columns: ["fields", "schemaVersion"],
+          where: { and: [{ column: "slug", op: "=", value: name }] },
+        }
+      );
+      const fields = (
+        typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+      ) as { name: string; required?: boolean }[];
+      expect(fields.map(f => f.name)).toEqual(["title2", "views"]);
+      expect(
+        fields.find(f => f.name === "views")?.required ?? false,
+        "views, as the save's answer left it"
+      ).toBe(false);
+      expect(Number(row?.schemaVersion)).toBe(before.schemaVersion + 1);
     });
 
     it("gives statements that move the records as the move itself does, dropping a path that no longer fits", async () => {

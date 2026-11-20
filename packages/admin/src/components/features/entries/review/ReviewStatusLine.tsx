@@ -45,7 +45,7 @@ function changesIn(label: string): string {
 }
 
 /**
- * What reviewers asked for: one line for each part whose latest move is a
+ * The changes requested of the document: one line for each part whose latest move is a
  * request for changes, "Changes requested by Rita: “Shorten the intro.”". A
  * request on another part than the one on screen says where: "on the shared
  * fields", or on that language. The writer reads it on the document they are

@@ -184,6 +184,66 @@ describe("a lossy type change at a terminal", () => {
   });
 });
 
+// A config reload runs inside the development server: its dispatcher never asks about a type
+// change, so only the consent naming the column clears a value, even at a terminal.
+describe("a lossy type change at a terminal, where type changes are never asked about", () => {
+  beforeEach(() => terminal(true));
+
+  const neverAsking = (events: TypeChangeEvent[]) =>
+    new ClackTerminalPromptDispatcher(() => {}, {
+      asksAboutTypeChanges: false,
+    }).dispatch({
+      candidates: [],
+      events,
+      classification: "destructive",
+      channel: "terminal",
+    });
+
+  it("is refused without a question where no consent names its column", async () => {
+    await expect(neverAsking([lossy])).rejects.toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            code: "CONVERSION_NEEDS_CONSENT",
+            message: expect.stringContaining(
+              "NEXTLY_ACCEPT_DATA_LOSS=dc_posts.seo"
+            ),
+          }),
+        ],
+      },
+    });
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
+  it("refuses a pair it would ask about, naming where it is confirmed, without a question", async () => {
+    const offered: TypeChangeEvent = {
+      id: "type_change:dc_posts.code",
+      kind: "type_change",
+      tableName: "dc_posts",
+      columnName: "code",
+      fromType: "text",
+      toType: "integer",
+      isWidening: false,
+      perDialectWarning: buildPerDialectWarning("text", "integer"),
+      dialect: "postgresql",
+    };
+
+    await expect(neverAsking([offered])).rejects.toThrow(
+      /type change on dc_posts\.code/
+    );
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
+  it("clears under the consent naming the column, without a question", async () => {
+    vi.stubEnv(ENV, "dc_posts.seo");
+
+    const result = await neverAsking([lossy]);
+
+    expect(result).toMatchObject({ proceed: true, clearing: [lossy.id] });
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+});
+
 describe("a pair the rule has no conversion for, at a terminal", () => {
   beforeEach(() => terminal(true));
 

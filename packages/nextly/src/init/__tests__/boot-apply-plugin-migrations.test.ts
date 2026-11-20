@@ -84,7 +84,8 @@ vi.mock("../../cli/utils/adapter", () => ({
 const schemaRegistry = { assertRelationsResolve: () => {} };
 vi.mock("../../di/container", () => ({
   container: {
-    has: () => true,
+    // No Builder save writer registered: the start reads the process's own folder and config.
+    has: (name: string) => name !== "builderSaveSetup",
     get: (name: string) =>
       name === "permissionSeedService"
         ? permissionSeedService
