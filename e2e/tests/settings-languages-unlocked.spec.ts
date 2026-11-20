@@ -32,6 +32,7 @@ import {
 
 import { gotoAdmin } from "./support/admin";
 import { expectNoAxeViolations } from "./support/axe";
+import { emptyScanReason, scanAxe } from "./support/axe-scan.mjs";
 import { test } from "./support/test";
 
 // Each test builds on the list the one before it left.
@@ -111,6 +112,47 @@ async function addLanguage(
   await page.getByRole("option", { name: language.fallback }).click();
   await dialog.getByRole("button", { name: "Add language" }).click();
   await expect(dialog).toBeHidden();
+}
+
+/** The shared destructive (red) button inside the open confirm dialog. */
+const RED_CONFIRM = '[role="alertdialog"] [data-slot="button.destructive"]';
+
+/**
+ * axe's AA scan of the open confirm dialog, every rule on every element, with
+ * one result set aside by rule AND element: `color-contrast` on the red
+ * confirm itself. Every other rule still runs on that button, and contrast
+ * still fails anywhere else in the dialog.
+ */
+async function expectDialogPassesAxeButItsRedConfirm(page: Page) {
+  const scope = { include: '[role="alertdialog"]' };
+  // Its opening animation finished first, as `expectNoAxeViolations` waits.
+  await page.locator(scope.include).evaluate(async element => {
+    await Promise.all(
+      element
+        .getAnimations({ subtree: true })
+        .map(animation => animation.finished.catch(() => undefined))
+    );
+  });
+  const { results, findings } = await scanAxe(page, scope);
+  const empty = emptyScanReason(results, scope);
+  expect(empty, empty ?? undefined).toBeNull();
+  const left = [];
+  for (const finding of findings) {
+    const targets = [];
+    for (const target of finding.targets) {
+      const isRedConfirm =
+        finding.id === "color-contrast" &&
+        (await page.evaluate(
+          ([selector, red]) =>
+            document.querySelector(selector)?.matches(red) === true,
+          [target, RED_CONFIRM]
+        ));
+      if (!isRedConfirm) targets.push(target);
+    }
+    if (targets.length > 0) left.push({ ...finding, targets });
+  }
+  // The shared destructive red is below AA against its text; tracked apart.
+  expect(left, JSON.stringify(left, null, 2)).toEqual([]);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -211,9 +253,7 @@ test("removes Arabic once confirmed, keeping its content, and adds it back", asy
     `Editors can no longer write or translate content in ${arabic}.`
   );
   await expect(dialog).toContainText("The content is kept.");
-  // Not held to axe's scan: its Remove is the shared destructive button, whose
-  // red measures 3.84:1 against its white text in light mode, below AA, on
-  // every confirm that draws it. The make-default dialog below is scanned.
+  await expectDialogPassesAxeButItsRedConfirm(page);
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
   expect(await activeCodes(page.request)).toEqual(["en", "ar", "es"]);
