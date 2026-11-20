@@ -87,12 +87,16 @@ export function templatesCollection(): CollectionConfig {
   return defineCollection({
     slug: TEMPLATES_SLUG,
     labels: { singular: "Collection template", plural: "Collection templates" },
+    // Its keys, ids, states and actors are bookkeeping, never translated: each says
+    // `localized: false`, so its column stays on the main table, where a lookup by it
+    // finds it in every language. Its editorial text is translated as any field is.
     fields: [
       // Bounded on every write path, so a long title is refused alike on every
       // dialect rather than fitting one database's column and not another's.
       text({ name: "title", required: true, maxLength: 255 }),
       text({
         name: TEMPLATE_COLLECTION_FIELD,
+        localized: false,
         label: "Collection",
         // Not required of the field, since an entry's own design leaves it
         // empty (stored as no value, which the unique index lets many rows
@@ -119,6 +123,7 @@ export function templatesCollection(): CollectionConfig {
       // "Own design".
       text({
         name: TEMPLATE_ENTRY_FIELD,
+        localized: false,
         label: "Entry",
         // One own design per entry, held by the database on every dialect,
         // whichever path the write takes.
@@ -131,24 +136,28 @@ export function templatesCollection(): CollectionConfig {
       }),
       text({
         name: TEMPLATE_ENTRY_COLLECTION_FIELD,
+        localized: false,
         label: "Entry's collection",
         index: true,
         admin: { hidden: true },
       }),
       text({
         name: TEMPLATE_ENTRY_ID_FIELD,
+        localized: false,
         label: "Entry id",
         admin: { hidden: true },
       }),
       // Indexed: deleting a template finds the designs copied from it by it.
       text({
         name: TEMPLATE_FORKED_FROM_FIELD,
+        localized: false,
         label: "Copied from",
         index: true,
         admin: { hidden: true },
       }),
       text({
         name: TEMPLATE_ADDRESS_FIELD,
+        localized: false,
         label: "Address",
         // One collection per address on every dialect and under concurrent
         // writes; the guard names the collection holding one before the

@@ -29,26 +29,46 @@ export function addressRecordCollection(): CollectionConfig {
     labels: { singular: "Public address", plural: "Public addresses" },
     // Bookkeeping the plugin keeps, never authored.
     internal: true,
+    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
+    // paths, states, actors), never translated: each says `localized: false`, so its
+    // column stays on the main table, where a lookup by it finds it in every language.
     fields: [
       text({
         name: "claimKey",
+        localized: false,
         label: "Claim key",
         required: true,
         unique: true,
       }),
-      text({ name: "kind", label: "Kind", required: true, index: true }),
-      text({ name: "locale", label: "Locale", index: true }),
+      text({
+        name: "kind",
+        localized: false,
+        label: "Kind",
+        required: true,
+        index: true,
+      }),
+      text({ name: "locale", localized: false, label: "Locale", index: true }),
       // Long text, so an address of any length fits.
-      textarea({ name: "path", label: "Path" }),
+      textarea({ name: "path", localized: false, label: "Path" }),
       // Indexed because a document's update finds its rows by holder.
       text({
         name: "holderCollection",
+        localized: false,
         label: "Holder collection",
         index: true,
       }),
-      text({ name: "holderId", label: "Holder id", index: true }),
+      text({
+        name: "holderId",
+        localized: false,
+        label: "Holder id",
+        index: true,
+      }),
       // Long text: a title of any length fits on every dialect.
-      textarea({ name: "holderLabel", label: "Holder label" }),
+      textarea({
+        name: "holderLabel",
+        localized: false,
+        label: "Holder label",
+      }),
     ],
     access: {
       // Constants rather than bare `false`: access rules are validated as

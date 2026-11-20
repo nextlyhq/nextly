@@ -25,20 +25,34 @@ export function routeValuesCollection(): CollectionConfig {
     slug: ROUTE_VALUES_SLUG,
     labels: { singular: "Value in code", plural: "Values in code" },
     internal: true,
+    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
+    // paths, states, actors), never translated: each says `localized: false`, so its
+    // column stays on the main table, where a lookup by it finds it in every language.
     fields: [
       // The SHA-256 of the page's type, id and language, so one page in one
       // language is one row on every dialect.
       text({
         name: "pageKey",
+        localized: false,
         label: "Page key",
         required: true,
         unique: true,
       }),
       // The page's content type as the problem list keys it: a collection's
       // slug, or `single:<slug>`.
-      text({ name: "type", label: "Content type", required: true }),
-      text({ name: "pageId", label: "Page" }),
-      text({ name: "language", label: "Language", required: true }),
+      text({
+        name: "type",
+        localized: false,
+        label: "Content type",
+        required: true,
+      }),
+      text({ name: "pageId", localized: false, label: "Page" }),
+      text({
+        name: "language",
+        localized: false,
+        label: "Language",
+        required: true,
+      }),
       // What the route's code supplied, as the page's head used it.
       json({ name: "codeValues", label: "Values in code" }),
     ],

@@ -42,6 +42,9 @@ function trustedSubmittedAt(context: HookContext): boolean {
 
 /** The unique index one response per person rests on. */
 const RESPONSE_KEY_INDEX = {
+  // Its keys, ids, states and actors are bookkeeping, never translated: each says
+  // `localized: false`, so its column stays on the main table, where a lookup by it
+  // finds it in every language. Its editorial text is translated as any field is.
   fields: ["form", "responseKey"],
   unique: true,
 };
@@ -118,6 +121,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
 
     text({
       name: "spamReason",
+      localized: false,
       label: "Spam Reason",
       admin: {
         readOnly: true,
@@ -131,6 +135,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // ============================================================
     textarea({
       name: "notes",
+      localized: false,
       label: "Internal Notes",
       admin: {
         description: "Notes visible only to admins (not shown to submitter)",
@@ -142,6 +147,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // ============================================================
     text({
       name: "ipAddress",
+      localized: false,
       label: "IP Address",
       admin: {
         readOnly: true,
@@ -151,6 +157,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
 
     text({
       name: "userAgent",
+      localized: false,
       label: "User Agent",
       admin: {
         readOnly: true,
@@ -163,6 +170,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // exceed what a short text column holds on MySQL.
     textarea({
       name: "page",
+      localized: false,
       label: "Page",
       admin: { hidden: true },
     }),
@@ -192,6 +200,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
 
     text({
       name: "editedBy",
+      localized: false,
       label: "Edited By",
       admin: {
         readOnly: true,
@@ -228,6 +237,7 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // taken from a caller.
     text({
       name: "title",
+      localized: false,
       label: "Sender",
       admin: { hidden: true },
     }),

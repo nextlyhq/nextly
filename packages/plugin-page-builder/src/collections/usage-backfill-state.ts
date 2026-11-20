@@ -71,17 +71,30 @@ export function usageBackfillStateCollection(): CollectionConfig {
     labels: { singular: "Usage backfill", plural: "Usage backfill" },
     // Bookkeeping the plugin maintains, never authored.
     internal: true,
+    // Every text value here is the plugin's own bookkeeping (keys, ids, languages,
+    // paths, states, actors), never translated: each says `localized: false`, so its
+    // column stays on the main table, where a lookup by it finds it in every language.
     fields: [
       // Indexed because every pass filters on it: a pass reads the recorded
       // keys to decide what is outstanding, and that read happens on every
       // drain tick for as long as the backfill has work left. Declared on the
       // FIELD, which is the form the schema pipeline materialises — a
       // collection-level `indexes` never reaches it.
-      text({ name: "scopeKey", label: "Scope key", index: true }),
+      text({
+        name: "scopeKey",
+        localized: false,
+        label: "Scope key",
+        index: true,
+      }),
       // Indexed with `scopeKey` because every pass filters on BOTH: a row only
       // counts as progress when its generation is the current one. Declared on
       // the field, which is the form the schema pipeline materialises.
-      text({ name: "generation", label: "Generation", index: true }),
+      text({
+        name: "generation",
+        localized: false,
+        label: "Generation",
+        index: true,
+      }),
     ],
     access: {
       // Derived state, written only by the backfill itself. A row authored by
