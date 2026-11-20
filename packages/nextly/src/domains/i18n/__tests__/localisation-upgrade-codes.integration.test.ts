@@ -235,6 +235,78 @@ describeEachDialect(
       expect(rows.map(row => row.locale)).toEqual(["pt-BR"]);
     });
 
+    // A configuration already corrected to the standard code no longer names the older spelling,
+    // so it is found from the rows: from every table the conversion rewrites, not only the
+    // translation tables. Broken, a spelling left only in the archive or in a version's list of
+    // changed languages is never converted, and that row stays out of reach of the language.
+    it("converts an older spelling only the archive holds, under a configuration that no longer names it", async () => {
+      database = await openUpgradeDatabase(dialect);
+      await bootSite(database, "legacy", STANDARD);
+      await ensureI18nArchive(database.adapter as never, dialect);
+      await database.adapter.insert(
+        "nextly_i18n_archive",
+        {
+          collection: ARTICLES,
+          entityKind: "collection",
+          entryId: "e1",
+          locale: "pt_BR",
+          field: "title",
+          value: "olá",
+          archivedAt: new Date("2026-08-01T10:00:00Z"),
+        },
+        { returning: [] }
+      );
+
+      await migrateData(database.adapter as never, STANDARD);
+
+      const rows = await database.adapter.select<{ locale: string }>(
+        "nextly_i18n_archive",
+        { columns: ["locale"] }
+      );
+      expect(rows.map(row => row.locale)).toEqual(["pt-BR"]);
+    });
+
+    it("converts an older spelling only a version's changed languages hold, under a configuration that no longer names it", async () => {
+      database = await openUpgradeDatabase(dialect);
+      const t = await bootSite(database, "legacy", STANDARD);
+      const created = await entriesOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+        { title: "hello", code: "code-list", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      const [version] = await database.adapter.select<{ id: string }>(
+        VERSIONS_TABLE,
+        {
+          columns: ["id"],
+          where: { and: [{ column: "entryId", op: "=", value: id }] },
+          limit: 1,
+        }
+      );
+      // The premise: the one place the older spelling is kept.
+      await database.adapter.update(
+        VERSIONS_TABLE,
+        { changedLocales: JSON.stringify(["en", "pt_BR"]) },
+        { and: [{ column: "id", op: "=", value: version!.id }] }
+      );
+      const changed = async () => {
+        const [row] = await database!.adapter.select<{
+          changedLocales: unknown;
+        }>(VERSIONS_TABLE, {
+          columns: ["changedLocales"],
+          where: { and: [{ column: "id", op: "=", value: version!.id }] },
+        });
+        const value = row?.changedLocales;
+        return typeof value === "string"
+          ? (JSON.parse(value) as unknown)
+          : value;
+      };
+      expect(await changed()).toEqual(["en", "pt_BR"]);
+
+      await migrateData(database.adapter as never, STANDARD);
+
+      expect(await changed()).toEqual(["en", "pt-BR"]);
+    });
+
     it("serves the old code as the standard one once upgraded", async () => {
       const id = await legacyArticle();
       await migrateData(database!.adapter as never, UNDERSCORED);
