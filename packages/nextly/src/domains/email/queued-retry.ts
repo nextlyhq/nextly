@@ -21,6 +21,11 @@
  * saved at that moment (`sendWithTemplate`), so a retry after the template
  * is fixed sends the fixed one; only the copies it was queued with are kept.
  *
+ * The plugin that queued a failed email is told it is `retrying`, with who
+ * retried it, in the retry's own transaction, so its record cannot fall
+ * behind the email's state (`queued-send-changes`). The attempts that follow
+ * count from 1 again.
+ *
  * Everything is decided and written in one transaction, under the row's
  * lock on PostgreSQL and MySQL, as a cancel is (`queued-cancel`).
  *
@@ -38,11 +43,16 @@ import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction"
 import { enqueueInTransaction } from "../jobs/jobs-repository";
 
 import { QUEUED_EMAIL_JOB } from "./queued-email-job";
-import type { QueueDialect } from "./queued-send-read";
+import {
+  changesObserved,
+  notifyQueuedEmailChange,
+} from "./queued-send-changes";
+import { attemptsOn, type QueueDialect } from "./queued-send-read";
 
 /** The row a retry decides on. */
 interface RetryRow {
   id: string;
+  scope: string;
   state: string;
   jobId: string | null;
   held: boolean | number;
@@ -96,6 +106,7 @@ export interface QueuedEmailRetried {
 export async function retryQueuedEmailAsPerson(
   adapter: DrizzleAdapter,
   id: string,
+  by: { userId: string | null } = { userId: null },
   now: Date = new Date()
 ): Promise<QueuedEmailRetried> {
   const dialect: QueueDialect = adapter.getCapabilities().dialect;
@@ -107,6 +118,7 @@ export async function retryQueuedEmailAsPerson(
       const read = db
         .select({
           id: queue.id,
+          scope: queue.scope,
           state: queue.state,
           jobId: queue.jobId,
           // Whether a message is held, never the message.
@@ -121,6 +133,23 @@ export async function retryQueuedEmailAsPerson(
         : read)) as RetryRow[];
       if (!row) throw NextlyError.notFound({ logContext: { queuedId: id } });
       const from = retryableFrom(row);
+      // A failed email's plugin is told it is retrying, with the attempts
+      // made so far, read now: the job they are counted on may restart below.
+      const telling = from === "failed" && changesObserved(row.scope);
+      const attemptsSoFar =
+        telling && row.jobId !== null
+          ? ((await attemptsOn(tx, dialect, [row.jobId])).get(row.jobId) ?? 0)
+          : 0;
+      const tell = async (): Promise<void> => {
+        if (!telling) return;
+        await notifyQueuedEmailChange(tx, row.scope, {
+          queuedId: row.id,
+          attempt: attemptsSoFar,
+          at: now,
+          state: "retrying",
+          retry: { by: "person", userId: by.userId },
+        });
+      };
       // Its own job, made due now, whatever state it is in: a failed email's
       // job is still pending when its runner stopped before finishing it,
       // and a second job beside it could send the message twice.
@@ -143,6 +172,7 @@ export async function retryQueuedEmailAsPerson(
           .update(queue)
           .set({ state: "waiting", settledAt: null, updatedAt: now.getTime() })
           .where(eq(queue.id, row.id));
+        await tell();
         return {
           id: row.id,
           state: "waiting",
@@ -179,6 +209,7 @@ export async function retryQueuedEmailAsPerson(
           updatedAt: now.getTime(),
         })
         .where(eq(queue.id, row.id));
+      await tell();
       return {
         id: row.id,
         state: "waiting",

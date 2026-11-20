@@ -2163,7 +2163,9 @@ export class EmailService extends BaseService {
     id: string,
     by: { actor?: RequestActor | null }
   ): Promise<{ id: string; state: string }> {
-    const retried = await retryQueuedEmailAsPerson(this.adapter, id);
+    const retried = await retryQueuedEmailAsPerson(this.adapter, id, {
+      userId: by.actor?.type === "user" ? (by.actor.id ?? null) : null,
+    });
     // The fields the retry itself says it changed.
     await this.recordQueuedActivity(
       "retry",

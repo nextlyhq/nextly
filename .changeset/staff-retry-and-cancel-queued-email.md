@@ -40,3 +40,4 @@ Staff can retry and cancel a queued email.
 - **Permissions:** both need `manage-email-deliveries`, seeded to super-admin only.
 - **Recorded:** each retry and cancel by a person is written to the activity log as an update under `email-deliveries`, naming the queued email and the action. No address is recorded.
 - A queued email whose attempt stopped after its send was recorded now keeps the provider that sent it, read from that send's delivery records.
+- **Plugins are told:** when a person retries a failed email a plugin queued, the plugin hears `state: "retrying"` with the new optional `retry: { by: "person", userId }`, in the retry's own transaction. The attempts that follow count from 1 again. `QueuedEmailChange.retry` is a new optional field (`@experimental`).

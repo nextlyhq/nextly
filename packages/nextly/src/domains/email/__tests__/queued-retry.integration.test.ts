@@ -26,7 +26,10 @@ import {
   seedPermissions,
 } from "../../../direct-api/__tests__/checked-access-fixtures";
 import { Nextly } from "../../../direct-api/nextly";
-import { definePlugin } from "../../../plugins/plugin-context";
+import {
+  definePlugin,
+  type PluginContext,
+} from "../../../plugins/plugin-context";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -37,6 +40,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import type { JobRegistry } from "../../jobs/job-registry";
 import { runJobsPass } from "../../jobs/jobs-runner";
 import { defineEmailProvider } from "../provider-definition";
+import type { QueuedEmailChange } from "../queued-send-changes";
 import type { EmailProviderAdapter } from "../types";
 
 type SentOptions = Parameters<EmailProviderAdapter["send"]>[0];
@@ -63,6 +67,12 @@ const behaviour: {
 } = { failures: 0, refusals: 0 };
 
 let current: TestNextly | undefined;
+/** The plugin's own context, to queue email as the plugin. */
+let pluginCtx: PluginContext | undefined;
+/** Every change the plugin's handler finished, in order. */
+const changes: QueuedEmailChange[] = [];
+/** The handler throws once on this state, as a plugin's own failure would. */
+const handler: { throwOn?: QueuedEmailChange["state"] } = {};
 
 afterEach(async () => {
   await current?.destroy();
@@ -72,6 +82,9 @@ afterEach(async () => {
   behaviour.refusals = 0;
   behaviour.gate = undefined;
   behaviour.reached = undefined;
+  pluginCtx = undefined;
+  changes.length = 0;
+  handler.throwOn = undefined;
 });
 
 const provider = definePlugin({
@@ -108,6 +121,16 @@ const provider = definePlugin({
         }),
       }),
     ],
+  },
+  init(context: PluginContext) {
+    pluginCtx = context;
+    context.services.email.onQueuedEmailChange(async change => {
+      if (handler.throwOn === change.state) {
+        handler.throwOn = undefined;
+        throw new Error("the plugin could not record it");
+      }
+      changes.push(change);
+    });
   },
 } as never);
 
@@ -486,6 +509,62 @@ describe.each(getConfiguredTestDialects())(
       await trigger(t);
       expect(await queued(t, id)).toMatchObject({ state: "sent" });
       expect(calls).toHaveLength(2);
+    });
+
+    it("tells the plugin that queued a failed email that a person retried it, in the retry's transaction", async () => {
+      const t = await boot(dialect);
+      await seedPermissions(t);
+      const person = await account(t, "retrier@example.com");
+      if (!pluginCtx) throw new Error("the plugin did not start");
+      behaviour.refusals = 1;
+      const { id } = await pluginCtx.services.email.queue({
+        ...message,
+        to: ADA,
+      });
+      const of = () => changes.filter(change => change.queuedId === id);
+      expect(of().at(-1)).toMatchObject({ state: "failed", attempt: 1 });
+
+      // A handler that cannot record it undoes the retry with it.
+      handler.throwOn = "retrying";
+      await expect(
+        t.nextly.email.retryQueued({ id, user: { id: person } })
+      ).rejects.toThrow();
+      expect(await queued(t, id)).toMatchObject({ state: "failed" });
+
+      await t.nextly.email.retryQueued({ id, user: { id: person } });
+      expect(of().at(-1)).toMatchObject({
+        state: "retrying",
+        attempt: 1,
+        retry: { by: "person", userId: person },
+      });
+
+      // The attempts that follow count from 1 again.
+      await trigger(t);
+      expect(of().at(-1)).toMatchObject({ state: "sent", attempt: 1 });
+      expect(of().map(change => change.state)).toEqual([
+        "sending",
+        "failed",
+        "retrying",
+        "sending",
+        "sent",
+      ]);
+    });
+
+    it("tells nothing new of a waiting email whose next attempt a person brought forward", async () => {
+      const t = await boot(dialect);
+      if (!pluginCtx) throw new Error("the plugin did not start");
+      behaviour.failures = 1;
+      const { id } = await pluginCtx.services.email.queue({
+        ...message,
+        to: ADA,
+      });
+      const before = changes.filter(change => change.queuedId === id).length;
+      await t.nextly.email.retryQueued({ id });
+      // Its plugin already heard it is retrying; nothing about it changed.
+      expect(changes.filter(change => change.queuedId === id)).toHaveLength(
+        before
+      );
+      expect(changes.some(change => change.retry !== undefined)).toBe(false);
     });
 
     it("refuses a retry of an email sent, cancelled or cleared, and of none", async () => {
