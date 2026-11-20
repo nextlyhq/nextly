@@ -22,6 +22,7 @@ import {
   type DeletionFacts,
   type NulledColumn,
 } from "../file-deletions";
+import { guardedIndexDrop } from "../../pipeline/sql-templates/mysql-live-restate";
 
 /** What the fake database answers, every name lower-case. */
 interface Facts {
@@ -1944,5 +1945,45 @@ describe("statements not read", () => {
         'DELETE FROM "archive"."pages"'
       ),
     ]);
+  });
+});
+
+// MySQL has no DROP INDEX IF EXISTS, so Nextly drops an index only where it stands through a
+// statement it builds from the catalog and prepares. Only that run, exactly as Nextly writes it, is
+// read as the drop it amounts to; any other prepared statement could run anything, and stays unread.
+describe("a prepared statement on MySQL", () => {
+  const guarded = guardedIndexDrop("dc_posts", "posts_code_key");
+
+  it("reads Nextly's guarded index drop as the drop of that index, which deletes no data", () => {
+    expect(read("mysql", guarded)).toEqual([]);
+  });
+
+  it("leaves one that starts as Nextly's but runs something else unread, as one that may delete", () => {
+    const changed = [
+      guarded[0].replace("'DO 0'", "'DROP TABLE `dc_posts`'"),
+      ...guarded.slice(1),
+    ];
+    expect(read("mysql", changed)).toContainEqual(
+      expect.objectContaining({
+        kind: "unnamed",
+        description: expect.stringContaining("not read, may delete data"),
+      })
+    );
+  });
+
+  it("leaves a hand-written one unread, as one that may delete", () => {
+    expect(
+      read("mysql", [
+        "SET @purge = 'DROP TABLE `dc_posts`'",
+        "PREPARE purge FROM @purge",
+        "EXECUTE purge",
+        "DEALLOCATE PREPARE purge",
+      ])
+    ).toContainEqual(
+      expect.objectContaining({
+        kind: "unnamed",
+        description: expect.stringContaining("not read, may delete data"),
+      })
+    );
   });
 });
