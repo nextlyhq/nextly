@@ -83,6 +83,8 @@ export interface QueuedEmailRetried {
   id: string;
   state: "waiting" | "sending";
   from: "waiting" | "sending" | "failed";
+  /** What the retry changed, by name: its activity entry's fields. */
+  changedFields: string[];
 }
 
 /**
@@ -119,12 +121,31 @@ export async function retryQueuedEmailAsPerson(
         : read)) as RetryRow[];
       if (!row) throw NextlyError.notFound({ logContext: { queuedId: id } });
       const from = retryableFrom(row);
+      // Its own job, made due now, whatever state it is in: a failed email's
+      // job is still pending when its runner stopped before finishing it,
+      // and a second job beside it could send the message twice.
       if (
-        (from === "waiting" || from === "sending") &&
         row.jobId !== null &&
         (await bringForward(db, jobs, row.jobId, now))
       ) {
-        return { id: row.id, state: from, from };
+        if (from !== "failed") {
+          return {
+            id: row.id,
+            state: from,
+            from,
+            changedFields: ["nextAttemptAt"],
+          };
+        }
+        await db
+          .update(queue)
+          .set({ state: "waiting", settledAt: null, updatedAt: now.getTime() })
+          .where(eq(queue.id, row.id));
+        return {
+          id: row.id,
+          state: "waiting",
+          from,
+          changedFields: ["state", "nextAttemptAt"],
+        };
       }
       if (
         from === "sending" ||
@@ -137,7 +158,8 @@ export async function retryQueuedEmailAsPerson(
         );
       }
 
-      // Failed, or waiting on a job that is gone: a new job, due now.
+      // Failed with its job finished, or waiting on a job that is gone: a
+      // new job, due now. The old one can no longer run.
       const { id: jobId } = await enqueueInTransaction(tx, {
         slug: QUEUED_EMAIL_JOB,
         input: { queuedId: row.id },
@@ -154,7 +176,12 @@ export async function retryQueuedEmailAsPerson(
           updatedAt: now.getTime(),
         })
         .where(eq(queue.id, row.id));
-      return { id: row.id, state: "waiting", from };
+      return {
+        id: row.id,
+        state: "waiting",
+        from,
+        changedFields: ["state", "jobId"],
+      };
     }
   );
 }
