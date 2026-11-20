@@ -14,15 +14,22 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const api = vi.hoisted(() => ({ updateWorkflowSettings: vi.fn() }));
+const api = vi.hoisted(() => ({
+  updateWorkflowSettings: vi.fn(),
+  listWorkflows: vi.fn(),
+}));
 
 vi.mock("@admin/services/workflowApi", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/services/workflowApi")>()),
   updateWorkflowSettings: api.updateWorkflowSettings,
+  listWorkflows: api.listWorkflows,
+}));
+vi.mock("@admin/hooks/queries/useAuthSession", () => ({
+  useAuthSession: () => ({ data: { isAuthenticated: true } }),
 }));
 
 import { reviewKeys } from "../useReviewState";
-import { useUpdateWorkflowSettings } from "../useWorkflows";
+import { useUpdateWorkflowSettings, useWorkflows } from "../useWorkflows";
 
 const LIST = ["workflows", "list"] as const;
 const REVIEW = reviewKeys.document({
@@ -107,5 +114,22 @@ describe("saving a workflow's settings", () => {
     expect(api.updateWorkflowSettings).toHaveBeenCalled();
     expect(stale(client, LIST)).toBe(false);
     expect(stale(client, REVIEW)).toBe(false);
+  });
+});
+
+describe("the workflows list", () => {
+  it("is read again each time it is opened, so its counts per stage follow moves made elsewhere", async () => {
+    // A document moves stage through its own save, a publish or another person's step: none of
+    // those passes through this cache, so a list read a moment ago is not trusted.
+    // As the admin's own client keeps a read fresh for five minutes.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 5 * 60 * 1000 } },
+    });
+    client.setQueryData(LIST, { items: [], meta: {} });
+    api.listWorkflows.mockResolvedValue({ items: [], meta: {} });
+
+    renderHook(() => useWorkflows(), { wrapper: wrapperFor(client) });
+
+    await waitFor(() => expect(api.listWorkflows).toHaveBeenCalledTimes(1));
   });
 });

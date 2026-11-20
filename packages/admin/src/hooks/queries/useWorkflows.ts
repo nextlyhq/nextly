@@ -19,6 +19,7 @@ import {
 
 import { useAuthSession } from "@admin/hooks/queries/useAuthSession";
 import { reviewKeys } from "@admin/hooks/queries/useReviewState";
+import { workflowKeys } from "@admin/hooks/queries/workflow-keys";
 import type { ListResponse } from "@admin/lib/api/response-types";
 import {
   getWorkflowSettings,
@@ -30,13 +31,6 @@ import type {
   WorkflowSettingsView,
   WorkflowSummary,
 } from "@admin/types/workflows";
-
-const workflowKeys = {
-  all: () => ["workflows"] as const,
-  list: () => [...workflowKeys.all(), "list"] as const,
-  settings: (slug: string) =>
-    [...workflowKeys.all(), "settings", slug] as const,
-};
 
 /**
  * Every registered workflow. Asked only of a signed-in session, as the general
@@ -52,6 +46,10 @@ export function useWorkflows(): UseQueryResult<
     queryKey: workflowKeys.list(),
     queryFn: listWorkflows,
     enabled: session?.isAuthenticated === true,
+    // Read again each time the list is opened: its counts per stage move with
+    // saves, publishes and other people's steps, none of which pass through
+    // this cache.
+    refetchOnMount: "always",
   });
 }
 
