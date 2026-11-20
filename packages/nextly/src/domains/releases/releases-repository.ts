@@ -57,7 +57,7 @@ import {
   type ReleaseTimeSpan,
   type ZonedDay,
 } from "./release-calendar";
-import { releaseDueCondition } from "./release-due";
+import { isDueAt, releaseDueCondition } from "./release-due";
 import {
   documentEventPayload,
   hasStartedAt,
@@ -989,6 +989,35 @@ function releaseMovedConflict(
  * parameters.
  */
 export const IDS_PER_LOOKUP = 500;
+
+/** The due releases a walk reads holding its documents, and the documents past its bound. */
+export interface DueHolders {
+  holding: Array<{ release: ReleaseRow; members: ReleaseMemberRow[] }>;
+  overflow: ReleaseRecheckDocument[];
+}
+
+/**
+ * Where the next page of members ordered by (document, id) starts: after `last`, or, when its
+ * document is past the bound (`skipDocument`), after every member of that document.
+ */
+function pageAfter(
+  last: Pick<ReleaseMemberRow, "entryId" | "id">,
+  skipDocument: boolean
+): ReleasesWhere {
+  const later = { column: "entryId", op: ">" as const, value: last.entryId };
+  if (skipDocument) return { and: [later] };
+  return {
+    or: [
+      later,
+      {
+        and: [
+          { column: "entryId", op: "=" as const, value: last.entryId },
+          { column: "id", op: ">" as const, value: last.id },
+        ],
+      },
+    ],
+  };
+}
 
 /** These ids, once each, in runs of at most {@link IDS_PER_LOOKUP}. */
 export function idBatches(ids: readonly string[]): string[][] {
@@ -2631,6 +2660,90 @@ export class ReleasesRepository {
       release,
       members: members.filter(member => member.releaseId === release.id),
     }));
+  }
+
+  /**
+   * The due releases holding these documents, each with its members naming them, as a walk of
+   * shared documents asks (`dueComponentsHolding`); and the documents held by more than `limit`
+   * due releases, named in `overflow`, whose holders are read no further.
+   *
+   * A walk needs only to learn that such a document is past its bound, so it is not read whole:
+   * the members naming the documents are read in pages ordered by document, each of at most
+   * `limit + 1` rows, with their releases looked up page by page, and a document is followed
+   * until `limit + 1` due releases hold it; the next page starts past its remaining members.
+   * Members of releases not due (a draft, a release run long ago) are still read, as before.
+   */
+  async dueHoldersOf(
+    documents: readonly ReleaseRecheckDocument[],
+    now: Date,
+    limit: number
+  ): Promise<DueHolders> {
+    const holding = new Map<
+      string,
+      { release: ReleaseRow; members: ReleaseMemberRow[] }
+    >();
+    const overflow: ReleaseRecheckDocument[] = [];
+    // Each release looked up once: the row while it is scheduled and due, null otherwise.
+    const due = new Map<string, ReleaseRow | null>();
+    for (const where of memberIndexConditions(documents)) {
+      const counts = new Map<string, number>();
+      let after: ReleasesWhere | null = null;
+      for (;;) {
+        const page = await this.db.select<ReleaseMemberRow>(MEMBERS, {
+          columns: [...MEMBER_COLUMNS],
+          where: after === null ? where : { and: [where, after] },
+          orderBy: [
+            { column: "entryId", direction: "asc" },
+            { column: "id", direction: "asc" },
+          ],
+          limit: limit + 1,
+        });
+        await this.lookUpDue(page, due, now);
+        for (const member of page) {
+          const release = due.get(member.releaseId);
+          const count = counts.get(member.entryId) ?? 0;
+          if (!release || count > limit) continue;
+          counts.set(member.entryId, count + 1);
+          if (count + 1 > limit) {
+            overflow.push({
+              scopeKind: member.scopeKind,
+              scopeSlug: member.scopeSlug,
+              entryId: member.entryId,
+            });
+            continue;
+          }
+          const held = holding.get(release.id) ?? { release, members: [] };
+          held.members.push(member);
+          holding.set(release.id, held);
+        }
+        const last = page[page.length - 1];
+        if (page.length <= limit || last === undefined) break;
+        after = pageAfter(last, (counts.get(last.entryId) ?? 0) > limit);
+      }
+    }
+    return { holding: [...holding.values()], overflow };
+  }
+
+  /** Look up each release of these members not already in `due`: its row when due, else null. */
+  private async lookUpDue(
+    members: readonly ReleaseMemberRow[],
+    due: Map<string, ReleaseRow | null>,
+    now: Date
+  ): Promise<void> {
+    const unknown = members
+      .map(member => member.releaseId)
+      .filter(id => !due.has(id));
+    for (const ids of idBatches(unknown)) {
+      for (const id of ids) due.set(id, null);
+      for (const release of await this.findReleases({
+        ids,
+        state: "scheduled" satisfies ReleaseState,
+      })) {
+        if (release.scheduledAt !== null && isDueAt(release.scheduledAt, now)) {
+          due.set(release.id, release);
+        }
+      }
+    }
   }
 
   /** The members an event names, of any release; see `scheduledMembersFor`. */

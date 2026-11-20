@@ -28,6 +28,10 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { RevalidationIntent } from "../../../revalidation/types";
+import {
+  COMPONENT_WALK_RELEASES,
+  dueComponentsHolding,
+} from "../component-hold";
 import { RELEASE_MEMBERS_TABLE } from "../release-tables";
 import {
   ReleasesRepository,
@@ -143,6 +147,48 @@ describe.each(getConfiguredTestDialects())(
         expect(flushed).toContain(entryId);
       }
     });
+
+    it("reads no more than the bound plus one of the due releases holding a document a walk reaches", async () => {
+      // A bridge document held by more due releases than one component may hold: the walk only
+      // needs to learn that it is past the bound, not to read every release holding it.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      const holders = COMPONENT_WALK_RELEASES + 20;
+      for (let i = 0; i < holders; i += 1) {
+        const release = await repo.createRelease({ title: `R${i}` });
+        await repo.addMember(
+          { releaseId: release.id, action: "publish", ...ref("bridge") },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
+      }
+      const select = vi.spyOn(app.adapter, "select");
+
+      const reached = await dueComponentsHolding(
+        repo,
+        [{ scopeKind: "collection", scopeSlug: "posts", entryId: "bridge" }],
+        new Date()
+      );
+
+      // Past the bound, as before, and with nothing of it planned.
+      expect(reached.unbounded.map(document => document.entryId)).toEqual([
+        "bridge",
+      ]);
+      expect(reached.releases).toEqual([]);
+      const memberRows = (
+        await Promise.all(
+          select.mock.calls.map(async ([table], index) =>
+            table === RELEASE_MEMBERS_TABLE
+              ? ((await select.mock.results[index]?.value) as unknown[])
+              : []
+          )
+        )
+      ).flat();
+      expect(memberRows.length).toBeGreaterThan(0);
+      expect(memberRows.length).toBeLessThanOrEqual(
+        COMPONENT_WALK_RELEASES + 1
+      );
+    }, 180_000);
 
     it("keeps an unscheduled draft out of BOTH ends of the timeline", async () => {
       // A null instant orders differently per dialect and the direction flips
