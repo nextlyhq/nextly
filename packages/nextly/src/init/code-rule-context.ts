@@ -21,6 +21,7 @@ import {
   LanguageRegistry,
   type StoredLanguageReader,
 } from "../domains/i18n/language-registry";
+import { perLanguageStorageEnabled } from "../domains/i18n/per-language-storage";
 import { storedLanguageReader } from "../domains/i18n/stored-language-reader";
 import {
   adapterForReads,
@@ -91,9 +92,9 @@ export function languageRegistryFor(
   return new LanguageRegistry({
     configured: config.localization,
     reader,
-    // A site keeping every translatable field per language stores its values under one
-    // language even before it declares any.
-    implicitLanguage: config.perLanguageStorage === true,
+    // Every installation keeps its translatable fields per language, so it stores its values
+    // under one language even before it declares any.
+    implicitLanguage: perLanguageStorageEnabled(),
   });
 }
 

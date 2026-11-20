@@ -661,6 +661,9 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_release_members" ("release_id", "single_slot")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_doc_idx"
       ON "nextly_release_members" ("scope_kind", "scope_slug", "entry_id", "locale")`,
+    // The walk of shared documents' pages, in document then id order (`dueHoldersOf`).
+    `CREATE INDEX IF NOT EXISTS "nextly_release_members_doc_walk_idx"
+      ON "nextly_release_members" ("scope_kind", "scope_slug", "entry_id", "id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_release_idx"
       ON "nextly_release_members" ("release_id")`,
     // Version pins. Columns match schemas/version-pins/sqlite.ts.

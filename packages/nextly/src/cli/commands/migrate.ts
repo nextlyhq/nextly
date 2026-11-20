@@ -84,6 +84,11 @@ import {
   reconcileCore,
 } from "../../domains/schema/migrate/core-reconcile";
 import {
+  checkCompanionFiles,
+  judgeCompanionFiles,
+  warnOfSnapshotlessFile,
+} from "../../domains/schema/migrate/companion-drift";
+import {
   consentToCover,
   countDeletions,
   describeDeletion,
@@ -333,6 +338,7 @@ import {
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
 import { storedDataOfRun } from "./stored-data-of-run";
+import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
@@ -749,6 +755,8 @@ export async function runMigrate(
       logger,
       backupConfirmed: options.backupConfirmed === true,
       lockTtlSeconds: configResult.config.db.migrateLockTtlSeconds,
+      // The site the data steps bring an earlier release's content in step with.
+      site: upgradeSiteOf(configResult.config),
     });
 
     const ended = await moveEarlierRecords({
@@ -1613,6 +1621,24 @@ export async function previewMigrate(args: {
     dialect
   )) {
     logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
+  }
+  // The translations tables a real run checks before its first file, judged the same way.
+  const { refusal: companionRefusal } = await judgeCompanionFiles({
+    db,
+    dialect,
+    applied: listed.filter(each => each.done).map(each => each.file),
+    pending: listed.filter(each => !each.done).map(each => each.file),
+    runs: new Set(pendingFiles.map(file => file.name)),
+    snapshotOf: name =>
+      loadTargetSnapshot(resolve(args.migrationsDir, "meta"), name),
+  });
+  if (companionRefusal !== undefined) {
+    logger.info(
+      `  ✖ a real run would refuse ${companionRefusal.migration}.sql: the translations table ${companionRefusal.table} lacks what the migrations record of it`
+    );
+    for (const item of companionRefusal.items) {
+      logger.info(`      ${item.kind} ${item.detail}`);
+    }
   }
   await previewOldBuilderFiles({ ...args, logger });
   if (hasLedger) await previewChangedFiles(rows, args, logger);
@@ -5185,6 +5211,18 @@ export async function runFileMigrations(args: {
     all.filter(m => plan.runs.has(m)),
     args.judged
   );
+  // The translations tables the pending companion files are about, compared with what the
+  // migrations around this point record of them, before any file applies: a table or column
+  // both the last applied and the newest pending snapshot name, and the database lacks, is
+  // drift and ends the run here.
+  const companions = await checkCompanionFiles({
+    db,
+    dialect,
+    applied: all.filter(m => plan.done.has(m)),
+    pending: all.filter(m => !plan.done.has(m)),
+    runs: new Set(all.filter(m => plan.runs.has(m)).map(m => m.name)),
+    snapshotOf: name => loadTargetSnapshot(metaDir, name),
+  });
 
   // The last file this run applied, which a run that lost the schema lock names, so the operator
   // knows where the database stands.
@@ -5295,9 +5333,12 @@ export async function runFileMigrations(args: {
         return executeSql(...statement);
       };
       if (!target) {
-        // No paired snapshot (hand-written migration): run verbatim + record.
-        logger.warn(
-          `No snapshot for ${filename}; applying verbatim without drift checks.`
+        // No paired snapshot: run verbatim + record. A hand-written file is said to have no
+        // drift check; a companion file had its table checked before the run's first file.
+        warnOfSnapshotlessFile(
+          message => logger.warn(message),
+          filename,
+          companions
         );
         // With no snapshot to place the database, a failed attempt that may
         // have left statements applied is refused here as the reconcile

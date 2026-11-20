@@ -1462,6 +1462,7 @@ export class CollectionQueryService extends BaseService {
           scopeKind: "collection" as const,
           scopeSlug: collectionName,
           dialect: this.adapter.dialect,
+          fields: companion.localizedFields.map(field => field.name),
         }
       : undefined;
     await populateTranslationStatus({
@@ -1944,6 +1945,7 @@ export class CollectionQueryService extends BaseService {
             provenance: {
               scopeKind: "collection" as const,
               scopeSlug: args.collectionName,
+              fields: companion.localizedFields.map(field => field.name),
             },
           }
         : {}),

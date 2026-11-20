@@ -28,6 +28,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { recordedSnapshotNames } from "../migrate-create/snapshot-io";
 
 import { compareMigrationBaseNames } from "./migration-order";
+import { isUpMarker } from "./sql-sections";
 
 /** Migrations written without each other, with no migration recording them together. */
 export interface UnrecordedMerge {
@@ -129,6 +130,33 @@ export function blankWrittenFrom(content: string): string[] {
     ...(typeof placed.parent === "string" ? [placed.parent] : []),
     ...placed.merges,
   ];
+}
+
+/**
+ * The line `migrate:create --blank` has written in every blank migration's header, before a
+ * blank file stated its place and since.
+ */
+export const BLANK_FILE_LINE =
+  "-- This is a blank migration file for custom SQL.";
+
+/**
+ * Whether `content` is a blank migration's: a file for SQL its author writes, which
+ * `migrate:create --blank` pairs with no snapshot. It says so in one of two ways: the header
+ * that states its place (`blankLineHeader`), or the template's own line (`BLANK_FILE_LINE`),
+ * which a file written before blank files stated a place also carries. Both are read in the
+ * header, above `-- UP`. A generated migration carries neither.
+ */
+export function isBlankMigration(content: string): boolean {
+  // The header alone, the lines above the file's statements: a comment among the statements
+  // that reads like either mark says nothing of the file. The header ends where `nextly migrate`
+  // opens the UP section (`isUpMarker`, over each line trimmed as the runner trims it).
+  const lines = content.split(/\r?\n/);
+  const up = lines.findIndex(line => isUpMarker(line.trim()));
+  const header = up === -1 ? lines : lines.slice(0, up);
+  return (
+    placedByHeader(header.join("\n"), "") !== undefined ||
+    header.some(line => line.trim() === BLANK_FILE_LINE)
+  );
 }
 
 /** The columns an element of a table names: an index's, a key's. */

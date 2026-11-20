@@ -3,6 +3,7 @@
  * process of its own, for the tests that need what only a real process does,
  * such as loading the project's configuration.
  */
+import { childLayoutArgs } from "../../../__tests__/storage-layout";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -48,11 +49,16 @@ export function runNextly(
     else merged[name] = value;
   }
   return new Promise(settle => {
-    const child = spawn(process.execPath, ["--import", TSX, ENTRY, ...args], {
-      cwd,
-      env: merged,
-      timeout: NEXTLY_RUN_TIMEOUT,
-    });
+    // On the layout the calling test file runs on (`storage-layout`).
+    const child = spawn(
+      process.execPath,
+      ["--import", TSX, ...childLayoutArgs(), ENTRY, ...args],
+      {
+        cwd,
+        env: merged,
+        timeout: NEXTLY_RUN_TIMEOUT,
+      }
+    );
     let stdout = "";
     let stderr = "";
     // A run that never started, timed out or was killed has no status of its

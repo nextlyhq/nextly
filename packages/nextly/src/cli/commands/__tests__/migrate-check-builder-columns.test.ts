@@ -480,12 +480,27 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       expect((await create(true, [note])).code).toBeUndefined();
       const before = sqlFiles();
 
-      // `code` was never in the companion, so it does not leave translation: it is a new column
-      // on the main table, which the main table's diff adds.
-      const disabled = await create(false, [note, code]);
+      // `code` was never in the companion, so it does not leave translation and its width is not
+      // judged. The edit is refused for adding a field beside the disable, which one run cannot
+      // apply, before any file is written.
+      const together = await create(false, [note, code]);
 
+      expect(together.code).toBe(1);
+      const said = together.said.join("\n");
+      expect(said).toContain("Turn translation off on its own");
+      expect(said).not.toContain("states no width");
+      expect(sqlFiles()).toEqual(before);
+
+      // Made in two runs, the disable is written, then `code` as a new column on the main table,
+      // which the main table's diff adds.
+      const disabled = await create(false, [note]);
       expect(disabled.code, disabled.said.join("\n")).toBeUndefined();
-      expect(sqlFiles().length).toBeGreaterThan(before.length);
+      const afterDisable = sqlFiles();
+      expect(afterDisable.length).toBeGreaterThan(before.length);
+
+      const added = await create(false, [note, code]);
+      expect(added.code, added.said.join("\n")).toBeUndefined();
+      expect(sqlFiles().length).toBeGreaterThan(afterDisable.length);
     });
   }
 );

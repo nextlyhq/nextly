@@ -71,6 +71,10 @@ import type { StoragePlugin } from "../../storage/types";
 import type { UserConfig } from "../../users/config/types";
 
 import { DEFAULT_MIGRATIONS_DIR } from "./migrations-dir-default";
+import {
+  perLanguageStorageWritten,
+  recordPerLanguageStorageWritten,
+} from "./per-language-storage-written";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "./typescript-config-defaults";
 
 // ============================================================
@@ -1205,10 +1209,11 @@ export interface SanitizedNextlyConfig {
   webhookAuditEnabled: boolean;
 
   /**
-   * Whether every translatable field is kept per language from the start
-   * (`experimental.perLanguageStorage`). Always present after sanitization; defaults to false.
+   * Always `true`: every installation keeps its translatable fields per language, and
+   * `experimental.perLanguageStorage` no longer chooses a layout. Kept, required, so code that
+   * reads it as a boolean goes on compiling.
    *
-   * @experimental
+   * @deprecated Has no effect; every installation stores translatable fields per language.
    */
   perLanguageStorage: boolean;
 }
@@ -1461,7 +1466,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       }
     : undefined;
 
-  return {
+  const sanitized: SanitizedNextlyConfig = {
     collections: config.collections ?? [],
     singles: config.singles ?? [],
     fieldGroups: config.fieldGroups ?? [],
@@ -1563,11 +1568,14 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     // Off unless explicitly enabled; the org-wide audit log flips this to keep
     // recording events when an install has no delivery endpoints.
     webhookAuditEnabled: config.webhooks?.audit ?? false,
-    // Only `true` turns it on, so a stray value never moves a site's storage. A config sanitized
-    // already, as the CLI sanitizes an export written with `defineConfig` again, carries the
-    // result instead of the `experimental` block, and keeps it.
-    perLanguageStorage:
-      config.experimental?.perLanguageStorage === true ||
-      (config as { perLanguageStorage?: unknown }).perLanguageStorage === true,
+    // Always true: the setting chooses no layout any longer (see the property's doc).
+    perLanguageStorage: true,
   };
+  // What the configuration wrote of the deprecated setting, kept off the published type for the
+  // start's warning alone. A config sanitized already, as the CLI sanitizes an export written with
+  // `defineConfig` again, carries it under the symbol and keeps it.
+  return recordPerLanguageStorageWritten(
+    sanitized,
+    config.experimental?.perLanguageStorage ?? perLanguageStorageWritten(config)
+  );
 }
