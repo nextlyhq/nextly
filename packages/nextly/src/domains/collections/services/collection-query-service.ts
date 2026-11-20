@@ -287,6 +287,7 @@ import {
   extractWorkflowFilter,
   IN_RELEASE_KEY,
   PENDING_CHANGE_KEY,
+  STAGE_KEY,
   STRANDED_STAGE_KEY,
   type WorkflowFilter,
 } from "../query/workflow-filter";
@@ -2729,6 +2730,7 @@ export class CollectionQueryService extends BaseService {
           collectionName: params.collectionName,
           filter: workflowFilter,
           idColumn: schema.id,
+          statusColumn: schema.status,
           now: params.releaseNow,
           overrideAccess: params.overrideAccess,
           accessUser: params.accessUser,
@@ -2794,6 +2796,8 @@ export class CollectionQueryService extends BaseService {
     collectionName: string;
     filter: WorkflowFilter;
     idColumn: SQLWrapper | undefined;
+    /** The lifecycle column, which a part's stage reads its liveness from. */
+    statusColumn?: SQLWrapper;
     now: Date;
     overrideAccess?: boolean;
     accessUser?: UserContext;
@@ -2857,6 +2861,18 @@ export class CollectionQueryService extends BaseService {
         })
       );
     }
+    if (filter.stage !== undefined) {
+      conditions.push(
+        await this.stageFilterCondition({
+          collectionName: params.collectionName,
+          stage: filter.stage,
+          idColumn,
+          statusColumn: params.statusColumn,
+          now: params.now,
+          locales,
+        })
+      );
+    }
     if (filter.changedSinceApproved === true) {
       conditions.push(
         changedSinceApprovedCondition({
@@ -2880,6 +2896,49 @@ export class CollectionQueryService extends BaseService {
       );
     }
     return conditions;
+  }
+
+  /**
+   * `_stage`'s condition: each part's stage as a step reads it, its liveness
+   * decided by the versions domain's one condition over the inputs read here
+   * once for the whole list (the due releases of the scope and its translation
+   * rows). A collection gone from the registry keeps nothing.
+   */
+  private async stageFilterCondition(params: {
+    collectionName: string;
+    stage: string;
+    idColumn: SQLWrapper;
+    statusColumn: SQLWrapper | undefined;
+    now: Date;
+    locales: readonly string[] | null;
+  }): Promise<SQL> {
+    const { entityOf } = await import("../../workflows/implicit-stage");
+    const { partLivenessInputs } = await import("../../versions/part-liveness");
+    const { stageCondition } = await import("../../workflows/stage-condition");
+    const entity = await entityOf({
+      scopeKind: "collection",
+      scopeSlug: params.collectionName,
+    });
+    if (entity === null) return sql`1 = 0`;
+    const localization = this.localization;
+    return stageCondition({
+      dialect: this.groupDialect(),
+      collectionName: params.collectionName,
+      entryId: params.idColumn,
+      status: params.statusColumn,
+      stage: params.stage,
+      locales: params.locales,
+      localized: entity.localized === true,
+      configuredLocales: (localization?.locales ?? []).map(l => l.code),
+      defaultLocale: localization?.defaultLocale ?? null,
+      liveness: await partLivenessInputs({
+        adapter: this.adapter,
+        scopeKind: "collection",
+        entity,
+        withLanguages: entity.localized === true,
+        now: params.now,
+      }),
+    });
   }
 
   /**
@@ -2968,6 +3027,7 @@ export class CollectionQueryService extends BaseService {
       STRANDED_STAGE_KEY,
       ASSIGNED_TO_ME_KEY,
       CHANGED_SINCE_APPROVED_KEY,
+      STAGE_KEY,
     ].find(key => Object.prototype.hasOwnProperty.call(where, key));
     if (used === undefined) return;
     const denied = await this.denyCollectionRead({

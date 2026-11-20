@@ -34,7 +34,7 @@ import { publicStateNames } from "../../lib/content-states";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { buildCompanionSchema } from "../i18n/runtime/companion-io";
 import { resolveCompanionReadiness } from "../i18n/runtime/companion-readiness";
-import type { ReleaseDecisions } from "../releases/release-scope";
+import { NO_DECISIONS, type ReleaseDecisions } from "../releases/release-scope";
 import { releaseVisibilityFor } from "../releases/release-visibility";
 import type { ReleaseVisibility } from "../releases/release-visibility";
 
@@ -132,6 +132,94 @@ export function partLiveCondition(args: {
 }
 
 /**
+ * What {@link partLiveCondition} reads besides the document's own columns,
+ * for one entity: whether it has the lifecycle, what a due release decides,
+ * and its translation rows where it keeps a status per language.
+ *
+ * @experimental
+ */
+export interface PartLivenessInputs {
+  lifecycle: boolean;
+  decisions: ReleaseDecisions;
+  perLanguageStatus: boolean;
+  languages: PartLiveLanguageRows | null;
+}
+
+/**
+ * The inputs {@link partLiveCondition} reads for `entity`, read once for any
+ * number of its documents: the due releases of its scope (the public read asks
+ * them before its stored status, and so does this: a scheduled publication or
+ * withdrawal is in effect before the release writes it), and, where
+ * `withLanguages` asks, its translation rows, which a companion whose
+ * migration has not run does not offer: a language then has no status of its
+ * own. An entity without the lifecycle reads nothing.
+ *
+ * @experimental
+ */
+export async function partLivenessInputs(args: {
+  adapter: DrizzleAdapter;
+  scopeKind: VersionScopeKind;
+  entity: LivenessEntity;
+  /** Whether a language's part is asked, so the translation rows are read. */
+  withLanguages: boolean;
+  /** What a due release makes visible; the adapter's shared one if omitted. */
+  visibility?: ReleaseVisibility;
+  now?: Date;
+}): Promise<PartLivenessInputs> {
+  const { adapter, entity } = args;
+  if (entity.status !== true) {
+    return {
+      lifecycle: false,
+      decisions: NO_DECISIONS,
+      perLanguageStatus: false,
+      languages: null,
+    };
+  }
+  const decisions = await (
+    args.visibility ?? releaseVisibilityFor(adapter)
+  ).decisions({
+    scopeKind: args.scopeKind,
+    scopeSlug: entity.slug,
+    now: args.now ?? new Date(),
+  });
+  const companion =
+    args.withLanguages && entity.localized === true
+      ? buildCompanionSchema({
+          slug: entity.slug,
+          tableName: entity.tableName,
+          fields: entity.fields as { name: string; type: string }[],
+          dialect: adapter.dialect,
+          status: true,
+        })
+      : null;
+  const perLanguageStatus = companion?.hasStatus === true;
+  const readable =
+    companion !== null &&
+    perLanguageStatus &&
+    (await resolveCompanionReadiness(adapter, {
+      companionTableName: companion.companionTableName,
+      mainTableName: entity.tableName,
+      localizedColumns: companion.localizedFields.map(f => f.column),
+    })) === "ready";
+  const column = (table: string, name: string): SQL =>
+    sql`${sql.identifier(table)}.${sql.identifier(name)}`;
+  return {
+    lifecycle: true,
+    decisions,
+    perLanguageStatus,
+    languages:
+      readable && companion
+        ? {
+            table: sql.identifier(companion.companionTableName),
+            parent: column(companion.companionTableName, "_parent"),
+            locale: column(companion.companionTableName, "_locale"),
+            status: column(companion.companionTableName, "_status"),
+          }
+        : null,
+  };
+}
+
+/**
  * Whether the part (a language, or null for the part with none) is live:
  * {@link partLiveCondition} asked of one document.
  *
@@ -151,64 +239,23 @@ export async function readPartIsLive(args: {
 }): Promise<boolean> {
   const { adapter, entity, entryId, part } = args;
   if (entity.status !== true) return true;
-
-  // The public read asks a due release before it reads the stored status, and
-  // so does this: a scheduled publication or withdrawal is in effect before
-  // the release writes it. A withdrawal hides the whole document; a
-  // publication widens the main row only, and each language's own status
-  // still decides, as the public read's translation filter does.
-  const decisions = await (
-    args.visibility ?? releaseVisibilityFor(adapter)
-  ).decisions({
+  const inputs = await partLivenessInputs({
+    adapter,
     scopeKind: args.scopeKind,
-    scopeSlug: entity.slug,
-    now: args.now ?? new Date(),
+    entity,
+    withLanguages: part !== null,
+    visibility: args.visibility,
+    now: args.now,
   });
-
-  const companion =
-    part !== null && entity.localized === true
-      ? buildCompanionSchema({
-          slug: entity.slug,
-          tableName: entity.tableName,
-          fields: entity.fields as { name: string; type: string }[],
-          dialect: adapter.dialect,
-          status: true,
-        })
-      : null;
-  const perLanguageStatus = companion?.hasStatus === true;
-  // A companion whose migration has not run is not queried; the language then
-  // has no status of its own.
-  const readable =
-    companion !== null &&
-    perLanguageStatus &&
-    (await resolveCompanionReadiness(adapter, {
-      companionTableName: companion.companionTableName,
-      mainTableName: entity.tableName,
-      localizedColumns: companion.localizedFields.map(f => f.column),
-    })) === "ready";
-  const column = (table: string, name: string): SQL =>
-    sql`${sql.identifier(table)}.${sql.identifier(name)}`;
-  const languages: PartLiveLanguageRows | null =
-    readable && companion
-      ? {
-          table: sql.identifier(companion.companionTableName),
-          parent: column(companion.companionTableName, "_parent"),
-          locale: column(companion.companionTableName, "_locale"),
-          status: column(companion.companionTableName, "_status"),
-        }
-      : null;
   const main = sql.identifier(entity.tableName);
   const live = partLiveCondition({
-    lifecycle: true,
+    ...inputs,
     part,
     defaultLocale: args.defaultLocale,
     id: sql`${entryId}`,
     // The main row's status, or NULL for a document with no row, which is
     // then live only where a due release publishes it.
     status: sql`(SELECT ${sql.identifier("status")} FROM ${main} WHERE ${sql.identifier("id")} = ${entryId})`,
-    perLanguageStatus,
-    languages,
-    decisions,
   });
   const [answer] = await adapter.queryStatement<{ live: unknown }>(
     sql`SELECT CASE WHEN ${live} THEN 1 ELSE 0 END AS ${sql.identifier("live")}`

@@ -30,6 +30,7 @@ import {
   CHANGED_SINCE_APPROVED_KEY,
   IN_RELEASE_KEY,
   PENDING_CHANGE_KEY,
+  STAGE_KEY,
   STRANDED_STAGE_KEY,
 } from "./reserved-filter-keys";
 
@@ -39,6 +40,7 @@ export {
   CHANGED_SINCE_APPROVED_KEY,
   IN_RELEASE_KEY,
   PENDING_CHANGE_KEY,
+  STAGE_KEY,
   STRANDED_STAGE_KEY,
 };
 
@@ -81,6 +83,11 @@ export interface WorkflowFilter {
    * reads as false, as `strandedStage` does.
    */
   changedSinceApproved?: boolean;
+  /**
+   * Keep only entries with a part in this stage of their workflow. Absent
+   * keeps every entry, as before the key existed.
+   */
+  stage?: string;
 }
 
 /**
@@ -172,6 +179,13 @@ function readChangedSinceApproved(value: unknown): true | undefined {
 }
 
 /**
+ * `_stage`'s value, read: a stage's name, which is never empty.
+ */
+function readStage(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
  * `_inRelease`'s value, read: `true`, or an object holding exactly one
  * `scheduledBefore` instant.
  *
@@ -219,6 +233,10 @@ const WORKFLOW_KEYS = {
     read: readChangedSinceApproved,
     form: `true`,
   },
+  [STAGE_KEY]: {
+    read: readStage,
+    form: `"<the name of a stage of the collection's workflow, such as review>"`,
+  },
 } as const;
 
 type WorkflowKey = keyof typeof WORKFLOW_KEYS;
@@ -254,6 +272,7 @@ export const WORKFLOW_KEY_PURPOSE: Readonly<Record<WorkflowKey, string>> = {
     "keeps entries with a part assigned to you or to one of your roles",
   [CHANGED_SINCE_APPROVED_KEY]:
     "keeps entries with a part changed since its last approval",
+  [STAGE_KEY]: "keeps entries with a part in a stage of their workflow",
 };
 
 /** How a workflow key is written, for the refusal of one given below the top level. */
@@ -282,7 +301,8 @@ function applyWorkflowKey(
   else if (key === ASSIGNED_TO_ME_KEY) filter.assignedToMe = true;
   else if (key === CHANGED_SINCE_APPROVED_KEY) {
     filter.changedSinceApproved = true;
-  } else filter.inRelease = readInRelease(value) ?? null;
+  } else if (key === STAGE_KEY) filter.stage = readStage(value);
+  else filter.inRelease = readInRelease(value) ?? null;
 }
 
 /**

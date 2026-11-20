@@ -47,6 +47,12 @@ export const ASSIGNED_TO_ME_KEY = "_assignedToMe";
 export const CHANGED_SINCE_APPROVED_KEY = "_changedSinceApproved";
 
 /**
+ * The reserved key keeping entries with a part in one stage of their workflow.
+ * @experimental
+ */
+export const STAGE_KEY = "_stage";
+
+/**
  * Every key a filter may carry only at its top level.
  *
  * @experimental
@@ -58,6 +64,7 @@ export const RESERVED_TOP_LEVEL_KEYS = [
   STRANDED_STAGE_KEY,
   ASSIGNED_TO_ME_KEY,
   CHANGED_SINCE_APPROVED_KEY,
+  STAGE_KEY,
 ] as const;
 
 /** @experimental */
