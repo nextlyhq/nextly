@@ -188,3 +188,32 @@ describe("validateCrossPluginRelations (D15 — cross-plugin dependsOn)", () => 
     expect(() => validateCrossPluginRelations([a, b])).not.toThrow();
   });
 });
+
+describe("collectUnresolvedRelationTargets, for a relationship inside another field", () => {
+  // A relationship nested in a group, a repeater or a layout field is a relationship all the same.
+  it.each([
+    ["group", { name: "meta", type: "group" }],
+    ["repeater", { name: "items", type: "repeater" }],
+    ["collapsible", { name: "more", type: "collapsible" }],
+  ])("finds one nested in a %s", (_, container) => {
+    const config = {
+      collections: [
+        {
+          slug: "notes",
+          fields: [
+            {
+              ...container,
+              fields: [
+                { name: "matter", type: "relationship", relationTo: "cases" },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as NextlyServiceConfig;
+
+    expect(
+      collectUnresolvedRelationTargets(config).map(relation => relation.target)
+    ).toEqual(["cases"]);
+  });
+});

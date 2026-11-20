@@ -237,3 +237,32 @@ describe("a rule across entities, broken beside another problem", () => {
       expect(paths, paths.join("\n")).toContain(path);
   });
 });
+
+describe("a configuration cached from a file named with -c, since removed", () => {
+  // The file `-c` names must still be there for its cached configuration to answer a caller that
+  // refuses a missing one.
+  it("is not given where the caller refuses a missing one", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    const cwd = project();
+    writeFileSync(join(cwd, "custom.config.mjs"), "export default {};\n");
+    await loadConfig({ cwd, configPath: "custom.config.mjs" });
+    rmSync(join(cwd, "custom.config.mjs"));
+
+    const refused = await loadConfig({
+      cwd,
+      configPath: "custom.config.mjs",
+      missing: "refuse",
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      logContext: { reason: "config-not-found" },
+    });
+  });
+});

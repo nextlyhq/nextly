@@ -1094,9 +1094,10 @@ function publishConfiguredPostgresSchema(config: {
 /** The configuration file `options` names or the search finds, as `loadConfigInternal` resolves it. */
 function configFileFor(options: LoadConfigOptions): string | undefined {
   const cwd = resolve(options.cwd ?? process.cwd());
-  return options.configPath
-    ? resolve(cwd, options.configPath)
-    : findConfigFile(cwd);
+  if (!options.configPath) return findConfigFile(cwd);
+  // A file `-c` names that is gone is none: `loadConfigInternal` refuses it (`CONFIG_NOT_FOUND`).
+  const named = resolve(cwd, options.configPath);
+  return existsSync(named) ? named : undefined;
 }
 
 export async function loadConfig(
