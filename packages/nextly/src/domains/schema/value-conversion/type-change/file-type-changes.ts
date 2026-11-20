@@ -41,6 +41,7 @@ import {
   entityLabel,
   fieldTypeChangeRefusals,
   fieldTypeChangesOf,
+  perLanguageAfter,
   perLanguageBefore,
   type TypeChangeRefusal,
   typeChangeError,
@@ -372,6 +373,7 @@ function entityTypeChange(args: {
         // companion is always named and each value read from whichever table holds it.
         translationsTable,
         ...perLanguageBefore(args.was.recorded.settings, readFrom, previous),
+        ...perLanguageAfter(after.settings, next),
         previous,
         next,
         ...(renamed.size > 0 ? { renamed } : {}),

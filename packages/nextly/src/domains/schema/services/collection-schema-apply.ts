@@ -104,6 +104,7 @@ import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-rec
 import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
 import {
   entityLabel,
+  perLanguageAfter,
   perLanguageBefore,
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
@@ -238,35 +239,35 @@ class AnsweringDispatcher implements PromptDispatcher {
       this.legacyResolutions
     ).dispatch(args);
     if (!result.proceed && this.ownTable !== undefined) {
-      refuseLeftoverColumns(
-        this.slug,
+      const leftover = leftoverColumns(
         this.ownTable,
         args,
         result,
         resolutions
       );
+      if (leftover.length > 0) {
+        throw columnsNotDescribed(this.slug, this.ownTable, leftover);
+      }
     }
     return result;
   }
 }
 
 /**
- * Refuse a save that would drop a column of its own table that no field describes and the save
- * never removed, such as one an install from before removed fields dropped their columns kept,
- * with its data. The push offers it as a drop, or as the old side of a rename, and nothing the
- * save decides answers it, so the push would stop as cancelled; this says which column and how
- * to go on instead, before anything is dropped. Another table's drift is left to the push's own
- * refusal.
- *
- * @throws NextlyError `VALIDATION_ERROR` naming each such column (`COLUMN_NOT_DESCRIBED`)
+ * The columns of the save's own table that a dispatch of its questions left unanswered, once the
+ * answers are applied: each offered as a drop not confirmed exactly once, or as the old side of a
+ * rename neither answered nor taken. Read where the dispatch did not proceed. Such a column, one
+ * the save never removed, such as one an install from before removed fields dropped their columns
+ * kept, would otherwise stop the save as cancelled; the push refuses it naming each
+ * (`columnsNotDescribed`), and a save running its own file reads the same decision. Another table's
+ * drift is left to the push's own refusal.
  */
-function refuseLeftoverColumns(
-  slug: string,
+export function leftoverColumns(
   ownTable: string,
-  args: Parameters<PromptDispatcher["dispatch"]>[0],
+  args: Pick<Parameters<PromptDispatcher["dispatch"]>[0], "candidates" | "events">,
   result: Awaited<ReturnType<PromptDispatcher["dispatch"]>>,
   resolutions: readonly BrowserRenameResolution[]
-): void {
+): string[] {
   // Acknowledged as the browser dispatcher acknowledges a drop: exactly one confirm_drop.
   const confirmations = new Map<string, number>();
   for (const r of result.resolutions) {
@@ -299,9 +300,21 @@ function refuseLeftoverColumns(
       leftover.add(c.fromColumn);
     }
   }
-  if (leftover.size === 0) return;
-  throw NextlyError.validation({
-    errors: [...leftover].map(column => ({
+  return [...leftover];
+}
+
+/**
+ * The refusal of a save over columns of the collection's own table that no field describes:
+ * saving would remove each with its data, so the person drops it by hand or describes it with a
+ * field first. One wording, given by the push and by a save that runs its own file alike.
+ */
+export function columnsNotDescribed(
+  slug: string,
+  tableName: string,
+  columns: readonly string[]
+): NextlyError {
+  return NextlyError.validation({
+    errors: columns.map(column => ({
       path: `columns.${column}`,
       code: "COLUMN_NOT_DESCRIBED",
       message:
@@ -309,7 +322,7 @@ function refuseLeftoverColumns(
         `saving would remove it with its data. Drop the column by hand, or add a field that ` +
         `describes it, then save again.`,
     })),
-    logContext: { slug, tableName: ownTable, columns: [...leftover] },
+    logContext: { slug, tableName, columns: [...columns] },
   });
 }
 
@@ -1076,6 +1089,7 @@ export async function checkCollectionTranslationChange(
       table: tableName,
       translationsTable: `${tableName}_locales`,
       ...perLanguageBefore({ localized: wasLocalized }, tableName, oldFields),
+      ...perLanguageAfter({ localized: isLocalized }, fields),
       previous: fieldsStoredOnRow(oldFields).filter(
         field => field.name === companionRename.from
       ),
@@ -1273,6 +1287,40 @@ function expectedCollectionColumns(
       ] as const;
     })
   );
+}
+
+/**
+ * This collection as a change that runs its own migration file leaves it, as the push states it
+ * for its own checks (`desired.collections[slug]`): its fields as the file writes them, its
+ * Draft/Published state and its translation.
+ */
+function collectionAsFileLeavesIt(
+  change: CollectionSchemaChange
+): DesiredCollection {
+  const { isLocalized } = storedPerLanguage(change);
+  return {
+    slug: change.slug,
+    tableName: change.collection.tableName,
+    fields: change.fields as DesiredCollection["fields"],
+    status: change.status,
+    localized: isLocalized,
+    // Authored in the Schema Builder.
+    builderOwned: true,
+    recordedFields: recordedFieldsOf(change.collection),
+  };
+}
+
+/**
+ * The push's index-name precondition (`refuseIndexNamesTaken`), asked of a change that runs its
+ * own migration file before anything is written: the file's `CREATE ... INDEX IF NOT EXISTS` skips
+ * a name another index already holds, so the field would be recorded unique, or indexed, while
+ * nothing enforces it.
+ */
+export async function refuseCollectionIndexNamesTaken(
+  change: CollectionSchemaChange
+): Promise<void> {
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  await refuseIndexNamesTaken(adapter, collectionAsFileLeavesIt(change));
 }
 
 /**
