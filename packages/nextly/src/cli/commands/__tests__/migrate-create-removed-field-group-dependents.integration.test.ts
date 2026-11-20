@@ -10,13 +10,16 @@
  * refused at boot. A field group removed together with the
  * only collection that places it, and a field group or Single nothing depends on, are dropped.
  *
+ * The same holds once the history has moved to the current field-group names, where the removed
+ * group's table is `fg_<slug>`.
+ *
  * The command connects to no database, so the dialect is read from a URL nothing connects to.
  */
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   defineCollection,
@@ -43,6 +46,7 @@ import {
   plainSeoGroup,
   seoGroup,
 } from "../../../domains/field-groups/__tests__/helpers/used-field-group-fixtures";
+import { fieldGroupTableNameFor } from "../../../domains/field-groups/services/field-group-storage-names";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import type { TestDialect } from "../../../plugins/test-nextly";
@@ -92,8 +96,9 @@ async function generate(
   name: string,
   config: Record<string, unknown>,
   // Where nobody can be asked, a file that drops a table is written only
-  // under consent naming it, as `--accept-data-loss` gives it.
-  consent: { acceptDataLoss?: string } = {}
+  // under consent naming it, as `--accept-data-loss` gives it. And
+  // `--field-group-names=current` writes the move of the history's names.
+  consent: { acceptDataLoss?: string; fieldGroupNames?: string } = {}
 ): Promise<{ exited: string | undefined; errors: string[] }> {
   process.env.DATABASE_URL = URLS[dialect];
   process.env.DB_DIALECT = dialect;
@@ -369,6 +374,102 @@ describeEachDialect(
 
       expect(run).toEqual({ exited: undefined, errors: [] });
       expect(await migrationFiles()).toHaveLength(2);
+    });
+
+    describe("after the history moved to the current field-group names", () => {
+      /** SEO's table once the history is on the current names. */
+      const MOVED_SEO_TABLE = fieldGroupTableNameFor("current", SEO);
+
+      /**
+       * A history whose field groups are on the current names: its first migration on the legacy
+       * ones, then the move, then `config`, which adds what depends on SEO's moved table.
+       */
+      async function movedHistoryWith(
+        config: Record<string, unknown>,
+        start: Record<string, unknown>
+      ): Promise<void> {
+        for (const [name, step, consent] of [
+          ["initial", start, {}],
+          ["move", start, { fieldGroupNames: "current" }],
+          ["depend", config, {}],
+        ] as const) {
+          const run = await generate(dialect, name, step, consent);
+          expect(run, name).toEqual({ exited: undefined, errors: [] });
+        }
+        expect(await migrationFiles()).toHaveLength(3);
+      }
+
+      it("refuses to drop a field group a declared key points at", async () => {
+        const links = { schema: { extend: [linksTo(MOVED_SEO_TABLE)] } };
+        await movedHistoryWith(
+          { fieldGroups: [plainSeoGroup], db: links },
+          { fieldGroups: [plainSeoGroup] }
+        );
+        const before = await migrationFiles();
+
+        const run = await generate(
+          dialect,
+          "drop_seo",
+          { fieldGroups: [], db: links },
+          { acceptDataLoss: MOVED_SEO_TABLE }
+        );
+
+        expect(run.exited).toBe("process.exit(1)");
+        const said = run.errors.join("\n");
+        expect(said).toContain(
+          `"${SEO}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
+        );
+        expect(said).toContain(`on "${LINKS_TABLE}" (${LINKS_OWNER})`);
+        expect(await migrationFiles()).toEqual(before);
+      });
+
+      it("refuses to drop a field group a plugin adds a column and an index to", async () => {
+        const marker = markerPluginOn(MOVED_SEO_TABLE);
+        await movedHistoryWith(
+          { fieldGroups: [plainSeoGroup], plugins: [marker] },
+          { fieldGroups: [plainSeoGroup] }
+        );
+        const before = await migrationFiles();
+
+        const run = await generate(
+          dialect,
+          "drop_seo",
+          { fieldGroups: [], plugins: [marker] },
+          { acceptDataLoss: MOVED_SEO_TABLE }
+        );
+
+        expect(run.exited).toBe("process.exit(1)");
+        expect(run.errors.join("\n")).toContain(
+          `the column "${MARKER_COLUMN}" on "${MOVED_SEO_TABLE}" (plugin "${MARKER_PLUGIN}")`
+        );
+        expect(await migrationFiles()).toEqual(before);
+      });
+
+      it("refuses to drop a translated field group a declared key into its translation table points at", async () => {
+        const links = {
+          schema: { extend: [linksTo(`${MOVED_SEO_TABLE}_locales`)] },
+        };
+        await movedHistoryWith(
+          { fieldGroups: [seoGroup], db: links, localization: LANGUAGES },
+          { fieldGroups: [seoGroup], localization: LANGUAGES }
+        );
+        const before = await migrationFiles();
+
+        const run = await generate(
+          dialect,
+          "drop_seo",
+          { fieldGroups: [], db: links, localization: LANGUAGES },
+          { acceptDataLoss: `${MOVED_SEO_TABLE},${MOVED_SEO_TABLE}_locales` }
+        );
+
+        expect(run.exited).toBe("process.exit(1)");
+        const said = run.errors.join("\n");
+        expect(said).toContain(
+          `"${SEO}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
+        );
+        expect(said).toContain(`on "${LINKS_TABLE}" (${LINKS_OWNER})`);
+        expect(await migrationFiles()).toEqual(before);
+      });
     });
   }
 );
