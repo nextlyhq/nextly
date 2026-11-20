@@ -252,6 +252,34 @@ describe("snapshot-io", () => {
       );
     });
 
+    // A release before the record could write the current names into a version 1 snapshot after
+    // the site's storage moved. Read as legacy, it would plan a drop of each fg_ table.
+    it("refuses an unmarked snapshot that records the current type column", () => {
+      let thrown: unknown;
+      try {
+        snapshotFieldGroupNaming({
+          migration: "20261101_120000_000_add_banner",
+          snapshot: {
+            tables: [
+              {
+                name: "fg_banner",
+                columns: [
+                  { name: "_field_group_type", type: "text", nullable: true },
+                ],
+              },
+            ],
+          } as never,
+        });
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as { logContext?: unknown }).logContext).toMatchObject({
+        reason: "field-group-history-names-unrecorded",
+        migration: "20261101_120000_000_add_banner",
+        tables: ["fg_banner"],
+      });
+    });
+
     // Every declared permission, by owner, travels in the snapshot so it alone says what they were;
     // a snapshot written without the record keeps no key, which a reader takes as saying nothing.
     it("writes the permission record it is given, and none when given none", async () => {

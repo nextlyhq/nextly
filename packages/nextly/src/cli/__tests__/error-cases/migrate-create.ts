@@ -26,7 +26,9 @@ export const MIGRATE_CREATE_CASES = {
   FIELD_GROUP_NAMES_OPTION_INVALID: () => fieldGroupNamesOptionInvalid("fg"),
   // Each built by the check `generateMigration` runs, as it throws it.
   FIELD_GROUP_NAMES_DIFFER_FROM_HISTORY: () =>
-    thrownBy(() => refuseNamingAgainstHistory({}, "current")),
+    thrownBy(() =>
+      refuseNamingAgainstHistory({ snapshot: { tables: [] } }, "current")
+    ),
   FIELD_GROUP_TRANSITION_REFUSED: () =>
     thrownBy(() =>
       refuseChangesToTransition({ tables: ["dc_posts"], beyondTables: false })

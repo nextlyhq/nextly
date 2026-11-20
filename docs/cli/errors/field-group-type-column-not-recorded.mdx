@@ -1,0 +1,29 @@
+---
+title: FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED
+description: "A field-group table an earlier release created after the field groups moved still holds the legacy type column, and the migration history records the current one."
+---
+
+## Cause
+
+A field-group table an earlier release created after the field groups moved still holds the legacy type column, and the migration history records the current one.
+
+`nextly migrate:field-groups` renames every field-group table's type column from `_component_type` to `_field_group_type`. A table that an earlier release created after that still holds `_component_type`, and the project's migration history, read under the database's names, records `_field_group_type` on it. Every migration planned from that history would address a column the table doesn't have, so `nextly migrate` stops before it applies anything.
+
+## Fix
+
+Start the history again from the database as it stands. Run the baseline: on a project that already has migrations it changes nothing, and lists each migration with the step that clears it.
+
+```bash
+npx nextly migrate:baseline
+```
+
+Clear each migration as it says, then run `npx nextly migrate:baseline` again. It records every table under the names and with the columns the database holds, on the current field-group names. Commit the files it writes, and apply them with `npx nextly migrate` on every other database the project deploys to.
+
+## Example
+
+```text
+✗ This database's field-group table fg_banner still holds the legacy type column _component_type, and the project's migration history records _field_group_type there.
+  Why:  An earlier release created it after the field groups moved to the current names, so the storage migration never renamed the column, and every file planned from the history would address a column the database does not have.
+  Next: No file was applied. Re-baseline the history with `nextly migrate:baseline`: it lists how to clear the existing migrations, then records each table with the columns it holds.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-type-column-not-recorded  (FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED)
+```

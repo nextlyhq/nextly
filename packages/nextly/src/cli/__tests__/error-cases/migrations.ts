@@ -20,8 +20,10 @@ import { migrationDriftError } from "../../../domains/schema/migrate/drift-error
 import {
   fieldGroupHistoryBehindStorageError,
   fieldGroupStorageNotMigratedError,
+  fieldGroupTypeColumnNotRecordedError,
 } from "../../../domains/schema/migrate/field-group-history";
 import { ownWriteLockError } from "../../../domains/schema/migrate/migration-transaction";
+import { fieldGroupHistoryNamesUnrecordedError } from "../../../domains/schema/migrate-create/snapshot-io";
 import {
   assertNotPartiallyApplied,
   concurrentRunError,
@@ -561,6 +563,12 @@ export const MIGRATION_CASES = {
     ),
   FIELD_GROUP_HISTORY_BEHIND_STORAGE: () =>
     fieldGroupHistoryBehindStorageError(),
+  FIELD_GROUP_HISTORY_NAMES_UNRECORDED: () =>
+    fieldGroupHistoryNamesUnrecordedError("20261101_120000_000_add_banner", [
+      "fg_banner",
+    ]),
+  FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED: () =>
+    fieldGroupTypeColumnNotRecordedError(["fg_banner"]),
   DATABASE_BEHIND_MIGRATIONS: () =>
     databaseBehindMigrations(2, [
       "- table dc_posts (created by 20261116_120000_000_create_posts)",

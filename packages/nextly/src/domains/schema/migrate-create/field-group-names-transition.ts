@@ -42,7 +42,10 @@ const ACROSS_NAMINGS =
  * field groups under, else legacy.
  */
 export function historyFieldGroupNaming(
-  latest: Pick<SnapshotFile, "fieldGroupStorage"> | null,
+  latest: Pick<
+    SnapshotFile,
+    "fieldGroupStorage" | "snapshot" | "migration"
+  > | null,
   requested: FieldGroupNaming | undefined
 ): FieldGroupNaming {
   if (latest === null) return requested ?? "legacy";
@@ -56,7 +59,15 @@ export function historyFieldGroupNaming(
  * (`transitionNeeded`).
  */
 export function fieldGroupNamingOfRun(
-  latest: { data: Pick<SnapshotFile, "fieldGroupStorage"> } | null | undefined,
+  latest:
+    | {
+        data: Pick<
+          SnapshotFile,
+          "fieldGroupStorage" | "snapshot" | "migration"
+        >;
+      }
+    | null
+    | undefined,
   run: { fieldGroupNaming?: FieldGroupNaming; fieldGroupTransition?: boolean }
 ): FieldGroupNaming | null {
   const history = latest?.data ?? null;
@@ -73,7 +84,10 @@ export function fieldGroupNamingOfRun(
  * created under the other. Names the step that moves the history instead.
  */
 export function refuseNamingAgainstHistory(
-  latest: Pick<SnapshotFile, "fieldGroupStorage"> | null,
+  latest: Pick<
+    SnapshotFile,
+    "fieldGroupStorage" | "snapshot" | "migration"
+  > | null,
   requested: FieldGroupNaming | undefined
 ): void {
   if (latest === null || requested === undefined) return;
@@ -100,7 +114,10 @@ export function refuseNamingAgainstHistory(
  * do (null) when the history is already on the current names.
  */
 export function transitionNeeded(
-  latest: Pick<SnapshotFile, "fieldGroupStorage"> | null
+  latest: Pick<
+    SnapshotFile,
+    "fieldGroupStorage" | "snapshot" | "migration"
+  > | null
 ): boolean {
   if (latest === null) {
     throw new NextlyError({

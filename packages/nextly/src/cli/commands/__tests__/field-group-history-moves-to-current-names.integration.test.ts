@@ -514,5 +514,66 @@ describe.each(getConfiguredTestDialects())(
         )
       ).toEqual([]);
     });
+
+    // A release before the naming record could write a snapshot on the current names after the
+    // storage moved, with nothing in it to say so. Read as legacy, the next file would drop the fg_
+    // tables and create comp_ copies: it is refused, naming the re-baseline, and nothing is written.
+    it("refuses an unmarked snapshot an earlier release wrote on the current names, pointing at a baseline", async () => {
+      const url = await legacyProject();
+      await migrateStorage(dialect, url);
+      expect(
+        (await create(undefined, { fieldGroupNames: "current" })).exit
+      ).toBeUndefined();
+      // As that release wrote it: the same tables, as version 1 with no record of their names.
+      const { snapshot } = written("field_group_current_names");
+      const file = JSON.parse(await readFile(snapshot, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      file.version = 1;
+      delete file.fieldGroupStorage;
+      writeFileSync(snapshot, JSON.stringify(file, null, 2));
+      loaded.config = configOf(WITH_SUBTITLE);
+
+      const refused = await create("add_subtitle");
+
+      expect(refused.exit, refused.said).not.toBeUndefined();
+      expect(refused.said).toContain("FIELD_GROUP_HISTORY_NAMES_UNRECORDED");
+      expect(refused.said).toContain("nextly migrate:baseline");
+      expect(
+        readdirSync(join(dir, "migrations")).filter(f =>
+          f.endsWith("_add_subtitle.sql")
+        )
+      ).toEqual([]);
+    });
+
+    // A field group an earlier release created after the move keeps the legacy type column, and
+    // the history, read under the database's names, records the current one there. The move of the
+    // history is refused before it is recorded, naming the re-baseline.
+    it("refuses to move the history over a table still on the legacy type column, pointing at a baseline", async () => {
+      const url = await legacyProject();
+      await migrateStorage(dialect, url);
+      // As that release left it: the table under the current name, on the legacy type column.
+      const adapter = await connect(dialect, url);
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      await adapter.executeQuery(
+        `ALTER TABLE ${q("fg_fh_card")} RENAME COLUMN ${q("_field_group_type")} TO ${q("_component_type")}`
+      );
+      expect(
+        (await create(undefined, { fieldGroupNames: "current" })).exit
+      ).toBeUndefined();
+
+      const refused = await migrate();
+
+      expect(refused.exit, refused.said).not.toBeUndefined();
+      expect(refused.said).toContain("FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED");
+      expect(refused.said).toContain("fg_fh_card");
+      expect(
+        (await appliedNames(dialect, adapter)).some(name =>
+          name.includes("_field_group_current_names")
+        )
+      ).toBe(false);
+    });
   }
 );

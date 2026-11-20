@@ -12,7 +12,9 @@
  */
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { retargetName } from "../../field-groups/migration/manifest";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import {
   namingOfRegistry,
   type FieldGroupNaming,
@@ -34,6 +36,7 @@ import {
   snapshotFieldGroupNaming,
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
+import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { resolveComponentTableName } from "../utils/resolve-table-name";
 
@@ -105,8 +108,14 @@ async function databaseFieldGroupNaming(
  * way it applies only to a database whose field groups are on the current names.
  */
 export function isFieldGroupTransition(
-  before: Pick<SnapshotFile, "fieldGroupStorage"> | null,
-  target: Pick<SnapshotFile, "fieldGroupStorage"> | null
+  before: Pick<
+    SnapshotFile,
+    "fieldGroupStorage" | "snapshot" | "migration"
+  > | null,
+  target: Pick<
+    SnapshotFile,
+    "fieldGroupStorage" | "snapshot" | "migration"
+  > | null
 ): boolean {
   return (
     target !== null &&
@@ -176,5 +185,85 @@ export function fieldGroupHistoryBehindStorageError(): NextlyError {
       "Every file after this point would be planned against tables the database no longer has. " +
       `No file was applied. Run \`${FIELD_GROUP_TRANSITION_COMMAND}\`, then \`nextly migrate\` again.`,
     logContext: { reason: "field-group-history-behind-storage" },
+  });
+}
+
+/**
+ * Refuses a database whose field groups moved to the current names and that holds a field-group
+ * table still on the legacy type column (`_component_type`), where the history the database is
+ * held to records that table with the current one. Such a table was created by an earlier release
+ * after the move, so the storage migration never renamed its column, and the history, read under
+ * the database's names, says it was renamed: every file planned from it would address a column
+ * the table does not have.
+ *
+ * `snapshots` are what the run holds the database to: the newest applied file's, and the next
+ * file's where it is the one that moves the history. A history that records the column the table
+ * holds, as a baseline of the database does, is not refused.
+ */
+export async function refuseTypeColumnsHistoryDoesNotRecord(args: {
+  adapter: CatalogReadAdapter & RegistryReadAdapter;
+  snapshots: readonly {
+    snapshot: NextlySchemaSnapshot;
+    fieldGroupNaming?: FieldGroupNaming;
+  }[];
+}): Promise<void> {
+  if (args.snapshots.length === 0) return;
+  if ((await databaseFieldGroupNaming(args.adapter)) === "legacy") return;
+  const stored = [
+    ...(await readStoredFieldGroupTables(args.adapter)).tables.values(),
+  ];
+  const live = await introspectLiveColumns(
+    args.adapter.getDrizzle(),
+    args.adapter.dialect,
+    stored
+  );
+  const keepsLegacy = live.tables
+    .filter(
+      table =>
+        holds(table, STORAGE_FORMAT.columns.type) &&
+        !holds(table, MIGRATION_TARGET.columnType)
+    )
+    .map(table => table.name);
+  if (keepsLegacy.length === 0) return;
+  const read = await underDatabaseFieldGroupNames(args.adapter, args.snapshots);
+  const unrecorded = keepsLegacy.filter(name =>
+    read.some(({ snapshot }) =>
+      snapshot.tables.some(
+        table =>
+          table.name === name &&
+          holds(table, MIGRATION_TARGET.columnType) &&
+          !holds(table, STORAGE_FORMAT.columns.type)
+      )
+    )
+  );
+  if (unrecorded.length > 0) {
+    throw fieldGroupTypeColumnNotRecordedError(unrecorded);
+  }
+}
+
+/** Whether `table` has a column named `column`. */
+function holds(
+  table: { columns: readonly { name: string }[] },
+  column: string
+): boolean {
+  return table.columns.some(held => held.name === column);
+}
+
+/** The refusal of field-group tables whose legacy type column the history does not record. */
+export function fieldGroupTypeColumnNotRecordedError(
+  tables: readonly string[]
+): NextlyError {
+  const list = tables.join(", ");
+  const one = tables.length === 1;
+  return new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage:
+      `This database's field-group ${one ? "table" : "tables"} ${list} still ${one ? "holds" : "hold"} the legacy type column ${STORAGE_FORMAT.columns.type}, and the project's migration history records ${MIGRATION_TARGET.columnType} there. ` +
+      `An earlier release created ${one ? "it" : "them"} after the field groups moved to the current names, so the storage migration never renamed the column, and every file planned from the history would address a column the database does not have. ` +
+      "No file was applied. Re-baseline the history with `nextly migrate:baseline`: it lists how to clear the existing migrations, then records each table with the columns it holds.",
+    logContext: {
+      reason: "field-group-type-column-not-recorded",
+      tables: [...tables],
+    },
   });
 }

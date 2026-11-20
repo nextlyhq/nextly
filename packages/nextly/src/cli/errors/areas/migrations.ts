@@ -6,10 +6,10 @@
  */
 
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
+import { HISTORY_FORKED_REASON } from "../../../domains/schema/migrate/history-line";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
 import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/unique-index-name-advice";
-import { HISTORY_FORKED_REASON } from "../../../domains/schema/migrate/history-line";
 import {
   WRITER_HOLD_HELD_REASON,
   WRITER_HOLD_LOST_REASON,
@@ -513,7 +513,7 @@ function malformedConsentParts(message: string): CliErrorParts {
  */
 function forkedHistoryParts(error: NextlyError): CliErrorParts {
   const lines = (error.logContext?.lines ?? []) as CliErrorParts[];
-  const part = (key: keyof CliErrorParts) =>
+  const part = (key: "what" | "why" | "next") =>
     [...new Set(lines.map(line => line[key]))].join("\n");
   return lines.length === 0
     ? {
@@ -1276,6 +1276,28 @@ export const MIGRATION_CODES = defineCodes({
       {
         code: "VALIDATION_ERROR",
         reason: "field-group-history-behind-storage",
+        describe: error => sentenceParts(error),
+      },
+    ],
+  },
+  FIELD_GROUP_HISTORY_NAMES_UNRECORDED: {
+    cause:
+      "A migration snapshot an earlier release wrote keeps field groups under the current names without recording that it does.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "field-group-history-names-unrecorded",
+        describe: error => sentenceParts(error),
+      },
+    ],
+  },
+  FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED: {
+    cause:
+      "A field-group table an earlier release created after the field groups moved still holds the legacy type column, and the migration history records the current one.",
+    from: [
+      {
+        code: "VALIDATION_ERROR",
+        reason: "field-group-type-column-not-recorded",
         describe: error => sentenceParts(error),
       },
     ],

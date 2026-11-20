@@ -23,6 +23,8 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
+import { NextlyError } from "../../../errors/nextly-error";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import type { FieldGroupNaming } from "../../field-groups/services/field-group-storage-names";
 import { normalizeContributions } from "../pipeline/diff/contributions";
 import type {
@@ -132,11 +134,51 @@ export interface SnapshotFile {
  * The field-group names a snapshot's point of the history is on: `"current"` when it says so,
  * otherwise legacy, which is what every snapshot written before the record existed was on. The
  * one reading of the record, for every command that follows the history's naming.
+ *
+ * Refused for an unmarked snapshot that records the current type column (`_field_group_type`):
+ * an earlier release wrote it after the site's field groups moved, when the record did not exist
+ * yet, so it is on the current names and does not say so. Read as legacy, the next migration
+ * would plan to drop each `fg_` table and create a `comp_` copy.
  */
 export function snapshotFieldGroupNaming(
-  file: Pick<SnapshotFile, "fieldGroupStorage">
+  file: Pick<SnapshotFile, "fieldGroupStorage" | "snapshot" | "migration">
 ): FieldGroupNaming {
-  return file.fieldGroupStorage === "current" ? "current" : "legacy";
+  if (file.fieldGroupStorage === "current") return "current";
+  const onCurrentNames = file.snapshot.tables
+    .filter(table =>
+      table.columns.some(column => column.name === MIGRATION_TARGET.columnType)
+    )
+    .map(table => table.name);
+  if (onCurrentNames.length > 0) {
+    throw fieldGroupHistoryNamesUnrecordedError(file.migration, onCurrentNames);
+  }
+  return "legacy";
+}
+
+/**
+ * The refusal of a snapshot an earlier release wrote on the current field-group names without
+ * recording them. The way on is a new history from the database as it stands.
+ */
+export function fieldGroupHistoryNamesUnrecordedError(
+  migration: string | undefined,
+  tables: readonly string[]
+): NextlyError {
+  const which =
+    migration === undefined
+      ? "A migration snapshot"
+      : `The snapshot of migration ${migration}`;
+  return new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage:
+      `${which} keeps field groups under the current names (${tables.join(", ")} with ${MIGRATION_TARGET.columnType}) and does not record that it does. ` +
+      "An earlier release wrote it after this site's field groups moved, and read as the legacy names the next migration would drop those tables and create legacy copies. " +
+      "Nothing was written or applied. Re-baseline the history with `nextly migrate:baseline`: it lists how to clear the existing migrations, then records the tables as the database holds them.",
+    logContext: {
+      reason: "field-group-history-names-unrecorded",
+      ...(migration === undefined ? {} : { migration }),
+      tables: [...tables],
+    },
+  });
 }
 
 /**

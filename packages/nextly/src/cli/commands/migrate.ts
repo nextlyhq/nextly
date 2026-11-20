@@ -36,7 +36,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
-import type { FieldGroupNaming } from "../../domains/field-groups/services/field-group-storage-names";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
@@ -124,6 +123,7 @@ import {
   isFieldGroupTransition,
   refuseFieldGroupTransitionOnLegacy,
   refuseMovedStorageBehindLegacyHistory,
+  refuseTypeColumnsHistoryDoesNotRecord,
   underDatabaseFieldGroupNames,
 } from "../../domains/schema/migrate/field-group-history";
 import {
@@ -3549,10 +3549,11 @@ async function missingFromAppStream(
 /**
  * Refuses, before anything applies, a database whose field groups moved to the current names
  * while the history's newest applied file is still on the legacy ones and the next file is not
- * the one that moves it (`refuseMovedStorageBehindLegacyHistory`). Run on every migrate run, the
- * development start's included: unlike the comparison of the database with its ledger, which
- * only some runs make, a legacy file applied to moved storage writes under names the registry no
- * longer has.
+ * the one that moves it (`refuseMovedStorageBehindLegacyHistory`), and one holding a field-group
+ * table an earlier release created after the move, on the legacy type column the history does not
+ * record (`refuseTypeColumnsHistoryDoesNotRecord`). Run on every migrate run, the development
+ * start's included: unlike the comparison of the database with its ledger, which only some runs
+ * make, a legacy file applied to moved storage writes under names the registry no longer has.
  */
 async function refuseFieldGroupHistoryBehindStorage(
   deps: MigrateCoreDeps
@@ -3570,30 +3571,41 @@ async function refuseFieldGroupHistoryBehindStorage(
     if (!entry.applied) continue;
     const newest = await loadTargetSnapshot(metaDir, entry.file.name);
     if (newest === null) continue;
+    const next = await nextPendingSnapshot(deps.migrationsDir, files);
+    const adapter = deps.adapter as unknown as DrizzleAdapter;
     await refuseMovedStorageBehindLegacyHistory({
-      adapter: deps.adapter as unknown as DrizzleAdapter,
+      adapter,
       newestApplied: snapshotFieldGroupNaming(newest),
-      nextPending: await namingOfNextPending(deps.migrationsDir, files),
+      nextPending: next === null ? undefined : snapshotFieldGroupNaming(next),
+    });
+    // What the run holds the database to: the newest applied file, and the move of the history
+    // where it is the next to apply.
+    const heldTo =
+      next !== null && isFieldGroupTransition(newest, next)
+        ? [newest, next]
+        : [newest];
+    await refuseTypeColumnsHistoryDoesNotRecord({
+      adapter,
+      snapshots: heldTo.map(file => ({
+        snapshot: file.snapshot,
+        fieldGroupNaming: snapshotFieldGroupNaming(file),
+      })),
     });
     return;
   }
 }
 
 /**
- * The field-group naming the next app file to apply records, where it has a snapshot: what tells
- * a moved database's run whether the file in front of it is the one that moves the history.
+ * The snapshot of the next app file to apply, where it has one: what tells a moved database's run
+ * whether the file in front of it is the one that moves the history.
  */
-async function namingOfNextPending(
+async function nextPendingSnapshot(
   migrationsDir: string,
   files: ReadonlyArray<{ applied: boolean; file: { name: string } }>
-): Promise<FieldGroupNaming | undefined> {
+): Promise<SnapshotFile | null> {
   const next = files.find(entry => !entry.applied);
-  if (next === undefined) return undefined;
-  const target = await loadTargetSnapshot(
-    resolve(migrationsDir, "meta"),
-    next.file.name
-  );
-  return target === null ? undefined : snapshotFieldGroupNaming(target);
+  if (next === undefined) return null;
+  return loadTargetSnapshot(resolve(migrationsDir, "meta"), next.file.name);
 }
 
 /**
