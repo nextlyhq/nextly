@@ -1,3 +1,4 @@
+import { standardLanguageCode } from "./config/standard-code";
 import type {
   ResolvedLocale,
   SanitizedLocalizationConfig,
@@ -9,22 +10,63 @@ export function getDefaultLocale(cfg: SanitizedLocalizationConfig): string {
   return cfg.defaultLocale;
 }
 
-/** Whether `code` is one of the configured locales. */
+/**
+ * The configured code `code` names: itself, or, for one release, the configured code an older
+ * spelling of it becomes in standard form (`pt_BR` for a site configuring `pt-BR`), which earlier
+ * releases accepted. Undefined where it names no configured language.
+ * The older spelling is accepted for one release; a caller answering over HTTP says so with a
+ * deprecation header (`requestedCodeAlias`).
+ *
+ * Every caller that goes on to use a requested code (to read, filter or write rows) takes this
+ * one's answer rather than the code it was handed: rows are stored under the configured code, so
+ * an older spelling used as given would read nothing and write under a code no row is read by.
+ */
+export function configuredLocale(
+  cfg: SanitizedLocalizationConfig,
+  code: string
+): string | undefined {
+  if (cfg.locales.some(l => l.code === code)) return code;
+  const standard = standardLanguageCode(code);
+  return standard !== undefined && cfg.locales.some(l => l.code === standard)
+    ? standard
+    : undefined;
+}
+
+/**
+ * Where a request named a configured language by its older spelling: the old code and the one it
+ * is read as, for the deprecation a response reports. Undefined for any other request.
+ */
+export function requestedCodeAlias(
+  cfg: SanitizedLocalizationConfig,
+  code: string | undefined
+): { requested: string; standard: string } | undefined {
+  if (code === undefined) return undefined;
+  const configured = configuredLocale(cfg, code);
+  return configured !== undefined && configured !== code
+    ? { requested: code, standard: configured }
+    : undefined;
+}
+
+/** Whether `code` names one of the configured locales, an older spelling of one included. */
 export function isValidLocale(
   cfg: SanitizedLocalizationConfig,
   code: string
 ): boolean {
-  return cfg.locales.some(l => l.code === code);
+  return configuredLocale(cfg, code) !== undefined;
 }
 
-/** The locale to actually use for a request: the requested one if valid, else the default. */
+/**
+ * The locale to actually use for a request: the configured code the requested one names, else
+ * the default. An older spelling of a configured code comes back as the configured code.
+ */
 export function resolveRequestedLocale(
   cfg: SanitizedLocalizationConfig,
   requested: string | undefined
 ): string {
-  return requested && isValidLocale(cfg, requested)
-    ? requested
-    : cfg.defaultLocale;
+  return (
+    (requested === undefined ? undefined : configuredLocale(cfg, requested)) ??
+    cfg.defaultLocale
+  );
 }
 
 /**
@@ -89,13 +131,16 @@ export function resolveLocaleChain(
   if (fallbackLocale === false || fallbackLocale === NO_FALLBACK) {
     return [requested];
   }
-  if (
-    typeof fallbackLocale === "string" &&
-    isValidLocale(cfg, fallbackLocale)
-  ) {
+  // A named fallback in an older spelling is resolved to its configured code, as the requested
+  // language is: the chain names the code its rows are stored under.
+  const named =
+    typeof fallbackLocale === "string"
+      ? configuredLocale(cfg, fallbackLocale)
+      : undefined;
+  if (named !== undefined) {
     const seen = new Set<string>();
-    return [requested, ...resolveFallbackChain(cfg, fallbackLocale)].filter(
-      code => (seen.has(code) ? false : (seen.add(code), true))
+    return [requested, ...resolveFallbackChain(cfg, named)].filter(code =>
+      seen.has(code) ? false : (seen.add(code), true)
     );
   }
   if (!cfg.fallback) return [requested];

@@ -57,7 +57,7 @@ import {
   type ReleaseTimeSpan,
   type ZonedDay,
 } from "./release-calendar";
-import { releaseDueCondition } from "./release-due";
+import { isDueAt, releaseDueCondition } from "./release-due";
 import {
   documentEventPayload,
   hasStartedAt,
@@ -990,6 +990,48 @@ function releaseMovedConflict(
  */
 export const IDS_PER_LOOKUP = 500;
 
+/** The due releases a walk reads holding its documents, and the documents past its bound. */
+export interface DueHolders {
+  holding: Array<{ release: ReleaseRow; members: ReleaseMemberRow[] }>;
+  overflow: ReleaseRecheckDocument[];
+}
+
+/**
+ * Where the next page of members ordered by (document, id) starts: after `last`, or, when its
+ * document is past the bound (`skipDocument`), after every member of that document.
+ */
+function pageAfter(
+  last: Pick<ReleaseMemberRow, "entryId" | "id">,
+  skipDocument: boolean
+): ReleasesWhere {
+  const later = after("entryId", last.entryId);
+  if (skipDocument) return later;
+  return {
+    or: [
+      later,
+      {
+        and: [
+          { column: "entryId", op: "=" as const, value: last.entryId },
+          after("id", last.id),
+        ],
+      },
+    ],
+  };
+}
+
+/**
+ * `column` strictly after `value`, spelled as at-or-after and not equal: the port's conditions
+ * have no strict greater-than.
+ */
+function after(column: string, value: string): ReleasesWhere {
+  return {
+    and: [
+      { column, op: ">=" as const, value },
+      { column, op: "!=" as const, value },
+    ],
+  };
+}
+
 /** These ids, once each, in runs of at most {@link IDS_PER_LOOKUP}. */
 export function idBatches(ids: readonly string[]): string[][] {
   const unique = [...new Set(ids)];
@@ -1191,24 +1233,8 @@ export class ReleasesRepository {
    * computed at the next read is a second line of defence for exactly this.
    */
   private async revalidateMembersOf(releaseId: string): Promise<void> {
-    // Drop the shared transition memo FIRST, and unconditionally. Flushing tags
-    // re-renders the page, and the re-render reads that memo — a stale one
-    // hands it the same "nothing scheduled" bound it had before, so the page is
-    // cached tag-only again against a release the schedule already knows about.
-    // Done even with no revalidator wired: the memo is wrong either way.
-    invalidateTransitionCacheFor(this.db);
-
-    if (this.revalidator === undefined) return;
-    try {
-      const intent = await this.revalidationIntentFor(
-        await this.listMembers(releaseId)
-      );
-      if (intent !== null) await this.revalidator.flush([intent]);
-    } catch (error) {
-      // Not thrown, for the reason above; logged, so a release whose pages stay
-      // stale says why.
-      logReleaseFlushFailure(error);
-    }
+    // The flush of many releases, asked of one, so the two cannot differ.
+    await this.revalidateReleases([releaseId]);
   }
 
   /**
@@ -1219,7 +1245,26 @@ export class ReleasesRepository {
    * and never throws, as every flush here is.
    */
   async revalidateReleases(ids: readonly string[]): Promise<void> {
-    for (const id of new Set(ids)) await this.revalidateMembersOf(id);
+    // Drop the shared transition memo FIRST, and unconditionally. Flushing tags
+    // re-renders the page, and the re-render reads that memo — a stale one
+    // hands it the same "nothing scheduled" bound it had before, so the page is
+    // cached tag-only again against a release the schedule already knows about.
+    // Done even with no revalidator wired: the memo is wrong either way.
+    invalidateTransitionCacheFor(this.db);
+
+    if (this.revalidator === undefined || ids.length === 0) return;
+    try {
+      // Every release's members in runs of ids (`listMembersOf`), and one flush
+      // for all of them, however many releases a component holds.
+      const intent = await this.revalidationIntentFor(
+        await this.listMembersOf([...ids])
+      );
+      if (intent !== null) await this.revalidator.flush([intent]);
+    } catch (error) {
+      // Not thrown, for the reason above; logged, so a release whose pages stay
+      // stale says why.
+      logReleaseFlushFailure(error);
+    }
   }
 
   /**
@@ -1528,7 +1573,10 @@ export class ReleasesRepository {
     // readers and drops the shared transition memo, and doing that from inside
     // the transaction would announce a transition that can still roll back —
     // the reader would then see a release stopped that is still scheduled.
-    for (const entry of moved) await this.revalidateMembersOf(entry.id);
+    // One flush for every release the component moved.
+    if (moved.length > 0) {
+      await this.revalidateReleases(moved.map(entry => entry.id));
+    }
     if (keptBegun)
       await this.revalidateReleases(entries.map(entry => entry.id));
     return moved.map(entry => entry.id);
@@ -2627,6 +2675,80 @@ export class ReleasesRepository {
     }));
   }
 
+  /**
+   * The due releases holding these documents, each with its members naming them, as a walk of
+   * shared documents asks (`dueComponentsHolding`); and the documents held by more than `limit`
+   * due releases, named in `overflow`, whose holders are read no further.
+   *
+   * A walk needs only to learn that such a document is past its bound, so it is not read whole:
+   * the members naming the documents are read in pages ordered by document, each of at most
+   * `limit + 1` rows, with their releases looked up page by page, and a document is followed
+   * until `limit + 1` due releases hold it; the next page starts past its remaining members.
+   * Members of releases not due (a draft, a release run long ago) are still read, as before.
+   */
+  async dueHoldersOf(
+    documents: readonly ReleaseRecheckDocument[],
+    now: Date,
+    limit: number
+  ): Promise<DueHolders> {
+    const holding = new Map<
+      string,
+      { release: ReleaseRow; members: ReleaseMemberRow[] }
+    >();
+    const overflow: ReleaseRecheckDocument[] = [];
+    // Each release looked up once: the row while it is scheduled and due, null otherwise.
+    const due = new Map<string, ReleaseRow | null>();
+    for (const where of memberIndexConditions(documents)) {
+      // Each document's due releases counted so far, a release once however many of the
+      // document's languages it holds: the bound is on releases, not member rows.
+      const counted = new Map<string, Set<string>>();
+      const countOf = (entryId: string) => counted.get(entryId)?.size ?? 0;
+      let after: ReleasesWhere | null = null;
+      let size = limit + 1;
+      for (;;) {
+        const page = await this.db.select<ReleaseMemberRow>(MEMBERS, {
+          columns: [...MEMBER_COLUMNS],
+          where: after === null ? where : { and: [where, after] },
+          orderBy: [
+            { column: "entryId", direction: "asc" },
+            { column: "id", direction: "asc" },
+          ],
+          limit: size,
+        });
+        await this.lookUpDue(page, due, now);
+        for (const member of page) {
+          takeDueHolder(member, due, counted, limit, holding, overflow);
+        }
+        const last = page[page.length - 1];
+        if (page.length < size || last === undefined) break;
+        ({ after, size } = nextHolderPage(last, countOf(last.entryId), limit));
+      }
+    }
+    return { holding: [...holding.values()], overflow };
+  }
+
+  /** Look up each release of these members not already in `due`: its row when due, else null. */
+  private async lookUpDue(
+    members: readonly ReleaseMemberRow[],
+    due: Map<string, ReleaseRow | null>,
+    now: Date
+  ): Promise<void> {
+    const unknown = members
+      .map(member => member.releaseId)
+      .filter(id => !due.has(id));
+    for (const ids of idBatches(unknown)) {
+      for (const id of ids) due.set(id, null);
+      for (const release of await this.findReleases({
+        ids,
+        state: "scheduled" satisfies ReleaseState,
+      })) {
+        if (release.scheduledAt !== null && isDueAt(release.scheduledAt, now)) {
+          due.set(release.id, release);
+        }
+      }
+    }
+  }
+
   /** The members an event names, of any release; see `scheduledMembersFor`. */
   private async membersNamedBy(
     target: ReleaseRecheckTarget
@@ -3412,4 +3534,55 @@ export class ReleasesRepository {
     });
     return new Map(rows.map(row => [row.id, { scheduledAt: row.scheduledAt }]));
   }
+}
+
+/**
+ * Count one member toward its document's due holders (`dueHoldersOf`): a release once however
+ * many of the document's languages it holds. A member of a release not due counts nothing; one
+ * past the bound reports the document as over it instead of being kept.
+ */
+function takeDueHolder(
+  member: ReleaseMemberRow,
+  due: ReadonlyMap<string, ReleaseRow | null>,
+  counted: Map<string, Set<string>>,
+  limit: number,
+  holding: Map<string, { release: ReleaseRow; members: ReleaseMemberRow[] }>,
+  overflow: ReleaseRecheckDocument[]
+): void {
+  const release = due.get(member.releaseId);
+  if (!release || (counted.get(member.entryId)?.size ?? 0) > limit) return;
+  const releases = counted.get(member.entryId) ?? new Set<string>();
+  releases.add(release.id);
+  counted.set(member.entryId, releases);
+  if (releases.size > limit) {
+    overflow.push({
+      scopeKind: member.scopeKind,
+      scopeSlug: member.scopeSlug,
+      entryId: member.entryId,
+    });
+    return;
+  }
+  const held = holding.get(release.id) ?? { release, members: [] };
+  held.members.push(member);
+  holding.set(release.id, held);
+}
+
+/**
+ * Where the walk's next page of members starts and how many rows it asks for, after `last`, whose
+ * document has `counted` due holders so far. A page continuing within that document reads only
+ * what it may still need, the bound plus one less those counted, so no more than the bound plus
+ * one of its due holders is read; past the bound, the next page starts at another document and is
+ * a full one. Releases not due take a row without counting, so a document mostly held by them is
+ * read in smaller pages near its bound.
+ */
+function nextHolderPage(
+  last: ReleaseMemberRow,
+  counted: number,
+  limit: number
+): { after: ReleasesWhere; size: number } {
+  const pastBound = counted > limit;
+  return {
+    after: pageAfter(last, pastBound),
+    size: pastBound ? limit + 1 : limit + 1 - counted,
+  };
 }

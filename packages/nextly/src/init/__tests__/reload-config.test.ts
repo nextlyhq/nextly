@@ -103,6 +103,15 @@ const setDeferredEntitiesSpy = vi.fn();
 // The reload PUBLISHES which entities it refused, per kind, and the widget
 // source refresh is the consumer. Mocked here so this file can assert the
 // call without pulling the DI container in through the widgets domain.
+// The judgement of each entity's type changes reads the rows its columns hold, which these cases'
+// stand-in database has none of: it holds nothing back unless a case says what it holds.
+const { heldBackSpy } = vi.hoisted(() => ({
+  heldBackSpy: vi.fn(async () => [] as unknown[]),
+}));
+vi.mock("../code-first-type-changes", () => ({
+  typeChangesHeldBack: heldBackSpy,
+}));
+
 vi.mock("../../domains/widgets/deferred-entities", () => ({
   setDeferredEntities: (kind: string, slugs: readonly string[]) =>
     setDeferredEntitiesSpy(kind, slugs),
@@ -688,7 +697,7 @@ describe("reloadNextlyConfig", () => {
           {
             slug: "books",
             tableName: "dc_books",
-            fields: [{ name: "active", type: "checkbox" }],
+            fields: [{ name: "active", type: "text", required: true }],
           },
           {
             slug: "authors",
@@ -869,13 +878,13 @@ describe("reloadNextlyConfig", () => {
           {
             slug: "books",
             tableName: "dc_books",
-            fields: [{ name: "active", type: "checkbox" }],
+            fields: [{ name: "active", type: "text", required: true }],
           },
         ],
       },
     });
-    // The live `active` column is text; the config declares a checkbox. That is
-    // the type change the gate refuses, and it is the ONLY change in the batch.
+    // The live `active` column allows no value; the config makes it required. That is
+    // the NOT NULL addition the gate refuses, and it is the ONLY change in the batch.
     introspectSpy.mockResolvedValue(
       buildSnapshot([
         {
@@ -978,12 +987,12 @@ describe("reloadNextlyConfig", () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
-          // REFUSED: live `active` is text, the config declares a checkbox --
-          // a column type change the gate defers rather than applies.
+          // REFUSED: live `active` allows no value, the config makes it required --
+          // a NOT NULL addition the gate defers rather than applies.
           {
             slug: "books",
             tableName: "dc_books",
-            fields: [{ name: "active", type: "checkbox" }],
+            fields: [{ name: "active", type: "text", required: true }],
           },
           // APPLIED: purely additive, so this reload reaches the post-DDL
           // commit at all. Without it the deferred branch bails earlier and
@@ -1212,8 +1221,11 @@ describe("reloadNextlyConfig", () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         singles: [
-          // REFUSED: live `active` is text, the config declares a checkbox.
-          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // REFUSED: live `active` allows no value, the config makes it required.
+          {
+            slug: "settings",
+            fields: [{ name: "active", type: "text", required: true }],
+          },
           // APPLIED: additive, so the reload reaches the post-DDL commit.
           { slug: "theme", fields: [{ name: "accent", type: "text" }] },
         ],
@@ -1370,8 +1382,11 @@ describe("reloadNextlyConfig", () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         singles: [
-          // REFUSED: live `active` is text, the config declares a checkbox.
-          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // REFUSED: live `active` allows no value, the config makes it required.
+          {
+            slug: "settings",
+            fields: [{ name: "active", type: "text", required: true }],
+          },
           // APPLIED, but its metadata write fails below.
           { slug: "theme", fields: [{ name: "accent", type: "text" }] },
         ],
@@ -1428,8 +1443,11 @@ describe("reloadNextlyConfig", () => {
           },
         ],
         singles: [
-          // REFUSED: live `active` is text, the config declares a checkbox.
-          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // REFUSED: live `active` allows no value, the config makes it required.
+          {
+            slug: "settings",
+            fields: [{ name: "active", type: "text", required: true }],
+          },
         ],
       },
     });
@@ -1670,7 +1688,7 @@ describe("reloadNextlyConfig", () => {
     expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
   });
 
-  it("skips a column type change and logs a warning", async () => {
+  it("passes a column type change through to the pipeline, which judges it by its values", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
@@ -1695,11 +1713,255 @@ describe("reloadNextlyConfig", () => {
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
+    // The pipeline judges the change as db:sync does, refusing what would lose or cut a value; the
+    // reload holds nothing back for review on its own.
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(
+      warnSpy.mock.calls
+        .map(c => String(c[0]))
+        .find(s => s.includes("needs review"))
+    ).toBeUndefined();
+  });
+
+  it("applies nothing, and says why, where the type-change judgement cannot read the rows", async () => {
+    heldBackSpy.mockRejectedValueOnce(new Error("connection lost"));
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      liveSnapshot("dc_posts", [
+        ...reservedColumns("dc_posts"),
+        { name: "active", type: "text", nullable: true },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await expect(
+      reloadNextlyConfig({ resolver: buildResolver() })
+    ).resolves.not.toThrow();
+
     expect(pipelineApplySpy).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalled();
-    const warningArg = warnSpy.mock.calls[0]?.[0] as string;
-    expect(warningArg).toContain("active");
-    expect(warningArg).toContain("type");
+    expect(
+      errorSpy.mock.calls
+        .map(c => String(c[0]))
+        .find(line =>
+          line.includes(
+            "Could not judge the type changes against the stored values: connection lost"
+          )
+        )
+    ).toBeDefined();
+  });
+
+  it("keeps a held collection's recording policy, giving it no curated event its new config names", async () => {
+    const { resetWebhookRecordingPolicy, getWebhookEmitSpec } = await import(
+      "../../domains/webhooks/recording-policy"
+    );
+    resetWebhookRecordingPolicy();
+    heldBackSpy.mockResolvedValueOnce([
+      { kind: "collection", slug: "posts", reasons: ["held."] },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "active", type: "checkbox" }],
+            webhooks: {
+              record: false,
+              emit: { event: "form.submission.created", fields: ["active"] },
+            },
+          },
+          // APPLIED: additive, so the reload reaches the post-DDL republish.
+          {
+            slug: "notes",
+            tableName: "dc_notes",
+            fields: [{ name: "body", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_posts",
+          columns: [
+            ...reservedColumns("dc_posts"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "dc_notes", columns: reservedColumns("dc_notes") },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(getWebhookEmitSpec("collection", "posts")).toBeUndefined();
+    resetWebhookRecordingPolicy();
+  });
+
+  it("keeps a held single's prior default snapshot", async () => {
+    heldBackSpy.mockResolvedValueOnce([
+      { kind: "single", slug: "settings", reasons: ["held."] },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        singles: [
+          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // APPLIED: additive, so the reload reaches the post-DDL commit.
+          { slug: "theme", fields: [{ name: "accent", type: "text" }] },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "single_settings",
+          columns: [
+            ...reservedColumns("single_settings"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "single_theme", columns: reservedColumns("single_theme") },
+      ])
+    );
+
+    const resolver = buildResolver({
+      singleSyncResult: { created: [], updated: ["theme"], unchanged: [] },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    const [, options] = resolver.setCodeFirstSinglesSpy.mock.calls.at(-1) as [
+      unknown,
+      { keepPriorFor?: ReadonlySet<string> },
+    ];
+    expect(options.keepPriorFor?.has("settings")).toBe(true);
+  });
+
+  it("refuses a start whose held collection's row it cannot write back, keeping what the start found", async () => {
+    const { holdRecordedAtStart, takeRecordedAtStart } = await import(
+      "../../domains/schema/pipeline/recorded-fields"
+    );
+    takeRecordedAtStart();
+    // The rows the start read before its registry sync replaced them.
+    const startRows = {
+      collections: [
+        { slug: "posts", fields: [{ name: "active", type: "text" }] },
+      ],
+      singles: [],
+      components: [],
+    };
+    holdRecordedAtStart(startRows);
+    heldBackSpy.mockResolvedValueOnce([
+      { kind: "collection", slug: "posts", reasons: ["held."] },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+          // Another collection's change, which the apply would otherwise run.
+          {
+            slug: "notes",
+            tableName: "dc_notes",
+            fields: [{ name: "body", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_posts",
+          columns: [
+            ...reservedColumns("dc_posts"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "dc_notes", columns: reservedColumns("dc_notes") },
+      ])
+    );
+    // The write back of `posts`' row is reported as not written.
+    const resolver = buildResolver({
+      collectionSyncResult: {
+        created: [],
+        updated: [],
+        unchanged: [],
+        errors: [{ slug: "posts", error: "write failed" }],
+      },
+    });
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver, atStart: true });
+
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(
+      errorSpy.mock.calls
+        .map(c => String(c[0]))
+        .find(line =>
+          line.includes("Could not keep the registry row of collection 'posts'")
+        )
+    ).toBeDefined();
+    // What the start found is held again, for the next reload to judge from.
+    expect(takeRecordedAtStart()).toEqual(startRows);
+  });
+
+  it("holds back an entity whose type change the judgement holds back, saying why", async () => {
+    heldBackSpy.mockResolvedValueOnce([
+      {
+        kind: "collection",
+        slug: "posts",
+        reasons: ["dc_posts.active: why it waits."],
+      },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            // `checkbox` is the field type that classifies as a boolean
+            // column, which renders as the SQLite `integer` token and so
+            // differs from the live `text` -> change_column_type op.
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      liveSnapshot("dc_posts", [
+        ...reservedColumns("dc_posts"),
+        { name: "active", type: "text", nullable: true },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    // Its only change was held back, so nothing is applied, and the reload says why.
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls
+        .map(c => String(c[0]))
+        .find(s =>
+          s.includes("'posts' was not applied: dc_posts.active: why it waits.")
+        )
+    ).toBeDefined();
   });
 
   it("passes a 3-drop / 1-add asymmetric change through to the pipeline", async () => {
@@ -3557,12 +3819,12 @@ describe("reloadNextlyConfig", () => {
       const edited = vi.fn(() => undefined);
       const { reloadNextlyConfig } = await import("../reload-config");
 
-      // `dc_refused` has a live `text` column the config declares as a
-      // checkbox: a column type change the gate refuses rather than applies.
+      // `dc_refused` has a live column allowing no value that the config makes
+      // required: a NOT NULL addition the gate refuses rather than applies.
       const refusedCollection = {
         slug: "refused",
         tableName: "dc_refused",
-        fields: [{ name: "active", type: "checkbox" }],
+        fields: [{ name: "active", type: "text", required: true }],
       };
       // The edited collection gains a column, so its own diff is additive and
       // DOES apply -- without that this reload would never reach the post-DDL
@@ -3655,7 +3917,7 @@ describe("reloadNextlyConfig", () => {
       const refusedCollection = {
         slug: "refused",
         tableName: "dc_refused",
-        fields: [{ name: "active", type: "checkbox" }],
+        fields: [{ name: "active", type: "text", required: true }],
       };
       const appliedCollection = {
         slug: SLUG,

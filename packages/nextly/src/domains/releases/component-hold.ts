@@ -22,7 +22,6 @@ import type {
   MaterialisationAction,
   planReleaseMaterialisation,
 } from "./plan-release-materialisation";
-import { isDueAt } from "./release-due";
 import type { ReleaseRecheckDocument } from "./release-recheck";
 import {
   IDS_PER_LOOKUP,
@@ -153,7 +152,7 @@ export const COMPONENT_WALK_RELEASES = IDS_PER_LOOKUP;
 /** The reads a walk of shared documents makes, satisfied by `ReleasesRepository`. */
 export type ComponentReads = Pick<
   ReleasesRepository,
-  "scheduledMembersFor" | "listMembersOf"
+  "dueHoldersOf" | "listMembersOf"
 >;
 
 /**
@@ -305,7 +304,10 @@ async function walkRound(
   components: WalkedComponents,
   releases: Map<string, DueRelease>
 ): Promise<DrainMemberRow[]> {
-  const holding = await dueReleasesHolding(reads, frontier, now);
+  const { holding, overflow } = await dueReleasesHolding(reads, frontier, now);
+  // A document held by more due releases than one component may hold is past the bound
+  // whatever else its component holds; its holders were read no further.
+  for (const document of overflow) components.giveUp(walkKeyOf(document));
   // Joined to the documents it was found by, every release, a known one too: a release given
   // up on is never read in full, so its edge to a document reached again is how what it joins
   // learns it is past the bound. And joined before members are read, so a component past the
@@ -326,20 +328,30 @@ async function walkRound(
 }
 
 /**
- * The due releases holding these documents, each with the members naming them: one round of a
- * walk's reads of releases.
+ * The due releases holding these documents, each with the members naming them, and the
+ * documents held by more due releases than one component may hold: one round of a walk's reads
+ * of releases, read no further than the bound plus one for any one document
+ * (`ReleasesRepository.dueHoldersOf`).
  */
 async function dueReleasesHolding(
   reads: ComponentReads,
   documents: readonly ReleaseRecheckDocument[],
   now: Date
-): Promise<
-  { release: DueRelease; naming: readonly ReleaseRecheckDocument[] }[]
-> {
-  return (await reads.scheduledMembersFor({ documents })).flatMap(
-    ({ release, members }) =>
-      release.scheduledAt !== null && isDueAt(release.scheduledAt, now)
-        ? [
+): Promise<{
+  holding: { release: DueRelease; naming: readonly ReleaseRecheckDocument[] }[];
+  overflow: readonly ReleaseRecheckDocument[];
+}> {
+  const { holding, overflow } = await reads.dueHoldersOf(
+    documents,
+    now,
+    COMPONENT_WALK_RELEASES
+  );
+  return {
+    // Due by the repository's answer; a due release always carries its instant.
+    holding: holding.flatMap(({ release, members }) =>
+      release.scheduledAt === null
+        ? []
+        : [
             {
               release: {
                 id: release.id,
@@ -349,6 +361,7 @@ async function dueReleasesHolding(
               naming: members,
             },
           ]
-        : []
-  );
+    ),
+    overflow,
+  };
 }

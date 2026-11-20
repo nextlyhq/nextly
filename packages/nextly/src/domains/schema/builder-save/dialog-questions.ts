@@ -14,10 +14,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { isFieldLocalized } from "../../i18n/classify-fields";
 import { appLocalization } from "../../i18n/configured-locales";
-import { offeredCompanionRename } from "../../i18n/migration/companion-rename";
-import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { previewDesiredSchema } from "../pipeline/preview";
 import {
   BrowserPromptDispatcher,
@@ -37,11 +34,11 @@ import {
   toSnakeCase,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
-import { rowFieldDiff } from "../services/field-diff";
+import { relationshipsDroppingLinks } from "../services/field-storage-moves";
 import {
-  fieldsLosingTheirColumn,
-  relationshipsDroppingLinks,
-} from "../services/field-storage-moves";
+  fieldsDroppedFromRow,
+  unconfirmedTranslatedDrops,
+} from "../services/translated-drops";
 
 /**
  * Refuse a dialog save whose request leaves a question the push asks unanswered, judged by the
@@ -85,66 +82,41 @@ export async function refuseUnansweredDialogQuestions(args: {
     dialect: args.dialect,
     defaultLocale: appLocalization()?.defaultLocale ?? "en",
   });
-  const candidates = preview.candidates.filter(
-    candidate => candidate.tableName === args.tableName
-  );
-  // The drops the request answers for are those of the fields the change removes, as the dialog
-  // lists them for the person to confirm (`rowFieldDiff`), a field inside a group with no name
-  // included, and those of the fields it keeps by name that lose their column on the row
-  // (`fieldsLosingTheirColumn`).
-  const wasStored = storesPerLanguage({ localized: args.wasLocalized });
-  const removedFields = rowFieldDiff(args.oldFields, args.newFields, {
-    localized: wasStored,
-    newLocalized: storesPerLanguage({ localized: args.isLocalized }),
-  }).removed;
-  const losingColumn = fieldsLosingTheirColumn(args.oldFields, args.newFields, {
-    dialect: args.dialect,
-    builtBy: args.builtBy,
-  });
-  // A column a move carries into a group is not a drop: the save's file copies its values before
-  // the column goes, so it is asked nothing (`moved`, from the save's planned moves).
+  // A column a move carries into a group is not a drop, nor a rename's source: the save's file
+  // copies its values before the column goes, so it is asked nothing (`moved`, from the save's
+  // planned moves).
   const moved = new Set(args.moved ?? []);
+  const candidates = preview.candidates.filter(
+    candidate =>
+      candidate.tableName === args.tableName && !moved.has(candidate.fromColumn)
+  );
+  // The drops the request answers for are those of the fields the change removes or keeps by name
+  // without their column on the row (`fieldsDroppedFromRow`).
+  const save = {
+    tableName: args.tableName,
+    builtBy: args.builtBy,
+    dialect: args.dialect,
+    oldFields: args.oldFields,
+    newFields: args.newFields,
+    wasLocalized: args.wasLocalized,
+    isLocalized: args.isLocalized,
+  };
   const removed = new Set(
-    [...removedFields, ...losingColumn]
+    fieldsDroppedFromRow(save)
       .map(field => toSnakeCase(field.name))
       .filter(column => !moved.has(column))
   );
-  // A removed field kept per language, or one kept by name that loses its column, has its values
-  // in the translations table, which the preview does not read: its drop is confirmed by the
-  // field's name, as the dialog sends it, or
-  // answered as the rename the dialog offered for it on the translations table
-  // (`offeredCompanionRename`, the one offer the preview shows and the apply takes back), `rename`
-  // keeping its values and `drop_and_add` the consent to lose them. A resolution naming any other
-  // pair answers nothing. Unanswered, the file would drop every language's values with nobody
-  // asked.
-  // Asked of where the values are stored, as the apply's `resolveCompanionRename` is: under
-  // per-language storage an untranslated entity keeps them in the translations table too.
-  const offered = await offeredCompanionRename({
-    tableName: args.tableName,
-    oldFields: args.oldFields,
-    newFields: args.newFields,
-    wasLocalized: wasStored,
-    isLocalized: storesPerLanguage({ localized: args.isLocalized }),
-    dialect: args.dialect,
-    builtBy: args.builtBy,
+  // A translated field's values in the translations table, which the preview does not read, are
+  // confirmed by the field's name or answered as the companion rename offered for it
+  // (`unconfirmedTranslatedDrops`). Unanswered, the save would drop every language's values with
+  // nobody asked.
+  const unconfirmedTranslated = await unconfirmedTranslatedDrops({
+    ...save,
+    renameResolutions: args.renameResolutions,
+    ...(args.legacy === undefined ? {} : { legacy: args.legacy }),
   });
-  const answeredAsOffered = (column: string) =>
-    offered !== undefined &&
-    offered.candidate.fromColumn === column &&
-    args.renameResolutions.some(
-      resolution =>
-        resolution.tableName === offered.candidate.tableName &&
-        resolution.fromColumn === offered.candidate.fromColumn &&
-        resolution.toColumn === offered.candidate.toColumn
-    );
   const confirmedByName = (field: FieldDefinition) =>
     args.legacy?.byFieldName[field.name]?.action === "confirm_drop";
-  const unconfirmedTranslated = [...removedFields, ...losingColumn].filter(
-    field =>
-      isFieldLocalized(field, wasStored) &&
-      !answeredAsOffered(toSnakeCase(field.name)) &&
-      !confirmedByName(field)
-  );
   // A relationship whose links go with a link table, removed or kept by name with its links moving
   // into, out of or to another link table, takes every link with it, which the preview, reading
   // the entity's own columns, does not ask about: its drop is confirmed by the field's name, as the

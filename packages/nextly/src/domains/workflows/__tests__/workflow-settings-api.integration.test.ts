@@ -50,6 +50,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildClaims } from "../../../auth/jwt/claims";
+import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import {
   getConfiguredTestDialects,
@@ -255,6 +256,13 @@ const everywhere = (action: string) =>
   EDITORIAL.map(slug => [action, slug] as const);
 
 /** Sam administers settings and roles; nothing else. */
+/**
+ * The prefix of the tables this file's collections own, so no other file sharing their slugs
+ * shares a table: short and fixed, as the other workflow suites' are, since the schema derives
+ * longer names from it.
+ */
+const TABLE_PREFIX = "wsa_";
+
 const SAM = "sam";
 
 async function admin(): Promise<void> {
@@ -341,7 +349,9 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     describe.each([REST, DIRECT])("through $name", door => {
       it("lists the registered workflows with the collections and Singles each is attached to", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
 
         const listed = await door.list(SAM);
@@ -366,7 +376,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("reads back each setting it saves, and records the change in the activity log", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         await person(app(), "rita", everywhere("sign-off"));
 
@@ -437,7 +449,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("answers a label that reads like a date exactly as it was saved, which is configuration", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         // A date with no offset: a date rewritten for the reader comes back as UTC, with one.
         const label = "2026-11-17T09:00:00";
@@ -453,7 +467,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("says where each workflow is registered, relative to the project root, and none outside it", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         const root = process.cwd();
         // Registered as a boot registers a configuration found at these paths.
@@ -483,7 +499,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("lists what the diagram draws: each step's permission and comment rule, each stage's primary step, and where edits and publishes lead", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
 
         const listed = await door.list(SAM);
@@ -552,7 +570,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("counts the documents recorded in each stage, each once, a part in a stage the workflow lacks in the first", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         const desk = workflowDefinitionHash(editorial);
         const seed = (
@@ -604,7 +624,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("counts every workflow's stages in reads that do not grow with its stages: one grouped read, and one of each first stage", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         // On the adapter's class, so the REST door's adapter and the Direct API's are both seen.
         const counts = vi.spyOn(Object.getPrototypeOf(app().adapter), "count");
@@ -622,8 +644,58 @@ describe.each(getConfiguredTestDialects())(
         }
       });
 
+      it("reads every workflow's stage counts in statements that do not grow with its stages", async () => {
+        // Measured at the driver, so any read of the review states counts, whatever layer sends
+        // it: the same workflows with three more stages must cost the same statements.
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
+        await admin();
+        const reviewReads = async () =>
+          (await statementsOf(dialect, () => door.list(SAM))).filter(
+            statement =>
+              /^\s*select/i.test(statement) &&
+              statement.includes("nextly_review_states")
+          ).length;
+        const before = await reviewReads();
+        const registered = publishedWorkflows();
+        const previous = publishWorkflows(
+          new Map(
+            [...registered].map(([slug, entry]) => {
+              const [, model] = entry.workflow.stages;
+              if (slug !== "editorial" || model === undefined) {
+                return [slug, entry];
+              }
+              const more = ["extra-a", "extra-b", "extra-c"].map(name => ({
+                ...model,
+                name,
+              }));
+              return [
+                slug,
+                {
+                  ...entry,
+                  workflow: {
+                    ...entry.workflow,
+                    stages: [...entry.workflow.stages, ...more],
+                  },
+                },
+              ];
+            })
+          )
+        );
+        try {
+          const after = await reviewReads();
+          expect(before).toBeGreaterThan(0);
+          expect(after).toBe(before);
+        } finally {
+          publishWorkflows(previous);
+        }
+      });
+
       it("says whether each default reviewer still holds the stage's primary step, a person or a role", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         await person(app(), "rita", everywhere("sign-off"));
         // A role needs a permission to exist; reading posts gives it nothing a review needs.
@@ -674,7 +746,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("lists whom each review stage's default reviewer may be chosen from: roles holding its primary step everywhere, granted, inherited or super-admin", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         const approvers = await role(
           app(),
@@ -721,7 +795,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("never offers or accepts the Public role as a default reviewer, even holding the step everywhere", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         // The role every visitor is judged by, as boot makes it.
         const { id: visitors } = await new RoleMutationService(
@@ -770,7 +846,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("lists each stage as Settings shows it: its label and colour, else the code's label and none", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         await door.update(SAM, "editorial", {
           revision: 0,
@@ -799,7 +877,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("refuses a default reviewer who cannot take the stage's primary step on every attached collection and Single", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         // Holds the legal check's primary step (sign-off) on Pages, and on nothing else.
         await person(app(), "kim", [["sign-off", "pages"]]);
@@ -849,7 +929,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("refuses a change to the definition, whatever part it names", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
 
         const writes: Doc[] = [
@@ -890,7 +972,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("refuses a write over a revision that is no longer the stored one", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         await door.update(SAM, "editorial", {
           revision: 0,
@@ -912,7 +996,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("sets which roles hold a step's permission on every attached collection and Single, and records it", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         const desk = await role(app(), "legal-desk", [["read", "pages"]]);
         // Holds sign-off directly on Pages: not named, so it is taken away.
@@ -974,7 +1060,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("refuses a caller without the settings permissions, and grants to one who may not update roles", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await person(app(), "alice", [
           ["read", "pages"],
           ["update", "pages"],
@@ -1012,7 +1100,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("says which steps share a permission, and refuses them different roles", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         const desk = await role(app(), "legal-desk", [["read", "pages"]]);
         const other = await role(app(), "other-desk", [["read", "pages"]]);
@@ -1043,7 +1133,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("accepts a default reviewer who holds the stage's step through the grants written with it", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         const desk = await role(app(), "legal-desk", [["read", "pages"]]);
         // Nina's one role is the desk, which holds no sign-off until this write.
@@ -1078,7 +1170,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("writes no grant when the default reviewer written with it is refused", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         const desk = await role(app(), "legal-desk", [["read", "pages"]]);
         // Holds sign-off on Pages alone, through a role the grants leave out.
@@ -1116,7 +1210,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("files the change with the settings changes, which a reader of settings sees in the activity feed", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
         await person(app(), "rhea", [["read", "settings"]]);
         await person(app(), "alice", [
@@ -1138,7 +1234,9 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("answers a workflow no one registered as not found", async () => {
-        current = await bootSteps(dialect);
+        current = await bootSteps(dialect, undefined, {
+          tablePrefix: TABLE_PREFIX,
+        });
         await admin();
 
         expect(await refusalOf(() => door.read(SAM, "nope"))).toMatchObject({
@@ -1149,7 +1247,9 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("keeps both of two workflows' grants made to one role at the same time", async () => {
-      current = await bootSteps(dialect);
+      current = await bootSteps(dialect, undefined, {
+        tablePrefix: TABLE_PREFIX,
+      });
       const desk = await role(app(), "desk", [["read", "pages"]]);
       // The first update is held after it has read the role's grants and before it writes them,
       // while the second runs: an update that read the grants before locking the role writes back
