@@ -146,6 +146,12 @@ import {
   type AppStreamSnapshots,
   type AppStreamTables,
 } from "./app-stream";
+import {
+  NO_CODE_MOVES,
+  planCodeMoves,
+  withoutMovedColumns,
+  type CodeMovesPlan,
+} from "./code-moves";
 import { withCyclicForeignKeysSplit } from "./cyclic-foreign-keys";
 import {
   describePermissionChange,
@@ -452,6 +458,14 @@ export interface GenerateArgs {
     surface: TranslationSurface;
     retries: JoinRetries;
   };
+  /**
+   * `migrate:create`: look for fields moved into or out of a group since the latest snapshot's
+   * record of each declaration, ask about each (`planCodeMoves`), and carry the accepted ones'
+   * values in the file. Without a terminal, `acceptAll` (`--accept-moves`) answers every one;
+   * otherwise each is declined. Absent (a Schema Builder save, which is told its moves and hands
+   * their statements in as `appendedStatements`), none are looked for.
+   */
+  codeMoves?: { acceptAll: boolean };
   /** Skip interactive prompts (non-TTY / CI). */
   nonInteractive?: boolean;
   /** Only meaningful with nonInteractive=true. Default = decline. */
@@ -883,7 +897,8 @@ export async function generateMigration(
 
   // Taken once, here, so the table diff and every companion planner below
   // see the same fields (`withKeptScopeFieldsOf`).
-  const args = withKeptScopeFieldsOf(scoped, previous?.data.snapshot);
+  // Reassigned once below, where the moves made in code join the ones the caller gave.
+  let args = withKeptScopeFieldsOf(scoped, previous?.data.snapshot);
 
   // 2. Build desired snapshot from config. Localized collections omit their
   //    translatable columns here (they live in the companion `_locales` table).
@@ -982,6 +997,17 @@ export async function generateMigration(
   //     (create + seed + drop). Strip those drops so we don't drop twice.
   operations = stripRelocatedDrops(operations, companionPlans);
   refuseTurnOffBesideOtherChanges(operations, companionPlans);
+
+  // 3a'. Fields moved into or out of a group in code. The diff reads each as a delete and an add;
+  //      an accepted one is carried as the Schema Builder carries a move, its values copied to the
+  //      new place first, and from here on is a move as one the caller gave would be.
+  const codeMoves = await movesMadeInCode(args, {
+    entities,
+    previous: previous?.data.entities,
+    previousSnapshot,
+    operations,
+  });
+  args = withCodeMoves(args, codeMoves);
 
   // 3b. Fields that stop being translated while their entity stays translated. The diff above gives
   //     the main table their columns; these files move the values around that migration.
@@ -1092,9 +1118,10 @@ export async function generateMigration(
     const detector = new RegexRenameDetector();
     // A joining field's main column goes to the companion, not to another main column, so its
     // drop is no rename source.
+    // A moved column's values travel with its move, so it is no rename source or target either.
     const candidates = detector.detect(
       operationsToJudge(
-        operations,
+        withoutMovedColumns(operations, codeMoves),
         fieldJoinsPlans.flatMap(({ plan }) =>
           plan.spec.columns.map(column => ({
             tableName: plan.spec.mainTable,
@@ -3310,6 +3337,77 @@ function requiredAgain(
     return sqliteTableRebuildStatements(prevMain, ops);
   }
   return generateStatements(ops, dialect, previousSnapshot.tables);
+}
+
+/**
+ * The moves made in code since the latest snapshot, asked about and planned (`planCodeMoves`), for
+ * a run that looks for them (`codeMoves`); none for any other.
+ */
+async function movesMadeInCode(
+  args: GenerateArgs,
+  run: {
+    entities: readonly TaggedConfigEntity[];
+    previous: EntitySettingsRecord | undefined;
+    previousSnapshot: NextlySchemaSnapshot;
+    operations: readonly Operation[];
+  }
+): Promise<CodeMovesPlan> {
+  const asked = args.codeMoves;
+  if (asked === undefined) return NO_CODE_MOVES;
+  return planCodeMoves({
+    entities: run.entities,
+    previous: run.previous,
+    previousTables: new Set(run.previousSnapshot.tables.map(t => t.name)),
+    operations: run.operations,
+    dialect: args.dialect,
+    originOf: columnOriginOf,
+    // Loaded only when there is something to ask, as the rename question is.
+    decide: async candidates => {
+      const { promptMoves } = await import("./prompt-moves");
+      return promptMoves(candidates, {
+        nonInteractive: args.nonInteractive,
+        autoAccept: asked.acceptAll,
+      });
+    },
+    interactive: args.nonInteractive !== true,
+    warn: args.onWarning ?? (() => {}),
+  });
+}
+
+/** `args` with the moves made in code beside the ones its caller gave, where there are any. */
+function withCodeMoves(args: GenerateArgs, moves: CodeMovesPlan): GenerateArgs {
+  const { up, down } = moves.appended;
+  const statements =
+    up.first.length + up.last.length + down.first.length + down.last.length;
+  if (
+    statements === 0 &&
+    moves.valueMoves.length === 0 &&
+    moves.refilledColumns.length === 0
+  ) {
+    return args;
+  }
+  const given = args.appendedStatements;
+  // The caller's statements keep their place around the moves': first ones first, last ones last.
+  const joined = (
+    mine: AddedStatements,
+    theirs: AddedStatements | undefined
+  ) => ({
+    first: [...(theirs?.first ?? []), ...mine.first],
+    last: [...mine.last, ...(theirs?.last ?? [])],
+  });
+  return {
+    ...args,
+    appendedStatements: {
+      up: joined(up, given?.up),
+      down: joined(down, given?.down),
+    },
+    valueMoves: [...(args.valueMoves ?? []), ...moves.valueMoves],
+    refilledColumns: [
+      ...(args.refilledColumns ?? []),
+      ...moves.refilledColumns,
+    ],
+    valuesMovedIn: [...(args.valuesMovedIn ?? []), ...moves.valuesMovedIn],
+  };
 }
 
 /** The tables whose values the caller's appended statements move (`valuesMovedIn`). */

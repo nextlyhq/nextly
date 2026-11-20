@@ -183,6 +183,15 @@ export interface MigrateCreateCommandOptions {
   acceptRenames?: boolean;
 
   /**
+   * Only meaningful when the run cannot prompt (`canPrompt`), where a field that looks moved into
+   * or out of a group is otherwise declined: deleted at its old place and added empty at its new
+   * one. Carries every such field as a move, its values copied to the new place first. The column
+   * a move drops still needs the data-loss consent, as every drop does.
+   * @default false
+   */
+  acceptMoves?: boolean;
+
+  /**
    * Generate a PLUGIN's migration module instead of the app's `.sql` file.
    * Path to the plugin's entry file (e.g. `./src/index.ts`); the module and
    * its `index.ts` barrel are written beside it under `src/migrations/`.
@@ -738,6 +747,13 @@ export async function runMigrateCreate(
           "Pass --non-interactive to use it (typically only for CI)."
       );
     }
+    // The same for moves: at a terminal, each one is asked about.
+    if (options.acceptMoves === true && !nonInteractive) {
+      logger.warn(
+        "--accept-moves has no effect in interactive mode: each possible move is asked about. " +
+          "Pass --non-interactive to use it (typically only for CI)."
+      );
+    }
 
     // The inputs every app migration is generated from, read and checked as
     // the server reads them for a Schema Builder save (`appMigrationInputs`).
@@ -838,6 +854,8 @@ export async function runMigrateCreate(
         permissions,
         nonInteractive,
         autoAcceptRenames: options.acceptRenames === true,
+        // Fields moved into or out of a group are looked for, and asked about as renames are.
+        codeMoves: { acceptAll: options.acceptMoves === true },
         recordSnapshot: options.recordSnapshot === true,
         liveCompanionColumns: live.read,
         dryRun: options.dryRun === true,

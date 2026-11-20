@@ -27,6 +27,12 @@ export function registerMigrateCreateCommand(program: Command): void {
       "ADVANCED: auto-accept all rename candidates in non-interactive mode, a renamed field group's (its rows move to the new name) included",
       false
     )
+    // Asked at a terminal like a rename; without one, declined unless this accepts every one.
+    .option(
+      "--accept-moves",
+      "With no terminal, carry every field that looks moved into or out of a group (same name and type) as a move, its values copied to the new place, instead of deleting it and adding it empty",
+      false
+    )
     .option(
       "--plugin <entry>",
       "Generate the PLUGIN's migration module (path to its entry, e.g. ./src/index.ts)"

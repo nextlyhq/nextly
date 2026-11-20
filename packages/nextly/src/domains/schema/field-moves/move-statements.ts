@@ -507,6 +507,45 @@ export function missingValuesStop(
   );
 }
 
+/** The table every entry's versions and working drafts are kept in. */
+const VERSIONS_TABLE = "nextly_versions";
+
+/**
+ * Statements that stop a run, before the file changes anything, where a working draft of
+ * `subject` holds a value at a moved field's old place (`from`): the move rewrites each entry's
+ * row, not a draft's snapshot, which keeps the field where it was, so publishing that draft would
+ * drop its pending change. The Schema Builder's save reads the database it writes from
+ * (`refuseMovesUnderWorkingDrafts`); a file written offline asks the database it runs on. The run
+ * stops on `publish_or_discard_drafts_of_<field>` in `nextly_drafted_<field>`, and goes ahead once
+ * those drafts are published or discarded. It fails closed: a versions table or column the
+ * statement cannot read is an error that stops the run as well.
+ */
+export function workingDraftsStop(
+  dialect: SupportedDialect,
+  subject: { kind: "collection" | "single"; slug: string },
+  from: readonly string[]
+): string[] {
+  const q = (name: string) => quoteIdent(name, dialect);
+  const literal = (text: string) => `'${safeLiteral(text)}'`;
+  const name = from.map(safeKey).join("_");
+  // A working draft as the versions repository finds one (`WORKING_DRAFT_SHAPE`): saved by hand,
+  // never numbered, still a draft.
+  const no = dialect === "postgresql" ? "false" : "0";
+  const working = [
+    `${q("scope_kind")} = ${literal(subject.kind)}`,
+    `${q("scope_slug")} = ${literal(subject.slug)}`,
+    `${q("is_autosave")} = ${no}`,
+    `${q("version_no")} IS NULL`,
+    `${q("status")} = 'draft'`,
+  ].join(" AND ");
+  return stopWhereNot(dialect, q(VERSIONS_TABLE), {
+    guard: `nextly_drafted_${name}`,
+    reason: `publish_or_discard_drafts_of_${name}`,
+    kept: `NOT (${holdsValueAt("snapshot", from, dialect)})`,
+    where: working,
+  });
+}
+
 /**
  * SQLite's rule for a date it keeps as the same instant: an ISO date, or one with a time and the
  * offset it was written at (a time with none is read at UTC here and in the server's zone by

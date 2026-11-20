@@ -16,6 +16,7 @@
  * Each run owns its database, reached by the commands through `DATABASE_URL` as an app's would: a
  * file on SQLite, a scratch database on the servers.
  */
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -169,9 +170,9 @@ async function exiting(fn: () => Promise<void>): Promise<number | undefined> {
 
 /**
  * `migrate:create` with `name` over the config `where` places `subtitle` in, non-interactively,
- * then `migrate`, each consenting to the drops it makes; what `migrate:create` said.
+ * consenting to the drops it makes; what it said.
  */
-async function createAndApply(
+async function createOnly(
   name: string,
   where: "row" | "grouped",
   options: { acceptMoves?: boolean } = {}
@@ -189,14 +190,49 @@ async function createAndApply(
     ),
     created.said.join("\n")
   ).toBeUndefined();
-  const applied = command();
-  expect(
-    await exiting(() =>
-      runMigrate({ cwd: dir, acceptDataLoss: true }, applied.context)
-    ),
-    applied.said.join("\n")
-  ).toBeUndefined();
   return created.said.join("\n");
+}
+
+/** `migrate`, non-interactively and consenting to the drops it makes: how it ended, what it said. */
+async function apply(): Promise<{ code: number | undefined; said: string }> {
+  setNonInteractive(true);
+  const applied = command();
+  // A failed run prints its error shape to standard error, not through the logger.
+  const printed = vi
+    .spyOn(process.stderr, "write")
+    .mockImplementation(chunk => {
+      applied.said.push(String(chunk));
+      return true;
+    });
+  const logged = vi.spyOn(console, "error").mockImplementation(message => {
+    applied.said.push(String(message));
+  });
+  let code: number | undefined;
+  try {
+    code = await exiting(() =>
+      runMigrate({ cwd: dir, acceptDataLoss: true }, applied.context)
+    );
+  } catch (error) {
+    // A statement that fails ends the run with its error rather than an exit code.
+    applied.said.push(String(error));
+    code = -1;
+  } finally {
+    printed.mockRestore();
+    logged.mockRestore();
+  }
+  return { code, said: applied.said.join("\n") };
+}
+
+/** `createOnly`, then `migrate`, which must apply the file; what `migrate:create` said. */
+async function createAndApply(
+  name: string,
+  where: "row" | "grouped",
+  options: { acceptMoves?: boolean } = {}
+): Promise<string> {
+  const said = await createOnly(name, where, options);
+  const applied = await apply();
+  expect(applied.code, applied.said).toBeUndefined();
+  return said;
 }
 
 /** The SQL file `migrate:create` wrote for `name`. */
@@ -287,6 +323,54 @@ describe.each(getConfiguredTestDialects())(
         row: "Kept subtitle",
         grouped: undefined,
       });
+    });
+
+    it("stops nextly migrate where a working draft holds the moved field at its old place, and goes ahead once it is gone", async () => {
+      const url = await openDatabase(dialect);
+      await start(dialect, url);
+      await createAndApply("create_posts", "row");
+      const id = await created(dialect, url, "row", {
+        title: "P",
+        subtitle: "Kept subtitle",
+        meta: { note: "N" },
+      });
+      // A pending edit of `subtitle` held as the entry's working draft, which the move rewrites no
+      // part of: publishing it after the move would drop the edit.
+      const app = await start(dialect, url, "row");
+      const now = new Date();
+      await app.adapter.insert("nextly_versions", {
+        id: randomUUID(),
+        scopeKind: "collection",
+        scopeSlug: "mf_posts",
+        entryId: id,
+        versionNo: null,
+        status: "draft",
+        isAutosave: false,
+        snapshot: { title: "P", subtitle: "Pending edit" },
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      await createOnly("move_subtitle_in", "grouped", { acceptMoves: true });
+      const stopped = await apply();
+      expect(stopped.code, stopped.said).not.toBeUndefined();
+      expect(stopped.said).toMatch(/publish_or_discard_drafts_of_subtitle/);
+      // Nothing moved: the value is still on the row, where the draft expects it.
+      expect(await subtitles(await start(dialect, url, "row"), id)).toEqual({
+        row: "Kept subtitle",
+        grouped: undefined,
+      });
+
+      // Once the draft is gone, the same file applies.
+      const again = await start(dialect, url, "row");
+      await again.adapter.delete("nextly_versions", {
+        and: [{ column: "entryId", op: "=", value: id }],
+      });
+      const applied = await apply();
+      expect(applied.code, applied.said).toBeUndefined();
+      expect(await subtitles(await start(dialect, url, "grouped"), id)).toEqual(
+        { row: undefined, grouped: "Kept subtitle" }
+      );
     });
 
     it("without --accept-moves and no terminal, makes no move and says which and how", async () => {
