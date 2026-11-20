@@ -628,6 +628,19 @@ describe.each(getConfiguredTestDialects())(
         .sort();
     }
 
+    /** The record that a save of the entity is in progress, as the database holds it. */
+    async function recordOf(
+      t: TestNextly,
+      path: SavePath
+    ): Promise<{ definitionAfter?: string; files?: string[] } | undefined> {
+      const entry = await new MetaService(t.adapter, consoleLogger).getEntry(
+        `builder-save-in-progress:${path.kind}:${path.slug}`
+      );
+      return entry.present
+        ? (entry.value as { definitionAfter?: string; files?: string[] })
+        : undefined;
+    }
+
     /** The field names the registry row records for the entity. */
     async function registryFields(
       t: TestNextly,
@@ -762,6 +775,67 @@ describe.each(getConfiguredTestDialects())(
       beforeEach(() => {
         vi.mocked(judgeStoppedSave).mockClear();
       });
+      // Settled to what applied, the save writes another definition than the one it set out to:
+      // its record says so first, so a process stopped after that write leaves a record a later
+      // settle judges against what is on disk, not the shape first asked for.
+      (keepsPartWay(dialect, path) && path.push !== true ? it : it.skip)(
+        "brings its record to the applied shape before the definition is written to it",
+        async () => {
+          const t = await boot();
+          await path.create(t, [text("heading")]);
+          const definitionFile = join(basePath, DEFINITION);
+          const onDisk = () =>
+            existsSync(definitionFile)
+              ? readFileSync(definitionFile, "utf8")
+              : null;
+          // Each change to the save's record, with the definition as it stood at that moment.
+          const amended: { definitionAfter?: string; then: string | null }[] =
+            [];
+          const compareAndSet = MetaService.prototype.compareAndSet;
+          vi.spyOn(MetaService.prototype, "compareAndSet").mockImplementation(
+            async function (
+              this: MetaService,
+              ...args: Parameters<MetaService["compareAndSet"]>
+            ) {
+              if (args[0].startsWith("builder-save-in-progress:")) {
+                amended.push({
+                  definitionAfter: (args[2] as { definitionAfter?: string })
+                    .definitionAfter,
+                  then: onDisk(),
+                });
+              }
+              return compareAndSet.apply(this, args);
+            }
+          );
+          const failed = failStatement(t, adding(path.table, "beta"));
+
+          const outcome = await outcomeOf(
+            path.save(t, [text("heading"), text("alpha"), text("beta")])
+          );
+
+          expect(failed(), "no statement adding `beta` was met").toBe(1);
+          expect(outcome.failed, "the save was reported as going through").toBe(
+            true
+          );
+          const settled = onDisk();
+          expect(definedFields(path), "the definition").toEqual([
+            "alpha",
+            "heading",
+          ]);
+          // The first change that gave the record the applied shape came before the definition held it.
+          const first = amended.find(a => a.definitionAfter === settled);
+          expect(
+            first,
+            "the record never held the applied shape"
+          ).toBeDefined();
+          expect(
+            first?.then,
+            "the record took it only once the definition was written"
+          ).not.toBe(settled);
+        },
+        300_000
+      );
+
       (keepsPartWay(dialect, path) ? it : it.skip)(
         "stopped at its second addition, keeps the first: one file for it, recorded applied, the definition and the registry at that shape",
         async () => {
@@ -1068,6 +1142,89 @@ describe.each(getConfiguredTestDialects())(
               f => f.endsWith(".sql") && !folderBefore.includes(f)
             );
             expect(sql, "the stopped save's file, put back").toHaveLength(1);
+            // And the record that the save is in progress describes it again: the shape the save
+            // asked for, not the applied one the settle took it to before it wrote.
+            expect(
+              (await recordOf(t, path))?.definitionAfter,
+              "the record's definition, put back"
+            ).toContain('"beta"');
+          } finally {
+            settleStall.at = undefined;
+            restoreBounds();
+          }
+        },
+        300_000
+      );
+
+      // Overtaken once its replacement's file is in place, the settle leaves the stopped file set
+      // aside for the stop to be settled again, and the record goes back to describing that stop.
+      it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
+        "overtaken once its replacement's file is in place, keeps the stop aside and puts the record back",
+        async () => {
+          const restoreBounds = setWriterHoldBounds({
+            waitMs: 30_000,
+            leaseSeconds: 1,
+            renewMs: 600_000,
+          });
+          try {
+            const t = await boot();
+            await path.create(t, [text("heading"), number("old_note")]);
+            await path.store?.(t, { heading: "Hello", old_note: 7 });
+            const folderBefore = filesBelow(history());
+            const failed = failStatement(t, adding(path.table, "beta"));
+            let overtaken = false;
+            // The definition's write once the statement has failed: the settle writes it after its
+            // replacement's files are in place.
+            settleStall.at = async path_ => {
+              if (overtaken || failed() === 0) return;
+              if (!path_.includes("builder.json") || !path_.endsWith(".tmp")) {
+                return;
+              }
+              overtaken = true;
+              await new Promise(resolve => setTimeout(resolve, 1_200));
+              const other = await acquireWriterHold({
+                migrationsDir: history(),
+                command: "migrate:create",
+                whenHeld: "wait",
+              });
+              await other.release();
+            };
+
+            const outcome = await outcomeOf(
+              path.save(
+                t,
+                [text("heading"), text("beta")],
+                notRenamed(path.table, "old_note", "beta")
+              )
+            );
+            settleStall.at = undefined;
+
+            expect(failed(), "no statement adding `beta` was met").toBe(1);
+            expect(overtaken, "the settle never stalled after its file").toBe(
+              true
+            );
+            expect(outcome.failed).toBe(true);
+            // The kept-aside answer, not the put-back one: the replacement was in place.
+            expect(
+              outcome.failed ? messageOf(outcome.error) : "",
+              "the stop kept set aside"
+            ).toMatch(/was kept, set aside/);
+            expect(
+              (await recordOf(t, path))?.definitionAfter,
+              "the record's definition, put back"
+            ).toContain('"beta"');
+            // Nor does it name the replacement left in the folder as the save's.
+            const replacement = filesBelow(history()).filter(
+              f => f.endsWith(".sql") && !folderBefore.includes(f)
+            );
+            expect(
+              replacement.length,
+              "the replacement left in place"
+            ).toBeGreaterThan(0);
+            expect(
+              (await recordOf(t, path))?.files ?? [],
+              "the record's files"
+            ).not.toEqual(expect.arrayContaining([replacement[0]]));
           } finally {
             settleStall.at = undefined;
             restoreBounds();

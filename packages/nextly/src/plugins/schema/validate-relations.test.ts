@@ -188,3 +188,72 @@ describe("validateCrossPluginRelations (D15 — cross-plugin dependsOn)", () => 
     expect(() => validateCrossPluginRelations([a, b])).not.toThrow();
   });
 });
+
+describe("collectUnresolvedRelationTargets, for a relationship inside another field", () => {
+  // A relationship nested in a group or a repeater is a relationship all the same.
+  it.each([
+    ["group", { name: "meta", type: "group" }],
+    ["repeater", { name: "items", type: "repeater" }],
+  ])("finds one nested in a %s", (_, container) => {
+    const config = {
+      collections: [
+        {
+          slug: "notes",
+          fields: [
+            {
+              ...container,
+              fields: [
+                { name: "matter", type: "relationship", relationTo: "cases" },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as NextlyServiceConfig;
+
+    expect(
+      collectUnresolvedRelationTargets(config).map(relation => relation.target)
+    ).toEqual(["cases"]);
+  });
+});
+
+describe("collectUnresolvedRelationTargets, for a field whose type holds no fields of the entity's", () => {
+  // A plugin may register a type of any other name with a `fields` option of its own: that is not
+  // a field list, and what it holds is not a relationship.
+  it("does not read a `fields` option of a type that is not a container", () => {
+    const config = {
+      collections: [
+        {
+          slug: "notes",
+          fields: [
+            {
+              name: "more",
+              type: "collapsible",
+              fields: [
+                { name: "matter", type: "relationship", relationTo: "cases" },
+              ],
+            },
+          ],
+        },
+      ],
+    } as unknown as NextlyServiceConfig;
+
+    expect(collectUnresolvedRelationTargets(config)).toEqual([]);
+  });
+});
+
+describe("collectUnresolvedRelationTargets, for a container whose fields are not a list", () => {
+  // The configuration's rules report that shape; collecting relationships leaves it to them.
+  it("collects nothing from it, and does not throw", () => {
+    const config = {
+      collections: [
+        {
+          slug: "notes",
+          fields: [{ name: "meta", type: "group", fields: 5 }],
+        },
+      ],
+    } as unknown as NextlyServiceConfig;
+
+    expect(collectUnresolvedRelationTargets(config)).toEqual([]);
+  });
+});

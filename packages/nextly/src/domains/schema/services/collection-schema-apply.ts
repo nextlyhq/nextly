@@ -105,6 +105,7 @@ import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-rec
 import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
 import {
   entityLabel,
+  perLanguageAfter,
   perLanguageBefore,
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
@@ -1090,6 +1091,7 @@ async function checkCollectionTranslationChange(
       table: tableName,
       translationsTable: `${tableName}_locales`,
       ...perLanguageBefore({ localized: wasLocalized }, tableName, oldFields),
+      ...perLanguageAfter({ localized: isLocalized }, fields),
       previous: fieldsStoredOnRow(oldFields).filter(
         field => field.name === companionRename.from
       ),

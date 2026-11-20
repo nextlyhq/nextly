@@ -180,6 +180,9 @@ export function LinkDialog({
           className="grid gap-3"
           onSubmit={event => {
             event.preventDefault();
+            // A dialog is drawn outside the workbench but sits inside its form in
+            // React, where this submit would bubble on and save the whole email.
+            event.stopPropagation();
             if (!next) return;
             onSave(next);
             close();

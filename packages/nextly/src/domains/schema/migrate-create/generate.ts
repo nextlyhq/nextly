@@ -385,6 +385,24 @@ export interface GenerateArgs {
     down: AddedStatements;
   };
   /**
+   * Columns the file drops whose values its appended statements copied elsewhere first (a field
+   * moved into a group). Judged as deletions, as `nextly migrate` judges the file, with the
+   * reason that says they are moves.
+   */
+  valueMoves?: readonly { table: string; column: string; reason: string }[];
+  /**
+   * Columns the file adds whose values its appended statements bring last (a field moved out of a
+   * group): added without NOT NULL, and made required, as the newest snapshot has them, once the
+   * values are in.
+   */
+  refilledColumns?: readonly { table: string; column: string }[];
+  /**
+   * The tables whose values the appended statements move between places (a field moved into, out
+   * of or between groups): a change of those tables, named in the file's header with their
+   * registry rows, though no operation may name them.
+   */
+  valuesMovedIn?: readonly string[];
+  /**
    * Foreign keys a table this file creates is declared with, by table: a
    * Schema Builder collection's relationship keys, which the column mapping
    * does not describe. Rendered into the table's CREATE, as the Builder
@@ -1029,9 +1047,11 @@ export async function generateMigration(
       latest: previous === null ? null : previous.data.permissions,
       ...permissionScopeOf(args),
     });
-  // What a run writes a file for even when no table changes.
+  // What a run writes a file for even when no table changes. A move of values is a change of its
+  // own though no table's shape changes with it: a field's values moved between two groups,
+  // whose columns both stand.
   const changesBeyondTables =
-    hasSettingsChanges || changedPermissions.length > 0;
+    hasSettingsChanges || changedPermissions.length > 0 || movesValues(args);
 
   const recorded = await recordedUnlessChanged(args, {
     // Not the per-language unique indexes: a snapshot from before the record has none of them, so
@@ -1124,6 +1144,8 @@ export async function generateMigration(
   //     copies the default language's values in. That file applies the settings after the copy.
   const heldSettings = fieldLeavesPlans.map(({ held }) => held);
   operations = withSettingsHeldBack(operations, heldSettings);
+  // A column a move fills from its group is added nullable; it is made required after the fill.
+  operations = restoredNullable(operations, args.refilledColumns);
 
   // 7. Generate UP SQL per op, a foreign-key cycle's keys split out of the
   // table operations that cannot carry them (see `withCyclicForeignKeysSplit`),
@@ -1174,7 +1196,7 @@ export async function generateMigration(
   const inverseOps = withCyclicForeignKeysSplit(
     restoredNullable(
       buildInverseOperations(operations, previousSnapshot),
-      fieldJoinsPlans
+      refilledOnTheWayDown(fieldJoinsPlans, args.valueMoves)
     ),
     args.dialect,
     desiredSnapshot.tables
@@ -1211,6 +1233,9 @@ export async function generateMigration(
   //     is where a Builder entity's settings live, so it travels with them.
   const touched = new Set([
     ...operations.map(operationTableName),
+    // A table whose values the appended statements move, though no operation may name it: a
+    // field's values moved between two of its groups.
+    ...valuesMovedIn(args),
     // A renamed field group's parent changes with it, though no statement names that table.
     ...groupRenames.parentTables,
   ]);
@@ -1220,8 +1245,6 @@ export async function generateMigration(
     args,
     args.dialect
   );
-  sqlStatements.push(...rows.up);
-  downSqlStatements.push(...rows.down);
   const added = args.appendedStatements;
   if (added !== undefined) {
     sqlStatements.unshift(...added.up.first);
@@ -1229,6 +1252,20 @@ export async function generateMigration(
     downSqlStatements.unshift(...added.down.first);
     downSqlStatements.push(...added.down.last);
   }
+  // A column whose field moved into a group comes back nullable on the way down, its values
+  // copied back from the group last: it is made required again once they are in.
+  downSqlStatements.push(
+    ...requiredOnceRefilled(args.valueMoves, args.dialect, previousSnapshot)
+  );
+  // Each column a move out of a group added is made required once the group's values are in.
+  sqlStatements.push(
+    ...requiredOnceRefilled(args.refilledColumns, args.dialect, desiredSnapshot)
+  );
+  // The registry rows come once every value is where the new definition reads it: on MySQL,
+  // where each statement stands as it runs, a run stopped before them keeps the definition that
+  // still reads the values where they are.
+  sqlStatements.push(...rows.up);
+  downSqlStatements.push(...rows.down);
 
   // 7c. A translated relation whose shape changed keeps its values on the entity's companion,
   //     which the diff above does not reach: its guards lead the file, before any DDL, and its
@@ -1454,6 +1491,7 @@ export async function generateMigration(
         previous === null ? undefined : previous.data.entities
       ),
       translationMoves: [
+        ...(args.valueMoves ?? []),
         ...companionPlans.flatMap(({ plan: { kind, spec } }) =>
           kind === "enable"
             ? spec.columns.map(column => ({
@@ -3177,7 +3215,7 @@ function planFieldsJoiningTranslation(
               ?.companion === true,
           restoreRequired: requiredAgain(
             c.tableName,
-            joining,
+            joining.map(({ column }) => column.name),
             prevMain,
             dialect,
             previousSnapshot
@@ -3196,13 +3234,13 @@ function planFieldsJoiningTranslation(
  */
 function requiredAgain(
   tableName: string,
-  joining: readonly LeavingField[],
+  columns: readonly string[],
   prevMain: TableSpec | undefined,
   dialect: SupportedDialect,
   previousSnapshot: NextlySchemaSnapshot
 ): string[] {
-  const ops: Operation[] = joining.flatMap(({ column }) => {
-    const before = prevMain?.columns.find(c => c.name === column.name);
+  const ops: Operation[] = columns.flatMap(name => {
+    const before = prevMain?.columns.find(c => c.name === name);
     if (!before || before.nullable) return [];
     return [
       dialect === "mysql"
@@ -3236,27 +3274,77 @@ function requiredAgain(
   return generateStatements(ops, dialect, previousSnapshot.tables);
 }
 
+/** The tables whose values the caller's appended statements move (`valuesMovedIn`). */
+function valuesMovedIn(
+  args: Pick<GenerateArgs, "valuesMovedIn">
+): readonly string[] {
+  return args.valuesMovedIn ?? [];
+}
+
+/** Whether the caller's appended statements move any table's values. */
+function movesValues(args: Pick<GenerateArgs, "valuesMovedIn">): boolean {
+  return valuesMovedIn(args).length > 0;
+}
+
+/** The columns the way down re-adds and then fills: each joining field's, and each moved field's. */
+function refilledOnTheWayDown(
+  joins: readonly FieldJoinsEntry[],
+  moves: GenerateArgs["valueMoves"]
+): { table: string; column: string }[] {
+  return [
+    ...joins.flatMap(({ plan }) =>
+      plan.spec.columns.map(c => ({
+        table: plan.spec.mainTable,
+        column: c.name,
+      }))
+    ),
+    ...(moves ?? []),
+  ];
+}
+
 /**
- * The main migration's DOWN with each joining field's column re-added nullable: on the way down
- * it runs before the `joins` file's DOWN copies the default language's values back, so a
- * required column added there would refuse every existing row. The `joins` DOWN makes it
- * required again once the values are in (`requiredAgain`).
+ * The main migration's DOWN with each column whose values are copied back after it is re-added
+ * made nullable: a joining field's, which the `joins` file's DOWN fills with the default
+ * language's values, and a field moved into a group, which the file's own DOWN fills from the
+ * group last. Added required, the column would refuse every existing row. Each is made required
+ * again once the values are in (`requiredAgain`).
  */
 function restoredNullable(
   inverse: Operation[],
-  joins: readonly FieldJoinsEntry[]
+  refilled: readonly { table: string; column: string }[] | undefined
 ): Operation[] {
-  const joining = new Set(
-    joins.flatMap(({ plan }) =>
-      plan.spec.columns.map(c => `${plan.spec.mainTable}::${c.name}`)
-    )
-  );
+  const keys = new Set((refilled ?? []).map(r => `${r.table}::${r.column}`));
   return inverse.map(op =>
     op.type === "add_column" &&
-    joining.has(`${op.tableName}::${op.column.name}`) &&
+    keys.has(`${op.tableName}::${op.column.name}`) &&
     !op.column.nullable
       ? { ...op, column: { ...op.column, nullable: true } }
       : op
+  );
+}
+
+/**
+ * The statements making each of `refilled` required, as `snapshot` has it, once a move's values
+ * are in (`requiredAgain`): on the way up a column a move out of a group added, against the newest
+ * snapshot; on the way down one a move into a group dropped, against the previous one.
+ */
+function requiredOnceRefilled(
+  refilled: readonly { table: string; column: string }[] | undefined,
+  dialect: SupportedDialect,
+  snapshot: NextlySchemaSnapshot
+): string[] {
+  const byTable = new Map<string, string[]>();
+  for (const { table, column } of refilled ?? []) {
+    byTable.set(table, [...(byTable.get(table) ?? []), column]);
+  }
+  return [...byTable].flatMap(([table, columns]) =>
+    requiredAgain(
+      table,
+      columns,
+      snapshot.tables.find(t => t.name === table),
+      dialect,
+      snapshot
+    )
   );
 }
 

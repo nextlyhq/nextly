@@ -11,6 +11,7 @@ import {
   fieldTypeChangesOf,
   type JudgedFieldTypeChange,
   pendingMigrationRefusal,
+  translationsColumnChanges,
   typeChangeRefusals,
 } from "../field-type-changes";
 
@@ -129,6 +130,30 @@ const judged = (
     cleared: [],
     counts: { kept: 0, changed: 0, lost: 0, blocked: 0 },
   },
+});
+
+// A translated change is judged by the column its migration gives the translations table on every
+// database, so a save on one database never writes a file that leaves another's in the old type.
+describe("whether a translated field's translations column takes another type", () => {
+  it("finds a checkbox becoming a number, whose column changes on PostgreSQL and MySQL though not on SQLite", () => {
+    expect(
+      translationsColumnChanges(
+        f("v", "checkbox", { localized: true }),
+        f("v", "number", { localized: true }),
+        "collection"
+      )
+    ).toBe(true);
+  });
+
+  it("leaves a long text becoming code, which keeps its column on every database", () => {
+    expect(
+      translationsColumnChanges(
+        f("v", "textarea", { localized: true }),
+        f("v", "code", { localized: true }),
+        "collection"
+      )
+    ).toBe(false);
+  });
 });
 
 describe("the refusals a save's type changes give", () => {

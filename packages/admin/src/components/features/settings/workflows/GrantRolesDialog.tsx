@@ -106,7 +106,8 @@ export function GrantRolesDialog({
             <code className="rounded bg-muted px-1 text-xs">
               {grantable?.permission}
             </code>{" "}
-            on {attachments}. Super admins hold every step.
+            on {attachments}, granted directly. Roles inheriting from a role
+            ticked hold it too, and super admins hold every step.
           </DialogDescription>
         </DialogHeader>
         {sharing.length > 0 && (
