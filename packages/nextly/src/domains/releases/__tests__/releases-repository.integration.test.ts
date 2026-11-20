@@ -27,6 +27,8 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { RevalidationIntent } from "../../../revalidation/types";
+import { RELEASE_MEMBERS_TABLE } from "../release-tables";
 import {
   ReleasesRepository,
   documentRefKey,
@@ -109,6 +111,37 @@ describe.each(getConfiguredTestDialects())(
         limit: 2,
       });
       expect(recent.map(row => row.title)).toEqual(["Latest", "Later"]);
+    });
+
+    it("flushes the documents of many releases with one read of their members and one flush", async () => {
+      // A held component's releases are flushed together: read release by release, the members
+      // and the flushes grow with the component, which a pass repeats each time it is held.
+      const app = await boot(dialect);
+      const flush = vi.fn((_intents: RevalidationIntent[]) => {});
+      const repo = new ReleasesRepository(app.adapter, { flush });
+      const ids: string[] = [];
+      for (const entryId of ["e0", "e1", "e2"]) {
+        const release = await repo.createRelease({ title: entryId });
+        await repo.addMember(
+          { releaseId: release.id, action: "publish", ...ref(entryId) },
+          ANY_EDITABLE_STATE
+        );
+        ids.push(release.id);
+      }
+      flush.mockClear();
+      const select = vi.spyOn(app.adapter, "select");
+
+      await repo.revalidateReleases(ids);
+
+      expect(
+        select.mock.calls.filter(([table]) => table === RELEASE_MEMBERS_TABLE)
+      ).toHaveLength(1);
+      expect(flush).toHaveBeenCalledTimes(1);
+      // The one flush names every release's document.
+      const flushed = JSON.stringify(flush.mock.calls[0]?.[0]);
+      for (const entryId of ["e0", "e1", "e2"]) {
+        expect(flushed).toContain(entryId);
+      }
     });
 
     it("keeps an unscheduled draft out of BOTH ends of the timeline", async () => {

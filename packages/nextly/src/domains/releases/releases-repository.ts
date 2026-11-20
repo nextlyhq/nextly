@@ -1191,24 +1191,8 @@ export class ReleasesRepository {
    * computed at the next read is a second line of defence for exactly this.
    */
   private async revalidateMembersOf(releaseId: string): Promise<void> {
-    // Drop the shared transition memo FIRST, and unconditionally. Flushing tags
-    // re-renders the page, and the re-render reads that memo — a stale one
-    // hands it the same "nothing scheduled" bound it had before, so the page is
-    // cached tag-only again against a release the schedule already knows about.
-    // Done even with no revalidator wired: the memo is wrong either way.
-    invalidateTransitionCacheFor(this.db);
-
-    if (this.revalidator === undefined) return;
-    try {
-      const intent = await this.revalidationIntentFor(
-        await this.listMembers(releaseId)
-      );
-      if (intent !== null) await this.revalidator.flush([intent]);
-    } catch (error) {
-      // Not thrown, for the reason above; logged, so a release whose pages stay
-      // stale says why.
-      logReleaseFlushFailure(error);
-    }
+    // The flush of many releases, asked of one, so the two cannot differ.
+    await this.revalidateReleases([releaseId]);
   }
 
   /**
@@ -1219,7 +1203,26 @@ export class ReleasesRepository {
    * and never throws, as every flush here is.
    */
   async revalidateReleases(ids: readonly string[]): Promise<void> {
-    for (const id of new Set(ids)) await this.revalidateMembersOf(id);
+    // Drop the shared transition memo FIRST, and unconditionally. Flushing tags
+    // re-renders the page, and the re-render reads that memo — a stale one
+    // hands it the same "nothing scheduled" bound it had before, so the page is
+    // cached tag-only again against a release the schedule already knows about.
+    // Done even with no revalidator wired: the memo is wrong either way.
+    invalidateTransitionCacheFor(this.db);
+
+    if (this.revalidator === undefined || ids.length === 0) return;
+    try {
+      // Every release's members in runs of ids (`listMembersOf`), and one flush
+      // for all of them, however many releases a component holds.
+      const intent = await this.revalidationIntentFor(
+        await this.listMembersOf([...ids])
+      );
+      if (intent !== null) await this.revalidator.flush([intent]);
+    } catch (error) {
+      // Not thrown, for the reason above; logged, so a release whose pages stay
+      // stale says why.
+      logReleaseFlushFailure(error);
+    }
   }
 
   /**
@@ -1528,7 +1531,10 @@ export class ReleasesRepository {
     // readers and drops the shared transition memo, and doing that from inside
     // the transaction would announce a transition that can still roll back —
     // the reader would then see a release stopped that is still scheduled.
-    for (const entry of moved) await this.revalidateMembersOf(entry.id);
+    // One flush for every release the component moved.
+    if (moved.length > 0) {
+      await this.revalidateReleases(moved.map(entry => entry.id));
+    }
     if (keptBegun)
       await this.revalidateReleases(entries.map(entry => entry.id));
     return moved.map(entry => entry.id);

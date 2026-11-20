@@ -170,18 +170,13 @@ function inValues(where: unknown, column: string): unknown[] {
   );
 }
 
-/** The repository's flush of a release's documents, private to it, watched from here. */
-interface FlushesMembers {
-  revalidateMembersOf(releaseId: string): Promise<void>;
-}
-
-/** The releases whose documents the repository flushes from here on, as a reader's cache sees. */
+/**
+ * The releases whose documents the repository flushes from here on, as a reader's cache sees:
+ * every flush of the repository goes through `revalidateReleases`.
+ */
 function watchFlushes(): () => string[] {
-  const flush = vi.spyOn(
-    ReleasesRepository.prototype as unknown as FlushesMembers,
-    "revalidateMembersOf"
-  );
-  return () => flush.mock.calls.map(([releaseId]) => releaseId);
+  const flush = vi.spyOn(ReleasesRepository.prototype, "revalidateReleases");
+  return () => flush.mock.calls.flatMap(([releaseIds]) => [...releaseIds]);
 }
 
 /** Takes a part's approval away by writing its review row, as nothing that signals would. */
