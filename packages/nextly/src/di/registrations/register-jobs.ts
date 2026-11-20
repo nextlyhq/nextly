@@ -58,6 +58,7 @@ import { collectJobs } from "../../plugins/jobs/collect-jobs";
 import type { Logger } from "../../services/shared";
 import { container } from "../container";
 
+import { wiredReleasesRepository } from "./register-releases";
 import type { RegistrationContext } from "./types";
 
 /**
@@ -215,6 +216,8 @@ export function registerJobServices(ctx: RegistrationContext): void {
         contentApi: nextly,
         runAs: databaseRunAs(adapter),
         onOutcome: result => reportReleasesOutcome(logger, result),
+        // The install's repository, whose flush reaches the pages readers are served.
+        repository: () => wiredReleasesRepository(adapter),
       })
     );
     // What a notice's email job reads and sends through, resolved on each run so
