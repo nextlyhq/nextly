@@ -14,6 +14,7 @@
  * Each dialect gets a database of its own, created and dropped here, as
  * `release-time-indexes.integration.test.ts` does.
  */
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +27,8 @@ import { createAdapter } from "../../../database/factory";
 import { getSchemaEventsDdl } from "../../schema/events/schema-events-ddl";
 import { reconcileCore } from "../../schema/migrate/core-reconcile";
 
-const DB_NAME = "nextly_release_walk_idx";
+// A name of this run's own, so two runs against one server never drop each other's database.
+const DB_NAME = `nextly_release_walk_idx_${randomBytes(4).toString("hex")}`;
 const INDEXES = ["nextly_release_members_doc_walk_idx"] as const;
 
 type Dialect = "postgresql" | "mysql" | "sqlite";
