@@ -2214,6 +2214,42 @@ describe.each(getConfiguredTestDialects())(
         ]);
       });
 
+      it("lists a part no step has moved yet where its workflow starts in a review stage", async () => {
+        // Briefs start in Draft, whose one step approves: an unpublished Brief that no step has
+        // moved has no review state yet and still waits there for whoever may approve it, as its
+        // own review state says. A Page no step has moved waits in Writing, whose step submits,
+        // which is the writer's, not a review: it is not listed.
+        current = await bootSteps(dialect, undefined, {
+          collections: [briefs],
+        });
+        await people();
+        await person(app(), "pia", [
+          ["read", BRIEFS],
+          ["publish", BRIEFS],
+        ]);
+        const PIA: Who = { kind: "person", id: "pia" };
+        const unmoved = await entry(app(), BRIEFS);
+        await entry(app(), PAGES);
+
+        expect(
+          partsOf(
+            await door.reviewState(PIA, { collection: BRIEFS, id: unmoved })
+          )
+        ).toEqual([expect.objectContaining({ stage: "draft", mayTake: true })]);
+
+        const waiting = await door.waiting(PIA, { page: 1, limit: 10 });
+        expect(
+          waiting.items.map(item => ({
+            entryId: (item.document as Doc).entryId,
+            stage: item.stage,
+          }))
+        ).toEqual([{ entryId: unmoved, stage: "draft" }]);
+        expect(waiting.meta).toMatchObject({ total: 1 });
+        expect(
+          (await door.waiting(ALICE, { page: 1, limit: 10 })).items
+        ).toEqual([]);
+      });
+
       it("names a part's last move: its latest step, by whom, from where to where, with the comment", async () => {
         current = await bootSteps(dialect);
         await people();
