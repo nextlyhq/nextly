@@ -289,10 +289,12 @@ export async function roleIdsOfSlugs(
   slugs: readonly string[]
 ): Promise<string[]> {
   const roles = new RoleService(adapter, logger());
-  const found = await Promise.all(
-    slugs.map(slug => roles.findRoleIdBySlug(slug))
-  );
-  return found.flatMap(role => (role ? [role.id] : []));
+  // One read per 500 slugs, however many roles a key carries.
+  const ids: string[] = [];
+  for (const run of chunks(slugs)) {
+    for (const role of await roles.findRoleIdsBySlugs(run)) ids.push(role.id);
+  }
+  return ids;
 }
 
 /** The stored permission for `action` on `resource`, or undefined when there is none. */
