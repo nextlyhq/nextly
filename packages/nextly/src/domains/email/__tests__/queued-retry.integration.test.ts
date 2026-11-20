@@ -434,6 +434,60 @@ describe.each(getConfiguredTestDialects())(
       expect(await queued(t, id)).toMatchObject({ state: "sent" });
     });
 
+    it("reuses a failed email's job still pending, rather than queuing a second beside it", async () => {
+      const t = await boot(dialect);
+      behaviour.refusals = 1;
+      const { id } = await t.nextly.email.queue({ ...message, to: ADA });
+      const [{ jobId }] = await t.adapter.select<{ jobId: string }>(
+        "email_queue",
+        { where: { and: [{ column: "id", op: "=", value: id }] } }
+      );
+      // As if its runner stopped after the email settled failed, before the
+      // job was finished: still pending, its lease lapsed.
+      const jobs = loadedDialect(dialect).tables.nextlyJobs;
+      const db = t.adapter.getDrizzle() as never as {
+        update(table: unknown): {
+          set(values: unknown): { where(c: unknown): Promise<unknown> };
+        };
+      };
+      await db
+        .update(jobs)
+        .set({
+          state: "pending",
+          lockedBy: "runner-1",
+          lockedUntil: new Date(Date.now() - 1_000),
+          // Its attempts spent, as the stopped runner left them.
+          attemptCount: 5,
+        })
+        .where(eq(jobs.id as never, jobId));
+
+      await t.nextly.email.retryQueued({ id });
+      // A fresh set of attempts, as a failed email retried is promised.
+      const [reused] = await t.adapter.select<{ attemptCount: number }>(
+        "nextly_jobs",
+        { where: { and: [{ column: "id", op: "=", value: jobId }] } }
+      );
+      expect(Number(reused.attemptCount)).toBe(0);
+      const [row] = await t.adapter.select<{ state: string; jobId: string }>(
+        "email_queue",
+        { where: { and: [{ column: "id", op: "=", value: id }] } }
+      );
+      expect(row).toMatchObject({ state: "waiting", jobId });
+      const pending = await t.adapter.select<{ id: string }>("nextly_jobs", {
+        where: {
+          and: [
+            { column: "slug", op: "=", value: "email:send" },
+            { column: "state", op: "=", value: "pending" },
+          ],
+        },
+      });
+      expect(pending.map(job => job.id)).toEqual([jobId]);
+
+      await trigger(t);
+      expect(await queued(t, id)).toMatchObject({ state: "sent" });
+      expect(calls).toHaveLength(2);
+    });
+
     it("refuses a retry of an email sent, cancelled or cleared, and of none", async () => {
       const t = await boot(dialect);
       const sent = await t.nextly.email.queue({ ...message, to: ADA });
@@ -562,7 +616,7 @@ describe.each(getConfiguredTestDialects())(
             userId: manager,
             metadata: {
               operation: "retry",
-              changedFields: ["state", "nextAttemptAt"],
+              changedFields: ["state", "jobId"],
             },
           },
           {

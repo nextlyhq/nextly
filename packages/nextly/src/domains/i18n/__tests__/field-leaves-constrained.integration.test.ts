@@ -11,6 +11,8 @@
  * Every Builder path that can make the change: a collection's save and schema dialog, a Single's
  * save and schema dialog, and a field group's schema dialog.
  */
+import { readdirSync } from "node:fs";
+
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 // What runs before a schema change applied whole: nothing unless a test arms it, to model a write
@@ -739,6 +741,33 @@ describeEachDialect(
               : [...english, "c3@example.com"]
           )
         );
+        // The refused save's record, and the files it kept, settled by the settle after the save
+        // that finished it: no record stands, and every file in the folder is recorded applied.
+        expect(
+          await query<{ key: string }>(
+            `SELECT ${q("key")} FROM ${q("nextly_meta")} WHERE ${q("key")} LIKE 'builder-save-in-progress:%'`
+          ),
+          "a save's record that it is in progress"
+        ).toEqual([]);
+        const applied = new Set(
+          (
+            await query<{ filename: string; status: string }>(
+              `SELECT ${q("filename")} AS filename, ${q("status")} AS status FROM ${q("nextly_schema_events")} WHERE ${q("event_type")} = 'file_apply'`
+            )
+          )
+            .filter(row => row.status === "applied")
+            .map(row => row.filename)
+        );
+        const { container } = await import("../../../di/container");
+        const { migrationsDir } = container.get<{ migrationsDir: string }>(
+          "builderSaveSetup"
+        );
+        expect(
+          readdirSync(migrationsDir).filter(
+            name => name.endsWith(".sql") && !applied.has(name)
+          ),
+          "the files the refused save kept, recorded applied"
+        ).toEqual([]);
         // The row sharing an entry's value first, then one of the same shape that does not: the
         // second is taken, so the first was refused for its value, not for its shape.
         expect(

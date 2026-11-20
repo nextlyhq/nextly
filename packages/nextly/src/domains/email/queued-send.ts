@@ -818,7 +818,8 @@ async function sendOnce(
   message: QueuedMessage,
   id: string,
   report: (recipients: FinalRecipient[]) => void,
-  onProvider: (provider: SentProvider) => void
+  onProvider: (provider: SentProvider) => void,
+  onRepeat: () => void = () => undefined
 ): Promise<EmailFailure | undefined> {
   // Each delivery it records names this email, so its attempts read as one
   // timeline; the provider it goes through is heard from the send itself.
@@ -843,6 +844,8 @@ async function sendOnce(
             ...message.send,
             idempotencyKey: attemptKey(message, id),
           });
+    // Answered from its key's claim: sent before, nothing sent now.
+    if (outcome.success && outcome.repeat) onRepeat();
     return outcome.success
       ? undefined
       : (outcome.failure ?? notAcceptedFailure());
@@ -1113,6 +1116,7 @@ export async function attemptQueuedEmail(
 
   let finals: FinalRecipient[] = [];
   let provider: SentProvider | undefined;
+  let repeated = false;
   const failure = await sendOnce(
     deps.sender(row.scope),
     message,
@@ -1122,14 +1126,17 @@ export async function attemptQueuedEmail(
     },
     heard => {
       provider = heard;
+    },
+    () => {
+      repeated = true;
     }
   );
   // A repeat answered from its key's claim sends nothing and hears of no
-  // provider. The provider that sent it is on the deliveries recorded with
+  // provider; only a repeat, never an attempt that contacted nobody. The provider that sent it is on the deliveries recorded with
   // that claim, in its transaction, so it is read from them: an attempt that
   // stopped after the claim settled and before this note still leaves the
   // email with the provider that sent it.
-  if (!failure && !provider) {
+  if (!failure && !provider && repeated) {
     provider = await sentProviderOf(deps.adapter, row.id).catch(
       () => undefined
     );

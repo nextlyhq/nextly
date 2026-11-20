@@ -83,6 +83,8 @@ export interface QueuedEmailRetried {
   id: string;
   state: "waiting" | "sending";
   from: "waiting" | "sending" | "failed";
+  /** What the retry changed, by name: its activity entry's fields. */
+  changedFields: string[];
 }
 
 /**
@@ -118,43 +120,35 @@ export async function retryQueuedEmailAsPerson(
         ? read.for(strength)
         : read)) as RetryRow[];
       if (!row) throw NextlyError.notFound({ logContext: { queuedId: id } });
-      if (row.state === "sent" || row.state === "cancelled") {
-        throw refused(
-          "This email has already been sent or cancelled.",
-          row.id,
-          row.state
-        );
-      }
-      if (!row.held) {
-        throw refused(
-          "This email's message has been cleared, so it can't be sent again.",
-          row.id,
-          row.state
-        );
-      }
-
-      const from = row.state as QueuedEmailRetried["from"];
-      if ((from === "waiting" || from === "sending") && row.jobId !== null) {
-        // Its pending job, made due now, unless a runner holds its lease:
-        // that attempt is with the provider, or about to reach it. A lease
-        // ending now is free, as the job queue reads it.
-        const claimable = and(
-          eq(jobs.id, row.jobId),
-          eq(jobs.state, "pending"),
-          or(isNull(jobs.lockedUntil), lte(jobs.lockedUntil, now))
-        );
-        const [job] = (await db
-          .select({ id: jobs.id })
-          .from(jobs)
-          .where(claimable)
-          .limit(1)) as Array<{ id: string }>;
-        if (job) {
-          await db
-            .update(jobs)
-            .set({ runAt: null, nextAttemptAt: null, updatedAt: now })
-            .where(claimable);
-          return { id: row.id, state: from, from };
+      const from = retryableFrom(row);
+      // Its own job, made due now, whatever state it is in: a failed email's
+      // job is still pending when its runner stopped before finishing it,
+      // and a second job beside it could send the message twice.
+      if (
+        row.jobId !== null &&
+        (await bringForward(db, jobs, row.jobId, now, {
+          strength,
+          fresh: from === "failed",
+        }))
+      ) {
+        if (from !== "failed") {
+          return {
+            id: row.id,
+            state: from,
+            from,
+            changedFields: ["nextAttemptAt"],
+          };
         }
+        await db
+          .update(queue)
+          .set({ state: "waiting", settledAt: null, updatedAt: now.getTime() })
+          .where(eq(queue.id, row.id));
+        return {
+          id: row.id,
+          state: "waiting",
+          from,
+          changedFields: ["state", "nextAttemptAt"],
+        };
       }
       if (
         from === "sending" ||
@@ -167,7 +161,8 @@ export async function retryQueuedEmailAsPerson(
         );
       }
 
-      // Failed, or waiting on a job that is gone: a new job, due now.
+      // Failed with its job finished, or waiting on a job that is gone: a
+      // new job, due now. The old one can no longer run.
       const { id: jobId } = await enqueueInTransaction(tx, {
         slug: QUEUED_EMAIL_JOB,
         input: { queuedId: row.id },
@@ -184,9 +179,75 @@ export async function retryQueuedEmailAsPerson(
           updatedAt: now.getTime(),
         })
         .where(eq(queue.id, row.id));
-      return { id: row.id, state: "waiting", from };
+      return {
+        id: row.id,
+        state: "waiting",
+        from,
+        changedFields: ["state", "jobId"],
+      };
     }
   );
+}
+
+/**
+ * The state a retry starts from, or the refusal of one that cannot be
+ * retried: sent or cancelled, or with its message cleared.
+ */
+function retryableFrom(row: RetryRow): QueuedEmailRetried["from"] {
+  if (row.state === "sent" || row.state === "cancelled") {
+    throw refused(
+      "This email has already been sent or cancelled.",
+      row.id,
+      row.state
+    );
+  }
+  if (!row.held) {
+    throw refused(
+      "This email's message has been cleared, so it can't be sent again.",
+      row.id,
+      row.state
+    );
+  }
+  return row.state as QueuedEmailRetried["from"];
+}
+
+/**
+ * Make pending job `jobId` due now, unless a runner holds its lease: that
+ * attempt is with the provider, or about to reach it. A lease ending now is
+ * free, as the job queue reads it. Answers whether it was made due.
+ *
+ * The job is read under its row lock on PostgreSQL and MySQL, so no runner
+ * claims it between the read and the write; SQLite runs one transaction at a
+ * time. `fresh` restarts its attempts, for a failed email retried with the
+ * job its stopped runner left pending.
+ */
+async function bringForward(
+  db: RetryDb,
+  jobs: ReturnType<typeof loadedDialect>["tables"]["nextlyJobs"],
+  jobId: string,
+  now: Date,
+  options: { strength: string | null; fresh: boolean }
+): Promise<boolean> {
+  const claimable = and(
+    eq(jobs.id, jobId),
+    eq(jobs.state, "pending"),
+    or(isNull(jobs.lockedUntil), lte(jobs.lockedUntil, now))
+  );
+  const read = db.select({ id: jobs.id }).from(jobs).where(claimable).limit(1);
+  const [job] = (await (options.strength !== null && read.for
+    ? read.for(options.strength)
+    : read)) as Array<{ id: string }>;
+  if (!job) return false;
+  await db
+    .update(jobs)
+    .set({
+      runAt: null,
+      nextAttemptAt: null,
+      ...(options.fresh ? { attemptCount: 0 } : {}),
+      updatedAt: now,
+    })
+    .where(claimable);
+  return true;
 }
 
 /** Whether job `id` is held by a runner now: pending, under a live lease. */
