@@ -455,6 +455,33 @@ function unkeptValuesStop(
 }
 
 /**
+ * Statements that stop a run, before the file changes anything, where a date column moving into a
+ * group holds a date the group's JSON could not keep as an ISO date: its copy writes four digits
+ * of year, so a year past 9999 (or, on PostgreSQL, before the year 1) would be written as text
+ * JavaScript does not read as a date on PostgreSQL, and as null on SQLite. MySQL's TIMESTAMP
+ * holds no such year. The run stops on `cannot_keep_<field>`, naming the field.
+ */
+function unwritableDatesStop(
+  target: MoveColumn,
+  table: string,
+  column: string
+): string[] {
+  if (target.kind !== "timestamp" || target.dialect === "mysql") return [];
+  const value = quoteIdent(column, target.dialect);
+  const kept =
+    target.dialect === "postgresql"
+      ? `extract(year from ${zoned(target.columnType) ? `${value} AT TIME ZONE 'UTC'` : value}) BETWEEN 1 AND 9999`
+      : // SQLite's seconds from 0000-01-01T00:00:00Z to 9999-12-31T23:59:59Z, the dates it writes.
+        `${value} BETWEEN -62167219200 AND 253402300799`;
+  return stopWhereNot(target.dialect, table, {
+    guard: `nextly_unkept_${column}`,
+    reason: `cannot_keep_${column}`,
+    kept,
+    where: `${value} IS NOT NULL`,
+  });
+}
+
+/**
  * Statements that stop a run, before the file changes anything, where an entry of the database it
  * runs on holds no value for a field that is required where it moves: the save's own check
  * (`refuseEmptyRequiredRefills`) reads the database the file is written from. The run stops on
@@ -763,7 +790,9 @@ export function moveDataStatements(
   const stop =
     to.kind === "column" && from.kind === "json"
       ? unkeptValuesStop(target, table, from, to.column)
-      : [];
+      : from.kind === "column" && to.kind === "json"
+        ? unwritableDatesStop(target, table, from.column)
+        : [];
   const copy =
     to.kind === "column"
       ? [

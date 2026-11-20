@@ -55,6 +55,7 @@ import {
 } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { AddressKind } from "../../../shared/address-rule";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { statedMoment } from "../../dynamic-collections/services/stated-default";
@@ -90,6 +91,8 @@ import {
   companionTableExists,
   liveColumnsOf,
 } from "../../i18n/runtime/companion-io";
+import { snapshotRecord } from "../../versions/shared-publish-base";
+import { WORKING_DRAFT_SHAPE } from "../../versions/versions-repository";
 import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
 import { runUnitInTries } from "../busy-table/run-unit";
 import { boundedStopRecord } from "../busy-table/stopped-record";
@@ -1179,6 +1182,7 @@ async function writeSave(
   const planned = plannedMovesOf(deps, save, plan.table);
   await refuseEmptyRequiredRefills(deps, planned, plan.table);
   await refuseUnkeptValues(deps, planned, plan.table);
+  await refuseMovesUnderWorkingDrafts(deps, save);
   await settledRows(deps, save, plan.table);
   // The translations table is judged before anything is written wherever the change reaches it:
   // the file's statements are planned from the history's record of it, and a push changes it too,
@@ -1492,6 +1496,7 @@ export async function previewCollectionSave(
     const planned = plannedMovesOf(deps, save, plan.table);
     await refuseEmptyRequiredRefills(deps, planned, plan.table);
     await refuseUnkeptValues(deps, planned, plan.table);
+    await refuseMovesUnderWorkingDrafts(deps, save);
     const moved = await moveSentencesOf(deps, plan.table, planned);
     return {
       adopts: plan.adoption !== null,
@@ -3159,6 +3164,73 @@ function moveSentencesOf(
  * refusal of the first that cannot keep its values. A save that creates or deletes the entity
  * moves nothing.
  */
+/**
+ * Refuses a move while a working draft of the collection holds a value at the field's old place:
+ * the move rewrites each entry's row, not a draft's snapshot, which keeps the field where it was,
+ * so publishing that draft would drop the pending change (its reads prune a path the definition
+ * no longer has). It names the field and how many entries, read before anything is written; once
+ * the drafts are published or discarded, the move goes ahead.
+ */
+async function refuseMovesUnderWorkingDrafts(
+  deps: CollectionSaveDeps,
+  save: CollectionSave
+): Promise<void> {
+  if (save.moves === undefined || save.moves.length === 0) return;
+  const drafts = await deps.adapter.select<{
+    entryId: string;
+    snapshot: unknown;
+  }>(VERSIONS_TABLE, {
+    where: {
+      and: [
+        { column: "scopeKind", op: "=", value: "collection" },
+        { column: "scopeSlug", op: "=", value: save.slug },
+        ...WORKING_DRAFT_SHAPE,
+      ],
+    },
+  });
+  for (const move of save.moves) {
+    const entries = new Set(
+      drafts
+        .filter(draft =>
+          holdsValueAtPath(snapshotRecord(draft.snapshot), move.from)
+        )
+        .map(draft => draft.entryId)
+    );
+    if (entries.size === 0) continue;
+    const name = move.from.at(-1) ?? "This field";
+    const count = entries.size === 1 ? "1 entry" : `${entries.size} entries`;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: move.to.join("."),
+          code: "FIELD_MOVE_REFUSED",
+          message: `${name} has unpublished changes in a working draft of ${count}, which keeps it where it was. Publish or discard those drafts first, then move ${name}.`,
+        },
+      ],
+      logContext: {
+        slug: save.slug,
+        field: move.from.join("."),
+        drafts: entries.size,
+      },
+    });
+  }
+}
+
+/** Whether a document's values hold something other than null at `path`. */
+function holdsValueAtPath(
+  values: Record<string, unknown>,
+  path: readonly string[]
+): boolean {
+  let at: unknown = values;
+  for (const key of path) {
+    if (at === null || typeof at !== "object" || !Object.hasOwn(at, key)) {
+      return false;
+    }
+    at = (at as Record<string, unknown>)[key];
+  }
+  return at !== null && at !== undefined;
+}
+
 /**
  * The row columns a save's moves carry into a group, as the save plans them (`plannedMovesOf`):
  * their values are copied by its file before the column goes, so they are not drops. A move the

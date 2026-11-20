@@ -492,6 +492,94 @@ describe.each(getConfiguredTestDialects())(
       expect(await readAll(t)).toEqual(before);
     });
 
+    it("refuses a move while a working draft holds a pending value at the field's old place", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      await createPosts(t, SLUG, { fields: [summary, group("meta", [NOTE])] });
+      const { item } = await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one", summary: "Live" },
+      });
+      const entryId = String((item as { id: unknown }).id);
+      // A pending edit of `summary` held as the entry's working draft, which the move would not
+      // carry: publishing it after the move would drop the edit.
+      const now = new Date();
+      await t.adapter.insert("nextly_versions", {
+        id: randomUUID(),
+        scopeKind: "collection",
+        scopeSlug: SLUG,
+        entryId,
+        versionNo: null,
+        status: "draft",
+        isAutosave: false,
+        snapshot: { title: "One", slug: "one", summary: "Pending edit" },
+        createdAt: now,
+        updatedAt: now,
+      });
+      const before = await readAll(t);
+      const columns = (await columnsOf(t)).sort();
+      const moves = [{ from: ["summary"], to: ["meta", "summary"] }];
+      const refusal = expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "FIELD_MOVE_REFUSED",
+              message:
+                "summary has unpublished changes in a working draft of 1 entry, which keeps it where it was. Publish or discard those drafts first, then move summary.",
+            }),
+          ],
+        },
+      });
+      await expect(
+        save(t, [group("meta", [NOTE, summary])], moves)
+      ).rejects.toThrow(refusal);
+      expect(await readAll(t)).toEqual(before);
+      expect((await columnsOf(t)).sort()).toEqual(columns);
+
+      // Once the draft is gone, the move goes ahead.
+      await run(
+        t,
+        `DELETE FROM ${q("nextly_versions")} WHERE ${q("entry_id")} = '${entryId}'`
+      );
+      await save(t, [group("meta", [NOTE, summary])], moves);
+      expect(
+        ((await readAll(t)).get("one")?.meta as { summary?: unknown })?.summary
+      ).toBe("Live");
+    });
+
+    // MySQL's TIMESTAMP holds no year past 2038.
+    it.runIf(dialect !== "mysql")(
+      "stops a move into a group, before it changes anything, where a date's year has more than four digits",
+      async () => {
+        const t = await boot(dialect);
+        const published: Field = { name: "published", type: "date" };
+        await createPosts(t, SLUG, {
+          fields: [published, group("meta", [NOTE])],
+        });
+        await t.nextly.create({
+          collection: SLUG,
+          data: { title: "One", slug: "one" },
+        });
+        // The year 10000, which the copy would write in four digits as `10000-…` (PostgreSQL) or
+        // as null (SQLite).
+        await run(
+          t,
+          dialect === "postgresql"
+            ? `UPDATE ${q(TABLE)} SET ${q("published")} = '10000-01-01 00:00:00' WHERE ${q("slug")} = 'one'`
+            : `UPDATE ${q(TABLE)} SET ${q("published")} = 253402300800 WHERE ${q("slug")} = 'one'`
+        );
+        const columns = (await columnsOf(t)).sort();
+        await expect(
+          save(
+            t,
+            [group("meta", [NOTE, published])],
+            [{ from: ["published"], to: ["meta", "published"] }]
+          )
+        ).rejects.toThrow(/cannot_keep_published/);
+        expect((await columnsOf(t)).sort()).toEqual(columns);
+      }
+    );
+
     it("undoes a required field's move with nextly migrate:down, its column required again with every value", async () => {
       const t = await boot(dialect);
       const summary: Field = { name: "summary", type: "text", required: true };

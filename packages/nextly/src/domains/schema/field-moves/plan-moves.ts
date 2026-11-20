@@ -116,7 +116,7 @@ function placed(
   if (move.from.kind === "column") {
     // Into a group: copied before the column is dropped; back after the way down adds it again.
     return {
-      up: { first: way.up, last: [] },
+      up: { first: [...forth.stop, ...way.up], last: [] },
       down: { first: [...back.stop, ...beside.downFirst], last: way.down },
     };
   }
@@ -124,7 +124,7 @@ function placed(
     // Out of a group: copied after the column is added; back before the way down drops it.
     return {
       up: { first: [...forth.stop, ...beside.first], last: way.up },
-      down: { first: way.down, last: [] },
+      down: { first: [...back.stop, ...way.down], last: [] },
     };
   }
   // Between two groups, whose columns stand throughout.
