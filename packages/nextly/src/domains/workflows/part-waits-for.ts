@@ -223,7 +223,8 @@ export async function partsWaitingFor(
   slug: string,
   parts: readonly WaitingPartInput[]
 ): Promise<(PartWaitingFor | null)[]> {
-  // Every assignee and default reviewer asked at once, then each part decided and named.
+  // Whether every assignee and default reviewer holds the step is read at once, then each part
+  // is decided and named.
   const decider = partWaitsDecider(adapter, registered.workflow, slug);
   await decider.prime(parts);
   const decided: { slug: string; waits: PartWaits }[] = [];

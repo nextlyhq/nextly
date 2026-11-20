@@ -244,7 +244,7 @@ function partReview(
 
 /**
  * Whom each listed part waits for, named into it: every assignee and default reviewer of the page
- * asked at once (`prime`), each part decided, and every name read once for the page.
+ * checked at once (`prime`), each part decided, and every name read once for the page.
  */
 async function nameEachPart(
   adapter: DrizzleAdapter,
