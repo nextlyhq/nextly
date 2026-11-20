@@ -129,6 +129,29 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("gives a row only the parts the read may see, never a language it may not read", async () => {
+      // Letters are read in every language but Spanish: a row read by Sam names no Spanish part,
+      // whatever stage it stands in.
+      t = await bootSteps(dialect);
+      await person(t, "sam", [["read", "letters"]]);
+      const id = await entry(t, "letters");
+      await seedState(t, partOf("letters", id, "es"), "legal", {
+        definitionHash: HASH,
+      });
+
+      const listed = await t.nextly.find({
+        collection: "letters",
+        status: "all",
+        overrideAccess: false,
+        user: { id: "sam" },
+        reviewState: true,
+      } as never);
+      const parts = ((listed.items[0] as Doc)._review as { parts: Doc[] })
+        .parts;
+      expect(parts.map(part => part.part)).not.toContain("es");
+      expect(parts.length).toBeGreaterThan(0);
+    });
+
     it("gives a visitor's rows, and a read that does not ask, no review key at all", async () => {
       t = await bootSteps(dialect, undefined, {
         collections: [notices],

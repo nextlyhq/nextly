@@ -134,8 +134,11 @@ describe.each(getConfiguredTestDialects())(
         }
       };
       const counted = async () => {
-        // The stored schema count's clock is frozen, as in the waiting list's own count tests.
-        vi.useFakeTimers({ toFake: ["performance"] });
+        // The clocks every cache on the read's path keeps time by are frozen for the measurement:
+        // `performance` (the stored schema count, a session's standing) and `Date` (the
+        // permission answers, kept for a minute). On a slow run an answer still fresh for the
+        // warm-up read could otherwise lapse during the counted one and add a read to it alone.
+        vi.useFakeTimers({ toFake: ["performance", "Date"] });
         try {
           await storedSchemaSeq(t!.adapter, { fresh: true });
           await waitingFor("sam");

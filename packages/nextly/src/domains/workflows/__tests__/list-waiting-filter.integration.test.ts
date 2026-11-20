@@ -216,6 +216,42 @@ describe.each(getConfiguredTestDialects())(
       expect(listed.meta).toMatchObject({ totalCapped: true });
     });
 
+    it("leaves out a part in a language the reader may not read, from the waiting list and its count alike", async () => {
+      // Letters are read in every language but Spanish. A Spanish part waiting in Legal check is
+      // not Sam's to see: neither the waiting list nor the list's filter names or counts it.
+      t = await bootSteps(dialect);
+      await person(t, "sam", [
+        ["read", "letters"],
+        ["sign-off", "letters"],
+      ]);
+      const spanishOnly = await entry(t, "letters");
+      await seedState(t, partOf("letters", spanishOnly, "es"), "legal", {
+        definitionHash: HASH,
+      });
+      const english = await entry(t, "letters");
+      await seedState(t, partOf("letters", english, "en"), "legal", {
+        definitionHash: HASH,
+      });
+
+      const waiting = (await t.nextly.workflows.waiting({
+        overrideAccess: false,
+        user: { id: "sam" },
+        limit: 20,
+      } as never)) as unknown as {
+        items: { document: { entryId: string }; part: string | null }[];
+        meta: { total: number };
+      };
+      expect(
+        waiting.items.map(item => [item.document.entryId, item.part])
+      ).toEqual([[english, "en"]]);
+      expect(waiting.meta.total).toBe(1);
+
+      expect(await listedFor(t, "letters", "sam", WAITING)).toEqual({
+        ids: [english],
+        total: 1,
+      });
+    });
+
     it("keeps for a key scoped to one role only that role's work, and nothing for a scope that names no key", async () => {
       t = await bootSteps(dialect);
       await person(t, "olga", []);
