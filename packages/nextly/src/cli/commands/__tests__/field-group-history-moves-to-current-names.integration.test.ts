@@ -439,6 +439,35 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(rows[0]?.fields)).toContain("subtitle");
     });
 
+    // A history on the current names drops a removed group's `fg_<slug>` table, which the
+    // removal check must still read as that group, or its dependents go unnamed.
+    it("refuses to drop a field group a remaining collection places, after the history moved", async () => {
+      const url = await legacyProject();
+      await migrateStorage(dialect, url);
+      expect(
+        (await create(undefined, { fieldGroupNames: "current" })).exit
+      ).toBeUndefined();
+      const moved = await migrate();
+      expect(moved.exit, moved.said).toBeUndefined();
+
+      loaded.config = defineConfig({
+        collections: FIRST.collections,
+        fieldGroups: [],
+        db: { migrationsDir: "./migrations" },
+      });
+      const dropped = await create("drop_card");
+
+      expect(dropped.exit).not.toBeUndefined();
+      expect(dropped.said).toContain(
+        '"fh_card" cannot be deleted while other schema depends on it. Fields that place it: fh_posts.card.'
+      );
+      expect(
+        readdirSync(join(dir, "migrations")).filter(f =>
+          f.endsWith("_drop_card.sql")
+        )
+      ).toEqual([]);
+    });
+
     it("refuses the transition on a database whose field groups have not moved, and records nothing", async () => {
       const url = await legacyProject();
 
