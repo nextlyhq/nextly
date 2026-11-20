@@ -727,6 +727,26 @@ describe.each(getConfiguredTestDialects())(
           });
           expect(free.workflow).toBeNull();
 
+          // A stage's label saved in Settings is the label the schema read names it by, as
+          // every other surface shows it, so a list's stage filter agrees with its Review column.
+          await writeWorkflowSettings(
+            stateDb(app()),
+            "editorial",
+            { stages: { legal: { label: "Lawyers" } } },
+            null,
+            null
+          );
+          const relabelled = await rest(
+            "GET",
+            ["collections", "schema", PAGES],
+            ALICE
+          );
+          expect(
+            (relabelled.workflow as { stages: Doc[] }).stages.find(
+              stage => stage.name === "legal"
+            )
+          ).toEqual({ name: "legal", label: "Lawyers" });
+
           // A visitor is refused the read, so the workflow is never named to one.
           const anonymous = await createDynamicHandlers().GET(
             new Request(`http://localhost/api/collections/schema/${PAGES}`, {
