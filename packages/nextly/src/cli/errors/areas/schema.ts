@@ -108,6 +108,44 @@ function leftoverRefusal(error: NextlyError): CliErrorParts {
   };
 }
 
+/**
+ * The refusal of a command over a Builder save left part-way, as its three parts: what it
+ * refused, each save it names, and the step that settles them, all from the thrown text.
+ */
+function savesLeftPartWay(error: NextlyError): CliErrorParts {
+  const message = error.publicMessage;
+  const colon = message.indexOf(": ");
+  const settle = message.lastIndexOf(" To settle it, ");
+  if (colon === -1 || settle < colon) {
+    return {
+      what: message,
+      why: "A Builder save stopped before its outcome was recorded.",
+      next: "Start the app in development (`next dev`) on this project: its start settles the save.",
+    };
+  }
+  return {
+    what: `${message.slice(0, colon)}.`,
+    why: `Left part-way: ${message.slice(colon + 2, settle)}`,
+    next: message.slice(settle + 1),
+  };
+}
+
+/**
+ * The refusal of a Builder save over an earlier save's record that cannot be read: what was
+ * refused, then the one step that clears the record by hand, as the thrown text gives it.
+ */
+function unreadableSaveRecord(error: NextlyError): CliErrorParts {
+  const [what = error.publicMessage, ...next] = sentences(error.publicMessage);
+  return {
+    what,
+    why: "Each Builder save records that it is in progress until its outcome is recorded, and what an earlier save left cannot be told from a record that cannot be read.",
+    next:
+      next.length > 0
+        ? next.join(" ")
+        : "Once no Builder save is running, remove the record's row from the nextly_meta table, then save again.",
+  };
+}
+
 /** Whether `error`'s message starts with the words its throw site gives one cause. */
 const startsWith =
   (prefix: string) =>
@@ -347,6 +385,32 @@ export const SCHEMA_CODES = defineCodes({
           why: "A save writes a migration into the folder, and the folder or its ledger is in a state `nextly migrate` refuses: an applied file was edited or removed, or an attempt is unfinished.",
           next: "Settle what the message names, with `nextly migrate:resolve` or by restoring the file, then save again.",
         }),
+      },
+    ],
+  },
+  // A command that would act on the migrations while a Builder save is recorded as left part-way:
+  // `nextly migrate` by the database's record, and the commands with no database by the marker.
+  BUILDER_SAVE_LEFT_PART_WAY: {
+    cause:
+      "A Builder save was left part-way, so the command refused: the project's migrations do not describe the database until the save is settled.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "builder-save-left-part-way",
+        describe: savesLeftPartWay,
+      },
+    ],
+  },
+  // A Builder save refused over the record of an earlier save of the same entity that cannot be
+  // read, whose part-way state cannot be told.
+  BUILDER_SAVE_RECORD_UNREADABLE: {
+    cause:
+      "A Builder save was refused, because the record that an earlier save of the same entity was in progress cannot be read.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "builder-save-record-unreadable",
+        describe: unreadableSaveRecord,
       },
     ],
   },

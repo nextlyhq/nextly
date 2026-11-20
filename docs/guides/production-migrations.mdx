@@ -447,6 +447,18 @@ adds with one constant default for every row is refused before anything runs onc
 two rows. An index with a `WHERE` clause, one over an expression, or one on a table qualified by
 another schema than the connection's own is left to the database.
 
+### Two migrations written from the same one
+
+Each migration is written from the one before it, and its snapshot records which. Two migrations that record the same one were written without each other: most often on two branches that each added a migration and were then merged, and rarely by two `migrate:create` runs at once where one was stopped for a long time. Until a migration records them together, the newest snapshot lacks one side's change.
+
+`nextly migrate`, a production start, `nextly migrate:check` and a Schema Builder save refuse such a history with `MIGRATION_HISTORY_FORKED`, naming the files, and `nextly migrate` applies none of them. Before this, they were applied in file order and the configuration was then refused as ahead of its migrations.
+
+After merging a branch that brought a migration of its own, run `nextly migrate:create --name record_merge`: it writes a migration after both that records the merged state, and `nextly migrate` then applies everything. Where both branches change the same table or column, they cannot be applied one after the other: the message names what both change, and the fix is to delete one of the two with its snapshot and run `nextly migrate:create` again, which writes its change after the other. If it finds nothing to record, the configuration is already what the newest of them records: it names the migrations written without it, which repeat the change or make one the configuration no longer has, and those are deleted with their snapshots in `meta/`. A migration that only continues one of the branches does not record the merge.
+
+Run `nextly migrate:check` in CI on every pull request, so a merge that still needs its record fails there.
+
+Migrations written before this was recorded name no parent, and are never refused.
+
 ### A build older than the database
 
 Stop every build released before this check, preview deployments that share production's database

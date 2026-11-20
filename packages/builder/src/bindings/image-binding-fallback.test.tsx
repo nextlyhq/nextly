@@ -32,7 +32,7 @@ import type {
   FoundMedia,
   MediaPickerProps,
   MediaSummary,
-} from "../content-controls";
+} from "../inspector/content/content-controls";
 import { ImageBindingFallback } from "./image-binding-fallback";
 
 beforeAll(() => {

@@ -16,7 +16,7 @@ import {
   CORE_SETTING_PLACES,
   type SettingPlace,
 } from "./core-block-placement.fixture";
-import { inspectSelection } from "./inspector";
+import { inspectSelection } from "./inspector/inspector";
 import { propLabel } from "./prop-label";
 
 beforeEach(() => registerBlocks(coreBlocks as never, { source: "core" }));

@@ -26,6 +26,8 @@ import { relative, resolve } from "node:path";
 import type * as NextEnv from "@next/env";
 import type { Command } from "commander";
 
+import { databaseTarget } from "./database-target";
+
 /** The modes a run can be in, as Next.js names them. */
 export const CLI_MODES = ["development", "production", "test"] as const;
 
@@ -93,21 +95,14 @@ export function loadCliEnvironment(
   // for the run, as `next build` and `next dev` do for theirs.
   Object.assign(process.env, { NODE_ENV: mode });
   const preset = new Set(Object.keys(process.env));
-  // `@next/env` is a bundled CommonJS file whose exports Node's ESM loader
-  // cannot name, so it is loaded through `require`, typed from its own
-  // declarations. Loaded here, not when this module is imported: the app's dev
-  // boot imports the database check that prints the mode line, and never
-  // reads environment files through the CLI.
-  const { loadEnvConfig } = createRequire(import.meta.url)(
-    "@next/env"
-  ) as typeof NextEnv;
-  // The loader announces each file it reads; the CLI prints its own mode line
+  const { loadEnvConfig } = nextEnv();
+  // The loader announces each file it reads; the CLI prints its own line
   // instead, so only a file it could not read is reported.
   const { loadedEnvFiles } = loadEnvConfig(folder, mode === "development", {
     info: () => {},
     error: (...args: unknown[]) => console.error(...args),
   });
-  // A run starts here, and the mode line is printed once a run.
+  // A run starts here, and its line is printed once a run.
   modeLinePrinted = false;
   current = {
     mode,
@@ -117,6 +112,65 @@ export function loadCliEnvironment(
     ),
     preset,
     values: loadedEnvFiles.map(file => file.env),
+  };
+}
+
+/**
+ * Next.js's own loader of environment files, typed from its declarations.
+ * `fresh` gives a copy of its own: the loader remembers the first folder it
+ * read and the environment it started from, for the whole process.
+ */
+function nextEnv(fresh = false): typeof NextEnv {
+  // `@next/env` is a bundled CommonJS file whose exports Node's ESM loader
+  // cannot name, so it is loaded through `require`. Loaded when asked, not
+  // when this module is imported: the app's dev boot imports the database
+  // check that prints the run's line, and never reads environment files
+  // through the CLI.
+  const load = createRequire(import.meta.url);
+  if (!fresh) return load("@next/env") as typeof NextEnv;
+  const id = load.resolve("@next/env");
+  const kept = load.cache[id];
+  delete load.cache[id];
+  try {
+    return load(id) as typeof NextEnv;
+  } finally {
+    // The run's own copy stays the one every other reader gets.
+    if (kept) load.cache[id] = kept;
+    else delete load.cache[id];
+  }
+}
+
+/**
+ * Reads the environment files of a second project folder, for a command told
+ * to work in another folder than the one the CLI ran in: the files Next.js
+ * reads there for the run's mode, in its order of precedence, each setting
+ * only what nothing has set yet. A value the first folder's files or the
+ * process environment gave stays as it is, and a variable the process has
+ * removed stays removed.
+ */
+export function readFurtherEnvironment(folder: string): void {
+  const mode = current?.mode ?? readMode(undefined, process.env.NODE_ENV);
+  // A loader of its own starts from the environment as it stands now, so it
+  // adds what that folder's files set and nothing has, and changes nothing
+  // else; the run's loader keeps what it read first.
+  const { loadedEnvFiles } = nextEnv(true).loadEnvConfig(
+    folder,
+    mode === "development",
+    { info: () => {}, error: (...args: unknown[]) => console.error(...args) },
+    true
+  );
+  if (!current) return;
+  // Recorded after the first folder's files, which won where both set a value.
+  const ranIn = current.folder;
+  current = {
+    ...current,
+    files: [
+      ...current.files,
+      ...loadedEnvFiles.map(file =>
+        relative(ranIn, resolve(folder, file.path))
+      ),
+    ],
+    values: [...current.values, ...loadedEnvFiles.map(file => file.env)],
   };
 }
 
@@ -153,17 +207,28 @@ export function environmentFolder(): string | undefined {
 }
 
 /**
- * The line naming the run's mode and where its database URL came from, as
- * `Mode: production (DATABASE_URL from .env.production)`; `undefined` when no
- * environment was loaded, as in a test that calls a command directly.
+ * The line naming the database a run is about to use, its mode and where its
+ * URL came from, as `Database: PostgreSQL db.internal:5432/shop (production;
+ * DATABASE_URL from .env.production)`; `undefined` when no environment was
+ * loaded, as in a test that calls a command directly. Of the URL it says the
+ * target alone (`databaseTarget`): never a user name, a password or a query
+ * parameter.
  */
 export function modeLine(): string | undefined {
   if (!current) return undefined;
-  return `Mode: ${current.mode} (DATABASE_URL ${sourceOf(current, "DATABASE_URL")})`;
+  const target = databaseTarget({
+    url: process.env.DATABASE_URL,
+    dialect: process.env.DB_DIALECT,
+    env: process.env,
+    // Where the connection resolves a relative file: the folder the
+    // process is in now, which a command told to work elsewhere has entered.
+    folder: process.cwd(),
+  });
+  return `Database: ${target} (${current.mode}; DATABASE_URL ${sourceOf(current, "DATABASE_URL")})`;
 }
 
 /**
- * Where the mode line goes, set by the program once it has read `--quiet`:
+ * Where the run's line goes, set by the program once it has read `--quiet`:
  * `undefined` prints nothing.
  */
 export function setModeLineWriter(
@@ -173,10 +238,10 @@ export function setModeLineWriter(
 }
 
 /**
- * Prints the mode line once a run, through the writer the program set. Called
+ * Prints the run's line once a run, through the writer the program set. Called
  * where a command first validates its database settings, so every command
- * that reaches a database names the mode it runs in and the file its URL came
- * from, and a command that does not stays as quiet as it was.
+ * that reaches a database names the database, the mode it runs in and where its URL
+ * came from, and a command that does not stays as quiet as it was.
  */
 export function announceMode(): void {
   if (modeLinePrinted || !writeModeLine) return;

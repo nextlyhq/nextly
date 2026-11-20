@@ -13,7 +13,7 @@ import {
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ContentServices } from "../content-controls";
+import type { ContentServices } from "../inspector/content/content-controls";
 import { useListItem } from "./item-binding-source";
 
 /** A page holding one list, fed as given, with block `h` in its entry slot. */

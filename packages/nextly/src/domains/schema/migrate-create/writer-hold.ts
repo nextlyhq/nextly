@@ -26,8 +26,16 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { linkSync, readFileSync, renameSync, rmSync } from "node:fs";
 import {
+  constants,
+  copyFileSync,
+  linkSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
+import {
+  copyFile,
   link,
   mkdir,
   open,
@@ -262,6 +270,33 @@ function alreadyThere(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "EEXIST";
 }
 
+/** Whether `error` says the file system has no hard links. */
+function noLinks(error: unknown): boolean {
+  return NO_LINKS.has((error as NodeJS.ErrnoException).code ?? "");
+}
+
+/**
+ * Puts a hold's file, moved to `aside`, back at `path`, unless the folder
+ * was taken again meanwhile: a link where the file system has them, which
+ * keeps the file it is, and otherwise a copy made only where nothing is at
+ * the path. Never a move, which would replace another writer's hold. The
+ * copy is a new file with a new time, so the hold put back starts a lease
+ * afresh, and its holder knows it by its token (`renewOwn`).
+ */
+async function putBack(aside: string, path: string): Promise<void> {
+  try {
+    await link(aside, path);
+  } catch (error) {
+    if (alreadyThere(error)) return;
+    if (!noLinks(error)) throw error;
+    await copyFile(aside, path, constants.COPYFILE_EXCL).catch(
+      (failed: unknown) => {
+        if (!alreadyThere(failed)) throw failed;
+      }
+    );
+  }
+}
+
 /**
  * Takes the hold's file from its path where `wanted` says it is the one to
  * take, and answers whether it did. The file is moved to a name of its own
@@ -284,11 +319,7 @@ async function takeFromPath(
   }
   const moved = await readHold(aside);
   const take = moved !== undefined && (await wanted(moved));
-  if (!take) {
-    await link(aside, path).catch((error: unknown) => {
-      if (!alreadyThere(error)) throw error;
-    });
-  }
+  if (!take) await putBack(aside, path);
   await rm(aside, { force: true });
   return take;
 }
@@ -333,9 +364,14 @@ async function renewOwn(
       // time itself, by its own clock, as it does for every writer's.
       await handle.write("{", 0);
       const there = await stat(path).catch(() => undefined);
-      return there?.ino === held.file.ino && there.dev === held.file.dev
-        ? true
-        : other();
+      if (there?.ino === held.file.ino && there.dev === held.file.dev) {
+        return true;
+      }
+      // Another file is at the path. It is this taking's all the same where
+      // it carries its token: its own, put back as a copy on a file system
+      // with no hard links (`putBack`).
+      const now = await other();
+      return now?.token === token ? true : now;
     },
     "r+"
   );
@@ -444,6 +480,16 @@ export function writerLostError(
   });
 }
 
+/** `putBack`, in the calls an exit handler may make. */
+function putBackSync(aside: string, path: string): void {
+  try {
+    linkSync(aside, path);
+  } catch (error) {
+    if (!noLinks(error)) throw error;
+    copyFileSync(aside, path, constants.COPYFILE_EXCL);
+  }
+}
+
 /** Holds this process took and has not released, removed if the process exits holding them. */
 const held = new Map<string, { path: string; token: string }>();
 let exitHookSet = false;
@@ -464,7 +510,7 @@ function releaseOnExit(): void {
       try {
         renameSync(path, aside);
         if (recordOf(readFileSync(aside, "utf-8"))?.token !== token) {
-          linkSync(aside, path);
+          putBackSync(aside, path);
         }
       } catch {
         // Gone already, unreadable, or taken again: the lease ends it.
@@ -489,7 +535,7 @@ async function placeHold(path: string, text: string): Promise<void> {
     await writeFile(whole, text, { encoding: "utf-8", flag: "wx" });
     await link(whole, path);
   } catch (error) {
-    if (!NO_LINKS.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    if (!noLinks(error)) throw error;
     await writeFile(path, text, { encoding: "utf-8", flag: "wx" });
   } finally {
     await rm(whole, { force: true });

@@ -77,6 +77,12 @@ export const NEXTLY_ERROR_STATUS = {
   // Deliberately NOT added to CANONICAL_CODE_FOR_STATUS -- that list drives the
   // status -> code direction, where 422 stays mapped to INVALID_INPUT.
   BUSINESS_RULE_VIOLATION: 422,
+  // A submit for review naming a step that is not a submit (an approval, a request for changes
+  // or a move). 400: the call names the wrong step, whatever the document's state.
+  WORKFLOW_STEP_NOT_SUBMIT: 400,
+  // A submit for review naming no step, of a part whose stage no submit step leaves. 409 like a
+  // stale write: the part's state stands in the way, not the call, and it may change.
+  WORKFLOW_NO_SUBMIT_STEP: 409,
   INTERNAL_ERROR: 500,
   DATABASE_ERROR: 500,
   // A request waited `pool.connectionTimeoutMs` for a database connection and

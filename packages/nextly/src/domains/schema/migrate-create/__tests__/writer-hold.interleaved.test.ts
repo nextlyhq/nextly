@@ -44,6 +44,8 @@ const between = vi.hoisted(() => ({
   beforeSetAside: undefined as (() => Promise<void>) | undefined,
   /** Once a hold's file has been put at its path, before its taker goes on. */
   afterPlaced: undefined as (() => Promise<void>) | undefined,
+  /** As a file system with no hard links: every link is refused. */
+  noLinks: false,
   /** Before any file is moved, given where it goes. */
   beforeMove: undefined as ((to: string) => void) | undefined,
   /** Every write and move made, in order. */
@@ -87,6 +89,11 @@ vi.mock("node:fs/promises", async importOriginal => {
       if (String(args[0]).endsWith(".nextly-writer.lock")) await afterPlaced();
     },
     link: async (from: string, to: string) => {
+      if (between.noLinks) {
+        throw Object.assign(new Error("operation not permitted"), {
+          code: "EPERM",
+        });
+      }
       await real.link(from, to);
       // A hold put at its path, not one put back there.
       if (from.endsWith(".new")) await afterPlaced();
@@ -126,6 +133,7 @@ afterEach(() => {
   between.afterRead = undefined;
   between.beforeSetAside = undefined;
   between.afterPlaced = undefined;
+  between.noLinks = false;
   between.beforeMove = undefined;
   vi.restoreAllMocks();
   rmSync(join(dir, ".."), { recursive: true, force: true });
@@ -227,6 +235,49 @@ describe("a writer taking the folder", () => {
     vi.restoreAllMocks();
     await holder.assertHeld();
     await holder.release();
+  });
+});
+
+describe("on a file system with no hard links", () => {
+  beforeEach(() => {
+    between.noLinks = true;
+  });
+
+  it("keeps a hold renewed between another writer's read of it lapsed and that writer's move", async () => {
+    const stalled = await take("migrate:create");
+    await lapse();
+    // The other writer has read the hold lapsed. Before it sets the file
+    // aside, the holder resumes and renews.
+    between.beforeSetAside = () => stalled.assertHeld();
+
+    const refused = await thrownBy(() => take("migrate:baseline"));
+
+    // The renewed hold is back at its path, so the folder never reads as
+    // free while its holder is alive: the other writer is refused, and a
+    // third arriving now is too.
+    expect(isWriterHoldHeld(refused)).toBe(true);
+    expect(
+      (JSON.parse(readFileSync(lockFile(), "utf-8")) as { command: string })
+        .command
+    ).toBe("migrate:create");
+    expect(isWriterHoldHeld(await thrownBy(() => take("migrate:create")))).toBe(
+      true
+    );
+    // And the holder still knows the hold as its own.
+    await stalled.assertHeld();
+    await stalled.release();
+    expect(existsSync(lockFile())).toBe(false);
+  });
+
+  it("takes, renews and lets go of a hold as it does with them", async () => {
+    const holder = await take("migrate:create");
+    await holder.assertHeld();
+    expect(
+      isWriterHoldHeld(await thrownBy(() => take("migrate:baseline")))
+    ).toBe(true);
+    await holder.release();
+    const next = await take("migrate:baseline");
+    await next.release();
   });
 });
 

@@ -20,6 +20,7 @@
 import { Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
+import { StagePill } from "@admin/components/features/settings/workflows/StagePill";
 import { toast } from "@admin/components/ui";
 import {
   useAssignPart,
@@ -41,21 +42,36 @@ import { leadingReviewStep } from "../EntryForm/document-actions";
 import { PanelSection } from "../EntryForm/panels/PanelSection";
 
 import { waitingForWords } from "./review-words";
+import { approves, useSharedApprovalHold } from "./shared-hold";
+import { StepRefusalNote } from "./StepRefusalNote";
 import { useStepTaker, type StepTaker } from "./useStepTaker";
 
 export interface ReviewSectionProps {
   document: ReleaseDocumentRef;
   /** The language being edited; the default language where none is named. */
   locale?: string | undefined;
+  /**
+   * Why no step can be taken at this moment, as the editor holds its header's
+   * steps (`stepsHold`): unsaved edits, a save on its way, a past version on
+   * screen. The steps here wait for it, and say it.
+   */
+  hold?: string | undefined;
 }
 
 export function ReviewSection({
   document,
   locale,
+  hold,
 }: ReviewSectionProps): JSX.Element | null {
   const { data } = useReviewState(document);
   const { defaultLocale, getLocale } = useLocalization();
   const taker = useStepTaker(document);
+  // Held where the shared fields' version under review is hidden from this
+  // person: see `shared-hold`.
+  const sharedHeld = useSharedApprovalHold(
+    document,
+    data?.attached === true ? data.review.parts : []
+  );
   const language = locale ?? defaultLocale;
   if (data === undefined || !data.attached) return null;
   const own = data.review.parts.find(part => part.part === language);
@@ -77,6 +93,8 @@ export function ReviewSection({
             document={document}
             part={part}
             taker={taker}
+            hold={hold}
+            approvalHeld={part.part === null ? sharedHeld : undefined}
             title={
               !titled
                 ? null
@@ -87,6 +105,7 @@ export function ReviewSection({
           />
         ))}
       </div>
+      <StepRefusalNote refusal={taker.refusal} onDismiss={taker.clearRefusal} />
       {taker.dialog}
     </PanelSection>
   );
@@ -96,11 +115,17 @@ function PartBlock({
   document,
   part,
   taker,
+  hold,
+  approvalHeld,
   title,
 }: {
   document: ReleaseDocumentRef;
   part: PartReview;
   taker: StepTaker;
+  /** Why every step waits at this moment, where something holds them. */
+  hold: string | undefined;
+  /** Why this part's approve steps are held, where they are. */
+  approvalHeld: string | undefined;
   title: string | null;
 }): JSX.Element {
   const { formatDate } = useAdminDateFormatter();
@@ -109,11 +134,19 @@ function PartBlock({
       {title === null ? null : (
         <p className="text-xs font-medium text-muted-foreground">{title}</p>
       )}
-      <p className="font-medium text-foreground">
-        {part.stage === null
-          ? "Live, nothing waiting for review"
-          : (part.stageLabel ?? part.stage)}
-      </p>
+      {part.stage === null ? (
+        <p className="font-medium text-foreground">
+          Live, nothing waiting for review
+        </p>
+      ) : (
+        <p>
+          {/* The stage as Settings shows it: its saved label on its colour. */}
+          <StagePill
+            label={part.stageLabel ?? part.stage}
+            colour={part.stageColour}
+          />
+        </p>
+      )}
       {part.stage === null ? null : (
         <>
           <p className="text-xs text-muted-foreground">
@@ -124,7 +157,12 @@ function PartBlock({
               Due {formatDate(part.dueAt, { dateStyle: "medium" }, part.dueAt)}
             </p>
           )}
-          <PartSteps part={part} taker={taker} />
+          <PartSteps
+            part={part}
+            taker={taker}
+            hold={hold}
+            approvalHeld={approvalHeld}
+          />
           <AssignControls document={document} part={part} />
         </>
       )}
@@ -137,9 +175,13 @@ function PartBlock({
 function PartSteps({
   part,
   taker,
+  hold,
+  approvalHeld,
 }: {
   part: PartReview;
   taker: StepTaker;
+  hold: string | undefined;
+  approvalHeld: string | undefined;
 }): JSX.Element | null {
   const steps = part.steps
     .filter(step => step.mayTake)
@@ -157,12 +199,27 @@ function PartSteps({
           size="sm"
           variant={step.primary ? "default" : "outline"}
           className="h-7 px-2 text-xs"
-          disabled={taker.pending || part.version === null}
+          disabled={
+            taker.pending ||
+            hold !== undefined ||
+            part.version === null ||
+            (approvalHeld !== undefined && approves(step))
+          }
           onClick={() => take(step)}
         >
           {step.label}
         </Button>
       ))}
+      {/* What holds every step is said first, and the shared approval's
+          own hold only where nothing else holds them. */}
+      {hold === undefined ? null : (
+        <p className="w-full text-xs text-muted-foreground">{hold}</p>
+      )}
+      {hold !== undefined ||
+      approvalHeld === undefined ||
+      !steps.some(step => approves(step)) ? null : (
+        <p className="w-full text-xs text-muted-foreground">{approvalHeld}</p>
+      )}
     </div>
   );
 }

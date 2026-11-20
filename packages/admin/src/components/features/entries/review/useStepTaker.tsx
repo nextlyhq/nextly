@@ -4,8 +4,9 @@
  * Taking a workflow step on some parts of a document, as the editor's header
  * and the side panel's Review section both do: sent with what the person saw
  * of each part, asking first for the comment a step needs, and said in a toast
- * either way. One implementation, so a step taken from either place is sent,
- * asked and reported alike.
+ * either way, and a refusal kept in words for the place the step was taken to
+ * show. One implementation, so a step taken from either place is sent, asked
+ * and reported alike.
  *
  * @module components/features/entries/review/useStepTaker
  * @experimental
@@ -14,13 +15,20 @@
 import { useState, type ReactNode } from "react";
 
 import { toast } from "@admin/components/ui";
-import { useTakeStep } from "@admin/hooks/queries/useReviewState";
-import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import {
+  useReviewState,
+  useTakeStep,
+} from "@admin/hooks/queries/useReviewState";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
-import type { PartReview, ReviewStep } from "@admin/types/workflows";
+import type {
+  PartReview,
+  ReviewStateAnswer,
+  ReviewStep,
+} from "@admin/types/workflows";
 
 import type { DocumentActionOutcome } from "../EntryForm/useDocumentActionBindings";
 
+import { stepRefusalWords } from "./step-refusal";
 import { StepCommentDialog } from "./StepCommentDialog";
 
 /** What a step resolves with where it cannot be sent at all. */
@@ -55,15 +63,41 @@ export interface StepTaker {
   ) => Promise<DocumentActionOutcome>;
   /** Whether a step is on its way. */
   pending: boolean;
+  /**
+   * Why the last step was refused, in words, until it is dismissed or the
+   * next step is taken; null otherwise. Drawn where the step was taken.
+   */
+  refusal: string | null;
+  /** Forgets the last refusal. */
+  clearRefusal: () => void;
   /** The comment dialog, to mount once. */
   dialog: ReactNode;
+}
+
+/**
+ * `parts` as the review state now reads them: a step refused as stale reads the state again, so
+ * a retry from the comment dialog is sent with each part's revision and version as they stand,
+ * not those of when it was asked. A part the state no longer names is sent as it was.
+ */
+function freshParts(
+  parts: readonly PartReview[],
+  answer: ReviewStateAnswer | undefined
+): readonly PartReview[] {
+  if (answer?.attached !== true) return parts;
+  const now = answer.review.parts;
+  return parts.map(
+    each => now.find(candidate => candidate.part === each.part) ?? each
+  );
 }
 
 export function useStepTaker(
   document: ReleaseDocumentRef | undefined
 ): StepTaker {
   const mutation = useTakeStep(document);
+  // The same query, under the same key, every surface reads the review from.
+  const { data: answer } = useReviewState(document);
   const [asking, setAsking] = useState<Asking | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
 
   const send = async (
     step: ReviewStep,
@@ -78,6 +112,7 @@ export function useStepTaker(
     if (parts.length === 0 || seen.length !== parts.length) {
       return STEP_NOT_OFFERED;
     }
+    setRefusal(null);
     try {
       await mutation.mutateAsync({
         step: step.name,
@@ -88,10 +123,10 @@ export function useStepTaker(
       toast.success(`${step.label}: done.`);
       return { ok: true };
     } catch (reason) {
-      const message = apiErrorMessage(
-        reason,
-        `${step.label} didn't go through.`
-      );
+      // Said in place as well as in a toast: a refusal can name fields and
+      // who could approve instead, more than a toast keeps on screen.
+      const message = stepRefusalWords(reason, step.label);
+      setRefusal(message);
       toast.error(message);
       return { ok: false, reason: "failed", message, reported: true };
     }
@@ -101,6 +136,8 @@ export function useStepTaker(
     step: ReviewStep,
     parts: readonly PartReview[]
   ): Promise<DocumentActionOutcome> => {
+    // A new step starts without the last one's refusal.
+    setRefusal(null);
     // A request for changes always needs a comment; any other step, where its
     // definition says so.
     if (step.kind !== "request-changes" && !step.commentRequired) {
@@ -116,21 +153,30 @@ export function useStepTaker(
       label={asking?.step.label ?? ""}
       asksForChanges={asking?.step.kind === "request-changes"}
       pending={mutation.isPending}
+      refusal={refusal}
       onCancel={() => {
         asking?.resolve(CANCELLED);
         setAsking(null);
       }}
       onSend={comment => {
         if (asking === null) return;
-        void send(asking.step, asking.parts, comment).then(outcome => {
-          // A refused step keeps the dialog, and the comment, for a retry.
-          if (!outcome.ok) return;
-          asking.resolve(outcome);
-          setAsking(null);
-        });
+        void send(asking.step, freshParts(asking.parts, answer), comment).then(
+          outcome => {
+            // A refused step keeps the dialog, and the comment, for a retry.
+            if (!outcome.ok) return;
+            asking.resolve(outcome);
+            setAsking(null);
+          }
+        );
       }}
     />
   );
 
-  return { take, pending: mutation.isPending, dialog };
+  return {
+    take,
+    pending: mutation.isPending,
+    refusal,
+    clearRefusal: () => setRefusal(null),
+    dialog,
+  };
 }

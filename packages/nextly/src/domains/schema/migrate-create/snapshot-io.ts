@@ -100,6 +100,32 @@ export interface SnapshotFile {
    * snapshot, which may not say which tables were translated.
    */
   translatedFieldsRecorded?: true;
+  /**
+   * The migration this one was written from: the base name of the newest
+   * snapshot its writer read, or null for a project's first migration.
+   *
+   * It is what makes the history a line that can be checked: two migrations
+   * naming one parent were written beside each other, by two writers or on
+   * two branches, and the second knows nothing of the first
+   * (`history-line.ts`). Absent from a snapshot written before parents were
+   * recorded, which says nothing about where it was written from.
+   */
+  parent?: string | null;
+  /**
+   * The migration this snapshot was written for, by base name, beside
+   * `parent`. A snapshot copied for a hand-written migration carries the
+   * name of the one it was copied from, and so says nothing of its own
+   * parent: only a snapshot under its own name is read as part of the line.
+   */
+  migration?: string;
+  /**
+   * The other migrations this one was written with in the folder, besides
+   * its parent and what its parent already accounts for: the ends of
+   * branches written without its parent. Naming them is what records a
+   * merge. Absent where there were none, which is every migration of a
+   * history that was one line when it was written.
+   */
+  merges?: string[];
 }
 
 /**
@@ -495,6 +521,25 @@ function optionalPartProblem(obj: Record<string, unknown>): string | undefined {
   ) {
     return `expected translatedFieldsRecorded to be true when present, got ${JSON.stringify(obj.translatedFieldsRecorded)}`;
   }
+  if (
+    obj.parent !== undefined &&
+    obj.parent !== null &&
+    typeof obj.parent !== "string"
+  ) {
+    return `expected parent to be a migration's name or null when present, got ${JSON.stringify(obj.parent)}`;
+  }
+  if (
+    obj.merges !== undefined &&
+    !(
+      Array.isArray(obj.merges) &&
+      obj.merges.every(each => typeof each === "string")
+    )
+  ) {
+    return `expected merges to list migrations' names when present, got ${JSON.stringify(obj.merges)}`;
+  }
+  if (obj.migration !== undefined && typeof obj.migration !== "string") {
+    return `expected migration to be a migration's name when present, got ${JSON.stringify(obj.migration)}`;
+  }
   return undefined;
 }
 
@@ -543,6 +588,14 @@ export async function prepareSnapshot(
   /** Every declared permission, by owner; omitted only by a caller that knows none. */
   permissions?: PermissionRecord,
   /**
+   * Where this migration stands in the project's line: the migration it is
+   * written from, by base name (null for a project's first), and the other
+   * branch ends in the folder that it records a merge of. Omitted only by a
+   * caller that does not know which snapshot it started from, whose file
+   * then records none.
+   */
+  line?: { parent: string | null; merges: readonly string[] },
+  /**
    * The field-group names this point of the history is on. Legacy writes the file exactly as
    * before the record existed (version 1, no record); current writes version 2 with
    * `fieldGroupStorage: "current"`.
@@ -571,6 +624,15 @@ export async function prepareSnapshot(
     ...(permissions !== undefined ? { permissions } : {}),
     // The tables below carry the translated-field record as written here.
     translatedFieldsRecorded: true,
+    ...(line === undefined
+      ? {}
+      : {
+          parent: line.parent,
+          migration: baseName,
+          ...(line.merges.length > 0
+            ? { merges: [...line.merges].sort() }
+            : {}),
+        }),
     // Sort tables by name for reproducibility across machines.
     snapshot: {
       tables: [...snapshot.tables]

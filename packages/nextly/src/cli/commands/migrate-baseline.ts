@@ -1066,6 +1066,8 @@ async function adopt(deps: BaselineCoreDeps): Promise<BaselineCoreResult> {
             planned.contributions,
             undefined,
             undefined,
+            // A baseline is a project's first migration: written from none.
+            { parent: null, merges: [] },
             // The names the database keeps field groups under, which every later file follows.
             deps.fieldGroupNaming ?? "legacy"
           ),

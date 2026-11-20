@@ -10,6 +10,8 @@
  *   leading with Approve, Publish held, and the status line under the title;
  * - `?state=ready`: the same, with "Choose what to publish…" open on "Ready to publish?";
  * - `?state=reason`: the same dialog asking the reason to publish without review;
+ * - `?state=changes-asked`: the note sent back with a request for changes whose comment holds a
+ *   long unbroken token, so the note under the title must wrap it at every width;
  * - `/admin/collections/history-notes?state=no-workflow`: an editor no workflow holds.
  *
  *   pnpm visual-check "/admin/collections/reviewed-notes?state=header" \
@@ -39,8 +41,8 @@ async function created(page, collection, data) {
   return String(item.id);
 }
 
-/** Submits a reviewed note for review, as it reads now. */
-async function submitted(page, id) {
+/** Takes `step` on a reviewed note's shared part, as it reads now, with `comment` if given. */
+async function stepped(page, id, step, comment) {
   const state = await sent(
     await page.request.get(
       `${API}/workflows/review-state?collection=reviewed-notes&id=${encodeURIComponent(id)}`
@@ -57,12 +59,13 @@ async function submitted(page, id) {
     await page.request.post(`${API}/workflows/steps`, {
       data: {
         document: { collection: "reviewed-notes", id },
-        step: "submit",
+        step,
         parts: [null],
         seen: [{ part: null, revision: part.revision, version: part.version }],
+        ...(comment === undefined ? {} : { comment }),
       },
     }),
-    "submitting for review"
+    `taking the ${step} step`
   );
 }
 
@@ -100,7 +103,22 @@ export default async (page, { route }) => {
     title: "Spring launch notes",
     summary: "What changes for readers when the spring range goes live.",
   });
-  await submitted(page, id);
+  await stepped(page, id, "submit");
+  if (state === "changes-asked") {
+    await stepped(
+      page,
+      id,
+      "requestChanges",
+      "Check the link https://example.com/spring-range/launch-notes/2026/final-copy-approved-by-legal-and-marketing-please-confirm before this goes out."
+    );
+    await opened(
+      page,
+      "reviewed-notes",
+      id,
+      page.getByRole("note").filter({ hasText: "Changes requested" })
+    );
+    return;
+  }
   await opened(
     page,
     "reviewed-notes",

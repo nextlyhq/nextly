@@ -55,6 +55,12 @@ import { buildExtensionSchema } from "../../domains/schema/extension/build-exten
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
+  blankLineHeader,
+  blankLineIn,
+  nothingToRecordNotice,
+  refuseUnrecordableMerge,
+} from "../../domains/schema/migrate/history-line";
+import {
   consentCovers,
   consentToCover,
   countDeletions,
@@ -711,6 +717,9 @@ export async function runMigrateCreate(
   });
   held.enter();
   try {
+    // Branches written without each other that change the same thing cannot
+    // be recorded as merged; ones that change different things are, below.
+    await refuseUnrecordableMerge(migrationsDir);
     // --blank: write a stub file and exit. No diff, no prompts.
     if (options.blank) {
       await runBlankPath(
@@ -897,6 +906,10 @@ export async function runMigrateCreate(
       logger.info(
         "No changes detected. Your config matches the latest snapshot."
       );
+      // Run to record a merge of migrations written without each other, it
+      // found none to record: they make the same change, and one of them goes.
+      const sameChange = await nothingToRecordNotice(migrationsDir);
+      if (sameChange !== undefined) logger.warn(sameChange);
       // Nothing to do is not a failure: 0, as every command ends a run with
       // nothing to do.
       endNothingToDo(logger, options.dryRun);
@@ -991,6 +1004,9 @@ async function runBlankPath(
   // "-- Migration: 20260429_154500_123_custom_seed").
   const content = formatBlankFile(slugify(name), dialect, now, {
     transaction,
+    // The migration it is written after and the other branch ends in the
+    // folder, which no snapshot records for a blank file.
+    line: blankLineHeader(await blankLineIn(migrationsDir)),
   });
   // A dry run prints the file and its path, and writes neither the file nor its folder.
   if (dryRun) {
