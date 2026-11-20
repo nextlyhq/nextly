@@ -34,6 +34,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runFileMigrations } from "../../../../cli/commands/migrate";
 import { createLogger } from "../../../../cli/utils/logger";
 import { writeAppliedFieldsRow } from "../../../../dispatcher/helpers/applied-fields-row";
+import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import { runBootTimeApplyIfDev } from "../../../../init/boot-apply";
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -43,7 +44,9 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import type { ServiceContainer } from "../../../../services";
 import { consoleLogger } from "../../../../shared/types";
+import type { CollectionService } from "../../../collections/services/collection-service";
 import { MetaService } from "../../../meta/services/meta-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
 import { recordAlreadyApplied } from "../../migrate/drift-reconcile";
@@ -152,8 +155,11 @@ const migrateStep = vi.hoisted(() => ({
   runsNothing: false,
 }));
 
-/** The start's code-first reload, counted where a case watches the start. */
-const reloads = vi.hoisted(() => ({ count: 0 }));
+/**
+ * The start's code-first reload, counted where a case watches the start. `stub` answers it as
+ * finished without running it, for a case whose stopped save still holds what the reload waits on.
+ */
+const reloads = vi.hoisted(() => ({ count: 0, stub: false }));
 
 vi.mock("../../../../init/reload-config", async original => {
   const actual =
@@ -164,6 +170,7 @@ vi.mock("../../../../init/reload-config", async original => {
       ...args: Parameters<typeof actual.reloadNextlyConfig>
     ) => {
       reloads.count += 1;
+      if (reloads.stub) return "finished";
       return actual.reloadNextlyConfig(...args);
     }) as typeof actual.reloadNextlyConfig,
   };
@@ -293,6 +300,7 @@ afterEach(async () => {
   migrateStep.runsNothing = false;
   staleMarkers.fail = false;
   reloads.count = 0;
+  reloads.stub = false;
   kill.at = undefined;
   kill.reached = undefined;
   kill.release?.();
@@ -1813,6 +1821,318 @@ describe.each(getConfiguredTestDialects())(
           "its start finishes the previous save"
         );
         expect(await recordRow(t), "the record stays").toBeDefined();
+      },
+      300_000
+    );
+
+    /** Stop a save of `fields` as the scope that made its record clears it: all else is done. */
+    async function stoppedAtClear(
+      t: TestNextly,
+      fields: BuilderField[],
+      key = RECORD_KEY,
+      saving: () => Promise<unknown> = () => save(t, fields)
+    ): Promise<void> {
+      const realDelete = MetaService.prototype.delete;
+      vi.spyOn(MetaService.prototype, "delete").mockImplementation(
+        async function (this: MetaService, deleted: string) {
+          if (deleted === key) await stopHere("clear");
+          return realDelete.call(this, deleted);
+        }
+      );
+      const reached = new Promise<void>(resolve => {
+        kill.reached = resolve;
+      });
+      kill.at = point => point === "clear";
+      stopped = saving().catch((error: unknown) => error);
+      const outcome = await Promise.race([
+        reached.then(() => "reached"),
+        stopped.then(answer => `the save ended first: ${String(answer)}`),
+      ]);
+      vi.mocked(MetaService.prototype.delete).mockRestore();
+      expect(outcome, "the save never reached its record's clear").toBe(
+        "reached"
+      );
+      expect(await new MetaService(t.adapter, consoleLogger).get(key)).toEqual(
+        expect.objectContaining({ id: expect.any(String) })
+      );
+    }
+
+    // A save that applied whole and keeps its record (here, one from before the saved definition
+    // was kept, so its registry row cannot be brought up) leaves the row as it may stand stale: the
+    // start's registration from snapshots inserts only absent rows and cannot repair it, and its
+    // code-first reload would go on over it. Both wait while the record stands.
+    it("holds back a start's registration and reload while a save that applied whole keeps its record", async () => {
+      const t = await boot();
+      await created(t);
+      await stoppedAtClear(t, [text("heading"), text("alpha")]);
+      const { definitionAfter: _kept, ...older } = (await recordRow(t)) as {
+        definitionAfter?: string;
+      } & Record<string, unknown>;
+      await new MetaService(t.adapter, consoleLogger).set(RECORD_KEY, older);
+      lockPassesThrough.on = true;
+      bootFolder.dir = HISTORY_DIR();
+      migrateStep.watch = true;
+      migrateStep.runsNothing = true;
+      reloads.stub = true;
+
+      await runBootTimeApplyIfDev({ caller: "settle test" });
+
+      expect(await recordRow(t), "the record stays").toBeDefined();
+      expect(
+        migrateStep.registrations,
+        "the start registered entities from the snapshots"
+      ).toBe(0);
+      expect(reloads.count, "the start's code-first reload ran").toBe(0);
+    }, 300_000);
+
+    // A create that applied whole and stopped before its registry row was written: the settle makes
+    // no row, but the start's registration from snapshots does, so the start registers and then
+    // settles the record again, bringing the row up and clearing it.
+    it("clears the record of a create stopped before its row once the start has registered it", async () => {
+      const t = await boot();
+      await created(t);
+      await stoppedAtClear(t, [text("heading"), text("alpha")]);
+      // The row as a create stopped before writing it leaves it: not there.
+      await t.adapter.delete("dynamic_singles", {
+        and: [{ column: "slug", op: "=", value: SLUG }],
+      });
+      lockPassesThrough.on = true;
+      bootFolder.dir = HISTORY_DIR();
+      migrateStep.watch = true;
+      migrateStep.runsNothing = true;
+      reloads.stub = true;
+
+      await runBootTimeApplyIfDev({ caller: "settle test" });
+
+      expect(
+        migrateStep.registrations,
+        "the start never registered entities from the snapshots"
+      ).toBe(1);
+      expect(await registryFieldNames(t), "the registry row").toEqual([
+        "heading",
+        "alpha",
+      ]);
+      expect(await recordRow(t), "the record clears").toBeUndefined();
+    }, 300_000);
+
+    // A collection's save that applied whole, stopped after its files were recorded and before its
+    // registry row was written: the settle brings the row up from the saved definition, as it does
+    // a Single's, and clears the record.
+    it("brings a collection's registry row up for a save that applied whole, and clears its record", async () => {
+      const t = await boot();
+      const posts = "settle_posts";
+      const key = `builder-save-in-progress:collection:${posts}`;
+      await t
+        .getService("collectionService")
+        .createCollection(
+          {
+            name: posts,
+            label: posts,
+            fields: [text("heading")],
+          } as Parameters<CollectionService["createCollection"]>[0],
+          {}
+        );
+      const rowOf = async () => {
+        const [row] = await t.adapter.select<{
+          fields: unknown;
+          schema_version: unknown;
+        }>("dynamic_collections", {
+          columns: ["fields", "schema_version"],
+          where: { and: [{ column: "slug", op: "=", value: posts }] },
+        });
+        return row;
+      };
+      const fieldNames = async () => {
+        const fields = (await rowOf())?.fields;
+        return (
+          (typeof fields === "string" ? JSON.parse(fields) : fields) as Array<{
+            name: string;
+          }>
+        ).map(field => field.name);
+      };
+      const before = await rowOf();
+      expect(await fieldNames()).toEqual(["heading"]);
+      await stoppedAtClear(t, [], key, () =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: posts },
+          {
+            fields: [text("heading"), text("alpha")],
+            confirmed: true,
+            schemaVersion: Number(before?.schema_version ?? 1),
+          }
+        )
+      );
+      // The row as a save stopped before its registry write leaves it: the fields it started from.
+      await t.adapter.update(
+        "dynamic_collections",
+        {
+          fields:
+            typeof before?.fields === "string"
+              ? before.fields
+              : JSON.stringify(before?.fields),
+        },
+        { and: [{ column: "slug", op: "=", value: posts }] }
+      );
+      expect(await fieldNames()).toEqual(["heading"]);
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["all"]);
+      expect(await fieldNames(), "the registry row").toEqual([
+        "heading",
+        "alpha",
+      ]);
+      expect(
+        await new MetaService(t.adapter, consoleLogger).get(key),
+        "the record clears"
+      ).toBeUndefined();
+    }, 300_000);
+
+    /** A record of a save of another Single, as another machine's process left it. */
+    async function anotherHostsRecord(
+      t: TestNextly,
+      applies: boolean
+    ): Promise<string> {
+      const key = "builder-save-in-progress:single:settle_other";
+      await new MetaService(t.adapter, consoleLogger).set(key, {
+        id: "another-hosts-save",
+        kind: "single",
+        slug: "settle_other",
+        startedAt: new Date().toISOString(),
+        host: "another-host",
+        database: "unknown",
+        definitionFile: DEFINITION,
+        definitionBefore: null,
+        applies,
+      });
+      return key;
+    }
+
+    /** A save's answer: its refusal's message, or "saved". */
+    const answerOf = (saving: Promise<unknown>): Promise<string> =>
+      saving.then(
+        answer =>
+          NextlyError.is(answer)
+            ? answer.publicMessage
+            : answer instanceof Response && !answer.ok
+              ? answer.text()
+              : "saved",
+        (error: unknown) =>
+          NextlyError.is(error) ? error.publicMessage : String(error)
+      );
+
+    // Another machine's save that applied its own files and was left part-way may have changed this
+    // database part-way: no Builder save runs over it, whatever the entity, until that machine's
+    // start settles it.
+    it("refuses a Builder save of another entity while another host's applying save is left", async () => {
+      const t = await boot();
+      await created(t);
+      const key = await anotherHostsRecord(t, true);
+
+      const answer = await answerOf(save(t, [text("heading"), text("alpha")]));
+
+      expect(answer).toContain("another-host");
+      expect(answer).toContain("left part-way");
+      expect(await liveColumns(t, TABLE)).not.toContain("alpha");
+      expect(
+        await new MetaService(t.adapter, consoleLogger).get(key),
+        "the other record stays"
+      ).toBeDefined();
+    }, 300_000);
+
+    // Another machine's save made outside development changed no table: its files are on that
+    // machine, for its `nextly migrate`. A save here goes on beside it.
+    it("saves beside another host's save made outside development", async () => {
+      const t = await boot();
+      await created(t);
+      const key = await anotherHostsRecord(t, false);
+
+      const answer = await answerOf(save(t, [text("heading"), text("alpha")]));
+
+      expect(answer).toBe("saved");
+      expect(await liveColumns(t, TABLE)).toContain("alpha");
+      expect(
+        await new MetaService(t.adapter, consoleLogger).get(key),
+        "the other record stays"
+      ).toBeDefined();
+    }, 300_000);
+
+    // A save of this host left as nothing could settle it refuses a save of any other entity too:
+    // that save would write its files and snapshot over a state no file finishes describing.
+    it("refuses a save of another entity while this host's save is left", async () => {
+      const t = await boot();
+      await created(t);
+      await stopSave(
+        t,
+        [text("heading"), text("alpha")],
+        point =>
+          point.startsWith(`file:${HISTORY_DIR()}`) && point.endsWith(".sql")
+      );
+      await t.adapter.executeQuery(
+        `ALTER TABLE ${dialect === "mysql" ? `\`${TABLE}\`` : `"${TABLE}"`} ADD COLUMN ${dialect === "mysql" ? "`by_hand`" : '"by_hand"'} ${dialect === "mysql" ? "VARCHAR(10)" : "TEXT"}`
+      );
+      expect((await settle(t)).map(s => s.outcome)).toEqual(["left"]);
+
+      // The gate a save meets as it records its start, asked directly: the stopped save still
+      // holds this process's exclusion, which a save through the dispatcher would meet first.
+      const answer = await answerOf(
+        withSaveRecords(() =>
+          recordSaveStarted({
+            adapter: t.adapter,
+            projectRoot: basePath,
+            kind: "single",
+            slug: "settle_other",
+            definitionFile: join(basePath, DEFINITION),
+            definitionBefore: definitionText() ?? undefined,
+            definitionAfter: "{}",
+            database: undefined,
+            notify: () => undefined,
+          })
+        )
+      );
+
+      expect(answer).toContain(`"${SLUG}"`);
+      expect(answer).toContain("left part-way");
+      expect(
+        await new MetaService(t.adapter, consoleLogger).get(
+          "builder-save-in-progress:single:settle_other"
+        ),
+        "no record of the refused save"
+      ).toBeUndefined();
+    }, 300_000);
+
+    // The start's migrate step reads the folder the app's saves write to, as its settle does, not
+    // the process's own: a save left pending under the app's base path has its files run there.
+    it.skipIf(dialect === "mysql")(
+      "runs a pending save's files from the folder the app's saves write to",
+      async () => {
+        const t = await boot();
+        await created(t);
+        const filesBefore = sqlFiles();
+        await stopSave(
+          t,
+          [text("heading", { localized: true })],
+          point => point.startsWith("unit:") && point.includes("localization"),
+          true
+        );
+        const written = sqlFiles().filter(f => !filesBefore.includes(f));
+        await firstFileAlone(t, written);
+        lockPassesThrough.on = true;
+        migrateStep.watch = true;
+        migrateStep.byFiles = true;
+
+        await runBootTimeApplyIfDev({ caller: "settle test" });
+
+        const repo = new SchemaEventsRepository(
+          t.adapter.getDrizzle(),
+          t.adapter.dialect
+        );
+        for (const file of written) {
+          expect(await repo.isFileApplied(file), file).toBe(true);
+        }
+        expect(await recordRow(t), "the record clears").toBeUndefined();
       },
       300_000
     );
