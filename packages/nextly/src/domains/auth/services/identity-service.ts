@@ -37,8 +37,6 @@
  * @module domains/auth/services/identity-service
  * @since 1.0.0
  */
-import { randomUUID } from "node:crypto";
-
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { asc, eq } from "drizzle-orm";
@@ -47,7 +45,7 @@ import { readAccessTokenCookie } from "../../../auth/cookies/access-token-cookie
 import { verifyAccessToken } from "../../../auth/jwt/verify";
 import { sessionTokenIsCurrent } from "../../../auth/session/session-standing";
 import { loadedDialect } from "../../../database/dialect-tables";
-import { toDbError } from "../../../database/errors";
+import { isDbError, toDbError } from "../../../database/errors";
 import { appPasswordDigester } from "../../../di/password-digester";
 import { NextlyError } from "../../../errors/nextly-error";
 import { env } from "../../../lib/env";
@@ -57,12 +55,15 @@ import { pluginAdminSlug } from "../../../plugins/plugin-slug";
 import {
   EXTERNAL_IDENTITIES_TABLE,
   externalIdentityKeyDigest,
+  newExternalIdentityRow,
+  type ExternalIdentityFacts,
 } from "../../../schemas/external-identities";
 import type { nextlyExternalIdentitiesMysql } from "../../../schemas/external-identities/mysql";
 import type { nextlyExternalIdentitiesPg } from "../../../schemas/external-identities/postgres";
 import type { nextlyExternalIdentitiesSqlite } from "../../../schemas/external-identities/sqlite";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 
 /**
@@ -139,9 +140,9 @@ export interface ProvisioningRoleResolver {
  * owns every refusal the creation itself can meet — the empty install, an
  * address another account already holds, a role id that is not a role,
  * super-admin direct or inherited — in one transaction with the roles it
- * assigns. Provisioning adds only what stands before the primitive: the
- * configuration's role names resolved to roles, and the identity row
- * attached after. There is no second creation path to drift from the first.
+ * assigns and the identity row it attaches. Provisioning adds only what
+ * stands before the primitive: the configuration's role names resolved to
+ * roles. There is no second creation path to drift from the first.
  */
 export interface ExternalUserCreator {
   createExternalUser(input: {
@@ -150,6 +151,12 @@ export interface ExternalUserCreator {
     image?: string | null;
     roleIds: string[];
     emailVerifiedAt: Date;
+    /**
+     * The identity being provisioned for, attached inside the creation's own
+     * transaction: the table's unique index then decides the whole creation
+     * when two first sign-ins race each other past the read.
+     */
+    identity?: ExternalIdentityFacts;
     // The id as the users service types it (`MinimalUser.id`); the one
     // reader, `provisionFor`, normalizes it to the string the table stores.
   }): Promise<{ id: string | number }>;
@@ -472,6 +479,31 @@ function stampedIdentityOf(
 }
 
 /**
+ * Whether a creation attempt was refused by the database's own restart
+ * verdict — a deadlock, or a serialization failure — rather than by
+ * anything the attempt itself asked for.
+ *
+ * MySQL answers two creations that meet inside it this way: a transaction
+ * that anchored its reads on rows both transactions then insert into is
+ * rolled back whole, with the verdict "try restarting transaction". The
+ * verdict reaches the sign-in as a `NextlyError` wrapping the classified
+ * driver error, so the chain of causes is walked for the `DbError` — its
+ * kind is the database's own word for what happened, and nothing else
+ * spells "restart me" — with a bound, because a cause chain is a linked
+ * list some driver builds circular.
+ */
+function creationLostToADatabaseRace(error: unknown, depth = 0): boolean {
+  if (depth > 5 || error === null || typeof error !== "object") return false;
+  if (isDbError(error)) {
+    return error.kind === "deadlock" || error.kind === "serialization-failure";
+  }
+  return creationLostToADatabaseRace(
+    (error as { cause?: unknown }).cause,
+    depth + 1
+  );
+}
+
+/**
  * What a handed-over identity resolved to. `userId` null: the identity is
  * linked to no account and the key's policy allowed core to make none — the
  * plugin has no account to finish a sign-in with, and no way to make one
@@ -594,6 +626,14 @@ export class IdentityService extends BaseService {
    * issuer's word for the same subject would name, nor a case-variant
    * subject the identity the provider actually named, and neither resolves
    * an account here.
+   *
+   * Two first sign-ins for one identity can both pass that read before
+   * either writes; the creation then decides the race — its transaction
+   * carries the identity row, so the table's unique index refuses the
+   * loser's whole attempt — and the loser resolves to the winner's account
+   * rather than seeing the refusal. Where the database instead ends the
+   * stand-off itself, with its restart verdict, the creation is restarted
+   * once: the same race, answered by the database rather than the index.
    */
   async resolveSignInIdentity(
     binding: PluginIdentityBinding,
@@ -608,9 +648,77 @@ export class IdentityService extends BaseService {
     const row = await this.findIdentity(identity);
     if (row !== null) return { userId: row.userId };
     if (!key.provisioning.mayProvision) return { userId: null };
-    return {
-      userId: await this.provisionFor(binding, identity, key.provisioning),
-    };
+    // Asked once, before the creation: whether it joins a transaction the
+    // caller opened, which decides both the restart and the re-read below.
+    const joinsCallersTransaction = this.adapter.inTransaction();
+    try {
+      return {
+        userId: await this.provisionWithOneRestart(
+          binding,
+          identity,
+          key.provisioning,
+          joinsCallersTransaction
+        ),
+      };
+    } catch (error) {
+      // Two first sign-ins for one identity race each other past the read
+      // above, and the loser's whole creation — account, roles, identity row,
+      // one transaction — is refused by the table's unique index. That
+      // refusal is the race answering, not a failure: the winner's identity
+      // is stored by now, so it is re-read and resolved, and the person's
+      // sign-in finishes on the account that won rather than on an error.
+      // Only the DUPLICATE code is caught, because that is the one both
+      // backstops surface — the identity's uniqueness and the address's —
+      // and a re-read that finds nothing means the address was genuinely
+      // held: the refusal stands as it would have anyway.
+      if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
+      // Joined to the caller's transaction, a re-read cannot see the winner —
+      // MySQL's snapshot predates its commit, PostgreSQL has aborted the
+      // transaction — so the refusal is the caller's to answer.
+      if (joinsCallersTransaction) throw error;
+      const winner = await this.findIdentity(identity);
+      if (winner === null) throw error;
+      return { userId: winner.userId };
+    }
+  }
+
+  /**
+   * Provision, restarting the creation once when the database itself
+   * refused the whole first attempt with its restart verdict.
+   *
+   * The restart is the race finishing, not a failure repeated: the database
+   * ends a stand-off between two creations by rolling one entirely back and
+   * telling it to restart, and by the restart's own reads the winner has
+   * committed — so the restart either writes (the other writer was the one
+   * rolled back), or meets the winner's committed identity and is refused
+   * as the duplicate it then is, a refusal `resolveSignInIdentity` already
+   * resolves to the winner. Only the one restart: a database that refuses
+   * twice is answering about more than two writers, and that answer is the
+   * caller's to see.
+   *
+   * No restart at all when the sign-in runs inside a transaction its caller
+   * opened: the creation joined that transaction rather than owning one, so
+   * the verdict ended the caller's whole transaction — a restart would run
+   * as part of a transaction the database already rolled back. The verdict
+   * is the caller's to answer, by restarting what it opened.
+   */
+  private async provisionWithOneRestart(
+    binding: PluginIdentityBinding,
+    identity: StampedIdentity,
+    provisioning: Extract<
+      ProviderProvisioningPolicy,
+      { readonly mayProvision: true }
+    >,
+    joinsCallersTransaction: boolean
+  ): Promise<string> {
+    try {
+      return await this.provisionFor(binding, identity, provisioning);
+    } catch (error) {
+      if (joinsCallersTransaction || !creationLostToADatabaseRace(error)) {
+        throw error;
+      }
+      return await this.provisionFor(binding, identity, provisioning);
+    }
   }
 
   /**
@@ -628,9 +736,11 @@ export class IdentityService extends BaseService {
    * an address another account already holds, super-admin however it is
    * reached — it refuses itself, writing nothing.
    *
-   * The account made, the identity is attached to it under the digest the
-   * table holds uniqueness by — the row the person's next sign-in will
-   * resolve.
+   * The identity row is attached inside the primitive's own transaction,
+   * with the account and its roles, under the digest the table holds
+   * uniqueness by: the row the person's next sign-in will resolve, built by
+   * the same builder the explicit link writes one with, and refused with
+   * everything else when the table's uniqueness loses a race.
    */
   private async provisionFor(
     binding: PluginIdentityBinding,
@@ -742,30 +852,19 @@ export class IdentityService extends BaseService {
       // The provider proved the address, and the account is created at the
       // sign-in that carries that proof.
       emailVerifiedAt: new Date(),
+      // Attached inside the creation's transaction: the identity row and
+      // the account it belongs to stand or fall together, and the digest's
+      // unique index is what refuses a second account for one identity when
+      // two first sign-ins race each other past the read.
+      identity: {
+        providerKey: identity.providerKey,
+        issuer: identity.issuer,
+        subject: identity.subject,
+        address: identity.address,
+      },
     });
     // Users ids are text in every dialect; the primitive's type merely admits a number.
-    const userId = String(created.id);
-
-    // The identity row, attached to the account it made, under the digest
-    // the table holds uniqueness by. Two first sign-ins racing each other
-    // both pass the read that precedes this; the digest's unique index is
-    // what actually refuses the second, as it refuses the link's race.
-    const row = {
-      id: randomUUID(),
-      providerKey: identity.providerKey,
-      issuer: identity.issuer,
-      subject: identity.subject,
-      keyDigest: identity.keyDigest,
-      address: identity.address,
-      userId,
-      createdAt: new Date(),
-    };
-    try {
-      await this.db.insert(this.identitiesTable).values(row);
-    } catch (error) {
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
-    return userId;
+    return String(created.id);
   }
 
   /**
@@ -836,16 +935,10 @@ export class IdentityService extends BaseService {
       throw identityAlreadyAttached(binding, identity);
     }
 
-    const row = {
-      id: randomUUID(),
-      providerKey: identity.providerKey,
-      issuer: identity.issuer,
-      subject: identity.subject,
-      keyDigest: identity.keyDigest,
-      address: identity.address,
-      userId: input.context.userId,
-      createdAt: new Date(),
-    };
+    // Built by the one builder the provisioning door's creation transaction
+    // also writes through, so a stored identity is one shape whichever door
+    // put it there.
+    const row = newExternalIdentityRow(identity, input.context.userId);
     try {
       await this.db.insert(this.identitiesTable).values(row);
     } catch (error) {
@@ -996,22 +1089,33 @@ export class IdentityService extends BaseService {
    * on MySQL and a case-variant subject would resolve an account the
    * provider never named. The whole row comes back, because the link's
    * answer to a repeated link is the stored row as it stands.
+   *
+   * Through `serializeOnSqlite`: on SQLite every request shares one
+   * connection, and a plain read issued while another request's creation
+   * transaction is open would run inside it and see that transaction's
+   * identity row before it commits — a row its rollback can still take
+   * away. Queued behind the open transaction, the read sees only what
+   * committed; inside a transaction this request opened, it nests in it.
    */
   private async findIdentity(
     identity: Pick<StampedIdentity, "keyDigest">
   ): Promise<StoredIdentityRow | null> {
-    const rows = await this.db
-      .select({
-        id: this.identitiesTable.id,
-        providerKey: this.identitiesTable.providerKey,
-        issuer: this.identitiesTable.issuer,
-        subject: this.identitiesTable.subject,
-        address: this.identitiesTable.address,
-        userId: this.identitiesTable.userId,
-      })
-      .from(this.identitiesTable)
-      .where(eq(this.identitiesTable.keyDigest, identity.keyDigest))
-      .limit(1);
+    const rows = await serializeOnSqlite(
+      this.adapter,
+      async () =>
+        await this.db
+          .select({
+            id: this.identitiesTable.id,
+            providerKey: this.identitiesTable.providerKey,
+            issuer: this.identitiesTable.issuer,
+            subject: this.identitiesTable.subject,
+            address: this.identitiesTable.address,
+            userId: this.identitiesTable.userId,
+          })
+          .from(this.identitiesTable)
+          .where(eq(this.identitiesTable.keyDigest, identity.keyDigest))
+          .limit(1)
+    );
     return rows[0] ?? null;
   }
 }

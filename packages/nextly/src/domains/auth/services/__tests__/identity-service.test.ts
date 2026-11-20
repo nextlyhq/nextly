@@ -30,6 +30,7 @@ import {
   type TestDb,
 } from "../../../../__tests__/fixtures/db";
 import { loadDialectTables } from "../../../../database/dialect-tables";
+import { DbError } from "../../../../database/errors";
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../../plugins/plugin-context";
 import { externalIdentityKeyDigest } from "../../../../schemas/external-identities";
@@ -1182,6 +1183,219 @@ describe("the provisioning branch", () => {
     const account = await userHolding("person@example.com");
     expect(account).toMatchObject({ id: result.userId });
     expect(await rolesOf(String(result.userId))).toEqual([editor]);
+  });
+
+  it("resolves the loser of two racing first sign-ins to the winner's account, keeping one account and one identity", async () => {
+    await plantUser("first"); // the install is not empty
+    const editor = await plantRole("editor");
+
+    // Both writers are held at the creation primitive's door until both
+    // have arrived, which is after both passed the identity lookup that
+    // precedes it: the read-then-write window two first sign-ins for one
+    // identity actually race in, made deterministic rather than left to
+    // timing. They assert DIFFERENT addresses, so the race is decided by
+    // the identity's uniqueness — the backstop R-22's concurrency test
+    // names — and not by the address's.
+    const adapter = countedAdapter();
+    const primitive = new UserMutationService(adapter, testLogger);
+    let arrived = 0;
+    let open!: () => void;
+    const gate = new Promise<void>(resolve => (open = resolve));
+    const service = new IdentityService(adapter, testLogger, {
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+      roles: new RoleQueryService(adapter, testLogger),
+      users: {
+        createExternalUser: async input => {
+          arrived += 1;
+          if (arrived === 2) open();
+          await gate;
+          return primitive.createExternalUser(input);
+        },
+      },
+      sessionOf: sessionReading(null),
+    });
+
+    const [one, two] = await Promise.all([
+      service.resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({
+          issuer: undefined,
+          subject: "raced",
+          address: "racer-one@example.com",
+        })
+      ),
+      service.resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({
+          issuer: undefined,
+          subject: "raced",
+          address: "racer-two@example.com",
+        })
+      ),
+    ]);
+
+    // One account won; the loser resolved to it rather than seeing the
+    // unique index's refusal as an error. Neither promise rejected, so no
+    // database violation surfaced as a crash.
+    expect(one.userId).toBeTypeOf("string");
+    expect(two.userId).toBe(one.userId);
+    // Exactly the rows one sign-in writes: no second account, no orphaned
+    // account the identity will never resolve to, no dangling role grant.
+    expect(await usersCount()).toBe(2);
+    expect(await identitiesOf(String(one.userId))).toBe(1);
+    expect(await rolesOf(String(one.userId))).toEqual([editor]);
+    const stored = await identityRowOf("acme-auth:google", "raced");
+    expect(stored).toMatchObject({
+      userId: one.userId,
+      issuer: "",
+      subject: "raced",
+    });
+    expect(["racer-one@example.com", "racer-two@example.com"]).toContain(
+      (stored as { address?: unknown } | undefined)?.address
+    );
+  });
+
+  it("restarts a creation the database's restart verdict refused, but not one joined to the caller's transaction", async () => {
+    await plantRole("editor");
+    const adapter = countedAdapter();
+    const verdict = () =>
+      new DbError({
+        message: "Deadlock found when trying to get lock",
+        kind: "deadlock",
+        dialect: "mysql",
+        code: "ER_LOCK_DEADLOCK",
+      });
+    let attempts = 0;
+    const service = new IdentityService(adapter, testLogger, {
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+      roles: new RoleQueryService(adapter, testLogger),
+      users: {
+        // The first attempt meets the verdict, wrapped as the creation
+        // primitive wraps a database error; any restart succeeds.
+        createExternalUser: async () => {
+          attempts += 1;
+          if (attempts === 1) throw NextlyError.fromDatabaseError(verdict());
+          return { id: "restarted" };
+        },
+      },
+      sessionOf: sessionReading(null),
+    });
+
+    // Owning its transaction, the creation is restarted once.
+    const owned = await service.resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "owned" })
+    );
+    expect(owned.userId).toBe("restarted");
+    expect(attempts).toBe(2);
+
+    // Joined to a transaction the caller opened, the verdict ended the
+    // caller's transaction too: no restart, the verdict is the caller's.
+    attempts = 0;
+    await expect(
+      adapter.transaction(() =>
+        service.resolveSignInIdentity(
+          pluginIdentityBinding(ACME),
+          handOff({ subject: "joined" })
+        )
+      )
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(attempts).toBe(1);
+  });
+
+  it("resolves a duplicate refusal to the winner, but not one joined to the caller's transaction", async () => {
+    await plantRole("editor");
+    await plantUser("winner");
+    const adapter = countedAdapter();
+    // The creation meets a winner that stored the identity after this
+    // sign-in's lookup, and is refused as the duplicate it then is.
+    const service = new IdentityService(adapter, testLogger, {
+      linkingPolicy: policyProvisioning({
+        mayProvision: true,
+        roles: ["editor"],
+      }),
+      roles: new RoleQueryService(adapter, testLogger),
+      users: {
+        createExternalUser: async input => {
+          await plantIdentity({
+            providerKey: "acme-auth:google",
+            issuer: GOOGLE_ISSUER,
+            subject: input.identity?.subject ?? "",
+            userId: "winner",
+          });
+          throw NextlyError.duplicate();
+        },
+      },
+      sessionOf: sessionReading(null),
+    });
+
+    // Owning its transaction, the loser re-reads and resolves the winner.
+    const owned = await service.resolveSignInIdentity(
+      pluginIdentityBinding(ACME),
+      handOff({ subject: "owned" })
+    );
+    expect(owned.userId).toBe("winner");
+
+    // Joined to the caller's transaction, the refusal is the caller's: it
+    // propagates rather than being re-read (a re-read here, on the one
+    // connection, would have found the winner and resolved it).
+    await expect(
+      adapter.transaction(() =>
+        service.resolveSignInIdentity(
+          pluginIdentityBinding(ACME),
+          handOff({ subject: "joined" })
+        )
+      )
+    ).rejects.toMatchObject({ code: "DUPLICATE" });
+  });
+
+  it("looks an identity up only once another request's open transaction has ended, never seeing its uncommitted row", async () => {
+    await plantUser("holder");
+    const reader = service({
+      linkingPolicy: policyEnabling("acme-auth:google"),
+    });
+
+    // Another request's transaction writes the identity row and stays open,
+    // then rolls back: on SQLite's one shared connection, a read issued
+    // meanwhile would run inside it.
+    let release!: () => void;
+    const released = new Promise<void>(resolve => (release = resolve));
+    let held!: () => void;
+    const isHeld = new Promise<void>(resolve => (held = resolve));
+    const holding = testDb.adapter.transaction(async () => {
+      await plantIdentity({
+        providerKey: "acme-auth:google",
+        issuer: GOOGLE_ISSUER,
+        subject: "uncommitted",
+        userId: "holder",
+      });
+      held();
+      await released;
+      throw new Error("rolled back");
+    });
+    await isHeld;
+
+    let settled = false;
+    const lookup = reader
+      .resolveSignInIdentity(
+        pluginIdentityBinding(ACME),
+        handOff({ subject: "uncommitted" })
+      )
+      .finally(() => (settled = true));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    // The lookup waits for the open transaction rather than reading in it.
+    expect(settled).toBe(false);
+
+    release();
+    await expect(holding).rejects.toThrow("rolled back");
+    // And sees only what committed: the rolled-back row resolves nobody.
+    expect((await lookup).userId).toBeNull();
   });
 });
 
