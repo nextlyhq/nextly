@@ -82,8 +82,13 @@ export async function refuseUnansweredDialogQuestions(args: {
     dialect: args.dialect,
     defaultLocale: appLocalization()?.defaultLocale ?? "en",
   });
+  // A column a move carries into a group is not a drop, nor a rename's source: the save's file
+  // copies its values before the column goes, so it is asked nothing (`moved`, from the save's
+  // planned moves).
+  const moved = new Set(args.moved ?? []);
   const candidates = preview.candidates.filter(
-    candidate => candidate.tableName === args.tableName
+    candidate =>
+      candidate.tableName === args.tableName && !moved.has(candidate.fromColumn)
   );
   // The drops the request answers for are those of the fields the change removes or keeps by name
   // without their column on the row (`fieldsDroppedFromRow`).
@@ -96,9 +101,6 @@ export async function refuseUnansweredDialogQuestions(args: {
     wasLocalized: args.wasLocalized,
     isLocalized: args.isLocalized,
   };
-  // A column a move carries into a group is not a drop: the save's file copies its values before
-  // the column goes, so it is asked nothing (`moved`, from the save's planned moves).
-  const moved = new Set(args.moved ?? []);
   const removed = new Set(
     fieldsDroppedFromRow(save)
       .map(field => toSnakeCase(field.name))

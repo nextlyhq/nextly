@@ -45,7 +45,6 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
-import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import {
   FirstQuestionWatch,
   landingPush,
@@ -57,6 +56,7 @@ import {
 } from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { fieldGroupEntity } from "../../domains/schema/builder-save/stored-entity";
+import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
@@ -89,6 +89,8 @@ import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
+  entityDialogQuestions,
+  entityPushReason,
   reviewBuilderSchemaChange,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
@@ -109,6 +111,7 @@ import {
   getLoggerFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
+import { readRequestedMoves } from "../helpers/request-moves";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
@@ -629,6 +632,8 @@ export const COMPONENTS_METHODS: Record<
         table: tableName,
         stored: fieldGroupEntity(component),
         fields: fields as FieldDefinition[],
+        // Each move checked as the save checks it, and what its column does not carry named.
+        moves: readRequestedMoves(body),
         localized:
           readRequestLocalized(body) ??
           (component as { localized?: boolean }).localized === true,
@@ -702,6 +707,8 @@ export const COMPONENTS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { stored: "under-lock" });
+      // The fields the save moves, each kept by statements its migration file carries.
+      const moves = readRequestedMoves(body);
 
       return withSchemaChangeExcluded(
         {
@@ -832,6 +839,40 @@ export const COMPONENTS_METHODS: Record<
             newFields: fields,
             subject: `Field group '${slug}'`,
             component: true,
+          });
+          // Whether the push applies this save rather than its file, asked at most once. A save
+          // whose moves would need the push is refused here, before the preflights below write
+          // anything; the write reuses the answer.
+          let pushAnswer: Promise<boolean> | undefined;
+          const pushes = () =>
+            (pushAnswer ??= pushCarriesValues({
+              oldFields: (component.fields ??
+                []) as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              wasStored,
+              isStored,
+              renamed: companionRename,
+              liveTable: async () =>
+                (
+                  await introspectLiveSnapshot(
+                    adapter.getDrizzle(),
+                    adapter.dialect,
+                    [tableName]
+                  )
+                ).tables[0],
+              columnOf: field =>
+                getComponentRowColumnDescriptor(
+                  field,
+                  adapter.dialect,
+                  "fieldGroup"
+                ),
+              renames: renamedFieldsOf(renameResolutions ?? []),
+              moved: moves,
+            }));
+          await refuseMovesOffTheFile({
+            moves,
+            writes: builderSave !== undefined,
+            pushReason: () => entityPushReason(builderSave, pushes),
           });
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.
@@ -1014,6 +1055,7 @@ export const COMPONENTS_METHODS: Record<
               stored: fieldGroupEntity(component),
               fields: fields as unknown as FieldDefinition[],
               localized: isLocalized,
+              moves,
               answers: {
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
@@ -1039,49 +1081,28 @@ export const COMPONENTS_METHODS: Record<
             {
               // The push where the save carries values across its change; its own migration file,
               // run in tries as `nextly migrate` runs it, where it carries none.
-              pushWhen: () =>
-                pushCarriesValues({
-                  oldFields: (component.fields ??
-                    []) as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  wasStored,
-                  isStored,
-                  renamed: companionRename,
-                  liveTable: async () =>
-                    (await introspectLiveSnapshot(db, dialect, [tableName]))
-                      .tables[0],
-                  columnOf: field =>
-                    getComponentRowColumnDescriptor(
-                      field,
-                      dialect,
-                      "fieldGroup"
-                    ),
-                  renames: renamedFieldsOf(renameResolutions ?? []),
-                }),
+              pushWhen: pushes,
               afterFile: () =>
                 reconcileBuilderCompanion("component", companion),
               // The push's questions, asked of the file before anything is written: a rename the
               // request does not answer, or a drop it does not confirm, refuses the save as the
               // push refuses it.
-              questions: () =>
-                refuseUnansweredDialogQuestions({
-                  desired,
-                  db,
-                  dialect,
-                  tableName,
-                  // The builder that made the table, which the offered rename is judged by.
-                  builtBy: "fieldGroup",
-                  oldFields: (component.fields ??
-                    []) as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  wasLocalized,
-                  isLocalized,
-                  renameResolutions: renameResolutions ?? [],
-                  eventResolutions: eventResolutions ?? [],
-                  ...(legacyBundle === undefined
-                    ? {}
-                    : { legacy: legacyBundle }),
-                }),
+              questions: entityDialogQuestions({
+                desired,
+                db,
+                dialect,
+                tableName,
+                // The builder that made the table, which the offered rename is judged by.
+                builtBy: "fieldGroup",
+                oldFields: (component.fields ??
+                  []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+                renameResolutions,
+                eventResolutions,
+                legacy: legacyBundle,
+              }),
               // On the file road the row is written in the file's own transaction, so a failed
               // write leaves the save as it was and is answered as the failure it is. Not where the
               // translations table is reconciled after the file: the row would then record the
