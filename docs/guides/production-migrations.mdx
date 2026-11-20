@@ -1314,6 +1314,28 @@ A release can add tables to Nextly's own core schema. An existing database gets 
 
 User migration files contain **user-schema only**. Nextly's own tables are owned by the Nextly package version, and `nextly migrate` brings them up to date before it applies your files, with the same consent for what that deletes as for the files: at a terminal it lists each deletion and asks once; with nobody to ask it refuses unless `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covers it. `nextly migrate --dry-run` names what it would delete. There is no separate command for it: `nextly upgrade --reconcile-core`, which earlier releases had, changes nothing now and names `nextly migrate`.
 
+### Two fields that share one column
+
+Two fields side by side may not share one stored value: two fields at an entity's top level whose names become one column (`Title` and `title`, `siteName` and `site_name`), or two fields of the same name inside one group or repeater. Earlier releases kept an entity that already held such a pair working. Now a start, a Builder save of its definition, `nextly migrate:create`, `nextly migrate` and `nextly migrate:check` refuse it with `FIELD_NAME_DUPLICATE` (`CONFIG_INVALID` in the CLI), naming the pair and what it shares:
+
+```text
+Collection 'posts': fields 'Title' and 'title' at the top level share the column 'title'. Rename one of them so each has its own column.
+```
+
+Rename one of the two fields so each has its own column or key:
+
+- **In your configuration:** rename it in the file and start again.
+- **In the Builder:** the app does not start, so the Builder cannot open. Rename the field in the Builder's definition file (`db.uiSchemaFile`, `./ui-schema.json` by default), then write and apply the migration:
+
+  ```bash
+  nextly migrate:create
+  nextly migrate
+  ```
+
+  The migration gives the renamed field its own column or key and records the new definition, and the start then goes on. Values stored under the shared column or key stay with the field that kept its name.
+
+A pair that shares no stored value, such as two names that differ only in letter case inside a group (two separate keys), keeps working where an entity already holds it, and `nextly migrate:check` warns about it. A change that adds such a pair is refused.
+
 ### Upgrading Nextly
 
 Nextly's packages (`nextly` and every `@nextlyhq/*` package) are released together and must be installed at one release. `nextly upgrade` moves all of them at once, with the package manager the project is installed with (npm, pnpm, Yarn with `node_modules`, or bun), found from its lockfile or its `packageManager` field:
