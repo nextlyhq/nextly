@@ -15,8 +15,11 @@ import {
   transitionNeeded,
 } from "../field-group-names-transition";
 
-const LEGACY = {};
-const CURRENT = { fieldGroupStorage: "current" as const };
+const LEGACY = { snapshot: { tables: [] } };
+const CURRENT = {
+  fieldGroupStorage: "current" as const,
+  snapshot: { tables: [] },
+};
 
 describe("the history's field-group naming", () => {
   it("is the newest snapshot's, whatever the caller resolved", () => {

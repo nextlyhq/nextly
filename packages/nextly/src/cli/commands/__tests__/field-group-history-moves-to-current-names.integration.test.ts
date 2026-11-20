@@ -538,7 +538,9 @@ describe.each(getConfiguredTestDialects())(
       const refused = await create("add_subtitle");
 
       expect(refused.exit, refused.said).not.toBeUndefined();
-      expect(refused.said).toContain("FIELD_GROUP_HISTORY_NAMES_UNRECORDED");
+      expect(refused.said).toContain(
+        "keeps field groups under the current names (fg_fh_card with _field_group_type) and does not record that it does"
+      );
       expect(refused.said).toContain("nextly migrate:baseline");
       expect(
         readdirSync(join(dir, "migrations")).filter(f =>

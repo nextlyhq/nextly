@@ -854,6 +854,13 @@ exports[`each code, as a command ends with it > FIELD_GROUP_HISTORY_BEHIND_STORA
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-history-behind-storage  (FIELD_GROUP_HISTORY_BEHIND_STORAGE)"
 `;
 
+exports[`each code, as a command ends with it > FIELD_GROUP_HISTORY_NAMES_UNRECORDED 1`] = `
+"✗ The snapshot of migration 20261101_120000_000_add_banner keeps field groups under the current names (fg_banner with _field_group_type) and does not record that it does.
+  Why:  An earlier release wrote it after this site's field groups moved, and read as the legacy names the next migration would drop those tables and create legacy copies.
+  Next: Nothing was written or applied. Re-baseline the history with \`nextly migrate:baseline\`: it lists how to clear the existing migrations, then records the tables as the database holds them.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-history-names-unrecorded  (FIELD_GROUP_HISTORY_NAMES_UNRECORDED)"
+`;
+
 exports[`each code, as a command ends with it > FIELD_GROUP_MIGRATION_IN_FLIGHT 1`] = `
 "✗ The command did not run: a field-group storage migration is in flight on this database.
   Why:  Mid-run, some field-group tables carry their old names and some their new ones (it is at step 3), a shape neither the old configuration nor the new one describes.
@@ -894,6 +901,13 @@ exports[`each code, as a command ends with it > FIELD_GROUP_TRANSITION_REFUSED 1
   Why:  The move changes nothing else, so a change written into its snapshot would be missing from every database that applies it.
   Next: Nothing was written. Write those first with \`nextly migrate:create --name <name>\`, then run it again.
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-transition-refused  (FIELD_GROUP_TRANSITION_REFUSED)"
+`;
+
+exports[`each code, as a command ends with it > FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED 1`] = `
+"✗ This database's field-group table fg_banner still holds the legacy type column _component_type, and the project's migration history records _field_group_type there.
+  Why:  An earlier release created it after the field groups moved to the current names, so the storage migration never renamed the column, and every file planned from the history would address a column the database does not have.
+  Next: No file was applied. Re-baseline the history with \`nextly migrate:baseline\`: it lists how to clear the existing migrations, then records each table with the columns it holds.
+  Docs: https://nextlyhq.com/docs/cli/errors/field-group-type-column-not-recorded  (FIELD_GROUP_TYPE_COLUMN_NOT_RECORDED)"
 `;
 
 exports[`each code, as a command ends with it > FIELDS_LEAVING_TRANSLATION_NOT_MOVED 1`] = `
