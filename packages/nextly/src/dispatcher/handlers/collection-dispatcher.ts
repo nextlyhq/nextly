@@ -1598,6 +1598,8 @@ const COLLECTIONS_METHODS: Record<
         translationStatus: isTruthyParam(p["translation-status"]),
         // `?source-locales=1` attaches `_sources`, each translatable value's language.
         sourceLocales: isTruthyParam(p["source-locales"]),
+        // Each row's review state, when the list asks for it (the admin's Review column).
+        reviewState: isTruthyParam(p.reviewState),
         // `?translations=all` attaches every language's values (`_allLocales`).
         translations: parseTranslationsParam(p.translations),
         // `?count=capped` counts the total no further than the list shows.

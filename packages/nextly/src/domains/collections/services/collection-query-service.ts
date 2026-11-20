@@ -2863,11 +2863,7 @@ export class CollectionQueryService extends BaseService {
     // read, so it must not keep a row either. A trusted read judged nobody, and
     // a site with no languages has only unlocalized rows, so both consider
     // every language.
-    const ruleLocales = currentRuleLanguage().locales;
-    const locales =
-      params.overrideAccess === true || ruleLocales.length === 0
-        ? null
-        : ruleLocales;
+    const locales = this.judgedLocales(params.overrideAccess);
     const conditions: SQL[] = [];
     if (filter.pendingChange) {
       conditions.push(
@@ -2945,6 +2941,59 @@ export class CollectionQueryService extends BaseService {
       );
     }
     return conditions;
+  }
+
+  /**
+   * The languages this read's access rules were judged for: the language it
+   * reads and its fallback chain, or every language where it reads them all.
+   * A part in any other language is withheld from this read. A trusted read
+   * judged nobody, and a site with no languages has only unlocalized rows, so
+   * both consider every language (`null`).
+   */
+  private judgedLocales(
+    overrideAccess: boolean | undefined
+  ): readonly string[] | null {
+    const ruleLocales = currentRuleLanguage().locales;
+    return overrideAccess === true || ruleLocales.length === 0
+      ? null
+      : ruleLocales;
+  }
+
+  /**
+   * Each row's review state under `_review`, for a read that asks for it
+   * (`reviewState`), as the document's own review read places each part:
+   * read for the page at once (`rowReviewStatesOf`), among the parts the read
+   * may see. Only for a trusted read or a reader the read names: a visitor's
+   * rows carry no review key at all, nor do the rows of a collection no
+   * workflow holds.
+   */
+  private async attachReviewStates(
+    rows: Record<string, unknown>[],
+    params: {
+      collectionName: string;
+      overrideAccess?: boolean;
+      accessUser?: UserContext;
+    }
+  ): Promise<void> {
+    if (params.overrideAccess !== true && !params.accessUser) return;
+    // Loaded when asked: the workflows domain reaches the services this module is read by.
+    const { rowReviewStatesOf } = await import(
+      "../../workflows/row-review-states"
+    );
+    const ids = rows
+      .map(row => row.id)
+      .filter((id): id is string | number => id !== undefined && id !== null)
+      .map(String);
+    const reviews = await rowReviewStatesOf(
+      this.adapter,
+      params.collectionName,
+      ids,
+      this.judgedLocales(params.overrideAccess)
+    );
+    for (const row of rows) {
+      const parts = reviews.get(String(row.id));
+      if (parts) row._review = { parts };
+    }
   }
 
   /**
@@ -4089,6 +4138,11 @@ export class CollectionQueryService extends BaseService {
      */
     apiKeyId?: string;
     /**
+     * Give each row its review state under `_review`, each part where it
+     * stands, for a collection a workflow holds; a visitor's rows get none.
+     */
+    reviewState?: boolean;
+    /**
      * Draft/Published filter override. Only takes effect when the collection
      * has Draft/Published enabled (collection.status === true).
      * - 'published' (default for public callers): only published rows
@@ -4842,6 +4896,14 @@ export class CollectionQueryService extends BaseService {
         requestFacts,
         ...readCallerOf(params),
       });
+
+      if (params.reviewState === true) {
+        await this.attachReviewStates(finalData, {
+          collectionName: params.collectionName,
+          overrideAccess: params.overrideAccess,
+          accessUser,
+        });
+      }
 
       // Build paginated response with all metadata
       const paginatedResponse = buildPaginatedResponse(finalData, {

@@ -867,6 +867,8 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
     /** The API key behind `authenticatedScope`, by id, passed through for `_waitingForMe`. */
     apiKeyId?: string;
+    /** Give each row its review state under `_review` (a list read only). */
+    reviewState?: boolean;
     /**
      * Draft/Published filter override (only effective when collection.status
      * === true). Public callers default to 'published'; trusted callers can

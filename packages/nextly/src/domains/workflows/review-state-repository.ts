@@ -180,6 +180,40 @@ export async function readDocumentReviewStates(
   return rows.map(fromRow);
 }
 
+/** Ids per statement: SQLite binds 999 values at most, the lowest of the dialects. */
+const ENTRY_IDS_PER_READ = 500;
+
+/**
+ * Every part with a review state of each of `entryIds`, documents of one collection or Single:
+ * a page of a list read at once, a statement per 500 documents, never one per document.
+ *
+ * @experimental
+ */
+export async function readReviewStatesOfDocuments(
+  db: ReviewStatesDb,
+  scope: { scopeKind: ReviewDocument["scopeKind"]; scopeSlug: string },
+  entryIds: readonly string[]
+): Promise<ReviewState[]> {
+  const states: ReviewState[] = [];
+  for (let at = 0; at < entryIds.length; at += ENTRY_IDS_PER_READ) {
+    const rows = await db.select<ReviewStateRow>(REVIEW_STATES_TABLE, {
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: scope.scopeKind },
+          { column: "scopeSlug", op: "=", value: scope.scopeSlug },
+          {
+            column: "entryId",
+            op: "IN",
+            value: entryIds.slice(at, at + ENTRY_IDS_PER_READ),
+          },
+        ],
+      },
+    });
+    states.push(...rows.map(fromRow));
+  }
+  return states;
+}
+
 /** A stage of one collection or Single, as a filter on review states names it. */
 export interface ScopedStageFilter {
   kind: ReviewScopeKind;

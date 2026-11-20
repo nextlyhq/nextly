@@ -51,6 +51,14 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
    * @default false
    */
   sourceLocales?: boolean;
+  /**
+   * Give each row its review state under `_review`: each part where it stands in the
+   * collection's workflow, as `workflows.reviewState` places it. Rows of a collection no
+   * workflow holds carry none.
+   *
+   * @experimental
+   */
+  reviewState?: boolean;
 
   /**
    * `"all"`: attach every language's values beside the read's own, under

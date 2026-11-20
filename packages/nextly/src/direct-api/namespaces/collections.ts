@@ -106,6 +106,7 @@ export async function find<TSlug extends CollectionSlug>(
     fallbackLocale: config.fallbackLocale,
     sourceLocales: args.sourceLocales,
     translations: args.translations,
+    ...(args.reviewState === true ? { reviewState: true } : {}),
     context: config.context,
   });
 
