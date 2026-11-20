@@ -30,7 +30,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../../../domains/field-groups/migration/target";
 import type { ServiceContainer } from "../../../services";
 
 const localization = { locales: ["en", "es"], defaultLocale: "en" };
@@ -335,11 +335,11 @@ describeEachDialect(
         )
       ).toBe("accepted");
       await query(
-        `ALTER TABLE ${q("comp_promo")} ADD COLUMN ${q("headline")} TEXT`
+        `ALTER TABLE ${q("fg_promo")} ADD COLUMN ${q("headline")} TEXT`
       );
-      const columnsBefore = await columnsOf("comp_promo");
+      const columnsBefore = await columnsOf("fg_promo");
       const { version } = await registered(
-        STORAGE_FORMAT.registryTable,
+        MIGRATION_TARGET.registryTable,
         "promo"
       );
 
@@ -351,17 +351,17 @@ describeEachDialect(
             fields: RENAMED,
             confirmed: true,
             schemaVersion: version,
-            eventResolutions: confirmDrop("comp_promo"),
+            eventResolutions: confirmDrop("fg_promo"),
             renameResolutions: [],
           }
         )
       );
 
-      expect(answer).toEqual(takenOn("comp_promo"));
+      expect(answer).toEqual(takenOn("fg_promo"));
       expect(
-        (await registered(STORAGE_FORMAT.registryTable, "promo")).names
+        (await registered(MIGRATION_TARGET.registryTable, "promo")).names
       ).toEqual(["heading", "body"]);
-      expect(await columnsOf("comp_promo")).toEqual(columnsBefore);
+      expect(await columnsOf("fg_promo")).toEqual(columnsBefore);
     });
 
     // A rename that keeps the column's name but moves its values between the tables: a field named

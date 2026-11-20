@@ -79,7 +79,7 @@ const DIALECTS: {
   },
 ];
 
-const TABLE = "comp_card";
+const TABLE = "fg_card";
 /** The migration dev's `migrate:create` wrote for `FIELDS` before this change, per dialect. */
 const MADE_BEFORE = join(
   __dirname,

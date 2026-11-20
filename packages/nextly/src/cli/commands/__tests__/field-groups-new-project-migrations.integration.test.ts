@@ -20,6 +20,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createScratchDatabase } from "../../../__tests__/helpers/fresh-database";
+import { writeLegacyFieldGroupMigration } from "../../../__tests__/helpers/legacy-field-group-history";
 import {
   defineCollection,
   defineConfig,
@@ -32,7 +33,6 @@ import { shutdownServices } from "../../../di/register";
 import { runFieldGroupMigration } from "../../../domains/field-groups/migration/run";
 import { forgetFieldGroupStorageNames } from "../../../domains/field-groups/storage/resolve-storage-names";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
-import { generateMigration } from "../../../domains/schema/migrate-create/generate";
 import {
   getConfiguredTestDialects,
   type TestDialect,
@@ -228,28 +228,13 @@ describe.each(getConfiguredTestDialects())(
     it("keep a legacy history's names on an empty database", async () => {
       const url = await openDatabase(dialect);
       loaded.config = PROJECT;
-      await generateMigration({
-        name: "init",
-        dialect,
+      await writeLegacyFieldGroupMigration({
+        config: PROJECT,
+        projectRoot: dir,
         migrationsDir: join(dir, "migrations"),
-        collections: [
-          {
-            slug: "np_posts",
-            tableName: "dc_np_posts",
-            fields: [{ name: "title", type: "text" }],
-          },
-        ],
-        singles: [],
-        components: [
-          {
-            slug: "np_card",
-            tableName: "comp_np_card",
-            fields: [{ name: "heading", type: "text" }],
-          },
-        ],
-        fieldGroupNaming: "legacy",
-        nonInteractive: true,
-      } as Parameters<typeof generateMigration>[0]);
+        dialect,
+        name: "init",
+      });
       expect(await newestSnapshot()).toMatchObject({ version: 1 });
 
       const applied = await migrate();

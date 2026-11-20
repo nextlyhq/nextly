@@ -190,12 +190,9 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("moves a field group's targets where its registry's storage was migrated to its new name", async () => {
+      // A new site's registry is under its migrated name, where the storage migration leaves an
+      // older site's: the rename reads it there.
       await seed(dialect);
-      // The field-group storage migration renames the registry; the registry's own resolver reads
-      // it under either name, and so does the rename.
-      await t().adapter.executeQuery(
-        `ALTER TABLE dynamic_field_groups RENAME TO ${MIGRATION_TARGET.registryTable}`
-      );
 
       await rename("authors", "writers");
 

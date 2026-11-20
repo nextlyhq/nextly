@@ -259,14 +259,15 @@ export async function seedBuilderSingle(
 }
 
 /**
- * Create the `comp_<slug>` table + `dynamic_components` row for a UI component.
+ * Create the `fg_<slug>` table + field-group registry row for a UI component, as a new site does.
  */
 export async function seedBuilderComponent(
   adapter: DrizzleAdapter,
   opts: SeedBuilderCollectionOptions
 ): Promise<{ slug: string; tableName: string }> {
   const slug = opts.slug.toLowerCase();
-  const tableName = `comp_${slug}`;
+  // A new site keeps its field groups on the current names, as the Builder's create names them.
+  const tableName = `fg_${slug}`;
   const dialect = adapter.getCapabilities().dialect;
 
   const userFields = opts.fields

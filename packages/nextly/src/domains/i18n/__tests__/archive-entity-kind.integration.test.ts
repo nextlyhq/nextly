@@ -659,16 +659,10 @@ describeEachDialect("the archive's entity kind", dialect => {
     await legacyRow("hero", collectionId, "Antes");
     await legacyRow("hero", "hero-1", "Grupo");
     await migrateCore();
-    // What the storage migration leaves: the registry under its new name, and no old one.
-    await query(
-      dialect === "mysql"
-        ? "RENAME TABLE `dynamic_field_groups` TO `dynamic_field_groups`"
-        : `ALTER TABLE "dynamic_field_groups" RENAME TO "dynamic_field_groups"`
-    );
+    // A new site starts where the storage migration leaves an older one: the registry under its
+    // new name, and no old one.
     forgetFieldGroupStorageNames();
-    expect(await current.adapter.tableExists("dynamic_field_groups")).toBe(
-      false
-    );
+    expect(await current.adapter.tableExists("dynamic_components")).toBe(false);
 
     const restored = await restoreHero();
 
