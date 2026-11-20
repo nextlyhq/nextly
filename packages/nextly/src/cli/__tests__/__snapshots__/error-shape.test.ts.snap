@@ -1134,8 +1134,8 @@ exports[`each code, as a command ends with it > MISSING_MIGRATION 1`] = `
 
 exports[`each code, as a command ends with it > MISSING_SNAPSHOT 1`] = `
 "✗ \`20261020_120000_add_posts.sql\` has no paired snapshot file in /home/you/app/migrations/meta.
-  Why:  Nothing is at \`20261020_120000_add_posts.snapshot.json\`, which \`migrate:create\` writes beside every migration; a migration generated before it wrote snapshots has none.
-  Next: Either delete it, or re-create it with \`nextly migrate:create --blank\` and copy the SQL across.
+  Why:  Nothing is at \`20261020_120000_add_posts.snapshot.json\`, which \`migrate:create\` writes beside every migration it generates, and the file does not say it is a blank migration, which has none; a migration generated before snapshots were written has none either.
+  Next: Restore the snapshot if it was deleted. For SQL you wrote yourself: if no database has applied the file, re-create it with \`nextly migrate:create --blank\` and copy the SQL across; if one has, add the line \`-- This is a blank migration file for custom SQL.\` to its header instead, then accept the edit with \`nextly migrate:resolve --applied '20261020_120000_add_posts' --skip-verify\` on every database that has applied it. Otherwise delete the file.
   Docs: https://nextlyhq.com/docs/cli/errors/missing-snapshot  (MISSING_SNAPSHOT)"
 `;
 
