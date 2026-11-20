@@ -52,6 +52,10 @@ import {
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
 import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
+import {
+  declinedRename,
+  refuseUnansweredRename,
+} from "../../schema/field-rename-answers";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type { ForeignKeySpec } from "../../schema/pipeline/diff/types";
@@ -1566,6 +1570,36 @@ export class DynamicCollectionService extends BaseService {
           userDefinedFields.some(kept => kept.name === f.name)
       );
 
+      // A field leaving and another of the same type arriving is never taken for a rename by
+      // guesswork: on a road that takes the request's answers, a pair with none is refused here,
+      // before anything is written.
+      const renameCandidates = this.schemaService.renameCandidatesOf(
+        oldUserFields,
+        userDefinedFields,
+        { was: collectionWasLocalized, is: collectionIsLocalized }
+      );
+      refuseUnansweredRename(
+        `The collection "${collectionName}"`,
+        renameCandidates,
+        field => this.schemaService.storageNameOf(collection.tableName, field),
+        {
+          before: oldUserFields.map(f => f.name),
+          after: userDefinedFields.map(f => f.name),
+        }
+      );
+      this.schemaService.refuseRenameJoiningTranslation(
+        `The collection "${collectionName}"`,
+        renameCandidates,
+        { was: collectionWasLocalized, is: collectionIsLocalized }
+      );
+      // The translated field the request answered as a drop and an add, from the same candidates,
+      // which the translated-field preflight below is told of, so it takes that removal, and only
+      // that one, as the request's.
+      const droppedByAnswer = this.schemaService.translatedFieldDroppedByAnswer(
+        renameCandidates,
+        collectionWasLocalized
+      );
+
       // A many-to-many added to a renamed collection would get a junction its reads can't find.
       refuseNewJunctionsOnRenamedCollection({
         slug: collectionName,
@@ -1620,6 +1654,9 @@ export class DynamicCollectionService extends BaseService {
         newFields: userDefinedFields,
         wasLocalized: collectionWasLocalized,
         isLocalized: collectionIsLocalized,
+        ...(droppedByAnswer === undefined
+          ? {}
+          : { renamed: null, droppedByAnswer }),
       });
       // What the existing entries must satisfy for the change to apply, asked before any statement
       // runs: a refusal part-way would leave MySQL, which commits each schema statement, holding
@@ -1905,7 +1942,14 @@ export class DynamicCollectionService extends BaseService {
           tableName: companionOffer.candidate.tableName,
           fromColumn: companionOffer.candidate.fromColumn,
           toColumn: companionOffer.candidate.toColumn,
-          choice: "rename",
+          // As the request answered it: a pair it declined is dropped and added on the companion
+          // too, and the apply takes that as the request's choice.
+          choice: declinedRename({
+            from: { name: companionOffer.rename.from },
+            to: { name: companionOffer.rename.to },
+          })
+            ? "drop_and_add"
+            : "rename",
         });
       }
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;

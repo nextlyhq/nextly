@@ -5,6 +5,8 @@
  * query text would certify a reader that fails on the real thing — SQLite's `PRAGMA
  * foreign_key_list` names the referencing column `from`, which nothing in the query says.
  */
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -12,7 +14,70 @@ import {
   readIndexNames,
   tableHasRows,
   readColumnNullState,
+  readUniqueColumns,
+  readUniqueIndexesByColumn,
 } from "../live-table-facts";
+
+// A real SQLite table, not transcribed rows: which name `readUniqueColumns` answers for a column
+// held unique twice depends on the order SQLite lists its indexes in, which a fixture would invent.
+describe("the unique indexes holding a column", () => {
+  function posts() {
+    const sqlite = new Database(":memory:");
+    sqlite.exec(
+      `CREATE TABLE "dc_posts" ("id" text PRIMARY KEY NOT NULL, "code" text, "title" text, "tag" text)`
+    );
+    // `code` held unique twice: Nextly's index first, then an older one under another name.
+    sqlite.exec(
+      `CREATE UNIQUE INDEX "uq_dc_posts_code" ON "dc_posts" ("code")`
+    );
+    sqlite.exec(`CREATE UNIQUE INDEX "posts_code_key" ON "dc_posts" ("code")`);
+    sqlite.exec(
+      `CREATE UNIQUE INDEX "uq_dc_posts_title" ON "dc_posts" ("title")`
+    );
+    // Neither holds one column unique on its own: over two columns, and a plain index.
+    sqlite.exec(`CREATE UNIQUE INDEX "pair" ON "dc_posts" ("title", "tag")`);
+    sqlite.exec(`CREATE INDEX "tag_idx" ON "dc_posts" ("tag")`);
+    return { sqlite, db: drizzle({ client: sqlite }) };
+  }
+
+  it("names every index on a column held unique twice", async () => {
+    const { sqlite, db } = posts();
+    try {
+      const byColumn = await readUniqueIndexesByColumn(
+        db,
+        "sqlite",
+        "dc_posts"
+      );
+      expect([...(byColumn.get("code") ?? [])].sort()).toEqual([
+        "posts_code_key",
+        "uq_dc_posts_code",
+      ]);
+      expect(byColumn.get("title")).toEqual(["uq_dc_posts_title"]);
+      // The primary key holds `id` unique, under no name a statement drops it by.
+      expect(byColumn.get("id")).toEqual([null]);
+      expect(byColumn.has("tag")).toBe(false);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("keeps readUniqueColumns' one name per column as it was before every name was kept", async () => {
+    const { sqlite, db } = posts();
+    try {
+      // The answer read from this table by the reader as it stood when it kept one name per
+      // column, the last read: SQLite lists the newest index first, so it is Nextly's own.
+      expect([
+        ...(await readUniqueColumns(db, "sqlite", "dc_posts")).entries(),
+      ]).toEqual([
+        ["title", "uq_dc_posts_title"],
+        ["code", "uq_dc_posts_code"],
+        ["id", null],
+      ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
 
 /** One row of `PRAGMA foreign_key_list("dc_posts")`, verbatim from SQLite 3.51. */
 const SQLITE_FK_ROW = {
