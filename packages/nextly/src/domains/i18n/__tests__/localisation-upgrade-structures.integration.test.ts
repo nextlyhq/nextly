@@ -30,6 +30,9 @@ import {
 } from "../../../plugins/test-nextly";
 import { parsedValue } from "../../../shared/lib/json-column-value";
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
+import { WORKING_DRAFT_SHAPE } from "../../versions/versions-repository";
+import { workingDraftKey } from "../../versions/working-draft-key";
 import { _resetPerLanguageStorage } from "../per-language-storage";
 
 import {
@@ -72,6 +75,10 @@ const SITE = {
 /** The one step under test, as `nextly migrate` lists it. */
 const STRUCTURES_STEP = LOCALISATION_DATA_STEPS.filter(step =>
   step.title.startsWith("keep one structure")
+);
+/** The step splitting a whole-document pending change by part. */
+const DRAFTS_STEP = LOCALISATION_DATA_STEPS.filter(step =>
+  step.title.startsWith("split pending changes")
 );
 
 /** Booting a site takes most of the default timeout on MySQL alone. */
@@ -304,6 +311,85 @@ describeEachDialect(
         expect(byName("slides")).not.toHaveProperty("localized");
         expect(byName("seo")).not.toHaveProperty("localized");
         expect(byName("slides")).toMatchObject({ type: "repeater" });
+      },
+      BOOT_TIMEOUT
+    );
+
+    it(
+      "splits a pending change holding a repeater whole: its text to the language's draft by row, no shared draft for an unchanged structure",
+      async () => {
+        await boot();
+        const created = await t!.nextly.create({
+          collection: SLUG,
+          locale: "en",
+          data: {
+            title: "Show",
+            slides: [
+              { caption: "first", rank: 1 },
+              { caption: "second", rank: 2 },
+            ],
+          },
+        });
+        const id = (created.item as { id: string }).id;
+        const [first, second] = (await read(id, "en")).slides;
+        const ref = {
+          scopeKind: "collection" as const,
+          scopeSlug: SLUG,
+          entryId: id,
+        };
+        // As an earlier release held it: the whole document in Spanish, the repeater whole,
+        // its rows and order as live.
+        await database!.adapter.insert(
+          VERSIONS_TABLE,
+          {
+            id: crypto.randomUUID(),
+            scopeKind: "collection",
+            scopeSlug: SLUG,
+            entryId: id,
+            versionNo: null,
+            status: "draft",
+            isAutosave: false,
+            snapshot: JSON.stringify({
+              title: "Muestra",
+              slides: [
+                { id: first!.id, caption: "primero", rank: 1 },
+                { id: second!.id, caption: "segundo", rank: 2 },
+              ],
+            }),
+            label: null,
+            locale: "es",
+            draftKey: workingDraftKey(ref, "es"),
+            sourceVersionNo: null,
+            createdBy: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          { returning: [] }
+        );
+
+        await migrateData(database!.adapter, SITE, DRAFTS_STEP);
+
+        const rows = await database!.adapter.select<{
+          locale: string | null;
+          snapshot: unknown;
+        }>(VERSIONS_TABLE, {
+          where: {
+            and: [
+              { column: "entryId", op: "=", value: id },
+              ...WORKING_DRAFT_SHAPE,
+            ],
+          },
+        });
+        const bySlot = Object.fromEntries(
+          rows.map(row => [row.locale ?? "shared", parsedValue(row.snapshot)])
+        ) as Record<string, Record<string, unknown>>;
+        // The structure equals live, so it starts no shared change; the text is Spanish's, by row.
+        expect(Object.keys(bySlot)).toEqual(["es"]);
+        expect(bySlot.es!.slides).toEqual({
+          [first!.id]: { caption: "primero" },
+          [second!.id]: { caption: "segundo" },
+        });
+        expect(bySlot.es!.title).toBe("Muestra");
       },
       BOOT_TIMEOUT
     );
