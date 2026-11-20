@@ -135,6 +135,39 @@ export const SCHEMA_CASES = {
         "Applied migration 20261106_120000_000_posts_create.sql was changed after it ran. Restore it as it was applied, or record the change with `nextly migrate:resolve --applied 20261106_120000_000_posts_create.sql`.",
       logContext: { refusedBy: "MIGRATION_TAMPERED" },
     }),
+  // As `nextly migrate` is refused over a Builder save its database records as left part-way.
+  BUILDER_SAVE_LEFT_PART_WAY: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        'A Builder save was left part-way, so the database does not match its migrations yet: a Builder save of the collection "posts", started 2026-11-19T10:00:00.000Z on studio. To settle it, start the app in development (`next dev`) on this project: its start settles the save.',
+      logContext: {
+        reason: "builder-save-left-part-way",
+        saves: ["builder-save-in-progress:collection:posts"],
+      },
+    }),
+  // As a Builder save is refused while an earlier save's remaining migration files have not run.
+  BUILDER_SAVE_EARLIER_LEFT: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        'An earlier Builder save stopped between its migration files (collection "posts"), and the rest of them have not run yet. Start the app in development (`next dev`): its start finishes the previous save. Then save again.',
+      logContext: {
+        reason: "builder-save-pending-files",
+        saves: ["collection:posts"],
+      },
+    }),
+  // As a Builder save is refused over an earlier save's record that cannot be read.
+  BUILDER_SAVE_RECORD_UNREADABLE: () =>
+    NextlyError.conflict({
+      reason: "state",
+      message:
+        'A Builder save of this collection was left part-way, and its record cannot be read. To clear it, first check that no Builder save is running, then remove the one row "builder-save-in-progress:collection:posts" from the nextly_meta table; the next save then records its own.',
+      logContext: {
+        reason: "builder-save-record-unreadable",
+        key: "builder-save-in-progress:collection:posts",
+      },
+    }),
   // As a Schema Builder save throws it for a converted column nobody confirmed.
   NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED: () =>
     new NextlyError({

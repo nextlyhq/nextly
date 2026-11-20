@@ -31,6 +31,7 @@ import { z } from "zod";
 import { copiedValuesFor } from "@admin/components/features/entries/copied-values";
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
+import { HISTORY_REASON } from "@admin/components/features/entries/EntryForm/document-actions";
 import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
 import {
   topLevelFieldNames,
@@ -121,6 +122,11 @@ import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLoc
 import { DocumentLanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { isRemovedFromCode } from "@admin/components/features/entries/removed-from-code-notice";
+import { storedStampOf } from "@admin/components/features/entries/review/review-words";
+import { ReviewChanges } from "@admin/components/features/entries/review/ReviewChanges";
+import { ReviewStatusLine } from "@admin/components/features/entries/review/ReviewStatusLine";
+import { StepRefusalNote } from "@admin/components/features/entries/review/StepRefusalNote";
+import { useEditorReview } from "@admin/components/features/entries/review/useEditorReview";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
@@ -226,6 +232,11 @@ export interface SingleSchema extends RemovedFromCodeMark {
    * cannot offer an affordance the engine will not honour.
    */
   draftsEnabled?: boolean;
+  /**
+   * The workflow that holds this Single's publishing, from the schema read;
+   * `null` (or absent from an older server) where none is attached.
+   */
+  workflow?: { slug: string; label: string } | null;
 }
 
 /**
@@ -611,6 +622,7 @@ function SingleFormRail({
   documentStatus,
   singleSlug,
   locale,
+  reviewHold,
   onLocaleChange,
   panel,
   panelOrder,
@@ -628,6 +640,8 @@ function SingleFormRail({
   /** The Single's slug, which releases address it by with its id. */
   singleSlug: string;
   locale?: string;
+  /** Why the Review section's steps wait, as the header's do (`stepsHold`). */
+  reviewHold: string | undefined;
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   panel: Pick<ReturnType<typeof useDocumentPanel>, "mode" | "shown" | "hide">;
   /** The panel's sections in the order the server placed them. */
@@ -665,6 +679,7 @@ function SingleFormRail({
         navigationDisabled={navigationDisabled}
         publishAllDisabled={publishAllDisabled}
         {...(locale === undefined ? {} : { locale })}
+        reviewHold={reviewHold}
         {...(onLocaleChange === undefined ? {} : { onLocaleChange })}
       />
     </DocumentSidePanel>
@@ -1781,6 +1796,28 @@ export function SingleForm({
     pendingOfferAt: recovery.offer?.savedAt ?? null,
   };
 
+  // The workflow's next step, where a workflow holds this Single's
+  // publishing, in the language being edited.
+  const review = useEditorReview({
+    document: {
+      scopeKind: "single",
+      scopeSlug: schema.slug,
+      entryId: String(document.id),
+    },
+    locale,
+    isDirty: hasUnsavedWork,
+    storedStamp: storedStampOf(document),
+    // A past version on screen, or a save or recovery on its way, holds
+    // the review's steps outside the header as the header holds its own.
+    held:
+      viewingVersion !== null ? HISTORY_REASON : busy ? "Saving…" : undefined,
+    // Known from the schema read: a Single with no workflow publishes
+    // without waiting for a review state. Absent (an older server), it waits.
+    ...(schema.workflow === undefined
+      ? {}
+      : { workflowExpected: schema.workflow !== null }),
+  });
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode: "edit",
     hasStatus,
@@ -1814,6 +1851,7 @@ export function SingleForm({
     ...storingHandlers(handleSubmit),
     onDiscardWorkingDraft: discardWorkingDraft,
     onCancel: handleCancel,
+    ...(review.binding === undefined ? {} : { review: review.binding }),
     ...(onViewApi === undefined ? {} : { onViewApi }),
   };
 
@@ -2080,6 +2118,31 @@ export function SingleForm({
                                       // instead.
                                       isSubmitting={writePending}
                                     />
+                                    <ReviewStatusLine
+                                      status={editedStatus.status}
+                                      hasWorkingDraft={
+                                        editedStatus.hasWorkingDraft
+                                      }
+                                      part={review.part}
+                                      parts={review.parts}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                    />
+                                    <StepRefusalNote
+                                      refusal={review.refusal}
+                                      onDismiss={review.clearRefusal}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                    />
+                                    <ReviewChanges
+                                      scope={{
+                                        kind: "single",
+                                        slug: schema.slug,
+                                        documentId: String(document.id),
+                                      }}
+                                      parts={review.onScreen}
+                                      allParts={review.parts}
+                                      hold={review.hold}
+                                      className={DOCUMENT_COLUMN_INSET}
+                                    />
                                     <EntryMetaStrip
                                       panelCarriesId={panel.docked}
                                       documentId={document.id}
@@ -2157,6 +2220,9 @@ export function SingleForm({
                                   placedSectionProps={placedSectionProps}
                                   about={singlePanel}
                                   {...(locale === undefined ? {} : { locale })}
+                                  // The Review section's steps wait for
+                                  // what holds the header's.
+                                  reviewHold={review.stepsHold}
                                   {...(switchLocale === undefined
                                     ? {}
                                     : { onLocaleChange: switchLocale })}
@@ -2193,6 +2259,7 @@ export function SingleForm({
           onLoadCurrent={() => lock.now.keepEditsAndLoad()}
           onSaveAnyway={saveAnyway}
         />
+        {review.dialog}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

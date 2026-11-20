@@ -12,6 +12,11 @@ import {
   tokensToDtcg,
   type DtcgNode,
 } from "./dtcg";
+import {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  type FluidRangeWidths,
+} from "./fluid-value";
 import type { NamedClass } from "./named-class";
 import { defaultSiteTokens, type SiteToken } from "./site-tokens";
 
@@ -251,5 +256,154 @@ describe("a text style in the design-token file", () => {
     const { file } = exported([]);
     expect(dtcgToTokens(file).textStyles).toBeUndefined();
     expect(group(file)).toBeUndefined();
+  });
+});
+
+/** The site's fluid range in the fixtures below, as the file states it. */
+const RANGE = { min: 320, max: 1440 };
+
+/** A text style made with "Fluid…" across `range`, on two devices. */
+const fluidHeading = (range: FluidRangeWidths): NamedClass => ({
+  id: "ts-fluid",
+  slug: "fluid-heading",
+  label: "Fluid heading",
+  orderIndex: 7,
+  role: "text",
+  styles: {
+    base: {
+      base: {
+        fontSize: fluidValue({ small: 24, large: 40 }, range),
+        fontWeight: 700,
+      },
+      mobile: { fontSize: fluidValue({ small: 18, large: 28 }, range) },
+    },
+  },
+  fluidSizes: {
+    base: { small: 24, large: 40 },
+    mobile: { small: 18, large: 28 },
+  },
+});
+
+/** The file a site on `range` writes with these text styles. */
+const exportedOn = (
+  range: FluidRangeWidths | undefined,
+  textStyles: readonly NamedClass[]
+) => {
+  const made = tokensToDtcg(
+    { tokens, ...(range === undefined ? {} : { fluidRange: range }) },
+    { textStyles }
+  );
+  return JSON.parse(JSON.stringify(made.document)) as DtcgNode;
+};
+
+/** The first kept text style's entry in a file, to change by hand. */
+const keptEntry = (file: DtcgNode) =>
+  (rootData(file).textStyles as DtcgNode[])[0] as DtcgNode;
+
+describe("a text style's fluid sizes in the design-token file", () => {
+  it("are kept in Nextly's extension beside the style, never in the typography value", () => {
+    const file = exportedOn(RANGE, [fluidHeading(RANGE)]);
+    expect(keptEntry(file).fluidSizes).toEqual(fluidHeading(RANGE).fluidSizes);
+    const entry = group(file)?.["fluid-heading"] as DtcgNode | undefined;
+    const value = entry?.$value;
+    // The value design tools read holds the format's five parts and nothing else.
+    expect(Object.keys(value as DtcgNode).sort()).toEqual([
+      "fontFamily",
+      "fontSize",
+      "fontWeight",
+      "letterSpacing",
+      "lineHeight",
+    ]);
+    expect(JSON.stringify(group(file))).not.toContain("fluidSizes");
+  });
+
+  it("leave the typography value exactly as a style without them writes it", () => {
+    const { fluidSizes: _sizes, ...plain } = fluidHeading(RANGE);
+    expect(group(exportedOn(RANGE, [fluidHeading(RANGE)]))).toEqual(
+      group(exportedOn(RANGE, [plain]))
+    );
+  });
+
+  it("are read back with the style, across the range the file states", () => {
+    const read = dtcgToTokens(exportedOn(RANGE, [fluidHeading(RANGE)]));
+    expect(read.issues).toEqual([]);
+    expect(read.textStyles).toEqual([fluidHeading(RANGE)]);
+  });
+
+  it("are read back across the default range where the file states none", () => {
+    const style = fluidHeading(DEFAULT_FLUID_RANGE);
+    const read = dtcgToTokens(exportedOn(undefined, [style]));
+    expect(read.issues).toEqual([]);
+    expect(read.textStyles).toEqual([style]);
+  });
+
+  it("leave out a device's sizes that don't make its size across the file's range, keeping the size and saying so", () => {
+    const file = exportedOn(RANGE, [fluidHeading(RANGE)]);
+    const styles = keptEntry(file).styles as {
+      base: Record<string, Record<string, unknown>>;
+    };
+    // A size typed by hand beside the sizes, as a file edited by hand can hold.
+    styles.base.mobile = { fontSize: "1.25rem" };
+    const read = dtcgToTokens(file);
+    expect(read.textStyles?.[0]?.styles.base?.mobile?.fontSize).toBe("1.25rem");
+    expect(read.textStyles?.[0]?.fluidSizes).toEqual({
+      base: { small: 24, large: 40 },
+    });
+    expect(read.issues.map(entry => entry.message)).toEqual([
+      "\"Fluid heading\" keeps its sizes as they are, but its fluid sizes for a size they don't make across the file's fluid range were left out, so that size won't follow a change of the range.",
+    ]);
+  });
+
+  it("are left out where the style's sizes were made across another range than the file states", () => {
+    const file = exportedOn(RANGE, [fluidHeading(DEFAULT_FLUID_RANGE)]);
+    const read = dtcgToTokens(file);
+    expect(read.textStyles?.[0]?.styles).toEqual(
+      fluidHeading(DEFAULT_FLUID_RANGE).styles
+    );
+    expect(read.textStyles?.[0]).not.toHaveProperty("fluidSizes");
+    expect(read.issues).toHaveLength(1);
+  });
+
+  it.each([
+    ["not a record", "24px"],
+    ["a list", [{ small: 24, large: 40 }]],
+    ["a size of zero", { base: { small: 0, large: 40 } }],
+    ["a size as text", { base: { small: "24", large: 40 } }],
+    ["a missing size", { base: { small: 24 } }],
+    ["an extra key", { base: { small: 24, large: 40, unit: "px" } }],
+  ])(
+    "are ignored where they can't be read (%s), and the style still arrives",
+    (_what, sizes) => {
+      const file = exportedOn(RANGE, [fluidHeading(RANGE)]);
+      keptEntry(file).fluidSizes = sizes;
+      const read = dtcgToTokens(file);
+      const { fluidSizes: _sizes, ...plain } = fluidHeading(RANGE);
+      expect(read.textStyles).toEqual([plain]);
+      expect(read.issues.map(entry => entry.message)).toEqual([
+        "\"Fluid heading\"'s fluid sizes could not be read, so they were ignored: its sizes arrive as they are, and won't follow a change of the fluid range.",
+      ]);
+    }
+  );
+
+  it("are left out for a device the style has no size on", () => {
+    const file = exportedOn(RANGE, [fluidHeading(RANGE)]);
+    keptEntry(file).fluidSizes = {
+      ...fluidHeading(RANGE).fluidSizes,
+      tablet: { small: 20, large: 30 },
+    };
+    const read = dtcgToTokens(file);
+    expect(read.textStyles?.[0]?.fluidSizes).toEqual(
+      fluidHeading(RANGE).fluidSizes
+    );
+    expect(read.issues).toHaveLength(1);
+  });
+
+  it("leave a file without them read exactly as before", () => {
+    const { fluidSizes: _sizes, ...plain } = fluidHeading(RANGE);
+    const file = exportedOn(RANGE, [plain]);
+    expect(keptEntry(file)).not.toHaveProperty("fluidSizes");
+    const read = dtcgToTokens(file);
+    expect(read.issues).toEqual([]);
+    expect(read.textStyles).toEqual([plain]);
   });
 });

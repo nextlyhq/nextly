@@ -38,10 +38,15 @@ import type {
   PublishPart,
 } from "../collections/services/publish-gate";
 import { recordWriteEvent } from "../content-events/write-event";
+import type { VersionsDbApi } from "../versions/db-api";
 
 import { partExemptFields, stillApproved } from "./approval-digest";
 import { partStage, pendingPartsOn } from "./implicit-stage";
-import { documentTableOn, shownContentOn } from "./part-versions";
+import {
+  documentTableOn,
+  shownContentOn,
+  type HistoryRead,
+} from "./part-versions";
 import { PUBLISH_WITHOUT_REVIEW } from "./permissions";
 import { workflowAttachedTo, type RegisteredWorkflow } from "./registry";
 import {
@@ -91,6 +96,15 @@ function partName(part: string | null): string {
   return part === null ? "The shared fields" : `The "${part}" language`;
 }
 
+/**
+ * A part named for a person with `verb` agreeing with it: a language is one ("is", "has"), the
+ * shared fields are many ("are", "have").
+ */
+function partWith(part: string | null, verb: "is" | "has"): string {
+  if (part !== null) return `${partName(part)} ${verb}`;
+  return `${partName(part)} ${verb === "is" ? "are" : "have"}`;
+}
+
 /** Whether a part was live before the move, as core read it. */
 function wasLive(question: PublishGateQuestion, part: string | null): boolean {
   return part === null
@@ -133,6 +147,32 @@ type Bypass =
   | { kind: "allowed"; reason: string }
   | { kind: "refused"; message: string };
 
+/**
+ * Whether `caller` may publish `slug`'s documents without review: trusted code, or a person
+ * holding "Publish without review" on it. Never an API key, which may act for an agent, whatever
+ * it holds, nor a visitor. The one judgement a publish without review is let through by, and the
+ * one the review-state read reports, so the two never disagree. `holds` asks whether a person
+ * holds the permission, on the pool unless a transaction is given.
+ *
+ * @experimental
+ */
+export async function mayPublishWithoutReview(
+  caller: PublishCaller,
+  slug: string,
+  holds: HoldsWithoutReview = async userId =>
+    holdsWithoutReview(await actorForUser(userId), slug)
+): Promise<boolean> {
+  switch (caller.kind) {
+    case "trusted":
+      return true;
+    case "user":
+      return holds(caller.userId);
+    case "api-key":
+    case "visitor":
+      return false;
+  }
+}
+
 async function bypassOf(
   question: PublishGateQuestion,
   holds: HoldsWithoutReview
@@ -146,16 +186,17 @@ async function bypassOf(
     };
   }
   const { caller } = question;
+  if (await mayPublishWithoutReview(caller, question.scope.slug, holds)) {
+    return { kind: "allowed", reason };
+  }
+  // Why not, by who asked.
   switch (caller.kind) {
     case "trusted":
-      return { kind: "allowed", reason };
     case "user":
-      return (await holds(caller.userId))
-        ? { kind: "allowed", reason }
-        : {
-            kind: "refused",
-            message: `Publishing without review needs the permission "${PUBLISH_WITHOUT_REVIEW}-${question.scope.slug}".`,
-          };
+      return {
+        kind: "refused",
+        message: `Publishing without review needs the permission "${PUBLISH_WITHOUT_REVIEW}-${question.scope.slug}".`,
+      };
     case "api-key":
       // An emergency publish is a person's act, and a key may act for an agent.
       return {
@@ -187,8 +228,13 @@ function refuseEvery(
  * content puts it) must allow publishing, and it must hold an approval given under the definition
  * attached now, whose content is still what goes live (`approvedNow`; undefined where the content
  * was not compared).
+ *
+ * Exported as the one per-part decision a release asks of each part it would publish
+ * (`part-approval`), so a release and a publish hold a part for the same reasons.
+ *
+ * @experimental
  */
-function holdReason(
+export function holdReason(
   registered: RegisteredWorkflow,
   part: string | null,
   state: ReviewState | null,
@@ -199,13 +245,13 @@ function holdReason(
   // Live with nothing pending: the publish puts nothing new live.
   if (stage === null) return null;
   if (!allowsPublish(registered.workflow, stage)) {
-    return `${partName(part)} is in "${stageLabel(registered, stage)}", which does not allow publishing.`;
+    return `${partWith(part, "is")} in "${stageLabel(registered, stage)}", which does not allow publishing.`;
   }
   if (
     state?.approval == null ||
     state.definitionHash !== registered.definitionHash
   ) {
-    return `${partName(part)} has no current approval.`;
+    return `${partWith(part, "has")} no current approval.`;
   }
   if (approvedNow === false) {
     return `${partName(part)} changed since it was approved.`;
@@ -220,8 +266,13 @@ function holdReason(
  */
 const SINGLES_GOVERNED = true;
 
-/** Whether the gate judges a publish of `scope` at all. */
-function governs(scope: PublishGateQuestion["scope"]): boolean {
+/**
+ * Whether the gate judges a publish of `scope` at all. Exported so a release holds back only what
+ * a publish of the same scope would.
+ *
+ * @experimental
+ */
+export function governs(scope: PublishGateQuestion["scope"]): boolean {
   return scope.kind === "collection" || SINGLES_GOVERNED;
 }
 
@@ -241,6 +292,11 @@ const documentOf = (question: PublishGateQuestion): ReviewDocument => ({
 interface JudgedPart {
   part: string | null;
   state: ReviewState | null;
+  /**
+   * Why the part would have been held, where it would: a publish without review goes past it, and
+   * records it as published without review. Null where the part may go live as it stands.
+   */
+  held: string | null;
 }
 
 /**
@@ -339,9 +395,8 @@ async function judgeOnLock(
   const refusals: PublishGateRefusal[] = [];
   for (const { key, part } of reviewParts(question, table.localized)) {
     const state = states.find(candidate => candidate.part === key) ?? null;
-    judged.push({ part: key, state });
-    // Let through without review: its parts are judged only so the move closes their cycles.
-    if (bypass.kind === "allowed") continue;
+    // Judged under a publish without review too: the parts it goes past are the ones it records,
+    // and a part that may go live as it stands is published as any publish would put it.
     const approvedNow =
       state?.approval == null
         ? undefined
@@ -353,7 +408,9 @@ async function judgeOnLock(
       { live: wasLive(question, key), pending: pending(key) },
       approvedNow
     );
-    if (message !== null) {
+    judged.push({ part: key, state, held: message });
+    // Let through without review: a part held is gone past, not refused.
+    if (message !== null && bypass.kind !== "allowed") {
       refusals.push({ part, code: "NOT_APPROVED", message });
     }
   }
@@ -370,17 +427,22 @@ async function judgeOnLock(
  * Whether the content a part puts live is still what its approval approved: the part's newest
  * recorded version, as a reviewer is shown it, without the stage's exempt fields. A Single's saves
  * do not withdraw an approval as they write, so this is the check that holds one to its content.
+ * Read on the move's transaction under its lock, or (`read: "pool"`) by a release's check, which
+ * writes nothing and is judged again by the publish it leads to.
+ *
+ * @experimental
  */
-async function stillApprovedOn(
-  tx: TransactionContext,
+export async function stillApprovedOn(
+  tx: VersionsDbApi,
   registered: RegisteredWorkflow,
   document: ReviewDocument,
   table: Awaited<ReturnType<typeof documentTableOn>>,
   part: string | null,
-  state: ReviewState
+  state: ReviewState,
+  read: HistoryRead = "locked"
 ): Promise<boolean> {
   if (state.approval === null) return false;
-  const shown = await shownContentOn(tx, document, table, part);
+  const shown = await shownContentOn(tx, document, table, part, read);
   if (!shown) return false;
   return stillApproved(
     state.approval.digest,
@@ -399,7 +461,8 @@ async function stillApprovedOn(
  * written: a compare-and-set on the revision `judge` read (a part with none must still have
  * none), then the pins released, the stage change recorded for integrations, and the approval it
  * went live under kept in the document's history. A publish without review is recorded with its
- * reason. Any part that moved since it was judged refuses the whole publish.
+ * reason, naming the parts it went past (none recorded where every part held its approval). Any
+ * part that moved since it was judged refuses the whole publish.
  */
 async function settle(
   adapter: DrizzleAdapter,
@@ -467,7 +530,10 @@ async function settle(
       }
     );
   }
-  if (bypass.kind === "allowed") {
+  // Recorded for the parts the publish went past without review alone: a part that held its
+  // approval went live under it, as the event above already says.
+  const bypassed = judged.filter(entry => entry.held !== null);
+  if (bypass.kind === "allowed" && bypassed.length > 0) {
     await recordWriteEvent(
       tx,
       { adapter },
@@ -476,7 +542,7 @@ async function settle(
         kind: REVIEW_STATE_EVENT_KINDS.publishedWithoutReview,
         actor,
         note: bypass.reason,
-        parts: eventParts(judged.map(entry => entry.part)),
+        parts: eventParts(bypassed.map(entry => entry.part)),
         definitionHash: registered.definitionHash,
       }
     );

@@ -26,6 +26,13 @@
 
 import type { VersionScopeKind } from "../../schemas/versions/types";
 
+import {
+  actionsByComponent,
+  componentHold,
+  dueComponentsHolding,
+} from "./component-hold";
+import { goingLiveHold, type GoingLiveHold } from "./going-live-hold";
+import { planReleaseMaterialisation } from "./plan-release-materialisation";
 import type { DueCheck } from "./release-read";
 import { NO_DECISIONS } from "./release-scope";
 import type { ReleaseDecisions } from "./release-scope";
@@ -52,6 +59,9 @@ export interface ReleaseVisibility {
 /** The lookup half, satisfied by `ReleasesRepository`. */
 export interface RevealSource {
   findDueDecisions(input: RevealQuery): Promise<ReleaseDecisions>;
+  /** The reads that walk the components of the documents decided, to plan (`withoutHeld`). */
+  dueHoldersOf: ReleasesRepository["dueHoldersOf"];
+  listMembersOf: ReleasesRepository["listMembersOf"];
 }
 
 /**
@@ -70,15 +80,102 @@ export const NO_RELEASE_VISIBILITY: ReleaseVisibility = {
 export function createReleaseVisibility(deps: {
   cache: DueCheck;
   repository: RevealSource;
+  /**
+   * What holds a document back from going live, asked per read: the registered hold when left
+   * out, looked up when a read needs it, so a hold registered after this was built still counts.
+   */
+  hold?: () => GoingLiveHold;
 }): ReleaseVisibility {
+  const hold = deps.hold ?? goingLiveHold;
   return {
     async decisions(query: RevealQuery): Promise<ReleaseDecisions> {
       // The cheap check first, always. Reversing these two turns the common
       // case — nothing scheduled anywhere — from a memo read into a query
       // against the members table on every read of every collection.
       if (!(await deps.cache.mayHaveDue(query.now))) return NO_DECISIONS;
-      return deps.repository.findDueDecisions(query);
+      const due = await deps.repository.findDueDecisions(query);
+      return withoutHeld(due, query, hold(), deps.repository);
     },
+  };
+}
+
+/**
+ * `due` without the documents of a component the run refuses whole. The run writes a component
+ * of due releases all or nothing, and refuses all of it when a document it would publish is held
+ * back from going live (`componentHold`), so a read in the window between the moment and the run
+ * must project none of that component either: neither the publishes nor the takedowns beside
+ * the held document, which the run will not make.
+ *
+ * Planned as the run plans (`planReleaseMaterialisation`) and asked as the run asks, so the two
+ * cannot disagree. Read only when this scope has a decision to make, and only while something is
+ * due, which the cheap check above already established.
+ *
+ * Planned over the COMPLETE components of the documents this read decides
+ * (`dueComponentsHolding`), followed through every shared document, so a hold reached through a
+ * release that shares a document with these but none with this scope still withholds them, as
+ * the run refuses them. A read pays for its own documents' components, not the whole due
+ * backlog; a component too large to walk is not guessed at, and this read projects none of that
+ * component's decisions, as a held component projects nothing, while every other component keeps
+ * its own.
+ */
+async function withoutHeld(
+  due: ReleaseDecisions,
+  query: RevealQuery,
+  hold: GoingLiveHold,
+  repository: RevealSource
+): Promise<ReleaseDecisions> {
+  if (due.reveal.length === 0 && due.hide.length === 0) return due;
+  const reached = await dueComponentsHolding(
+    repository,
+    [...due.reveal, ...due.hide].map(entryId => ({
+      scopeKind: query.scopeKind,
+      scopeSlug: query.scopeSlug,
+      entryId,
+    })),
+    query.now
+  );
+  const plan = planReleaseMaterialisation({
+    releases: reached.releases,
+    members: reached.members,
+    now: query.now,
+  });
+  const decided = new Set([...due.reveal, ...due.hide]);
+  const inScope = (action: (typeof plan.actions)[number]) =>
+    action.ref.scopeKind === query.scopeKind &&
+    action.ref.scopeSlug === query.scopeSlug;
+  // A component past the walk's bound is not guessed at: its documents project nothing, as a
+  // held component's do, and every other component keeps its decisions.
+  const withheld = new Set(reached.unbounded.map(document => document.entryId));
+  // The decisions and the plan are two reads, and the schedule can move between them. A decision
+  // the plan, read second, no longer makes of the document as a whole (its release stopped or
+  // ran meanwhile, or another release now wins it) is not projected, so the read answers as one
+  // snapshot would and never reveals a document no due release still publishes.
+  const planned = new Map(
+    plan.actions
+      .filter(action => inScope(action) && action.ref.locale === null)
+      .map(action => [action.ref.entryId, action.effect])
+  );
+  for (const entryId of due.reveal) {
+    if (planned.get(entryId) !== "publish") withheld.add(entryId);
+  }
+  for (const entryId of due.hide) {
+    if (planned.get(entryId) !== "unpublish") withheld.add(entryId);
+  }
+  for (const actions of actionsByComponent(plan)) {
+    const here = actions.filter(
+      action => inScope(action) && decided.has(action.ref.entryId)
+    );
+    if (here.length === 0) continue;
+    if (
+      (await componentHold(documents => hold.held(documents), actions)) !== null
+    ) {
+      for (const action of here) withheld.add(action.ref.entryId);
+    }
+  }
+  if (withheld.size === 0) return due;
+  return {
+    reveal: due.reveal.filter(entryId => !withheld.has(entryId)),
+    hide: due.hide.filter(entryId => !withheld.has(entryId)),
   };
 }
 

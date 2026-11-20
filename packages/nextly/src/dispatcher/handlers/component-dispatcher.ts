@@ -56,6 +56,7 @@ import {
 } from "../../domains/schema/builder-save/schema-change-save";
 import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { fieldGroupEntity } from "../../domains/schema/builder-save/stored-entity";
+import { refuseMovesOffTheFile } from "../../domains/schema/field-moves/moves-road";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
@@ -88,6 +89,8 @@ import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
+  entityDialogQuestions,
+  entityPushReason,
   reviewBuilderSchemaChange,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
@@ -108,6 +111,7 @@ import {
   getLoggerFromDI,
 } from "../helpers/di";
 import { readRequestLocalized } from "../helpers/request-localized";
+import { readRequestedMoves } from "../helpers/request-moves";
 import { requireParam, toNumber } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
 
@@ -628,6 +632,8 @@ export const COMPONENTS_METHODS: Record<
         table: tableName,
         stored: fieldGroupEntity(component),
         fields: fields as FieldDefinition[],
+        // Each move checked as the save checks it, and what its column does not carry named.
+        moves: readRequestedMoves(body),
         localized:
           readRequestLocalized(body) ??
           (component as { localized?: boolean }).localized === true,
@@ -701,6 +707,8 @@ export const COMPONENTS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       assertValidFieldsPayload(fields, { stored: "under-lock" });
+      // The fields the save moves, each kept by statements its migration file carries.
+      const moves = readRequestedMoves(body);
 
       return withSchemaChangeExcluded(
         {
@@ -832,6 +840,40 @@ export const COMPONENTS_METHODS: Record<
             subject: `Field group '${slug}'`,
             component: true,
           });
+          // Whether the push applies this save rather than its file, asked at most once. A save
+          // whose moves would need the push is refused here, before the preflights below write
+          // anything; the write reuses the answer.
+          let pushAnswer: Promise<boolean> | undefined;
+          const pushes = () =>
+            (pushAnswer ??= pushCarriesValues({
+              oldFields: (component.fields ??
+                []) as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              wasStored,
+              isStored,
+              renamed: companionRename,
+              liveTable: async () =>
+                (
+                  await introspectLiveSnapshot(
+                    adapter.getDrizzle(),
+                    adapter.dialect,
+                    [tableName]
+                  )
+                ).tables[0],
+              columnOf: field =>
+                getComponentRowColumnDescriptor(
+                  field,
+                  adapter.dialect,
+                  "fieldGroup"
+                ),
+              renames: renamedFieldsOf(renameResolutions ?? []),
+              moved: moves,
+            }));
+          await refuseMovesOffTheFile({
+            moves,
+            writes: builderSave !== undefined,
+            pushReason: () => entityPushReason(builderSave, pushes),
+          });
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.
           await archiveFieldsLeavingTranslation({
@@ -915,6 +957,16 @@ export const COMPONENTS_METHODS: Record<
                 legacyBundle,
               ],
               firstQuestion,
+              // A translated field's values the companion reconcile after the push drops, asked of
+              // the push by field name, as the save's file road asks them.
+              fields: {
+                tableName,
+                builtBy: "fieldGroup",
+                oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+              },
             }),
             dialect,
             firstQuestion
@@ -969,14 +1021,29 @@ export const COMPONENTS_METHODS: Record<
           // applied, whether it is translated, and the advanced schema version, written with the
           // stored version in one transaction and the cached rows cleared after it.
           const registryTable = await resolveFieldGroupRegistryName(adapter);
-          const writeRow = () =>
+          // Handed the fields that applied where the save's file stopped part way and was settled.
+          const writeRow = (
+            stored: readonly unknown[] = fields
+          ): Promise<void> =>
             writeAppliedFieldsRow(adapter, {
               table: registryTable,
               slug,
-              fields: fields as FieldConfig[],
+              fields: stored as FieldConfig[],
               localized: isLocalized,
               schemaVersion: newSchemaVersion,
             });
+          // The runtime table this process reads and writes the field group through, built from the
+          // fields its row records: the save's, or those a stopped save settled to.
+          const refreshRuntime = (stored: readonly unknown[]): void => {
+            registerComponentRuntimeSchema(
+              adapter,
+              dialect,
+              tableName,
+              stored as FieldConfig[],
+              componentTypeColumn,
+              isStored
+            );
+          };
           const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
             () =>
@@ -988,6 +1055,7 @@ export const COMPONENTS_METHODS: Record<
               stored: fieldGroupEntity(component),
               fields: fields as unknown as FieldDefinition[],
               localized: isLocalized,
+              moves,
               answers: {
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
@@ -1013,33 +1081,34 @@ export const COMPONENTS_METHODS: Record<
             {
               // The push where the save carries values across its change; its own migration file,
               // run in tries as `nextly migrate` runs it, where it carries none.
-              pushWhen: () =>
-                pushCarriesValues({
-                  oldFields: (component.fields ??
-                    []) as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  wasStored,
-                  isStored,
-                  renamed: companionRename,
-                  liveTable: async () =>
-                    (await introspectLiveSnapshot(db, dialect, [tableName]))
-                      .tables[0],
-                  columnOf: field =>
-                    getComponentRowColumnDescriptor(
-                      field,
-                      dialect,
-                      "fieldGroup"
-                    ),
-                  renames: renamedFieldsOf(renameResolutions ?? []),
-                }),
+              pushWhen: pushes,
               afterFile: () =>
                 reconcileBuilderCompanion("component", companion),
+              // The push's questions, asked of the file before anything is written: a rename the
+              // request does not answer, or a drop it does not confirm, refuses the save as the
+              // push refuses it.
+              questions: entityDialogQuestions({
+                desired,
+                db,
+                dialect,
+                tableName,
+                // The builder that made the table, which the offered rename is judged by.
+                builtBy: "fieldGroup",
+                oldFields: (component.fields ??
+                  []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+                renameResolutions,
+                eventResolutions,
+                legacy: legacyBundle,
+              }),
               // On the file road the row is written in the file's own transaction, so a failed
               // write leaves the save as it was and is answered as the failure it is. Not where the
               // translations table is reconciled after the file: the row would then record the
               // change before that step holds it, so it is written after it, as before.
               ...(registryInFileTransaction({ wasStored, isStored })
-                ? { registry: writeRow }
+                ? { registry: writeRow, settled: refreshRuntime }
                 : {}),
             }
           );
@@ -1112,14 +1181,7 @@ export const COMPONENTS_METHODS: Record<
           // so the registered table includes component system columns
           // (_parent_id, _parent_table, _parent_field, _order, _component_type)
           // instead of collection columns (title, slug).
-          registerComponentRuntimeSchema(
-            adapter,
-            dialect,
-            tableName,
-            fields as FieldConfig[],
-            componentTypeColumn,
-            isStored
-          );
+          refreshRuntime(fields);
 
           // Reached only when the registry write landed, or when it raised and the row was found
           // to carry this edit anyway. Either way the version reported is the one now stored, so

@@ -26,6 +26,13 @@ import { mutateManifest } from "../../../domains/schema/ui-schema/mutate";
 import { uiSchemaFieldSchema } from "../../../schemas/_zod/ui-schema";
 import { validateSingleConfig } from "../../../singles/config/validate-single";
 import type { SingleConfig } from "../../../singles/config/types";
+import { configurationProblems } from "../config-problems";
+
+/** Every problem the configuration's load reports for these entities, as one text. */
+const problemText = (entities: Parameters<typeof configurationProblems>[0]) =>
+  configurationProblems(entities)
+    .map(problem => `[${problem.code}] ${problem.path}: ${problem.message}`)
+    .join("\n");
 
 afterEach(() => {
   clearFieldTypes();
@@ -118,12 +125,16 @@ describe("declaration checks reach every authoring path", () => {
     // actually protect a plugin type all run after registration.
     registerDocument();
 
-    expect(() =>
-      defineCollection({
-        slug: "posts",
-        fields: [badField],
-      } as unknown as CollectionConfig)
-    ).toThrow(/policy\.kinds must name at least one kind/);
+    expect(
+      problemText({
+        collections: [
+          defineCollection({
+            slug: "posts",
+            fields: [badField],
+          } as unknown as CollectionConfig),
+        ],
+      })
+    ).toMatch(/policy\.kinds must name at least one kind/);
   });
 
   it("still checks the name of a field whose type it defers", () => {
@@ -515,5 +526,23 @@ describe("the direct schema handlers' declaration check", () => {
         { name: "rows", type: "repeater", fields: [badField] },
       ])[0]?.path
     ).toBe("0.fields.0.policy.kinds");
+  });
+});
+
+describe("a plugin field option a configuration's load reports", () => {
+  // Each entity's validator reports a registered type's option problem; the field-type pass
+  // reports only a type nothing offers, so one problem is one line and the count is right.
+  it("is reported once", () => {
+    registerDocument();
+
+    const problems = configurationProblems({
+      collections: [
+        { slug: "posts", fields: [badField] } as unknown as CollectionConfig,
+      ],
+    });
+
+    expect(
+      problems.filter(problem => problem.message.includes("policy.kinds"))
+    ).toHaveLength(1);
   });
 });

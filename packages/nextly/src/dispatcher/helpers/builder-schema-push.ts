@@ -21,6 +21,7 @@ import {
   type LeavingFieldLike,
   leavingFieldConstraints,
 } from "../../domains/i18n/migration/field-leaves-translation-rules";
+import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
 import type { FirstQuestionWatch } from "../../domains/schema/builder-save/landing-push";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
@@ -39,6 +40,10 @@ import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detect
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import type { ColumnOrigin } from "../../domains/schema/services/field-column-descriptor";
+import {
+  type FieldsSave,
+  unconfirmedTranslatedDrops,
+} from "../../domains/schema/services/translated-drops";
 import { NextlyError } from "../../errors/nextly-error";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
@@ -61,6 +66,12 @@ export function builderSchemaPush(args: {
   resolutions: ConstructorParameters<typeof BrowserPromptDispatcher>;
   /** Notes a push refused at its first question, which ran no statement (`landingPush`). */
   firstQuestion?: FirstQuestionWatch;
+  /**
+   * The save's fields, before and after, whose translated values the entity's translations-table
+   * step after the push drops: each the answers do not confirm by name is asked of the push at its
+   * prompt stage (`unconfirmedTranslatedDrops`).
+   */
+  fields?: Omit<FieldsSave, "dialect">;
 }): (desired: DesiredSchema) => Promise<PipelineResult> {
   const { dialect, db } = args;
   const answering = new BrowserPromptDispatcher(...args.resolutions);
@@ -74,6 +85,7 @@ export function builderSchemaPush(args: {
     migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
     notifier: getProductionNotifier(),
   });
+  const saveFields = args.fields;
   return desired =>
     pipeline.apply({
       desired,
@@ -89,7 +101,31 @@ export function builderSchemaPush(args: {
       // A field becoming translated keeps its value as this language's; the apply moves it after
       // its prompts and refusals, before it drops the main column.
       defaultLocale: appLocalization()?.defaultLocale ?? "en",
+      ...(saveFields === undefined
+        ? {}
+        : { unconfirmedDropsBeside: () => unconfirmedOf(saveFields, args) }),
     });
+}
+
+/**
+ * The fields of `save` whose translated values no answer of the push confirms by name
+ * (`unconfirmedTranslatedDrops`): the push's own answers are the save's.
+ */
+async function unconfirmedOf(
+  save: Omit<FieldsSave, "dialect">,
+  args: {
+    dialect: SupportedDialect;
+    resolutions: ConstructorParameters<typeof BrowserPromptDispatcher>;
+  }
+): Promise<string[]> {
+  const [renameResolutions, , legacy] = args.resolutions;
+  const unconfirmed = await unconfirmedTranslatedDrops({
+    ...save,
+    dialect: args.dialect,
+    renameResolutions,
+    ...(legacy === undefined ? {} : { legacy }),
+  });
+  return unconfirmed.map(field => field.name);
 }
 
 /** What a Single's or field group's companion reconcile is given, beyond the entity's kind. */
@@ -217,6 +253,9 @@ export function companionReconcileFailure(
   context: { op: string; slug: string; note?: string }
 ): unknown {
   if (isLeavingSettingsRefusal(error)) return error;
+  // A renamed field's provenance move that failed once its change landed says so itself, with the
+  // statements that finish it for the server log (`provenanceNotMoved`).
+  if (isProvenanceNotMoved(error)) return error;
   if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) {
     // The busy-table stop as it is, its code, status and report, with what it leaves said beside
     // its first line: the entity's main table has its change, and only the translations table's

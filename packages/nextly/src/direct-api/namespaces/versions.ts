@@ -19,7 +19,10 @@
  * @module direct-api/namespaces/versions
  */
 
-import type { ComparisonQuery } from "../../api/versions-access";
+import type {
+  ComparisonPart,
+  ComparisonQuery,
+} from "../../api/versions-access";
 import { runWithCallerScope } from "../../auth/caller-scope";
 import { getService } from "../../di";
 import { resolveSingleDocumentId } from "../../domains/singles/services/single-document-access";
@@ -68,6 +71,7 @@ async function historyFunctions() {
   ]);
   return {
     assertComparisonRequest: access.assertComparisonRequest,
+    parseComparisonPart: access.parseComparisonPart,
     compareDocumentVersions: access.compareDocumentVersions,
     getVersionDiffForDocument: methods.getVersionDiffForDocument,
     getVersionForDocument: methods.getVersionForDocument,
@@ -94,7 +98,9 @@ export interface VersionsNamespace {
    * A typed comparison: an explicit pair (`from` and `to`), or a target and a
    * named baseline the server resolves, as REST's `versions/diff` takes them.
    * A trusted call gets relationship and upload ids without their display
-   * labels, which are read as a person may read them.
+   * labels, which are read as a person may read them. `part: "shared"`
+   * compares the shared fields alone, across languages, from the shared
+   * part's own baselines, as REST's `?part=shared` does.
    */
   compare(
     args: VersionCall & {
@@ -102,6 +108,7 @@ export interface VersionsNamespace {
       to?: number;
       baseline?: string;
       locale?: string;
+      part?: ComparisonPart;
       modifiedOnly?: boolean;
     }
   ): Promise<VersionDiff>;
@@ -299,6 +306,9 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
         to: args.to,
         baseline: args.baseline,
         locale: args.locale,
+        // Read through the parser REST's query uses, so a value REST refuses
+        // is refused here too.
+        part: h.parseComparisonPart(args.part),
         modifiedOnly: args.modifiedOnly === true,
       };
       h.assertComparisonRequest(query);

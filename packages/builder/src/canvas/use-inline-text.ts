@@ -42,11 +42,11 @@
 import { itemOfPropName, type BlockDocument } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { isElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
 import type { BuilderOp } from "../op-vocabulary";
 
 import { useCanvasFrame } from "./canvas-frame-context";
+import { isElement } from "./dom-kind";
 import {
   composedTextAt,
   exposedTextOp,

@@ -6,11 +6,14 @@
  *
  * A kill is made by letting the step at the kill point run and then never return: no `catch` or
  * `finally` of the save runs, as none would in a process that was killed there. Each write point
- * of the save in turn: the definition file, a migration file, a statement of the file run, the
- * ledger's record of it and the registry row. After each, the row and the marker are there and
- * describe the save. A save that ends, written or withdrawn whole, leaves neither; one that ends
- * with part of it kept and nothing recording what (a MySQL save stopped part-way) keeps both. A
- * record already standing, from a process that stopped, stays as it was through a later save.
+ * of the save in turn, in the order the save writes them: a migration file, its snapshot, the
+ * definition file, a statement of the file run, the ledger's record of it and the registry row.
+ * After each, the row and the marker are there and describe the save, and the definition is as it
+ * was until the save's own write of it: a save stopped before then leaves it untouched. A save
+ * that ends, written, withdrawn whole or stopped part-way and settled to what applied (MySQL),
+ * leaves neither; one that ends with part of it kept and nothing recording what (a MySQL stop
+ * whose settle failed) keeps both. A record already standing, from a process that stopped, stays
+ * as it was through a later save.
  *
  * The kill is released once the case has looked, so the instance's connections can close.
  */
@@ -43,6 +46,11 @@ import type { ServiceContainer } from "../../../../services";
 import { consoleLogger } from "../../../../shared/types";
 import { MetaService } from "../../../meta/services/meta-service";
 import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import {
+  acquireWriterHold,
+  setWriterHoldBounds,
+  WRITER_LOCK_FILE,
+} from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import {
   refuseWhileSaveInProgress,
@@ -67,6 +75,12 @@ const kill = vi.hoisted(() => ({
   failAfter: undefined as undefined | ((point: string) => boolean),
   /** Whether a folder about to be listed is one to refuse, as one the process may not read. */
   refuseReading: undefined as undefined | ((path: string) => boolean),
+  /**
+   * Run once a file has been written in full under its temporary name (its path), or put in place
+   * (`renamed:` and its path), or before one is read (`read:` and its path), as a stalled process
+   * would.
+   */
+  stall: undefined as undefined | ((path: string) => Promise<void>),
 }));
 
 /**
@@ -98,6 +112,7 @@ vi.mock("node:fs/promises", async importOriginal => {
       throw Object.assign(new Error("input/output error"), { code: "EIO" });
     }
     await stopHere(`file:${String(to)}`);
+    await kill.stall?.(`renamed:${String(to)}`);
   };
   const rm: typeof real.rm = async (path, options) => {
     if (kill.refuseRemoving?.(String(path)) === true) {
@@ -121,12 +136,24 @@ vi.mock("node:fs/promises", async importOriginal => {
       ...rest
     );
   }) as typeof real.readdir;
+  const writeFile = (async (
+    ...args: Parameters<typeof real.writeFile>
+  ): Promise<void> => {
+    await real.writeFile(...args);
+    await kill.stall?.(String(args[0]));
+  }) as typeof real.writeFile;
+  const readFile = (async (...args: Parameters<typeof real.readFile>) => {
+    await kill.stall?.(`read:${String(args[0])}`);
+    return real.readFile(...args);
+  }) as typeof real.readFile;
   return {
     ...real,
     rename,
     rm,
     readdir,
-    default: { ...real, rename, rm, readdir },
+    writeFile,
+    readFile,
+    default: { ...real, rename, rm, readdir, writeFile, readFile },
   };
 });
 
@@ -179,6 +206,7 @@ afterEach(async () => {
   kill.failRegistry = false;
   kill.failAfter = undefined;
   kill.refuseReading = undefined;
+  kill.stall = undefined;
   await stopped;
   stopped = undefined;
   vi.restoreAllMocks();
@@ -504,20 +532,34 @@ async function within(promise: Promise<unknown>, ms: number): Promise<boolean> {
   }
 }
 
-/** The kill points, each naming the write it stops after. */
+/**
+ * The kill points, each naming the write it stops after, in the order the save writes them, and
+ * whether the definition is still as it was there: the save writes it once its migration files
+ * and snapshots are in place.
+ */
 const KILL_POINTS: ReadonlyArray<{
   name: string;
   arm(t: TestNextly): (point: string) => boolean;
+  definitionKept: boolean;
 }> = [
-  {
-    name: "the definition file",
-    arm: () => point => point === `file:${join(basePath, DEFINITION)}`,
-  },
   {
     name: "a migration file",
     arm: () => point =>
       point.startsWith(`file:${join(basePath, HISTORY)}`) &&
       point.endsWith(".sql"),
+    definitionKept: true,
+  },
+  {
+    name: "a migration file's snapshot",
+    arm: () => point =>
+      point.startsWith(`file:${join(basePath, HISTORY)}`) &&
+      point.endsWith(".snapshot.json"),
+    definitionKept: true,
+  },
+  {
+    name: "the definition file",
+    arm: () => point => point === `file:${join(basePath, DEFINITION)}`,
+    definitionKept: false,
   },
   {
     name: "a statement of the file run",
@@ -526,6 +568,7 @@ const KILL_POINTS: ReadonlyArray<{
       return point =>
         point.startsWith("statement:") && adding("alpha").test(point);
     },
+    definitionKept: false,
   },
   {
     name: "the ledger's record of the file",
@@ -533,10 +576,12 @@ const KILL_POINTS: ReadonlyArray<{
       stopAtLedger();
       return point => point === "ledger:markApplied";
     },
+    definitionKept: false,
   },
   {
     name: "the registry row",
     arm: () => point => point === "registry",
+    definitionKept: false,
   },
 ];
 
@@ -556,7 +601,7 @@ describe.each(getConfiguredTestDialects())(
     describe.each(PATHS)("$name", path => {
       it.each(KILL_POINTS)(
         "a kill after $name leaves the row and the marker, both naming the save",
-        async ({ arm }) => {
+        async ({ arm, definitionKept }) => {
           const t = await boot();
           await path.create([text("heading")]);
           const definitionBefore = definitionText();
@@ -573,6 +618,19 @@ describe.each(getConfiguredTestDialects())(
             await reachedKill(reached),
             "the save never reached the kill point"
           ).toBe("reached");
+
+          // The definition is replaced only once the migration files and snapshots are in place.
+          if (definitionKept) {
+            expect(
+              definitionText(),
+              "the definition, before the save's write of it"
+            ).toBe(definitionBefore);
+          } else {
+            expect(
+              definitionText(),
+              "the definition, after the save's write of it"
+            ).toContain('"alpha"');
+          }
 
           const row = await recordRow(t, path);
           const marker = recordMarker(path);
@@ -645,6 +703,7 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         await path.create([text("heading")]);
         const definitionBefore = definitionText();
+        const folderBefore = filesBelow(join(basePath, HISTORY));
         let refused = 0;
         kill.refuse = point => {
           if (point !== `file:${join(basePath, DEFINITION)}`) return false;
@@ -662,9 +721,91 @@ describe.each(getConfiguredTestDialects())(
           "the save was not refused"
         ).toBe(false);
         expect(definitionText()).toBe(definitionBefore);
+        // The migration files and snapshots written before it are taken back with it: nothing of
+        // the save is left for a later `nextly migrate` or `migrate:create`.
+        expect(filesBelow(join(basePath, HISTORY))).toEqual(folderBefore);
         expect(await recordRow(t, path)).toBeUndefined();
         expect(recordMarker(path)).toBeUndefined();
       }, 300_000);
+
+      // A definition rename the file system made and then reported failed: the new definition is
+      // in place, so the withdrawal puts the old one back, with the save's files taken back too.
+      it("a save whose definition rename reports a failure after it was made puts the definition back", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const definitionBefore = definitionText();
+        const folderBefore = filesBelow(join(basePath, HISTORY));
+        let failed = 0;
+        kill.failAfter = point => {
+          if (point !== `file:${join(basePath, DEFINITION)}`) return false;
+          failed += 1;
+          return true;
+        };
+
+        const answer = await path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+        expect(failed, "the definition's rename was never made").toBe(1);
+        expect(
+          answer instanceof Response ? answer.ok : !(answer instanceof Error),
+          "the save was not refused"
+        ).toBe(false);
+        expect(definitionText(), "the definition").toBe(definitionBefore);
+        expect(
+          filesBelow(join(basePath, HISTORY)).filter(f => !f.endsWith(".lock")),
+          "the migration folder"
+        ).toEqual(folderBefore.filter(f => !f.endsWith(".lock")));
+        expect(await recordRow(t, path), "the record's row").toBeUndefined();
+        expect(recordMarker(path), "the record's marker").toBeUndefined();
+      }, 300_000);
+
+      // MySQL keeps the statements before a failing one, and the save settles to what applied: its
+      // stopped file is replaced by one for the applied changes, then the definition is brought to
+      // that shape. Killed between the two, the record stands, with the definition the save
+      // started from, so the stop is settled again from the live tables.
+      it.runIf(dialect === "mysql")(
+        "a settle killed after its replacement file, before its definition, keeps the record",
+        async () => {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const definitionBefore = definitionText();
+          const refused = refuseAdding(t, "beta");
+          let placed = 0;
+          const reached = new Promise<void>(resolve => {
+            kill.reached = resolve;
+          });
+          // The save's own file is the first migration file put in place; the settle's
+          // replacement, the second.
+          kill.at = point => {
+            if (
+              !point.startsWith(`file:${join(basePath, HISTORY)}`) ||
+              !point.endsWith(".sql")
+            ) {
+              return false;
+            }
+            placed += 1;
+            return placed === 2;
+          };
+          stopped = path
+            .save(t, [text("heading"), text("alpha"), text("beta")])
+            .catch((error: unknown) => error);
+
+          expect(
+            await reachedKill(reached),
+            "the settle never put its replacement in place"
+          ).toBe("reached");
+          expect(refused(), "no statement adding `beta` was met").toBe(1);
+          const row = await recordRow(t, path);
+          expect(row, "the record's row").toBeDefined();
+          expect(recordMarker(path), "the record's marker").toEqual(row);
+          expect(row).toMatchObject({
+            kind: path.kind,
+            slug: path.slug,
+            definitionBefore,
+          });
+        },
+        300_000
+      );
 
       // A marker linked in place whose temporary copy then cannot be removed: the placing failed,
       // so the marker goes again with the row, and nothing of the save stands.
@@ -697,15 +838,16 @@ describe.each(getConfiguredTestDialects())(
       }, 300_000);
 
       // A row of a stopped save whose process stopped before its marker: the next save puts the
-      // marker back before it goes on, so the commands with no database see the part-way save.
+      // marker back before it goes on, so the commands with no database see the part-way save. Left
+      // by another host outside development, which changed no table, so a save goes on beside it:
+      // a record of this host is settled before the save instead (`settle-left-save`).
       it("a standing record without its marker gets it back before a later save goes on", async () => {
         const t = await boot();
         await path.create([text("heading")]);
-        // Left on this host, by an app handed its adapter as this one is: the marker refuses here.
         const left = {
           ...stoppedRecord(path, "a-stopped-host"),
-          host: hostname(),
           database: "unknown",
+          applies: false,
         };
         await new MetaService(t.adapter, consoleLogger).set(
           `${RECORD_KEY_PREFIX}${path.kind}:${path.slug}`,
@@ -719,7 +861,40 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(await recordRow(t, path)).toEqual(left);
         expect(entityMarkers(path)).toEqual([left]);
-        expect(await refusal(markersRefuse())).toBe("CONFLICT");
+        // Another host's: one line of notice here, not a refusal.
+        const notices: string[] = [];
+        expect(await refusal(markersRefuse(notices))).toBe("none");
+        expect(notices.join(" ")).toContain("a-stopped-host");
+      }, 300_000);
+
+      // Another host's save that applied its own files may have changed this database part-way,
+      // and only that host's start, which has its files, settles it: a save of the entity here is
+      // refused, its marker still put back first.
+      it("a standing record of another host's applying save refuses a later save of the entity", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const left = {
+          ...stoppedRecord(path, "a-stopped-host"),
+          database: "unknown",
+          applies: true,
+        };
+        await new MetaService(t.adapter, consoleLogger).set(
+          `${RECORD_KEY_PREFIX}${path.kind}:${path.slug}`,
+          left
+        );
+        const definitionBefore = definitionText();
+
+        const answer = await path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+
+        expect(
+          answer instanceof Response ? answer.ok : !(answer instanceof Error),
+          "the save was not refused"
+        ).toBe(false);
+        expect(definitionText()).toBe(definitionBefore);
+        expect(await recordRow(t, path)).toEqual(left);
+        expect(entityMarkers(path)).toEqual([left]);
       }, 300_000);
 
       // A row that is not a save's record still stands for one: both readers refuse, and a save of
@@ -744,6 +919,443 @@ describe.each(getConfiguredTestDialects())(
           "the save was not refused"
         ).toBe(false);
         expect(definitionText()).toBe(definitionBefore);
+      }, 300_000);
+
+      // A save stalled past its lease once its files are written, with another writer taking the
+      // folder meanwhile, no longer owns it: its definition is not written, and its files stay,
+      // since a migration file in the folder may already be applied.
+      it("a save overtaken before its definition leaves its files and the definition as they were", async () => {
+        const restoreBounds = setWriterHoldBounds({
+          waitMs: 30_000,
+          leaseSeconds: 1,
+          // Never inside the case: the stalled save is not renewing.
+          renewMs: 600_000,
+        });
+        try {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const definitionBefore = definitionText();
+          const sqlBefore = filesBelow(join(basePath, HISTORY)).filter(f =>
+            f.endsWith(".sql")
+          );
+          let overtaken = false;
+          kill.stall = async written => {
+            if (overtaken || !written.startsWith(join(basePath, DEFINITION))) {
+              return;
+            }
+            overtaken = true;
+            await new Promise(resolve => setTimeout(resolve, 1_200));
+            const other = await acquireWriterHold({
+              migrationsDir: join(basePath, HISTORY),
+              command: "migrate:create",
+              whenHeld: "wait",
+            });
+            await other.release();
+          };
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha")])
+            .catch((error: unknown) => error);
+          kill.stall = undefined;
+          expect(
+            overtaken,
+            "the save never stalled before its definition"
+          ).toBe(true);
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+          expect(definitionText(), "the definition").toBe(definitionBefore);
+          const left = filesBelow(join(basePath, HISTORY)).filter(
+            f => f.endsWith(".sql") && !sqlBefore.includes(f)
+          );
+          expect(left, "the save's migration file, left in place").toHaveLength(
+            1
+          );
+          expect(await recordRow(t, path), "the record's row").toBeDefined();
+        } finally {
+          restoreBounds();
+        }
+      }, 300_000);
+
+      /**
+       * Stall the save past its 1 s lease where `at` first matches a stall point, and take the
+       * migration folder as another writer meanwhile. Answers whether it stalled.
+       */
+      function overtakeAt(at: (point: string) => boolean): () => boolean {
+        let overtaken = false;
+        kill.stall = async point => {
+          if (overtaken || !at(point)) return;
+          overtaken = true;
+          await new Promise(resolve => setTimeout(resolve, 1_200));
+          const other = await acquireWriterHold({
+            migrationsDir: join(basePath, HISTORY),
+            command: "migrate:create",
+            whenHeld: "wait",
+          });
+          await other.release();
+        };
+        return () => overtaken;
+      }
+
+      // Its generation published the migration file and was then refused as overtaken, before
+      // naming the file to the save: the file is in the folder, so the record stays with it.
+      it("a save overtaken once its migration file was put in place keeps its record, the file left", async () => {
+        const restoreBounds = setWriterHoldBounds({
+          waitMs: 30_000,
+          leaseSeconds: 1,
+          renewMs: 600_000,
+        });
+        try {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const definitionBefore = definitionText();
+          const sqlBefore = filesBelow(join(basePath, HISTORY)).filter(f =>
+            f.endsWith(".sql")
+          );
+          // The save's migration file, just put in place.
+          const stalled = overtakeAt(
+            point =>
+              point.startsWith(`renamed:${join(basePath, HISTORY)}`) &&
+              point.endsWith(".sql")
+          );
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha")])
+            .catch((error: unknown) => error);
+          kill.stall = undefined;
+          expect(
+            stalled(),
+            "the save never stalled on its migration file"
+          ).toBe(true);
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+          expect(definitionText(), "the definition").toBe(definitionBefore);
+          expect(
+            filesBelow(join(basePath, HISTORY)).filter(
+              f => f.endsWith(".sql") && !sqlBefore.includes(f)
+            ),
+            "the save's migration file, left in place"
+          ).toHaveLength(1);
+          expect(await recordRow(t, path), "the record's row").toBeDefined();
+          expect(recordMarker(path), "the record's marker").toBeDefined();
+        } finally {
+          restoreBounds();
+        }
+      }, 300_000);
+
+      // On MySQL a save that stops part way is settled to what applied: its stopped file is
+      // replaced by one for the applied changes. A settle overtaken once that replacement was put
+      // in place, before its generation named it, leaves the replacement and does not write the
+      // stopped file back beside it: the folder holds one migration of the save, not two.
+      it.runIf(dialect === "mysql")(
+        "a settle overtaken once its replacement was put in place does not put the stopped file back beside it",
+        async () => {
+          const restoreBounds = setWriterHoldBounds({
+            waitMs: 30_000,
+            leaseSeconds: 1,
+            renewMs: 600_000,
+          });
+          try {
+            const t = await boot();
+            await path.create([text("heading")]);
+            const sqlBefore = filesBelow(join(basePath, HISTORY)).filter(f =>
+              f.endsWith(".sql")
+            );
+            const refused = refuseAdding(t, "beta");
+            // The save's own file is the first migration file put in place; the settle's
+            // replacement, the second.
+            let placed = 0;
+            const stalled = overtakeAt(point => {
+              if (
+                !point.startsWith(`renamed:${join(basePath, HISTORY)}`) ||
+                !point.endsWith(".sql")
+              ) {
+                return false;
+              }
+              placed += 1;
+              return placed === 2;
+            });
+
+            const answer = await path
+              .save(t, [text("heading"), text("alpha"), text("beta")])
+              .catch((error: unknown) => error);
+            kill.stall = undefined;
+            expect(refused(), "no statement adding `beta` was met").toBe(1);
+            expect(
+              stalled(),
+              "the settle never stalled on its replacement"
+            ).toBe(true);
+            expect(
+              answer instanceof Response
+                ? answer.ok
+                : !(answer instanceof Error),
+              "the save was not refused"
+            ).toBe(false);
+            expect(
+              filesBelow(join(basePath, HISTORY)).filter(
+                f => f.endsWith(".sql") && !sqlBefore.includes(f)
+              ),
+              "the save's migration files"
+            ).toHaveLength(1);
+            expect(await recordRow(t, path), "the record's row").toBeDefined();
+          } finally {
+            restoreBounds();
+          }
+        },
+        300_000
+      );
+
+      // A settle overtaken while it generates its replacement, by a writer whose own migration
+      // happens to share the replacement's name: nothing tells the two apart, so the stopped file is
+      // kept, set aside, never deleted, and the record stays for the stop to be settled again.
+      it.runIf(dialect === "mysql")(
+        "a settle overtaken by a writer of a same-named migration keeps the stopped file",
+        async () => {
+          const restoreBounds = setWriterHoldBounds({
+            waitMs: 30_000,
+            leaseSeconds: 1,
+            renewMs: 600_000,
+          });
+          try {
+            const t = await boot();
+            await path.create([text("heading")]);
+            const refused = refuseAdding(t, "beta");
+            const history = join(basePath, HISTORY);
+            // The save's own file, the first migration file put in place.
+            let stoppedFile: string | undefined;
+            let overtaken = false;
+            kill.stall = async point => {
+              if (
+                stoppedFile === undefined &&
+                point.startsWith(`renamed:${history}`) &&
+                point.endsWith(".sql")
+              ) {
+                stoppedFile = point.slice(`renamed:${history}/`.length);
+                return;
+              }
+              // The settle's generation writing its replacement in full, once the save's own file
+              // has stopped at its statement: stalled past the lease while another writer takes
+              // the folder and writes a migration of the same name.
+              if (
+                stoppedFile === undefined ||
+                refused() === 0 ||
+                overtaken ||
+                !point.startsWith(history) ||
+                !point.endsWith(".tmp")
+              ) {
+                return;
+              }
+              overtaken = true;
+              await new Promise(resolve => setTimeout(resolve, 1_200));
+              const other = await acquireWriterHold({
+                migrationsDir: history,
+                command: "migrate:create",
+                whenHeld: "wait",
+              });
+              writeFileSync(
+                join(history, `29991231_235959_999_${path.slug}_update.sql`),
+                "-- UP\n-- DOWN\n"
+              );
+              await other.release();
+            };
+
+            const answer = await path
+              .save(t, [text("heading"), text("alpha"), text("beta")])
+              .catch((error: unknown) => error);
+            kill.stall = undefined;
+            expect(refused(), "no statement adding `beta` was met").toBe(1);
+            expect(overtaken, "the settle was never overtaken").toBe(true);
+            expect(
+              answer instanceof Response
+                ? answer.ok
+                : !(answer instanceof Error),
+              "the save was not refused"
+            ).toBe(false);
+            // The stopped file is in the folder, put back or set aside, never deleted.
+            const files = filesBelow(history);
+            expect(
+              files.some(
+                f => f === stoppedFile || f.startsWith(`${stoppedFile}.`)
+              ),
+              `the stopped file ${stoppedFile}, among ${files.join(", ")}`
+            ).toBe(true);
+            expect(await recordRow(t, path), "the record's row").toBeDefined();
+          } finally {
+            restoreBounds();
+          }
+        },
+        300_000
+      );
+
+      // A settle stalled past its lease while it judges the stop, with another writer holding the
+      // folder by the time it would set the stopped file aside: it no longer owns the folder, so it
+      // renames nothing in it, and the stop stays as the save left it with its record.
+      it.runIf(dialect === "mysql")(
+        "a settle overtaken before it sets the stopped file aside moves nothing in the folder",
+        async () => {
+          const restoreBounds = setWriterHoldBounds({
+            waitMs: 30_000,
+            leaseSeconds: 1,
+            renewMs: 600_000,
+          });
+          const history = join(basePath, HISTORY);
+          let other: Awaited<ReturnType<typeof acquireWriterHold>> | undefined;
+          try {
+            const t = await boot();
+            await path.create([text("heading")]);
+            const refused = refuseAdding(t, "beta");
+            const definition = join(basePath, DEFINITION);
+            // Every migration file and snapshot put in place while the other writer holds it. The
+            // hold's own file is left out: the save giving up its hold moves it aside to judge it,
+            // and puts it back as the other writer's.
+            const movedUnderOther: string[] = [];
+            kill.stall = async point => {
+              if (other !== undefined) {
+                if (
+                  point.startsWith(`renamed:${history}`) &&
+                  !point.includes(WRITER_LOCK_FILE)
+                ) {
+                  movedUnderOther.push(
+                    point.slice(`renamed:${history}/`.length)
+                  );
+                }
+                return;
+              }
+              // The settle reading the definition, once the save has stopped at its statement:
+              // stalled past the lease, and the folder taken and held by another writer.
+              if (refused() === 0 || point !== `read:${definition}`) return;
+              await new Promise(resolve => setTimeout(resolve, 1_200));
+              other = await acquireWriterHold({
+                migrationsDir: history,
+                command: "migrate:create",
+                whenHeld: "wait",
+              });
+            };
+            const sqlBefore = filesBelow(history).filter(f =>
+              f.endsWith(".sql")
+            );
+
+            const answer = await path
+              .save(t, [text("heading"), text("alpha"), text("beta")])
+              .catch((error: unknown) => error);
+            kill.stall = undefined;
+            expect(refused(), "no statement adding `beta` was met").toBe(1);
+            expect(other, "the settle was never overtaken").toBeDefined();
+            expect(
+              answer instanceof Response
+                ? answer.ok
+                : !(answer instanceof Error),
+              "the save was not refused"
+            ).toBe(false);
+            expect(
+              movedUnderOther,
+              "files moved under the other writer"
+            ).toEqual([]);
+            // The save's own file, under its own name.
+            expect(
+              filesBelow(history).filter(
+                f => !sqlBefore.includes(f) && f.includes(".sql")
+              ),
+              "the save's migration files"
+            ).toEqual([expect.stringMatching(/\.sql$/)]);
+            expect(await recordRow(t, path), "the record's row").toBeDefined();
+          } finally {
+            kill.stall = undefined;
+            await other?.release();
+            restoreBounds();
+          }
+        },
+        300_000
+      );
+
+      it("a save overtaken before it put any file in place withdraws its record, with nothing written", async () => {
+        const restoreBounds = setWriterHoldBounds({
+          waitMs: 30_000,
+          leaseSeconds: 1,
+          renewMs: 600_000,
+        });
+        try {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const definitionBefore = definitionText();
+          const before = filesBelow(join(basePath, HISTORY));
+          // The first file the save writes in full, before it puts any in place.
+          const stalled = overtakeAt(
+            point =>
+              point.startsWith(join(basePath, HISTORY)) &&
+              point.endsWith(".tmp")
+          );
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha")])
+            .catch((error: unknown) => error);
+          kill.stall = undefined;
+          expect(stalled(), "the save never stalled on its first file").toBe(
+            true
+          );
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+          expect(definitionText(), "the definition").toBe(definitionBefore);
+          expect(
+            filesBelow(join(basePath, HISTORY)).filter(
+              f => !f.endsWith(".lock")
+            ),
+            "the migration folder"
+          ).toEqual(before.filter(f => !f.endsWith(".lock")));
+          // Nothing to settle: the record goes with the refusal.
+          expect(await recordRow(t, path), "the record's row").toBeUndefined();
+          expect(recordMarker(path), "the record's marker").toBeUndefined();
+        } finally {
+          restoreBounds();
+        }
+      }, 300_000);
+
+      it("a save overtaken as it puts its definition in place is refused, with its files and definition left", async () => {
+        const restoreBounds = setWriterHoldBounds({
+          waitMs: 30_000,
+          leaseSeconds: 1,
+          renewMs: 600_000,
+        });
+        try {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const sqlBefore = filesBelow(join(basePath, HISTORY)).filter(f =>
+            f.endsWith(".sql")
+          );
+          const stalled = overtakeAt(
+            point => point === `renamed:${join(basePath, DEFINITION)}`
+          );
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha")])
+            .catch((error: unknown) => error);
+          kill.stall = undefined;
+          expect(stalled(), "the save never stalled on its definition").toBe(
+            true
+          );
+          // Found out after the rename, and refused rather than taken for a whole save.
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+          expect(definitionText(), "the definition it wrote").toContain(
+            '"alpha"'
+          );
+          expect(
+            filesBelow(join(basePath, HISTORY)).filter(
+              f => f.endsWith(".sql") && !sqlBefore.includes(f)
+            ),
+            "the save's migration file, left in place"
+          ).toHaveLength(1);
+          expect(await recordRow(t, path), "the record's row").toBeDefined();
+        } finally {
+          restoreBounds();
+        }
       }, 300_000);
 
       // A migration file put in place whose writing then fails, which its generation takes back
@@ -824,15 +1436,53 @@ describe.each(getConfiguredTestDialects())(
       }, 300_000);
 
       // MySQL commits each statement as it runs, so a save refused at its second addition keeps
-      // the first, and its files are kept recorded applied nowhere: nothing records what committed,
-      // so the record stays for the next start to settle.
+      // the first. The save settles to what applied, its outcome recorded, so its record clears.
       it.runIf(dialect === "mysql")(
-        "a save stopped part-way on MySQL, its files kept unrecorded, keeps the row and the marker",
+        "a save stopped part-way on MySQL and settled to what applied clears the row and the marker",
+        async () => {
+          const t = await boot();
+          await path.create([text("heading")]);
+          const refused = refuseAdding(t, "beta");
+
+          const answer = await path
+            .save(t, [text("heading"), text("alpha"), text("beta")])
+            .catch((error: unknown) => error);
+          expect(refused(), "no statement adding `beta` was met").toBe(1);
+          expect(
+            answer instanceof Response ? answer.ok : !(answer instanceof Error),
+            "the save was not refused"
+          ).toBe(false);
+          const live = await liveColumns(t, path.table);
+          expect(live, "alpha committed before beta failed").toContain("alpha");
+          expect(live, "beta never added").not.toContain("beta");
+
+          expect(await recordRow(t, path), "the record's row").toBeUndefined();
+          expect(entityMarkers(path), "the record's marker").toEqual([]);
+        },
+        300_000
+      );
+
+      // Where recording what applied fails too, nothing records what committed: the record stays
+      // for the next start to settle.
+      it.runIf(dialect === "mysql")(
+        "a save stopped part-way on MySQL whose settle fails keeps the row and the marker",
         async () => {
           const t = await boot();
           await path.create([text("heading")]);
           const definitionBefore = definitionText();
           const refused = refuseAdding(t, "beta");
+          // Once the save's own statement failed, the ledger refuses the settle's record.
+          const markApplied = SchemaEventsRepository.prototype.markApplied;
+          vi.spyOn(
+            SchemaEventsRepository.prototype,
+            "markApplied"
+          ).mockImplementation(async function (
+            this: SchemaEventsRepository,
+            ...args: Parameters<typeof markApplied>
+          ) {
+            if (refused() > 0) throw new Error("injected ledger failure");
+            return markApplied.apply(this, args);
+          });
 
           const answer = await path
             .save(t, [text("heading"), text("alpha"), text("beta")])
@@ -887,12 +1537,16 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      // Nothing settles a record yet, so a later save leaves one it finds as it was: the stopped
-      // save's record, its definition text included, is what settling it reads.
+      // A later save beside another host's save made outside development leaves the record it
+      // finds as it was: the stopped save's record, its definition text included, is what settling
+      // it reads.
       it("a record left by a stopped process stays as it was through a later save", async () => {
         const t = await boot();
         await path.create([text("heading")]);
-        const left = stoppedRecord(path, "a-stopped-host");
+        const left = {
+          ...stoppedRecord(path, "a-stopped-host"),
+          applies: false,
+        };
         await new MetaService(t.adapter, consoleLogger).set(
           `${RECORD_KEY_PREFIX}${path.kind}:${path.slug}`,
           left

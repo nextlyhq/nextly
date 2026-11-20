@@ -34,7 +34,15 @@ function kindOf(reader: IssueReader): PluginFieldWriteCaller["kind"] {
 }
 
 /** The caller the write `reader` describes is made as. */
-export function fieldWriteCaller(reader: IssueReader): PluginFieldWriteCaller {
+export function fieldWriteCaller(
+  reader: IssueReader,
+  /**
+   * The write's transaction, where the validation runs inside one: `can` is
+   * answered on it, so a validator asking it waits on no pooled connection
+   * the transaction holds.
+   */
+  executor?: unknown
+): PluginFieldWriteCaller {
   const kind = kindOf(reader);
   return {
     kind,
@@ -49,7 +57,8 @@ export function fieldWriteCaller(reader: IssueReader): PluginFieldWriteCaller {
         effectiveCallerScope(reader.authenticatedScope),
         action,
         resource,
-        { id: userId, ...(roles === undefined ? {} : { roles }) }
+        { id: userId, ...(roles === undefined ? {} : { roles }) },
+        executor === undefined ? {} : { executor }
       );
     },
   };

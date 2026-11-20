@@ -11,9 +11,12 @@
  *
  * @module init/__tests__/dev-boot-document-columns.integration.test
  */
+import { rmSync } from "node:fs";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../config";
+import { container } from "../../di/container";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import { withSchemaLock } from "../../domains/schema/pipeline/schema-lock";
 import {
@@ -25,7 +28,8 @@ import {
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { runBootTimeApplyIfDev } from "../boot-apply";
 
-// A project with no migrations directory and no plugins: the boot has no
+// A project with no plugins. The start reads the migration folder the app's
+// Builder saves write to; each case below leaves it absent, so the boot has no
 // migrate run to make.
 vi.mock("../../cli/utils/config-loader", () => ({
   loadConfig: async () => ({
@@ -123,6 +127,13 @@ describe.each(getConfiguredTestDialects())(
         expect(created.success, JSON.stringify(created)).toBe(true);
         ids[slug] = String((created.data as { id: unknown }).id);
       }
+      // A project without a migrations directory: the folder the Builder's
+      // create wrote its migration to, which the start reads, is gone.
+      rmSync(
+        container.get<{ migrationsDir: string }>("builderSaveSetup")
+          .migrationsDir,
+        { recursive: true, force: true }
+      );
 
       // A site from before the columns.
       for (const table of TABLES) {

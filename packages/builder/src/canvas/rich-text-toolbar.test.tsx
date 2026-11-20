@@ -37,7 +37,7 @@ import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
   BlockActionsContext,
   type BlockActions,
-} from "../block-actions-context";
+} from "../shell/block-actions-context";
 import type { EditorState } from "../editor-state";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 

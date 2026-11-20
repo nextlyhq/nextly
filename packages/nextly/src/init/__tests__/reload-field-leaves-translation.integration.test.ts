@@ -83,8 +83,8 @@ type Body = {
   type?: string;
   /** A shared field beside it, for a reload that changes something else too. */
   summary?: true;
-  /** `title`'s type, for a reload with a change that needs review. */
-  titleType?: string;
+  /** `title` made required, for a reload with a change that needs review (a NOT NULL addition). */
+  titleRequired?: true;
   /** A unique index on `body` declared in the collection's `indexes`. */
   indexedUnique?: true;
   /** A unique index on `body` and `title` together declared in the collection's `indexes`. */
@@ -100,7 +100,7 @@ const collectionWith = (
   slug: string,
   {
     summary,
-    titleType,
+    titleRequired,
     indexedUnique,
     pairUnique,
     renamedTo,
@@ -117,7 +117,12 @@ const collectionWith = (
       ? { indexes: [{ fields: ["body", "title"], unique: true }] }
       : {}),
     fields: [
-      { name: "title", type: titleType ?? "text", localized: false },
+      {
+        name: "title",
+        type: "text",
+        localized: false,
+        ...(titleRequired ? { required: true } : {}),
+      },
       { name: renamedTo ?? "body", type: "text", ...body },
       ...(summary ? [{ name: "summary", type: "text", localized: false }] : []),
     ] as never,
@@ -505,8 +510,8 @@ describe.each(getConfiguredTestDialects())(
     it("stops the reload when the collection a field leaves translation on has a change that needs review", async () => {
       await seed({ e1: { en: "Hello", es: "Hola" } });
 
-      // `title` changes type, which a reload leaves for review: the field's move waits for it,
-      // even where the terminal confirms the type change, as a developer at one may.
+      // `title` becomes required, a NOT NULL addition a reload leaves for review: the field's move
+      // waits for it, even where the terminal confirms the change, as a developer at one may.
       const confirming: PromptDispatcher = {
         dispatch: () =>
           Promise.resolve({
@@ -515,7 +520,7 @@ describe.each(getConfiguredTestDialects())(
             proceed: true,
           }),
       };
-      loaded.config = configWith({ localized: false, titleType: "number" });
+      loaded.config = configWith({ localized: false, titleRequired: true });
       await reloadNextlyConfig({ dispatcher: confirming });
 
       expect(told()).toMatch(/"rlleaves".*another change/s);

@@ -35,7 +35,7 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "../../editor-state";
-import { EMPTY_SELECTION } from "../../selection";
+import { EMPTY_SELECTION } from "../../canvas/selection";
 import {
   DocumentMiniature,
   type MiniatureRender,

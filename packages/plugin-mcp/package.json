@@ -1,7 +1,7 @@
 {
   "name": "@nextlyhq/plugin-mcp",
   "version": "0.0.2-alpha.78",
-  "description": "Experimental: serves a Model Context Protocol endpoint for AI agents, off by default and authenticated like every other Nextly route. Read-only, and the one tool it exposes reports what the connecting credential may read",
+  "description": "Experimental: serves a Model Context Protocol endpoint for AI agents, off by default and authenticated like every other Nextly route. Agents read what their credential may read and where documents stand in review, and may submit for review; no tool approves or publishes",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",

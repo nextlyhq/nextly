@@ -31,6 +31,10 @@ import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalo
 import { isIconIdShape } from "../../collections/fields/types/icon";
 import { isVirtualField } from "../../collections/fields/virtual";
 import {
+  copiedFromOf,
+  type SourceReadCopy,
+} from "../../domains/collections/services/copied-from";
+import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
 } from "../../domains/field-groups/storage/field-group-field-type";
@@ -238,6 +242,12 @@ export interface EntryWriteContext {
   readonly caller?: PluginFieldWriteCaller;
   /** Whether the value sits in a field-group instance; see `PluginFieldWrite.inFieldGroup`. */
   readonly inFieldGroup?: boolean;
+  /**
+   * The entry a create copies, as the caller's read of it minted it
+   * (`readSourceCopy`); see `PluginFieldWrite.copiedFrom`. Only a minted copy
+   * reaches a validator: {@link fieldWriteFor} hands on nothing else.
+   */
+  readonly copiedFrom?: SourceReadCopy;
   readStored(
     allowedType: string,
     target: PluginStoredValueTarget
@@ -269,6 +279,9 @@ function fieldWriteFor(
   type: string
 ): PluginFieldWrite {
   const locale = writtenLanguage(write);
+  // Only a copy core minted from the caller's read of its source, never a
+  // look-alike that reached the write some other way.
+  const copiedFrom = copiedFromOf(write.copiedFrom);
   // A read that names no language reads the one the write is judged in, so
   // every stored value a validator compares with is the same language's.
   const inWriteLanguage = <T extends { readonly locale?: string }>(
@@ -285,6 +298,7 @@ function fieldWriteFor(
     inTransaction: write.inTransaction,
     ...(write.caller === undefined ? {} : { caller: write.caller }),
     ...(write.inFieldGroup === true ? { inFieldGroup: true } : {}),
+    ...(copiedFrom === undefined ? {} : { copiedFrom }),
     readStored: target => write.readStored(type, inWriteLanguage(target)),
     readStoredOf: target => write.readStoredOf(type, inWriteLanguage(target)),
   };

@@ -227,13 +227,19 @@ describe("dispatchSingles, single-doc reads (respondDoc)", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     // source: "code" means injectSingleDefaultFields returns the fields
-    // unchanged, so the body is the original doc plus ONE derived field.
+    // unchanged, so the body is the original doc plus TWO derived fields.
     // `draftsEnabled` is not decoration: it is how the admin learns whether a
     // status-less save will be stored as a working draft or written live, and
     // draft-split-eligibility.ts is explicit that every call site must derive
     // it from the same predicate -- a divergence shows the editor one
-    // behaviour while the server performs the other.
-    expect(body).toEqual({ ...fakeSingle, draftsEnabled: false });
+    // behaviour while the server performs the other. `workflow` names the
+    // workflow attached to the Single, null where none is, so the editor
+    // knows before a save whether publishing waits for review.
+    expect(body).toEqual({
+      ...fakeSingle,
+      draftsEnabled: false,
+      workflow: null,
+    });
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("item");
   });

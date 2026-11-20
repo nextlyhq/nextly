@@ -60,7 +60,7 @@ const SCREENS: readonly string[] = [
   "plugin-seo/src/admin/previews.tsx",
   "plugin-seo/src/tab/contributions.ts",
   "builder/src/editor-words.ts",
-  "builder/src/block-style-words.ts",
+  "builder/src/inspector/style-inspector/block-style-words.ts",
   "builder/src/canvas/page-start-words.ts",
   "builder/src/shell",
 ];

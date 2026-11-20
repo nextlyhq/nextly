@@ -660,7 +660,9 @@ export function MediaPickerDialog({
                       No media available. Please upload media via the{" "}
                       <a
                         href="/admin/media"
-                        className="text-primary hover:underline"
+                        // In the text colour, underlined: a brand's primary is a fill and
+                        // can fall under AA as small text.
+                        className="font-medium text-foreground underline underline-offset-2"
                         target="_blank"
                         rel="noopener noreferrer"
                       >
@@ -673,7 +675,9 @@ export function MediaPickerDialog({
                       No media available. Please upload media via the{" "}
                       <a
                         href="/admin/media"
-                        className="text-primary hover:underline"
+                        // In the text colour, underlined: a brand's primary is a fill and
+                        // can fall under AA as small text.
+                        className="font-medium text-foreground underline underline-offset-2"
                         target="_blank"
                         rel="noopener noreferrer"
                       >

@@ -479,7 +479,9 @@ import {
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
 import {
+  takesSavepoints,
   underSavepoint,
+  undoneAfter,
   VersionCaptureService,
 } from "../../versions/version-capture-service";
 import { versionConflictRetries } from "../../versions/version-conflict";
@@ -548,6 +550,7 @@ import {
   collectionTableName,
   generateSlug,
 } from "./collection-utils";
+import type { SourceReadCopy } from "./copied-from";
 import {
   entryStillReferenced,
   referrersHolding,
@@ -1804,6 +1807,11 @@ interface EntryValidationArgs {
   goesLive?: boolean;
   /** The batch the document goes live with, which reads definitions once. */
   batch?: GoingLiveRelationsBatch;
+  /**
+   * The entry a create copies, minted from the caller's read of it in the
+   * same call; see `PluginFieldWrite.copiedFrom`.
+   */
+  copiedFrom?: SourceReadCopy;
 }
 
 interface CreateEntryWriteParams {
@@ -1842,6 +1850,13 @@ interface CreateEntryWriteParams {
    * it. Self-resolved on the pooled connection when a caller does not pass one.
    */
   transitionAuth?: TransitionAuthorization;
+  /**
+   * The entry this create copies, minted by `readSourceCopy` from the
+   * caller's read of it on the same transaction (`createEntryFromSource`
+   * with a transaction). A value that is not such a copy reaches no
+   * validator.
+   */
+  copiedFrom?: SourceReadCopy;
 }
 
 /** The only things that differ between the two create entry points. */
@@ -3502,8 +3517,14 @@ export class CollectionMutationService extends BaseService {
             args.readLocale ?? args.writeLocale
           ),
           // Who the write is made as, from the reader its access is judged
-          // by, for a field type whose values only some callers may change.
-          caller: fieldWriteCaller(args.reader),
+          // by, for a field type whose values only some callers may change;
+          // asked on the write's transaction where it has one.
+          caller: fieldWriteCaller(args.reader, args.tx?.getDrizzle()),
+          // The entry a create copies, where the caller's read of it minted
+          // one; nothing else reaches a validator as a copy.
+          ...(args.copiedFrom === undefined
+            ? {}
+            : { copiedFrom: args.copiedFrom }),
         },
       }
     );
@@ -8932,6 +8953,13 @@ export class CollectionMutationService extends BaseService {
       // publish transition gate (a create-as-published) judges the key's OWN
       // grants — the route only authorized `create` against the key's scope.
       authenticatedScope?: AuthenticatedScope;
+      /**
+       * The entry this create copies, minted by `readSourceCopy` from the
+       * caller's read of it in the same call (a duplicate, or
+       * `createEntryFromSource`). Its field validators are told it; a value
+       * that is not such a copy is handed on to none of them.
+       */
+      copiedFrom?: SourceReadCopy;
     },
     body: Record<string, unknown>,
     depth?: number
@@ -9224,6 +9252,10 @@ export class CollectionMutationService extends BaseService {
           ...(params.locale === undefined
             ? {}
             : { writeLocale: params.locale }),
+          // The entry this create copies, where the caller read it first.
+          ...(params.copiedFrom === undefined
+            ? {}
+            : { copiedFrom: params.copiedFrom }),
           // No transaction yet, so stored rows are read on the pool: no row
           // of this write exists for a read to miss.
         });
@@ -22386,12 +22418,17 @@ export class CollectionMutationService extends BaseService {
         // The publish gate's early answer to a create that publishes, before any hook runs, as
         // the create door asks it: a create the gate holds back runs no hook. Asked on the
         // caller's transaction, with no entry yet, so it reads nothing from outside it; only its
-        // refusal is kept, and the verdict after the insert is the one the create settles.
-        await this.judgeCreateOnTx(
-          tx,
-          { ...params, entryId: "" },
-          { status: body.status, locale: undefined, withoutReview },
-          collection
+        // refusal is kept, and the verdict after the insert is the one the create settles. It is
+        // asked under a savepoint undone once it answers: it runs before the item's own savepoint,
+        // so an effect a gate held for the commit while answering would otherwise outlive an item
+        // that savepoint then undoes. Only the verdict on the written entry holds effects.
+        await undoneAfter(tx, () =>
+          this.judgeCreateOnTx(
+            tx,
+            { ...params, entryId: "" },
+            { status: body.status, locale: undefined, withoutReview },
+            collection
+          )
         );
       }
 
@@ -22563,6 +22600,10 @@ export class CollectionMutationService extends BaseService {
           // On the caller's transaction, so a row an earlier entry of the
           // same batch wrote is seen.
           tx,
+          // The entry this create copies, where the caller read it first.
+          ...(params.copiedFrom === undefined
+            ? {}
+            : { copiedFrom: params.copiedFrom }),
         });
       }
 
@@ -22726,7 +22767,11 @@ export class CollectionMutationService extends BaseService {
       // field-group table this instance has not registered, say) then undoes
       // the row too, so a caller that catches the failure and commits its own
       // transaction keeps nothing of this create. Side effects and hooks run
-      // after it, as before.
+      // after it, as before. Where the transaction takes no savepoint,
+      // nothing but the whole transaction can take the row back: a failure once
+      // it is written is marked a write-integrity failure, so a batch aborts and
+      // rolls back rather than carrying on and committing it.
+      const undoesAlone = takesSavepoints(tx);
       const { entry, createEffects } = await underSavepoint(tx, async () => {
         // Insert using transaction context
         const entry = await tx.insert<unknown>(tableName, entryData, {
@@ -22839,6 +22884,10 @@ export class CollectionMutationService extends BaseService {
         // with the items after it.
         if (settleCreateGate) await settleCreateGate();
         return { entry, createEffects };
+      }).catch((error: unknown) => {
+        throw rowWritten && !undoesAlone
+          ? markWriteIntegrityFailure(error)
+          : error;
       });
       const eventRecorded = createEffects.eventRecorded;
       revalidationIntent = createEffects.revalidationIntent;

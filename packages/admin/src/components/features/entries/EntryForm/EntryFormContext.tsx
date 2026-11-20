@@ -519,12 +519,20 @@ export function useOptionalEntryFormContext(): EntryFormContextValue | null {
  */
 export function useDocumentIdentity(): DocumentIdentity | null {
   const context = useContext(EntryFormContext);
-  if (!context) return null;
-  return {
-    kind: context.kind,
-    slug: context.collectionSlug,
-    documentId: context.entryId,
-  };
+  // One value while the document is the same, built from the fields it
+  // names: a consumer memoises over it, or hands it to a memoised surface,
+  // and a new object for the same document would draw that again on every
+  // render of the form. Outside a form there is no kind or slug.
+  const kind = context?.kind;
+  const slug = context?.collectionSlug;
+  const documentId = context?.entryId;
+  return useMemo(
+    () =>
+      kind === undefined || slug === undefined
+        ? null
+        : { kind, slug, documentId },
+    [kind, slug, documentId]
+  );
 }
 
 /**

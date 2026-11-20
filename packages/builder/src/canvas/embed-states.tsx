@@ -35,16 +35,19 @@ import { Button } from "@nextlyhq/ui";
 import { MonitorPlay } from "lucide-react";
 import * as React from "react";
 
-import { isElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
 import type { Rect } from "../geometry";
-import { designIsWritable, lockViewOf, propIsWritable } from "../inspector";
-import { selectionModeFor, type SelectionMode } from "../selection";
+import {
+  designIsWritable,
+  lockViewOf,
+  propIsWritable,
+} from "../inspector/inspector";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { CHROME_ATTRIBUTE } from "./canvas-chrome";
 import { useCanvasFrame } from "./canvas-frame-context";
 import { watchCanvasFor } from "./canvas-geometry-watch";
+import { isElement } from "./dom-kind";
 import {
   EMBED_STATE_WORDS as WORDS,
   embedFrames,
@@ -53,6 +56,7 @@ import {
 } from "./embed-states-model";
 import { overlaySpaceOf } from "./geometry-dom";
 import { shownRectOf } from "./image-states";
+import { selectionModeFor, type SelectionMode } from "./selection";
 
 export interface EmbedStatesProps {
   /** The editor the links are written through. */

@@ -221,6 +221,19 @@ async function probeForAbortedTransaction(
  */
 const GUARDED = Symbol.for("nextly.abortedTransactionGuardInstalled");
 
+/** The adapter's dialect, as it reports it; undefined where it reports none. */
+function dialectOf(adapter: unknown): string | undefined {
+  const reporting = adapter as {
+    dialect?: unknown;
+    getCapabilities?: () => { dialect?: unknown };
+  };
+  const dialect =
+    typeof reporting.getCapabilities === "function"
+      ? reporting.getCapabilities().dialect
+      : reporting.dialect;
+  return typeof dialect === "string" ? dialect : undefined;
+}
+
 function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
   // An adapter can be handed to `createTestNextly` more than once — that is how a test keeps an
   // in-memory database alive across boots. Wrapping the wrapper would nest a probe per boot, so a
@@ -229,14 +242,26 @@ function guardAgainstAbortedTransactions<T extends TestAdapter>(adapter: T): T {
   const marker = adapter as unknown as Record<symbol, boolean>;
   if (marker[GUARDED]) return adapter;
 
+  // Only PostgreSQL leaves a transaction aborted after a failed statement, so only there is
+  // there anything to record. Probing elsewhere can break a healthy transaction instead: on
+  // MySQL a schema statement commits the transaction it runs in, the probe's savepoint is gone
+  // by the time it is released, and a migration that applied would be reported as failed.
+  if (dialectOf(adapter) !== "postgresql") return adapter;
+
   const originalTransaction = adapter.transaction?.bind(adapter);
   if (!originalTransaction) return adapter;
+  // MySQL never poisons a transaction, so it has nothing for the probe to find, and the probe
+  // would break it: MySQL commits a transaction before a statement that changes a table's shape,
+  // and the savepoints go with it, so a callback that dropped a table leaves the probe's release
+  // naming a savepoint that no longer exists. SQLite keeps such statements inside the
+  // transaction, so it is probed as before.
+  const probes = adapter.getCapabilities().dialect !== "mysql";
   const wrapped = async (...args: unknown[]): Promise<unknown> => {
     const [callback, ...rest] = args;
     // Probe on the context the callback itself used, so the question reaches the transaction
     // that may have been poisoned rather than a fresh connection from the pool.
     const instrumented =
-      typeof callback === "function"
+      probes && typeof callback === "function"
         ? async (ctx: AbortProbeContext): Promise<unknown> => {
             const result = await (
               callback as (c: AbortProbeContext) => Promise<unknown>
