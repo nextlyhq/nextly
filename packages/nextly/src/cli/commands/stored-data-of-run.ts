@@ -30,8 +30,10 @@ import {
   runDataSteps,
   type DataStepsDeps,
 } from "./data-steps";
+import { dryRunRefusalOf } from "./migrate-create";
 import type { UpgradeSite } from "./upgrade-step";
 import { MIGRATE_DATA_STEPS } from "./upgrade-steps";
+import { refusedForColumnsTheRunAdds } from "./upgrade-steps/localisation-site";
 import {
   storedPasswordsNotice,
   storedPasswordsOn,
@@ -71,6 +73,27 @@ export interface StoredDataOfRun {
   refusal: () => NextlyError | null;
 }
 
+/**
+ * Whether `error`, from counting the steps before a run's schema changes, refuses the stored data
+ * as those changes leave it: a step's refusal, as a dry run names it (`dryRunRefusalOf`), other
+ * than the one naming the columns the run's own migrations add. Anything else is a count the
+ * earlier schema cannot answer yet.
+ */
+function refusesBeforeSchemaChanges(error: unknown): boolean {
+  return (
+    dryRunRefusalOf(error) !== undefined && !refusedForColumnsTheRunAdds(error)
+  );
+}
+
+/** Whether `plan`'s report lists anything: content to move, a conflict, or something to check. */
+function listsAnything(plan: DryRunPlan): boolean {
+  const report = plan.report;
+  return (
+    report !== undefined &&
+    report.move.length + report.conflicts.length + report.check.length > 0
+  );
+}
+
 /** Prints `plan` under the dry run's heading; nothing when it holds neither work nor a refusal. */
 function reportPlan(
   plan: DryRunPlan,
@@ -80,9 +103,7 @@ function reportPlan(
   const refusals = plan.refusals ?? [];
   const notes = plan.notes ?? [];
   const report = plan.report;
-  const listed =
-    report !== undefined &&
-    report.move.length + report.conflicts.length + report.check.length > 0;
+  const listed = listsAnything(plan);
   if (plan.changes.length + refusals.length + notes.length === 0 && !listed) {
     return;
   }
@@ -127,9 +148,9 @@ function reportPlan(
  * run refuses before it changes the schema, and stays named beside a refusal
  * of the schema change itself. The steps' work is left out where the real
  * run never reaches it: where the schema change would be refused, and where
- * the command takes no data step. A plan of the steps holding neither work
- * nor a refusal (a count that cannot be read yet says only that) adds
- * nothing.
+ * the command takes no data step. A plan of the steps holding no work, no
+ * refusal and nothing its report lists (a count that cannot be read yet says
+ * only that) adds nothing.
  */
 export function planWithStoredData(
   plan: DryRunPlan,
@@ -138,9 +159,11 @@ export function planWithStoredData(
 ): DryRunPlan {
   const planRefusals = plan.refusals ?? [];
   const storedRefusals = stored.refusals ?? [];
+  // A report can list something with no work to do, as an archive no entity claims.
   if (
     !options.takesSteps ||
-    stored.changes.length + storedRefusals.length === 0
+    (stored.changes.length + storedRefusals.length === 0 &&
+      !listsAnything(stored))
   ) {
     return plan;
   }
@@ -251,7 +274,12 @@ export function storedDataOfRun(args: {
         const before = deps(false);
         await confirmDataStepsBackup(
           before,
-          await firstDataStepWithWork(before).catch(() => undefined)
+          await firstDataStepWithWork(before).catch((error: unknown) => {
+            // A refusal of the stored data holds whatever the migrations change, so it is made
+            // here, with nothing changed; anything else is a count taken again after them.
+            if (refusesBeforeSchemaChanges(error)) throw error;
+            return undefined;
+          })
         );
       } finally {
         // The run goes on with the resolver it started with, so nothing

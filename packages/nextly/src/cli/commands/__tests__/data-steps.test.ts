@@ -320,5 +320,27 @@ describe("a command's dry-run plan with the data steps it takes after", () => {
         { takesSteps: true }
       )
     ).toBe(sync);
+    // A report that lists nothing adds nothing either.
+    expect(
+      planWithStoredData(
+        sync,
+        { changes: [], report: { move: [], conflicts: [], check: [] } },
+        { takesSteps: true }
+      )
+    ).toBe(sync);
+  });
+
+  // A step can have nothing to change and still list something an editor should check, as an
+  // archive no entity claims. Broken, the plan of the steps is dropped whole for holding no work.
+  it("keeps what the steps list where they have no work and no refusal", () => {
+    const report = {
+      move: [],
+      conflicts: [],
+      check: ["archived translations of a collection no longer configured"],
+    };
+
+    expect(
+      planWithStoredData(sync, { changes: [], report }, { takesSteps: true })
+    ).toEqual({ ...sync, report });
   });
 });

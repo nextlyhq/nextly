@@ -152,6 +152,9 @@ export async function versionHistoryReady(
   return PENDING_CHANGE_COLUMNS.every(column => present.has(column));
 }
 
+/** The reason `assertVersionHistoryReady`'s refusal carries, which tells it from the steps' others. */
+const HISTORY_NOT_LAID_OUT = "version-history-not-laid-out";
+
 /**
  * Refuses, naming the repair, where the version history is not laid out as this release keeps it
  * (`versionHistoryReady`) yet holds pending changes a localisation step would rewrite: keying,
@@ -184,8 +187,20 @@ export async function assertVersionHistoryReady(
       `(it lacks ${PENDING_CHANGE_COLUMNS.join(", ")}). Run \`nextly migrate\` without --step, ` +
       "so its migrations add them before its data steps key and split the pending changes. " +
       "Nothing was changed.",
-    logContext: { table: VERSIONS_TABLE },
+    logContext: { table: VERSIONS_TABLE, reason: HISTORY_NOT_LAID_OUT },
   });
+}
+
+/**
+ * Whether `error` is `assertVersionHistoryReady`'s refusal: the one refusal of the steps that a
+ * run's own migrations answer, by adding the columns it names. Asked before those migrations
+ * apply, it says only that they have not applied yet.
+ */
+export function refusedForColumnsTheRunAdds(error: unknown): boolean {
+  return (
+    NextlyError.isCode(error, "NEXTLY_UPGRADE_LOCALISATION_UNRESOLVED") &&
+    error.logContext?.reason === HISTORY_NOT_LAID_OUT
+  );
 }
 
 /**

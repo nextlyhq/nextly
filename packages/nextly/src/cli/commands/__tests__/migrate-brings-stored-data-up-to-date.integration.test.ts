@@ -85,9 +85,20 @@ vi.mock("../../utils/config-loader", async importOriginal => {
 const TABLE = "dc_msd_entries";
 const STEP = "hash passwords stored before this release";
 
-/** The site's collection, with or without the field its second migration adds. */
-function configWith(summary: boolean) {
+/**
+ * The site's collection, with or without the field its second migration adds, in the languages
+ * `locales` names (the first the default) where given.
+ */
+function configWith(summary: boolean, locales?: readonly string[]) {
   return defineConfig({
+    ...(locales === undefined
+      ? {}
+      : {
+          localization: {
+            locales: [...locales],
+            defaultLocale: locales[0] ?? "en",
+          },
+        }),
     collections: [
       defineCollection({
         slug: "msd-entries",
@@ -339,6 +350,47 @@ describe.each(getConfiguredTestDialects())(
       const again = await migrate();
       expect(await storedPin()).toBe(stored);
       expect(again.join("\n")).not.toContain(STEP);
+    }, 240_000);
+
+    // A refusal of the stored data holds whatever the waiting migration changes, so it is made
+    // before that migration applies, and "Nothing was changed" is true of it. Broken, the count
+    // before the migrations swallows it as unreadable and the same refusal comes after them.
+    it("refuses one language stored under two spellings before the waiting migration applies", async () => {
+      const LANGUAGES = ["en", "pt-BR"] as const;
+      setNonInteractive(true);
+      state.config = configWith(false, LANGUAGES);
+      await capture("entries");
+      await migrate();
+      const now =
+        dialect === "sqlite" ? String(Date.now()) : "CURRENT_TIMESTAMP";
+      await sql(
+        `INSERT INTO ${id(TABLE)} (${id("id")}, ${id("slug")}, ${id("created_at")}, ${id("updated_at")}) VALUES ('entry-1', 'first', ${now}, ${now})`
+      );
+      // The entry's Portuguese translation under the standard code and under the older one an
+      // earlier release wrote: one language kept twice for one entry.
+      for (const [locale, title] of [
+        ["pt-BR", "olá"],
+        ["pt_BR", "olá antes"],
+      ]) {
+        await sql(
+          `INSERT INTO ${id(`${TABLE}_locales`)} (${id("_parent")}, ${id("_locale")}, ${id("title")}) VALUES ('entry-1', '${locale}', '${title}')`
+        );
+      }
+      state.config = configWith(true, LANGUAGES);
+      await capture("summary");
+      expect(await summaryColumnExists()).toBe(false);
+
+      // Confirmed, so the backup is not what refuses.
+      const refusal = await migrate({ backupConfirmed: true }).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
+        true
+      );
+      expect(messageOf(refusal)).toContain("pt_BR");
+      expect(await summaryColumnExists()).toBe(false);
     }, 240_000);
 
     it("lists the work in a dry run and changes nothing", async () => {
