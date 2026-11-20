@@ -172,7 +172,8 @@ async function peopleAnswers(
   resource: string
 ): Promise<Map<string, HolderAnswer>> {
   if (isRetiredManage(action, resource)) {
-    const each = [];
+    // Each plain action's answers, by person.
+    const each: Map<string, HolderAnswer>[] = [];
     for (const plain of RETIRED_MANAGE_PLAIN_ACTIONS) {
       each.push(await peopleAnswers(adapter, userIds, plain, resource));
     }
