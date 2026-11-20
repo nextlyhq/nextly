@@ -179,6 +179,31 @@ describe("Convert to code", () => {
     );
   });
 
+  it("shows the code the draft preview says converting would store", async () => {
+    api.previewDraft.mockResolvedValue({
+      subject: "",
+      html: "",
+      text: "",
+      preheader: "",
+      from: null,
+      source: { html: "<h1>Shipped</h1>", text: "Shipped" },
+    });
+    mount(template({}));
+    // The preview has answered before the dialog opens.
+    await waitFor(() => expect(api.previewDraft).toHaveBeenCalled());
+    await openMenu();
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Convert to code…" })
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Convert to code?",
+    });
+    expect(
+      (await within(dialog).findByLabelText("The code this email becomes"))
+        .textContent
+    ).toBe("<h1>Shipped</h1>");
+  });
+
   it("is not offered for a coded email", async () => {
     mount(template({ format: "code", blocks: null, htmlContent: "<p>Hi</p>" }));
     await openMenu();

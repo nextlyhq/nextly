@@ -14,10 +14,13 @@ import { ConvertToCodeDialog } from "./written/ConvertToCodeDialog";
 export function WorkbenchDialogs({
   template,
   acts,
+  source,
   onDiscardEdits,
 }: {
   template: EmailTemplateRecord;
   acts: OwnershipActs;
+  /** The written email's code as the preview has it, for Convert to code. */
+  source: string | undefined;
   /** Put the form back to the saved email, so an act can start from it. */
   onDiscardEdits: () => void;
 }): JSX.Element {
@@ -72,6 +75,7 @@ export function WorkbenchDialogs({
         open={acts.convert.open}
         onOpenChange={acts.convert.setOpen}
         dirty={acts.isDirty}
+        source={source}
         isPending={acts.convert.isPending}
         onConvert={acts.convert.convert}
       />

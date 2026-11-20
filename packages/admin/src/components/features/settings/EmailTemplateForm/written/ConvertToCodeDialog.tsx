@@ -53,7 +53,10 @@ export function ConvertToCodeDialog({
             each email sent still uses its own recipient&apos;s data.
           </DialogDescription>
         </DialogHeader>
-        {source !== undefined ? (
+        {/* The code of the email on screen, which is the saved one only
+            while nothing is unsaved: with edits pending it would not be what
+            converting stores. */}
+        {source !== undefined && !dirty ? (
           <pre
             aria-label="The code this email becomes"
             className="max-h-64 overflow-auto rounded-md border border-border bg-muted p-3 text-xs"
