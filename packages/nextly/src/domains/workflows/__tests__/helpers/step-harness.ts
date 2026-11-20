@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { apiKeyScope } from "../../../../auth/authenticated-scope";
 import { defineCollection, defineSingle, text } from "../../../../config";
 import { getDialectTables } from "../../../../database/index";
+import { layoutForBoot } from "../../../../__tests__/storage-layout";
 import {
   createTestNextly,
   type CreateTestNextlyOptions,
@@ -72,14 +73,14 @@ export function bootSteps(
     options.tablePrefix === undefined
       ? {}
       : { dbName: `${options.tablePrefix}${slug}` };
+  // Every boot names its layout, so a case booted per language never leaves the cases after it in
+  // this file on per-language storage: the harness keeps a boot's layout until another names one.
+  layoutForBoot(options.perLanguageStorage === true);
   return createTestNextly({
     dialect,
     // Only when given, so every other case boots exactly as before.
     ...(plugins === undefined ? {} : { plugins }),
     ...(options.seedPublic === true ? { seedPublic: true } : {}),
-    ...(options.perLanguageStorage === true
-      ? { perLanguageStorage: true }
-      : {}),
     localization: { locales: ["en", "es", "ar"], defaultLocale: "en" },
     collections: [
       defineCollection({
