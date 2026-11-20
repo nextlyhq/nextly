@@ -11,8 +11,7 @@
  * settings but not roles sees who takes each step without "Change".
  */
 
-import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
-import { Copy, Lock } from "lucide-react";
+import { Lock } from "lucide-react";
 import type React from "react";
 import { useCallback, useMemo, useState } from "react";
 
@@ -26,13 +25,11 @@ import {
 } from "@admin/hooks/queries/useWorkflows";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useDocumentTitle } from "@admin/hooks/useDocumentTitle";
-import { apiErrorMessage, isApiError } from "@admin/lib/api/parseApiError";
+import { isApiError } from "@admin/lib/api/parseApiError";
 import { cn } from "@admin/lib/utils";
-import type {
-  WorkflowAssignee,
-  WorkflowStepSummary,
-} from "@admin/types/workflows";
+import type { WorkflowStepSummary } from "@admin/types/workflows";
 
+import { CandidateLoadError } from "./CandidateLoadError";
 import { DefaultReviewerSection } from "./DefaultReviewerSection";
 import { GrantRolesDialog } from "./GrantRolesDialog";
 import { StageLabelsSection } from "./StageLabelsSection";
@@ -40,13 +37,19 @@ import { StepGrantsTable } from "./StepGrantsTable";
 import { useWorkflowSettingsSave } from "./useWorkflowSettingsSave";
 import { workflowSettingsAccess } from "./workflow-permissions";
 import {
-  attachmentsPhrase,
+  assigneeNames,
   reviewerOptions,
   staleReviewers,
 } from "./workflow-settings-model";
+import {
+  RolesAccessNote,
+  Section,
+  WorkflowDetailUnavailableBody,
+  WorkflowHeaderDescription,
+  type WorkflowDetailUnavailable,
+} from "./WorkflowDetailParts";
 import { WorkflowDiagram } from "./WorkflowDiagram";
 import { WorkflowEmailSection } from "./WorkflowEmailSection";
-import { DefinedInCodeBadge } from "./WorkflowList";
 import { WorkflowNotices } from "./WorkflowNotices";
 
 /** Enough roles and people for a settings choice, in one page each. */
@@ -58,58 +61,13 @@ const ONE_PAGE = {
 
 const parentCrumb = { label: "Workflows", href: ROUTES.SETTINGS_WORKFLOWS };
 
-/** A titled card of the page, named by its heading. */
-function Section({
-  id,
+/** The settings chrome's identity for a page titled `title`. */
+const header = (title: string, description?: React.ReactNode) => ({
   title,
   description,
-  children,
-}: {
-  id: string;
-  title: string;
-  description: string;
-  children: React.ReactNode;
-}): React.JSX.Element {
-  return (
-    <section
-      aria-labelledby={id}
-      className="space-y-4 rounded-lg border border-border bg-card p-4 text-card-foreground sm:p-6"
-    >
-      <div className="space-y-1">
-        <h2 id={id} className="text-base font-semibold">
-          {title}
-        </h2>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-/**
- * Copies the configuration file's path, and says so in its own name for a
- * moment, so a screen reader hears the copy happen.
- */
-function CopyPathButton({ path }: { path: string }): React.JSX.Element {
-  const [copied, setCopied] = useState(false);
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      aria-label={copied ? "Path copied" : "Copy path"}
-      onClick={() => {
-        void navigator.clipboard?.writeText(path).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        });
-      }}
-    >
-      <Copy aria-hidden="true" className="size-3.5" />
-      {copied ? "Copied" : "Copy path"}
-    </Button>
-  );
-}
+  crumb: title,
+  parentCrumb,
+});
 
 export interface WorkflowSettingsDetailProps {
   slug: string;
@@ -143,77 +101,34 @@ export function WorkflowSettingsDetail({
   const roleItems = useMemo(() => roles.data?.items ?? [], [roles.data]);
   const userItems = useMemo(() => users.data?.items ?? [], [users.data]);
 
-  const roleName = (id: string): string => {
-    const role = roleItems.find(each => each.id === id);
-    if (role) return role.roleName || role.name;
-    const partial = Object.values(settings?.grantableSteps ?? {})
-      .flatMap(step => step.partialRoles)
-      .find(each => each.id === id);
-    return partial?.name ?? `Role ${id}`;
-  };
-  const nameOf = (assignee: WorkflowAssignee): string => {
-    if (assignee.kind === "role") return `${roleName(assignee.id)} (role)`;
-    const user = userItems.find(each => each.id === assignee.id);
-    return user ? user.name || user.email : `Person ${assignee.id}`;
-  };
+  const { roleName, nameOf } = assigneeNames(roleItems, userItems, settings);
 
-  const header = (title: string, description?: React.ReactNode) => ({
-    title,
-    description,
-    crumb: title,
-    parentCrumb,
-  });
-
-  const missing =
-    (isApiError(settingsQuery.error) && settingsQuery.error.status === 404) ||
-    (list.isSuccess && !workflow);
-  if (missing) {
-    return (
-      <SettingsLayout {...header("Workflow not found")}>
-        <Alert variant="warning" role="alert">
-          <AlertDescription>
-            No workflow named &ldquo;{slug}&rdquo; is registered. A workflow is
-            defined in code and attached to a collection or Single.
-          </AlertDescription>
-        </Alert>
-      </SettingsLayout>
-    );
-  }
-
+  // What the page shows while it has no workflow: none registered, a failed read, or still reading.
   const failed = list.error ?? settingsQuery.error;
-  if (failed) {
+  const unavailable: WorkflowDetailUnavailable | null =
+    (isApiError(settingsQuery.error) && settingsQuery.error.status === 404) ||
+    (list.isSuccess && !workflow)
+      ? { kind: "missing", slug }
+      : failed
+        ? {
+            kind: "failed",
+            error: failed,
+            onRetry: () => {
+              void list.refetch();
+              void settingsQuery.refetch();
+            },
+          }
+        : !workflow || !settings
+          ? { kind: "loading" }
+          : null;
+  if (unavailable || !workflow || !settings) {
+    const title =
+      unavailable?.kind === "missing" ? "Workflow not found" : "Workflow";
     return (
-      <SettingsLayout {...header("Workflow")}>
-        <Alert variant="destructive" role="alert">
-          <AlertDescription className="space-y-3">
-            <p>
-              {apiErrorMessage(failed, "The workflow could not be loaded.")}
-            </p>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                void list.refetch();
-                void settingsQuery.refetch();
-              }}
-            >
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      </SettingsLayout>
-    );
-  }
-
-  if (!workflow || !settings) {
-    return (
-      <SettingsLayout {...header("Workflow")}>
-        <div className="space-y-4" aria-busy="true" aria-label="Loading">
-          <Skeleton className="h-6 w-1/3" />
-          <Skeleton className="h-24 w-full" />
-          <Skeleton className="h-48 w-full" />
-        </div>
+      <SettingsLayout {...header(title)}>
+        <WorkflowDetailUnavailableBody
+          state={unavailable ?? { kind: "loading" }}
+        />
       </SettingsLayout>
     );
   }
@@ -230,19 +145,7 @@ export function WorkflowSettingsDetail({
     <SettingsLayout
       {...header(
         workflow.label,
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <DefinedInCodeBadge />
-          {workflow.configPath !== null && (
-            <span className="inline-flex flex-wrap items-center gap-1">
-              Registered in{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5 text-xs text-foreground">
-                {workflow.configPath}
-              </code>
-              <CopyPathButton path={workflow.configPath} />
-            </span>
-          )}
-          <span>Used by {attachmentsPhrase(workflow)}</span>
-        </span>
+        <WorkflowHeaderDescription workflow={workflow} />
       )}
     >
       <div className="space-y-6">
@@ -286,24 +189,20 @@ export function WorkflowSettingsDetail({
           title="Who takes each step"
           description="The roles holding each step's permission on every collection and Single using this workflow."
         >
-          {access.update && !access.reviewers ? (
-            <p className="text-sm text-muted-foreground">
-              Changing who takes a step, or choosing a default reviewer, also
-              needs permission to read roles.
-            </p>
-          ) : (
-            access.update &&
-            !access.grants && (
-              <p className="text-sm text-muted-foreground">
-                Changing who takes a step also needs permission to update roles.
-              </p>
-            )
-          )}
+          <RolesAccessNote access={access} />
+          {access.grants && roles.error ? (
+            <CandidateLoadError
+              what="roles"
+              error={roles.error}
+              onRetry={() => void roles.refetch()}
+            />
+          ) : null}
           <StepGrantsTable
             workflow={workflow}
             settings={settings}
             roleName={roleName}
-            canChange={access.grants}
+            // Never a choice of roles drawn from a list that did not load.
+            canChange={access.grants && !roles.error}
             saving={saving?.startsWith("grants.") ?? false}
             errors={errors}
             onChange={step => setGranting(step)}
@@ -315,6 +214,21 @@ export function WorkflowSettingsDetail({
           title="Default reviewer"
           description="Assigned when a document enters the stage."
         >
+          {access.reviewers && roles.error ? (
+            <CandidateLoadError
+              what="roles"
+              error={roles.error}
+              onRetry={() => void roles.refetch()}
+            />
+          ) : null}
+          {/* People who failed to load are said so; the roles are still offered. */}
+          {access.reviewers && users.error ? (
+            <CandidateLoadError
+              what="people"
+              error={users.error}
+              onRetry={() => void users.refetch()}
+            />
+          ) : null}
           <DefaultReviewerSection
             workflow={workflow}
             settings={settings}
@@ -322,7 +236,7 @@ export function WorkflowSettingsDetail({
               reviewerOptions(settings, roleItems, userItems, stage)
             }
             nameOf={nameOf}
-            canChange={access.reviewers}
+            canChange={access.reviewers && !roles.error}
             saving={saving}
             errors={errors}
             onSave={(stage, reviewer) =>
