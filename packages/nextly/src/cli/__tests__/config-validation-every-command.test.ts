@@ -225,6 +225,15 @@ describe("a project with no configuration file", () => {
 
   // A plugin's own rollback reads its migrations and no app entity, so it goes on without one; it
   // ends for its own reason (no such plugin), never for the missing configuration.
+  // A blank migration reads no entity, only the migrations folder, so it is written where the
+  // default configuration puts that folder.
+  it("is no reason for migrate:create --blank to refuse", async () => {
+    const ran = await run(["migrate:create", "--blank", "--name", "by_hand"]);
+
+    expect(ran.stderr).not.toContain("CONFIG_MISSING");
+    expect(ran.status, ran.stderr).toBe(0);
+  });
+
   it("is no reason for migrate:down --plugin to refuse", async () => {
     const ran = await run(["migrate:down", "--plugin", "@acme/seo"]);
 
