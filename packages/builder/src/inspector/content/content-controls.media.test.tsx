@@ -35,7 +35,7 @@ import {
 } from "./content-controls";
 import type { EditorState } from "../../editor-state";
 import { InspectorPanel } from "../inspector-panel";
-import { createOpenPassages } from "../../open-passages";
+import { createOpenPassages } from "../../canvas/open-passages";
 
 beforeAll(() => {
   const element = window.Element.prototype as unknown as Record<

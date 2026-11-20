@@ -47,10 +47,10 @@ import { BlockToolbar } from "./block-toolbar";
 import { Canvas } from "./canvas";
 import { useEditorState, type EditorState } from "../editor-state";
 import { HoveredBlockProvider, useHoveredBlockSetter } from "./hovered-block";
-import { BlockKeyboardActions } from "../keyboard-actions";
+import { BlockKeyboardActions } from "../shell/keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
 import { EDITING_ATTRIBUTE } from "./use-inline-text";
-import { VisitorUnreadableBadges } from "../visitor-unreadable-badges";
+import { VisitorUnreadableBadges } from "../shell/visitor-unreadable-badges";
 
 afterEach(() => {
   cleanup();

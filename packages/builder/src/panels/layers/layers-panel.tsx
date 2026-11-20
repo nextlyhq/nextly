@@ -103,6 +103,7 @@ import * as React from "react";
 import { BlockIconMark } from "../../block-icon";
 import { DRAG_SOURCE_ATTRIBUTE } from "../../canvas/canvas";
 import { useHoveredBlockSetter } from "../../canvas/hovered-block";
+import type { MoveDirection } from "../../canvas/keyboard-move";
 import { revealNode } from "../../canvas/reveal-node";
 import type { EditorState } from "../../editor-state";
 import { EDITOR_WORDS } from "../../editor-words";
@@ -115,13 +116,12 @@ import {
   lockViewOf,
   renameOp,
 } from "../../inspector/inspector";
-import { keyHint } from "../../key-hint";
-import { MOVE_KEYS, type SharedBlockVerbs } from "../../keyboard-actions";
-import type { MoveDirection } from "../../keyboard-move";
 import { lockRefusalWording } from "../../lock-refusal";
 import { refusalAnnouncement } from "../../move-refusal";
 import type { BuilderOp } from "../../op-vocabulary";
 import { deviceLabel } from "../../shell/breakpoint-switcher";
+import { keyHint } from "../../shell/key-hint";
+import { MOVE_KEYS, type SharedBlockVerbs } from "../../shell/keyboard-actions";
 
 import {
   EntryContentRowFact,

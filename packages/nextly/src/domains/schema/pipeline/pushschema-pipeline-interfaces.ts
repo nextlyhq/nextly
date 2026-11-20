@@ -147,6 +147,15 @@ export interface PreCleanupField {
   type: string;
 }
 
+/**
+ * Told as each statement starts and once it has run, with whether it is a schema statement: what
+ * an apply records of what stays when it fails (`PipelineResult.statementsKept`).
+ */
+export interface StatementRecord {
+  starting(schema: boolean): void;
+  finished(schema: boolean): void;
+}
+
 export interface PreCleanupExecutor {
   execute(args: {
     tx: unknown;
@@ -162,6 +171,8 @@ export interface PreCleanupExecutor {
     dialect: SupportedDialect;
     /** The lossy type changes whose named values to clear (`PromptDispatchResult.clearing`). */
     clearing?: readonly string[];
+    /** Told of each statement it runs, as it starts and once it has run. */
+    statements?: StatementRecord;
   }): Promise<NextlySchemaSnapshot>;
 }
 

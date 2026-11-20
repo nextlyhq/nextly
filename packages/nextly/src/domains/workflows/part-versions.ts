@@ -175,8 +175,29 @@ function newestOfAnyPart(
 }
 
 /**
- * The newest recorded version of one part, snapshot included, read on `tx`: in the part's
- * language, or for the shared part, in any (each language's snapshot carries the shared fields).
+ * The number of a part's version under review, from each language's newest recorded version
+ * number (null for the versions recorded without one): a language's own newest, or for the shared
+ * part the newest of any language, since each language's snapshot carries the shared fields.
+ * Undefined for a part never saved. The one statement of which version a review shows and an
+ * approval names: the review state and {@link shownVersionOn} both derive their number here.
+ */
+export function versionUnderReview(
+  newestByLocale: ReadonlyMap<string | null, number>,
+  part: string | null
+): number | undefined {
+  if (part !== null) return newestByLocale.get(part);
+  let newest: number | undefined;
+  for (const versionNo of newestByLocale.values()) {
+    if (newest === undefined || versionNo > newest) newest = versionNo;
+  }
+  return newest;
+}
+
+/**
+ * The newest recorded version of one part, snapshot included, read on `tx`: the version
+ * {@link versionUnderReview} names. The shared part's comes from the newest version of any part,
+ * read as `read` says, so a locked read sees the latest committed version; a language's from its
+ * own newest version number.
  * Undefined for a part never saved.
  */
 export async function shownVersionOn(
@@ -191,9 +212,27 @@ export async function shownVersionOn(
     scopeSlug: document.scopeSlug,
     entryId: document.entryId,
   };
-  if (part === null) return newestOfAnyPart(repo, ref, read);
-  const newest = (await repo.newestVersionNoByLocale(ref, [part])).get(part);
-  return newest === undefined ? undefined : repo.findByVersionNo(ref, newest);
+  const newestOfAny =
+    part === null ? await newestOfAnyPart(repo, ref, read) : undefined;
+  const newestByLocale =
+    part === null
+      ? newestByLocaleOf(newestOfAny)
+      : await repo.newestVersionNoByLocale(ref, [part]);
+  const versionNo = versionUnderReview(newestByLocale, part);
+  if (versionNo === undefined) return undefined;
+  // The newest of any part is already in hand when it is the one named: no second read.
+  return newestOfAny?.versionNo === versionNo
+    ? newestOfAny
+    : repo.findByVersionNo(ref, versionNo);
+}
+
+/** The newest version of any part as the one-language map {@link versionUnderReview} reads. */
+function newestByLocaleOf(
+  newest: VersionRow | undefined
+): Map<string | null, number> {
+  return newest?.versionNo == null
+    ? new Map()
+    : new Map([[newest.locale ?? null, newest.versionNo]]);
 }
 
 /**

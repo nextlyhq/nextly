@@ -14,6 +14,7 @@ function part(over: Partial<PartReview> = {}): PartReview {
     part: null,
     stage: "inReview",
     stageLabel: "In review",
+    stageColour: null,
     publishable: false,
     enteredAt: null,
     enteredBy: null,
@@ -25,6 +26,7 @@ function part(over: Partial<PartReview> = {}): PartReview {
     steps: [],
     waitingFor: { kind: "roles", roles: [{ id: "r1", name: "Editors" }] },
     lastMove: null,
+    reviewedVersionNo: null,
     ...over,
   };
 }
@@ -33,6 +35,79 @@ const LIVE_STRIP =
   "Readers see the published version until these changes are approved and published.";
 
 describe("ReviewStatusLine", () => {
+  it("tells the writer the changes a reviewer asked for, with who asked", () => {
+    render(
+      <ReviewStatusLine
+        status="draft"
+        hasWorkingDraft={false}
+        part={part({
+          stage: "drafting",
+          stageLabel: "Drafting",
+          waitingFor: { kind: "user", id: "alice", name: "Alice" },
+          lastMove: {
+            kind: "workflow-request-changes",
+            actor: { kind: "person", id: "rita", name: "Rita" },
+            at: "2026-11-19T09:00:00.000Z",
+            from: "inReview",
+            to: "drafting",
+            comment: "Shorten the intro.",
+          },
+        })}
+      />
+    );
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Changes requested by Rita: “Shorten the intro.”"
+    );
+  });
+
+  it("tells the writer of changes asked for on the shared fields alone, from another language", () => {
+    const shared = part({
+      part: null,
+      stage: "drafting",
+      stageLabel: "Drafting",
+      lastMove: {
+        kind: "workflow-request-changes",
+        actor: { kind: "person", id: "rita", name: "Rita" },
+        at: "2026-11-19T09:00:00.000Z",
+        from: "inReview",
+        to: "drafting",
+        comment: "The price is wrong.",
+      },
+    });
+    const english = part({ part: "en", stage: null, stageLabel: null });
+    render(
+      <ReviewStatusLine
+        status="published"
+        hasWorkingDraft={false}
+        part={undefined}
+        parts={[english, shared]}
+      />
+    );
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Changes requested on the shared fields by Rita: “The price is wrong.”"
+    );
+  });
+
+  it("says nothing of a comment that came with any other move", () => {
+    render(
+      <ReviewStatusLine
+        status="draft"
+        hasWorkingDraft={false}
+        part={part({
+          lastMove: {
+            kind: "workflow-submit",
+            actor: { kind: "person", id: "alice", name: "Alice" },
+            at: "2026-11-19T09:00:00.000Z",
+            from: "drafting",
+            to: "inReview",
+            comment: "Ready",
+          },
+        })}
+      />
+    );
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+
   it("takes the editor's column inset, so it starts where the title does", () => {
     render(
       <ReviewStatusLine
@@ -45,6 +120,31 @@ describe("ReviewStatusLine", () => {
     expect(screen.getByTestId("review-status-line").parentElement).toHaveClass(
       "px-4"
     );
+  });
+
+  it("marks the stage with the colour Settings gives it, and with none where it has none", () => {
+    const { rerender } = render(
+      <ReviewStatusLine
+        status="draft"
+        hasWorkingDraft={false}
+        part={part({
+          stageLabel: "Waiting for review",
+          stageColour: "#d97706",
+        })}
+      />
+    );
+    const line = screen.getByTestId("review-status-line");
+    expect(line).toHaveTextContent("Draft · Waiting for review");
+    expect(line.querySelector(".bg-warning-solid")).not.toBeNull();
+
+    rerender(
+      <ReviewStatusLine status="draft" hasWorkingDraft={false} part={part()} />
+    );
+    expect(
+      screen
+        .getByTestId("review-status-line")
+        .querySelector("[class*='-solid']")
+    ).toBeNull();
   });
 
   it("says a live page's changes are in review, and who they wait for", () => {

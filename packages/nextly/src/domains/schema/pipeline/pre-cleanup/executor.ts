@@ -20,7 +20,7 @@
 // here — both layers fail loud on adversarial input.
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
 import { clearingStatements, rowKeyText } from "../../repair-columns/clearing";
@@ -38,6 +38,7 @@ import { PromptCancelledError } from "../prompt-dispatcher/errors";
 import type {
   PreCleanupExecutor,
   PreCleanupField,
+  StatementRecord,
 } from "../pushschema-pipeline-interfaces";
 import type { ClassifierEvent, Resolution } from "../resolution/types";
 import { generateSQL } from "../sql-templates";
@@ -328,6 +329,8 @@ export async function clearConsentedValues(args: {
   dialect: SupportedDialect;
   events: ClassifierEvent[];
   clearing?: readonly string[];
+  /** Told of each clearing statement it runs (`StatementRecord`). */
+  statements?: StatementRecord;
 }): Promise<void> {
   for (const event of clearedTypeChanges(args)) {
     const consented = new Set(event.lossy.cleared.map(rowKeyText));
@@ -353,7 +356,7 @@ export async function clearConsentedValues(args: {
       keyedBy: event.lossy.keyedBy,
       keys: still,
     })) {
-      await runStatement(args.tx, args.dialect, statement);
+      await runRecorded(args, statement, false);
     }
     if (args.dialect === "sqlite" && late.length > 0) {
       throw lateValuesLeft(event, late);
@@ -419,6 +422,24 @@ function lateValuesLeft(
     ],
     logContext: { column, late: late.map(rowKeyText) },
   });
+}
+
+/**
+ * Runs one statement on `args.tx`, telling `args.statements` as it starts and once it has run, so
+ * an apply that fails part-way records only what ran.
+ */
+async function runRecorded(
+  args: {
+    tx: unknown;
+    dialect: SupportedDialect;
+    statements?: StatementRecord;
+  },
+  statement: SQL,
+  schema: boolean
+): Promise<void> {
+  args.statements?.starting(schema);
+  await runStatement(args.tx, args.dialect, statement);
+  args.statements?.finished(schema);
 }
 
 function sideEffectResolutions(args: {
@@ -650,13 +671,13 @@ export class RealPreCleanupExecutor implements PreCleanupExecutor {
       // DELETE below names it, and it does not exist until this runs.
       const add = addStatements.get(`${event.tableName}.${event.columnName}`);
       if (add !== undefined) {
-        await runStatement(args.tx, args.dialect, sql.raw(add));
+        await runRecorded(args, sql.raw(add), true);
       }
       const stmt =
         resolution.kind === "provide_default"
           ? sql`UPDATE ${sql.identifier(event.tableName)} SET ${sql.identifier(event.columnName)} = ${resolution.value} WHERE ${sql.identifier(event.columnName)} IS NULL`
           : sql`DELETE FROM ${sql.identifier(event.tableName)} WHERE ${sql.identifier(event.columnName)} IS NULL`;
-      await runStatement(args.tx, args.dialect, stmt);
+      await runRecorded(args, stmt, false);
     }
     // A lossy type change consented to, cleared ahead of the conversion (`clearConsentedValues`).
     // SQLite applies without a transaction, so there the clearing waits until its rebuild has

@@ -60,7 +60,7 @@ export function readManifest(
     const manifest: unknown = JSON.parse(text);
     // A file that parses to something other than an object is not a manifest.
     return manifest !== null && typeof manifest === "object"
-      ? { text, manifest: manifest as Manifest }
+      ? { text, manifest: manifest }
       : undefined;
   } catch {
     return undefined;

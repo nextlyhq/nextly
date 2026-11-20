@@ -37,6 +37,44 @@ import {
 import type { ServiceContainer } from "../../../services";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
+// The test's seam on the migration file a save runs: a statement `fileFailure.matches` names is sent
+// as one the database refuses, so the file stops at that statement as a server would stop it, inside
+// the real runner (its transaction, or MySQL's statements kept before it).
+const fileFailure = vi.hoisted(() => ({
+  matches: undefined as ((statement: string) => boolean) | undefined,
+}));
+vi.mock("../../schema/busy-table/run-unit", async original => {
+  const actual =
+    await original<typeof import("../../schema/busy-table/run-unit")>();
+  return {
+    ...actual,
+    runUnitInTries: (
+      adapter: Parameters<typeof actual.runUnitInTries>[0],
+      statements: Parameters<typeof actual.runUnitInTries>[1],
+      ...rest: Parameters<typeof actual.runUnitInTries> extends [
+        unknown,
+        unknown,
+        ...infer R,
+      ]
+        ? R
+        : never
+    ) => {
+      const matches = fileFailure.matches;
+      return actual.runUnitInTries(
+        adapter,
+        matches === undefined
+          ? statements
+          : statements.map(statement =>
+              matches(statement)
+                ? "SELECT injected_copy_failure FROM injected_copy_failure"
+                : statement
+            ),
+        ...rest
+      );
+    },
+  };
+});
+
 const LOCALES = ["en", "es", "ar"];
 const SHARED = [
   { name: "heading", type: "text", localized: false },
@@ -81,6 +119,21 @@ function quote(dialect: TestDialect, name: string): string {
   return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 }
 
+/**
+ * A refused save's drift, told with the way on that works for a save, and no command: the save
+ * withdrew its files, so none is left for `nextly migrate:resolve` to record.
+ */
+function expectBuilderDriftWayOn(refusal: unknown): void {
+  // Read as text: a path that answers rather than throws hands its answer on in an Error.
+  const told = `${refusal instanceof Error ? refusal.message : String(refusal)} ${String(
+    (refusal as { publicMessage?: unknown } | undefined)?.publicMessage
+  )}`;
+  expect(told).toContain("schema drift detected");
+  expect(told).toContain("put the table back as the history records it");
+  expect(told).not.toContain("migrate:resolve");
+  expect(told).not.toContain("migrate:create");
+}
+
 describeEachDialect("a shared field that becomes translated", dialect => {
   let current: TestNextly;
 
@@ -95,6 +148,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
   });
 
   afterEach(async () => {
+    // A case that failed before clearing its seam leaves the next one's file whole.
+    fileFailure.matches = undefined;
     await current.destroy();
     vi.unstubAllEnvs();
   });
@@ -250,6 +305,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
   const PATHS = [
     {
       path: "the builder saves the field alone",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: false,
       table: "dc_posts",
       seed: seedCollection,
       read: readCollection,
@@ -264,6 +321,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     },
     {
       path: "the builder applies the change with the schema dialog",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       table: "dc_posts",
       seed: seedCollection,
       read: readCollection,
@@ -289,6 +348,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     },
     {
       path: "a Single's schema is saved with the field translated",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       table: "single_hero",
       seed: seedSingle,
       read: () => readSingle(),
@@ -302,6 +363,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     },
     {
       path: "a Single's schema is applied with the schema dialog",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       table: "single_hero",
       seed: seedSingle,
       read: () => readSingle(),
@@ -321,6 +384,8 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     },
     {
       path: "a field group's schema is applied with the schema dialog",
+      // Whether the save runs the migration file it writes, rather than its push.
+      runsFile: true,
       table: "comp_banner",
       seed: seedFieldGroup,
       // A field group has no reader of its own: its rows are read through the entries embedding
@@ -450,58 +515,68 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(row?.heading).toBe("Hello");
   });
 
-  it("keeps the value on main when moving it fails, so the drop never runs, and judges the next try by what the failure left", async () => {
-    // The apply moves the value before it drops the main column, so a move that fails stops the
-    // apply with the column, and its value, still in place: the drop is never let through on a
-    // move that did not happen. PostgreSQL takes the whole apply back; SQLite and MySQL keep the
-    // companion's new, empty column, which the history does not record, so the next save is
-    // judged as drift before its push runs and refused with the recovery steps.
-    const id = await seedCollection();
-    const dialog = PATHS.find(p => p.path.includes("schema dialog"));
-    if (!dialog) throw new Error("the collection dialog path is missing");
-    // Matched anywhere in the statement: on PostgreSQL and MySQL a schema
-    // statement carries the run's lock claim ahead of it (`markedForSchemaLock`).
-    const injected = failStatementsMatching(
-      statement =>
+  // The value moves before the main column is dropped, so a move that fails stops the change with
+  // the column, and its value, still in place: the drop is never let through on a move that did not
+  // happen. The push (a collection's settings save) moves it as its own step: PostgreSQL takes the
+  // whole push back, while SQLite and MySQL keep the companion's new, empty column, which the next
+  // save's push takes as it is and finishes. The migration file (the schema dialog) copies it before its drop, a copy the
+  // database refuses stops the file there, and on SQLite and PostgreSQL the save's files go back in
+  // one transaction; MySQL commits each schema statement, so there the save is told as part held.
+  it.each([
+    {
+      road: "the push",
+      path: "the builder saves the field alone",
+    },
+    {
+      road: "its migration file",
+      path: "the builder applies the change with the schema dialog",
+    },
+  ])(
+    "keeps the value on main when moving it fails, so the drop never runs, through $road",
+    async ({ path }) => {
+      const id = await seedCollection();
+      const save = PATHS.find(p => p.path === path);
+      if (!save) throw new Error(`the path "${path}" is missing`);
+      // Matched anywhere in the statement: on PostgreSQL and MySQL a schema
+      // statement carries the run's lock claim ahead of it (`markedForSchemaLock`).
+      const copies = (statement: string) =>
         statement.includes("INSERT INTO") &&
-        statement.includes("dc_posts_locales")
-    );
+        statement.includes("dc_posts_locales");
+      const injected = save.runsFile
+        ? undefined
+        : failStatementsMatching(copies);
+      if (save.runsFile) fileFailure.matches = statement => copies(statement);
 
-    const failed = await dialog.change(TRANSLATED).then(
-      () => undefined,
-      (error: unknown) => error
-    );
-    injected.mockRestore();
+      const failed = await save.change(TRANSLATED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      injected?.mockRestore();
+      fileFailure.matches = undefined;
 
-    expect(String(failed)).toMatch(/injected copy failure/);
-    expect(await mainHeading("dc_posts", id)).toBe("Hello");
-    expect(await readCollection(id)).toBe("Hello");
-    const leftColumn = dialect !== "postgresql";
-    expect(await columnsOf("dc_posts_locales")).toEqual(
-      leftColumn
-        ? expect.arrayContaining(["heading"])
-        : expect.not.arrayContaining(["heading"])
-    );
-
-    const retried = await dialog.change(TRANSLATED).then(
-      () => undefined,
-      (error: unknown) => error
-    );
-
-    if (leftColumn) {
-      const told = `${retried instanceof Error ? retried.message : String(retried)} ${String(
-        (retried as { publicMessage?: unknown } | undefined)?.publicMessage
-      )}`;
-      expect(told).toContain("schema drift detected");
-      expect(told).toContain("pnpm nextly db:sync");
-      expect(told).toContain("pnpm nextly migrate:resolve --applied");
+      expect(String(failed)).toMatch(/injected[ _]copy[ _]failure/);
       expect(await mainHeading("dc_posts", id)).toBe("Hello");
-      return;
+      // MySQL commits each schema statement as it runs, so the save's files run one by one there:
+      // its own file, which records the field translated, stays applied, and the failure is told
+      // as part held, its translations file kept with the steps that finish it.
+      if (save.runsFile && dialect === "mysql") {
+        const said = (failed as { publicMessage?: string }).publicMessage ?? "";
+        expect(said).toContain("The database now holds part of this change");
+        expect(said).toContain("nextly migrate:resolve --applied");
+        return;
+      }
+      expect(await readCollection(id)).toBe("Hello");
+
+      const retried = await save.change(TRANSLATED).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(retried).toBeUndefined();
+      expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+      expect(await readCollection(id)).toBe("Hello");
     }
-    expect(retried).toBeUndefined();
-    expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
-    expect(await readCollection(id)).toBe("Hello");
-  });
+  );
 
   it("writes nothing when the schema dialog's apply is refused for a question left unanswered", async () => {
     // The same apply renames `views`, and the dialog sends no answer for that rename, so the apply
@@ -535,11 +610,11 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(moved.en ?? null).toBeNull();
   });
 
-  it("finishes on the next apply when one moved and dropped the column but failed before recording it", async () => {
-    // The apply moves the value and drops the main column, then the registry write after it
-    // fails, so the registry still describes the field as shared. Applied again, the main column is
-    // already gone and the value already on the companion: nothing is left to move, and the apply
-    // finishes from there instead of failing on the column it no longer has.
+  // The dialog's save runs its migration file, which records the change in the registry inside its
+  // own transaction, so the move and that record stand or fall together. The dialog's own write of
+  // the registry row after the translations table is brought in step is refused once: not fatal,
+  // as the file has recorded the change, and the value reads from the companion.
+  it("keeps the change its file recorded when the dialog's registry write after it fails", async () => {
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
@@ -584,21 +659,10 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     injected.mockRestore();
     expect(refusedOnce).toBe(true);
     expect(await mainHeading("dc_posts", id)).toBeUndefined();
-    // The registry still records the field shared: the next apply is a retry of this one.
-    const [registry] = await query<{ fields: unknown }>(
-      `SELECT ${quote(dialect, "fields")} AS fields FROM ${quote(dialect, "dynamic_collections")} WHERE ${quote(dialect, "slug")} = 'posts'`
-    );
-    const recorded = (
-      typeof registry?.fields === "string"
-        ? JSON.parse(registry.fields)
-        : registry?.fields
-    ) as { name: string; localized?: unknown }[];
-    // Recorded, and recorded shared as the seed declared it: a field missing from the record, or
-    // recorded with no answer either way, is another state.
-    const heading = recorded.find(f => f.name === "heading");
-    expect(heading).toBeDefined();
-    expect(heading?.localized).toBe(false);
+    expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+    expect(await readCollection(id)).toBe("Hello");
 
+    // Saved again, there is nothing left to change: the save goes through and the value stays.
     await dialog.change(TRANSLATED);
 
     expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
@@ -961,13 +1025,6 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     }
   );
 
-  /**
-   * Whether a save of `table`'s entity runs the migration file it writes, planned from the
-   * migration history: a Single's and a field group's do; a collection's is still applied by its
-   * push.
-   */
-  const runsItsFile = (table: string) => !table.startsWith("dc_");
-
   // A default given to the main column outside the history is drift, refused as `nextly migrate`
   // refuses it, before anything changes: by a Single's and a field group's file, and by a
   // collection's push, whose check before the push judges the table as the file road does. On MySQL
@@ -988,27 +1045,26 @@ describeEachDialect("a shared field that becomes translated", dialect => {
         (error: unknown) => error
       );
 
-      // On MySQL the move's own refusal comes first, before a file is planned or a field saved
-      // alone is applied; the schema dialog's push is judged for drift before it.
-      if (
-        dialect === "mysql" &&
-        path !== "the builder applies the change with the schema dialog"
-      ) {
+      // On MySQL the move's own refusal comes first on every path, before a file is planned or a
+      // push is judged: the field's TEXT companion column could take no literal default.
+      if (dialect === "mysql") {
         expect(reportedRefusal(refusal)).toMatch(
           /own default; turning translation on moves its values into a new column/
         );
         expect(await mainHeading(table, id)).toBe("Hello");
         return;
       }
-      // Read as text: a path that answers rather than throws hands its answer on in an Error.
-      const told = `${refusal instanceof Error ? refusal.message : String(refusal)} ${String(
-        (refusal as { publicMessage?: unknown } | undefined)?.publicMessage
-      )}`;
-      expect(told).toContain("schema drift detected");
-      expect(told).toContain("pnpm nextly db:sync");
-      expect(told).toContain("pnpm nextly migrate:resolve --applied");
+      expectBuilderDriftWayOn(refusal);
       expect(await mainHeading(table, id)).toBe("Hello");
       expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+
+      // The way on, followed: the column put back as the history records it by hand, and the same
+      // save made again.
+      await query(
+        `ALTER TABLE ${quote(dialect, table)} ALTER COLUMN ${quote(dialect, "heading")} DROP DEFAULT`
+      );
+      await change(TRANSLATED);
+      expect((await companionHeadings(table, id)).en).toBe("Hello");
     }
   );
 

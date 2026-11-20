@@ -1,11 +1,11 @@
 /**
- * The external identities' table, per dialect, and the digest its uniqueness
- * is enforced with.
+ * The external identities' table, per dialect, the digest its uniqueness is
+ * enforced with, and the one row builder every attaching door writes through.
  *
  * @module schemas/external-identities
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
@@ -57,4 +57,63 @@ export function externalIdentityKeyDigest(
     hash.update(bytes);
   }
   return hash.digest("hex");
+}
+
+/**
+ * The facts that pick out one external identity: the stamped provider key,
+ * the issuer as the table stores it ("" where the provider has none), the
+ * subject, and the address the provider asserted.
+ *
+ * What both a sign-in hand-off and an explicit link are validated down to
+ * before anything is written — the shape the attaching doors hand each
+ * other, so neither has to know the other's internal parse result. No
+ * digest: the one the table holds uniqueness by is derived from these facts
+ * by the row builder, never taken from whoever hands them in, so a stored
+ * row cannot carry a digest its own facts do not produce.
+ */
+export interface ExternalIdentityFacts {
+  readonly providerKey: string;
+  readonly issuer: string;
+  readonly subject: string;
+  readonly address: string | null;
+}
+
+/**
+ * The row one attached identity writes, built the one way every attaching
+ * door stores it: the explicit link's own insert, and the user-creation
+ * transaction a provisioning sign-in runs.
+ *
+ * One builder because the doors are routes to one question — what a stored
+ * identity row is — and two spellings of it would drift the first time a
+ * column is added to one and not the other. The key digest is computed here,
+ * by `externalIdentityKeyDigest` — the function the sign-in lookup derives
+ * its digest with — so every stored row is found by the lookup for its facts.
+ */
+export function newExternalIdentityRow(
+  facts: ExternalIdentityFacts,
+  userId: string
+): {
+  id: string;
+  providerKey: string;
+  issuer: string;
+  subject: string;
+  keyDigest: string;
+  address: string | null;
+  userId: string;
+  createdAt: Date;
+} {
+  return {
+    id: randomUUID(),
+    providerKey: facts.providerKey,
+    issuer: facts.issuer,
+    subject: facts.subject,
+    keyDigest: externalIdentityKeyDigest(
+      facts.providerKey,
+      facts.issuer,
+      facts.subject
+    ),
+    address: facts.address,
+    userId,
+    createdAt: new Date(),
+  };
 }

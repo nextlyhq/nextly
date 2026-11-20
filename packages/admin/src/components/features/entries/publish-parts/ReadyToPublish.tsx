@@ -13,17 +13,22 @@ import type { JSX } from "react";
 import { useId } from "react";
 
 import { AlertTriangle } from "@admin/components/icons";
-import { Button, Label, Textarea, toast } from "@admin/components/ui";
-import { useTakeStep } from "@admin/hooks/queries/useReviewState";
-import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { Button, Label, Textarea } from "@admin/components/ui";
 import type { ReleaseDocumentRef } from "@admin/types/releases";
+
+import { StepRefusalNote } from "../review/StepRefusalNote";
+import { useStepTaker } from "../review/useStepTaker";
 
 import type { ReadyProblem } from "./ready-to-publish";
 
 /** The longest reason the publish route takes, as its body schema bounds it. */
 const WITHOUT_REVIEW_REASON_MAX = 2000;
 
-/** What holds Publish, each with its fix or who can unblock it. Nothing where nothing does. */
+/**
+ * What holds Publish, each with its fix or who can unblock it. Nothing where nothing does. A fix
+ * is taken as the editor's header and side panel take a step (`useStepTaker`): a step that needs
+ * a comment asks for it first, and a refusal is said here as well as in a toast.
+ */
 export function ReadyToPublish({
   document,
   problems,
@@ -32,7 +37,7 @@ export function ReadyToPublish({
   problems: readonly ReadyProblem[];
 }): JSX.Element | null {
   const headingId = useId();
-  const step = useTakeStep(document);
+  const taker = useStepTaker(document);
   if (problems.length === 0) return null;
   return (
     <section
@@ -59,34 +64,11 @@ export function ReadyToPublish({
                   size="sm"
                   variant="outline"
                   className="h-7 px-2 text-xs"
-                  disabled={step.isPending || problem.fix.part.version === null}
+                  disabled={taker.pending || problem.fix.part.version === null}
                   onClick={() => {
                     const fix = problem.fix;
-                    if (fix === undefined || fix.part.version === null) return;
-                    step.mutate(
-                      {
-                        step: fix.step.name,
-                        parts: [fix.part.part],
-                        seen: [
-                          {
-                            part: fix.part.part,
-                            revision: fix.part.revision,
-                            version: fix.part.version,
-                          },
-                        ],
-                      },
-                      {
-                        onSuccess: () =>
-                          toast.success(`${fix.step.label}: done.`),
-                        onError: reason =>
-                          toast.error(
-                            apiErrorMessage(
-                              reason,
-                              `${fix.step.label} didn't go through.`
-                            )
-                          ),
-                      }
-                    );
+                    if (fix === undefined) return;
+                    void taker.take(fix.step, [fix.part]);
                   }}
                 >
                   {problem.fix.step.label}
@@ -96,6 +78,8 @@ export function ReadyToPublish({
           </li>
         ))}
       </ul>
+      <StepRefusalNote refusal={taker.refusal} onDismiss={taker.clearRefusal} />
+      {taker.dialog}
     </section>
   );
 }

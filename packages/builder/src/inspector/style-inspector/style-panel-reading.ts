@@ -14,15 +14,15 @@ import type {
 } from "@nextlyhq/blocks-engine";
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 
-import { editedTierLive } from "../../breakpoints";
 import { breakpointsAtWidth } from "../../canvas/canvas-width";
 import type { EditorState } from "../../editor-state";
+import { editedTierLive } from "../../styles/breakpoints";
 import {
   breakpointBadge,
   inheritedProvenance,
   provenanceBeneath,
-} from "../../style-provenance";
-import { styleSubjectFor } from "../../style-subject";
+} from "../../styles/style-provenance";
+import { styleSubjectFor } from "../../styles/style-subject";
 
 import type { CascadeAt, ProvenanceOf } from "./style-field-surroundings";
 import type { StyleInspectionOptions } from "./style-inspector";

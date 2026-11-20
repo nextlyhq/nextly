@@ -22,8 +22,8 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import {
   BlockActionsContext,
   type BlockActions,
-} from "../block-actions-context";
-import type { TurnIntoOffer } from "../turn-into-verb";
+} from "../shell/block-actions-context";
+import type { TurnIntoOffer } from "./turn-into-verb";
 
 import {
   createFormatBarStore,

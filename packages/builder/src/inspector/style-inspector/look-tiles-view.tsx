@@ -20,9 +20,9 @@ import {
 import { ArrowUpRight, Check, Image as ImageIcon } from "lucide-react";
 import * as React from "react";
 
-import { siteBaseOf } from "../../block-look-rows";
 import type { EditorState } from "../../editor-state";
 import { variationLabel } from "../../panels/add/inserter";
+import { siteBaseOf } from "../../panels/design/block-look-rows";
 import { radioGroupStep } from "../../roving-radios";
 import { PanelSections } from "../panel-section";
 import { sectionEntries, type SettingEntry } from "../settings-index";

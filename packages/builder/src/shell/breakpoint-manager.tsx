@@ -24,7 +24,7 @@ import {
   BASE_BREAKPOINT,
   sameBreakpoints,
   type BreakpointSet,
-} from "../breakpoints";
+} from "../styles/breakpoints";
 
 import { BreakpointEditor } from "./breakpoint-editor";
 import { deviceOptions, tierIcon } from "./breakpoint-switcher";

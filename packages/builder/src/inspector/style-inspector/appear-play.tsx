@@ -23,7 +23,7 @@ import * as React from "react";
 import { playAppear } from "../../canvas/appear-replay";
 import { useCanvasFrame } from "../../canvas/canvas-frame-context";
 import type { EditorState } from "../../editor-state";
-import { readStyleValue } from "../../style-values";
+import { readStyleValue } from "../../styles/style-values";
 
 import { StyleTargetContext } from "./style-field-surroundings";
 import { fieldStyles, targetKey } from "./style-field-target";

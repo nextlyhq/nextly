@@ -37,7 +37,7 @@ import { Button, Checkbox, Label, Textarea } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { useBoundFieldOf } from "../../bindings/binding-controls";
-import { useVisitorUnreadable } from "../../visitor-unreadable-context";
+import { useVisitorUnreadable } from "../../shell/visitor-unreadable-context";
 import { HeldByLock } from "../held-by-lock";
 import { propLabel, type EditableProp } from "../inspector";
 

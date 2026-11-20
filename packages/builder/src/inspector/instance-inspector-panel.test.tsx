@@ -39,7 +39,7 @@ import type {
   MediaPickerProps,
 } from "./content/content-controls";
 import { InspectorPanel } from "./inspector-panel";
-import type { SharedBlockVerbs } from "../keyboard-actions";
+import type { SharedBlockVerbs } from "../shell/keyboard-actions";
 
 /** Verbs as a host shares them: the menu's locked answers are the same list. */
 function shared(verbs: Omit<SharedBlockVerbs, "withLocks">): SharedBlockVerbs {
