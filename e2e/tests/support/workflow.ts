@@ -287,29 +287,33 @@ export function publishControl(page: Page): Locator {
 }
 
 /**
- * Publish held until the note is approved, as the header draws it: greyed and
- * `aria-disabled`, yet focusable and read with its reason; pressed, it opens
- * "Ready to publish?", which Escape closes again.
+ * Publish held until the note is approved, as the header draws it: greyed, yet
+ * an enabled button read with its reason, never `aria-disabled`, since pressed
+ * it opens "Ready to publish?", which Escape closes again. Its look is held
+ * to WCAG 2.2 AA by {@link expectEditorAccessible} like any enabled control.
  */
 export async function expectPublishHeldForReview(
   page: Page,
   reason: RegExp
 ): Promise<void> {
   const held = publishControl(page);
-  await expect(held).toHaveAttribute("aria-disabled", "true");
-  // Not the native `disabled`, which would take it out of the Tab order.
-  expect(
-    await held.evaluate(element => (element as HTMLButtonElement).disabled)
-  ).toBe(false);
+  await expect(held).toHaveAttribute("data-review-held", "true");
+  // A press that opens something is not unavailable: neither the native
+  // `disabled`, which would take it out of the Tab order, nor `aria-disabled`.
+  await expect(held).toBeEnabled();
+  await expect(held).not.toHaveAttribute("aria-disabled");
   await held.focus();
   await expect(held).toBeFocused();
   await expect(held).toHaveAccessibleDescription(reason);
-  // Pressed by keyboard, as a person reaching it by Tab would: a pointer click
-  // waits for an `aria-disabled` control to be enabled, which this never is.
-  await page.keyboard.press("Enter");
   const ready = page
     .locator("[data-publish-parts-dialog]")
     .getByRole("region", { name: "Ready to publish?" });
+  // Pressed by keyboard, as a person reaching it by Tab would, then by pointer.
+  await page.keyboard.press("Enter");
+  await expect(ready).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(ready).toBeHidden();
+  await held.click();
   await expect(ready).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(ready).toBeHidden();

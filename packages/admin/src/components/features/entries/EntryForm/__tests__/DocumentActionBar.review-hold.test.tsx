@@ -1,8 +1,8 @@
 /**
  * Publish held by a workflow until the document is approved, as the bar draws it: greyed, yet
- * reached by keyboard and read with its reason, which is also on screen in words; pressed, it
- * opens "Choose what to publish…", which lists what holds it and who can unblock it. A Publish
- * refused for want of a permission stays a disabled control.
+ * an enabled button, reached by keyboard and read with its reason, which is also on screen in
+ * words; pressed, it opens "Choose what to publish…", which lists what holds it and who can
+ * unblock it. A Publish refused for want of a permission stays a disabled control.
  *
  * @module components/features/entries/EntryForm/__tests__/DocumentActionBar.review-hold.test
  */
@@ -44,7 +44,7 @@ function bindings(
 }
 
 describe("a Publish the workflow holds", () => {
-  it("stays focusable, greyed, and is read with its reason", () => {
+  it("stays an enabled button, greyed, and is read with its reason", () => {
     render(
       <DocumentActionBar
         actions={[HELD_PUBLISH, CHOOSE]}
@@ -52,9 +52,11 @@ describe("a Publish the workflow holds", () => {
       />
     );
     const publish = screen.getByRole("button", { name: "Publish" });
-    // Greyed for assistive technology without leaving the Tab order.
-    expect(publish).toHaveAttribute("aria-disabled", "true");
-    expect(publish).not.toHaveAttribute("disabled");
+    // An enabled button, since pressed it opens Choose what to publish…: never
+    // marked unavailable, which would tell assistive technology it does nothing.
+    expect(publish).toBeEnabled();
+    expect(publish).not.toHaveAttribute("aria-disabled");
+    expect(publish).toHaveAttribute("data-review-held", "true");
     publish.focus();
     expect(publish).toHaveFocus();
     expect(publish).toHaveAccessibleDescription(REASON);
@@ -103,7 +105,8 @@ describe("a Publish the workflow holds", () => {
       />
     );
     const held = screen.getByRole("button", { name: "Publish" });
-    expect(held).toHaveAttribute("aria-disabled", "true");
+    expect(held).not.toHaveAttribute("aria-disabled");
+    expect(held).toHaveAttribute("data-review-held", "true");
     expect(held).toHaveAccessibleDescription(REASON);
     await userEvent.click(held);
     expect(choose).toHaveBeenCalledTimes(1);
@@ -139,7 +142,8 @@ describe("a Publish the workflow holds, on a full-window surface's compact bar",
       />
     );
     const held = screen.getByRole("button", { name: "Publish" });
-    expect(held).toHaveAttribute("aria-disabled", "true");
+    expect(held).not.toHaveAttribute("aria-disabled");
+    expect(held).toHaveAttribute("data-review-held", "true");
     expect(held).toHaveAccessibleDescription(REASON);
     await userEvent.click(held);
     expect(choose).toHaveBeenCalledTimes(1);

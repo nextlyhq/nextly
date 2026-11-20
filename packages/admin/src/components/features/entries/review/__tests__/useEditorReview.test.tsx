@@ -317,10 +317,11 @@ describe("the editor's next step under a workflow", () => {
     fetchSpy.mockResolvedValue(attached(part(inReview(false))));
     render(<Editor />);
     const publish = await screen.findByRole("button", { name: /^publish$/i });
-    // Held, yet still reached by keyboard and read with why.
+    // Held, yet an enabled button reached by keyboard and read with why.
     await waitFor(() =>
-      expect(publish).toHaveAttribute("aria-disabled", "true")
+      expect(publish).toHaveAttribute("data-review-held", "true")
     );
+    expect(publish).not.toHaveAttribute("aria-disabled");
     expect(publish).not.toBeDisabled();
     expect(publish).toHaveAccessibleDescription(
       "Needs approval: In review, waiting for Editors"

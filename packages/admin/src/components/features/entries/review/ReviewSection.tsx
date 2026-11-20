@@ -17,7 +17,7 @@
  */
 
 import { Button } from "@nextlyhq/ui";
-import type { JSX } from "react";
+import { useEffect, useRef, type JSX, type MouseEvent } from "react";
 
 import { StagePill } from "@admin/components/features/settings/workflows/StagePill";
 import { toast } from "@admin/components/ui";
@@ -243,6 +243,48 @@ function assignmentWords(part: PartReview): string {
 }
 
 /**
+ * Keeps the keyboard's place across a press that replaces itself. "Assign to
+ * me" gives way to "Unassign" once the part is assigned, and back, so the
+ * press that held focus leaves the page and focus would fall to its start.
+ *
+ * An assignment made always takes its press away (the person, the role or
+ * nobody is then assigned), so once that press is gone and the group's
+ * presses are enabled again, focus goes to the first of them. A refused
+ * assignment leaves its press drawn, so once the request has settled focus
+ * goes back to it. Checked on every render rather than on a change of
+ * `pending`, which an answer quick enough can turn and turn back between two
+ * renders. Only a press that held focus is followed, so nothing is taken from
+ * a person who had moved on.
+ */
+function usePlaceKeptAcrossPresses(pending: boolean) {
+  const group = useRef<HTMLDivElement>(null);
+  const pressed = useRef<{ from: HTMLElement; refused: boolean } | null>(null);
+  useEffect(() => {
+    const press = pressed.current;
+    if (press === null || pending) return;
+    const next = press.from.isConnected
+      ? press.refused
+        ? press.from
+        : null
+      : group.current?.querySelector<HTMLButtonElement>(
+          "button:not(:disabled)"
+        );
+    if (next === null || next === undefined) return;
+    pressed.current = null;
+    next.focus();
+  });
+  const remember = (event: MouseEvent<HTMLElement>) => {
+    if (event.currentTarget === document.activeElement) {
+      pressed.current = { from: event.currentTarget, refused: false };
+    }
+  };
+  const refused = () => {
+    if (pressed.current !== null) pressed.current.refused = true;
+  };
+  return { group, remember, refused };
+}
+
+/**
  * The ways to assign the part this person is offered. The server takes an
  * assignment from whoever may edit the document or take the stage's main
  * step, and only to someone who may take that step; a refusal is said where
@@ -259,6 +301,9 @@ function AssignControls({
   const has = useHasPermission();
   const me = useCurrentUserId();
   const assign = useAssignPart(document);
+  const { group, remember, refused } = usePlaceKeptAcrossPresses(
+    assign.isPending
+  );
   const leading = leadingReviewStep(part.steps);
   // Whoever may edit the document, or may take the stage's primary step as
   // the server judges it, may assign the part.
@@ -266,12 +311,18 @@ function AssignControls({
     has(`update-${document.scopeSlug}`) || leading?.mayTake === true;
   if (!mayAssign || leading === undefined) return null;
 
-  const to = (assignee: ReviewAssignee | null) => {
+  const to = (
+    event: MouseEvent<HTMLElement>,
+    assignee: ReviewAssignee | null
+  ) => {
+    remember(event);
     assign.mutate(
       { part: part.part, revision: part.revision, assignee },
       {
-        onError: reason =>
-          toast.error(apiErrorMessage(reason, "The part wasn't assigned.")),
+        onError: reason => {
+          refused();
+          toast.error(apiErrorMessage(reason, "The part wasn't assigned."));
+        },
       }
     );
   };
@@ -282,7 +333,7 @@ function AssignControls({
       ? part.waitingFor.roles
       : [];
   return (
-    <div className="flex flex-wrap gap-1.5 pt-1">
+    <div ref={group} className="flex flex-wrap gap-1.5 pt-1">
       {me === null || assignedToMe ? null : (
         <Button
           type="button"
@@ -290,7 +341,7 @@ function AssignControls({
           variant="outline"
           className="h-7 px-2 text-xs"
           disabled={assign.isPending}
-          onClick={() => to({ kind: "user", id: me })}
+          onClick={event => to(event, { kind: "user", id: me })}
         >
           Assign to me
         </Button>
@@ -303,7 +354,7 @@ function AssignControls({
           variant="outline"
           className="h-7 px-2 text-xs"
           disabled={assign.isPending}
-          onClick={() => to({ kind: "role", id: role.id })}
+          onClick={event => to(event, { kind: "role", id: role.id })}
         >
           Assign to {role.name ?? "this role"}
         </Button>
@@ -315,7 +366,7 @@ function AssignControls({
           variant="ghost"
           className="h-7 px-2 text-xs"
           disabled={assign.isPending}
-          onClick={() => to(null)}
+          onClick={event => to(event, null)}
         >
           Unassign
         </Button>

@@ -231,6 +231,61 @@ describe("ReviewSection", () => {
     );
   });
 
+  it("keeps the keyboard's place when a press replaces itself: Assign to me gives way to Unassign, and back", async () => {
+    fetchSpy.mockResolvedValue(answer(part()));
+    // The server answers the next read with the assignment just made, as a refetch reads it.
+    assignSpy.mockImplementation(
+      async (requests: { assignee: { kind: string; id: string } | null }[]) => {
+        const assignee = requests[0]?.assignee ?? null;
+        fetchSpy.mockResolvedValue(
+          answer(
+            assignee === null
+              ? part()
+              : part({
+                  assignee: { kind: "user", id: "me" },
+                  waitingFor: { kind: "user", id: "me", name: "Me" },
+                })
+          )
+        );
+        return { message: "Assigned.", item: {} };
+      }
+    );
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+
+    within(section).getByRole("button", { name: "Assign to me" }).focus();
+    await userEvent.keyboard("{Enter}");
+    // The press is gone once assigned; focus lands on the one that undoes it, not the page.
+    const unassign = await within(section).findByRole("button", {
+      name: "Unassign",
+    });
+    await waitFor(() => expect(unassign).toHaveFocus());
+
+    await userEvent.keyboard("{Enter}");
+    const assign = await within(section).findByRole("button", {
+      name: "Assign to me",
+    });
+    await waitFor(() => expect(assign).toHaveFocus());
+  });
+
+  it("gives focus back to a press whose assignment was refused", async () => {
+    fetchSpy.mockResolvedValue(answer(part()));
+    assignSpy.mockImplementation(async () => {
+      // A browser drops focus from a control as it is disabled; jsdom keeps it, so drop it here.
+      (document.activeElement as HTMLElement | null)?.blur();
+      throw new Error("refused");
+    });
+    render(<ReviewSection document={post} />);
+    const section = await screen.findByRole("region", { name: "Review" });
+    const assign = within(section).getByRole("button", {
+      name: "Assign to me",
+    });
+    assign.focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(assignSpy).toHaveBeenCalled());
+    await waitFor(() => expect(assign).toHaveFocus());
+  });
+
   it("offers no assigning to a person who may neither edit nor take the stage's step", async () => {
     held.slugs = new Set(["approve-posts"]);
     fetchSpy.mockResolvedValue(

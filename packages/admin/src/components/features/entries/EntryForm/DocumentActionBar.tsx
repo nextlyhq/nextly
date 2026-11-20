@@ -299,11 +299,13 @@ function readyToPublishOpener(
 
 /**
  * The props that make a press a Publish the workflow holds until the document
- * is approved: greyed and marked `aria-disabled` rather than `disabled`, so it
- * stays in the Tab order and is read with its reason (`reasonId`, drawn by
- * {@link HeldReason}), and pressed it opens "Choose what to publish…". A
- * refusal for want of a permission is drawn as a disabled control instead: a
- * control that cannot fire is worth more there than one that explains itself.
+ * is approved: an enabled button, greyed by {@link REVIEW_HELD_CLASS} and
+ * marked `data-review-held`, read with its reason (`reasonId`, drawn by
+ * {@link HeldReason}); pressed, it opens "Choose what to publish…". Never
+ * `aria-disabled`: a press that opens something is not unavailable, and saying
+ * it is would tell assistive technology it does nothing. A refusal for want of
+ * a permission is drawn as a disabled control instead: a control that cannot
+ * fire is worth more there than one that explains itself.
  *
  * Props on the one press rather than a press of its own, so the control is
  * the same element held or not, and a hold that starts or ends never takes
@@ -315,17 +317,21 @@ function reviewHeldProps(
 ) {
   return {
     type: "button" as const,
-    "aria-disabled": "true" as const,
     "aria-describedby": reasonId,
+    "data-review-held": "true" as const,
     onClick: () => onOpenReady?.(),
   };
 }
 
 /**
- * Greyed as a disabled control is, by opacity rather than a colour of its
- * own, so it reads alike in either colour scheme.
+ * Greyed, with a dashed edge, in the muted tokens rather than by opacity: the
+ * held press is an enabled control, so its label keeps AA's 4.5:1 in either
+ * colour scheme, which half opacity drops under in light mode. The classes
+ * replace the variant's fill, label colour and edge, so a primary press and
+ * a toolbar one are held alike.
  */
-const REVIEW_HELD_CLASS = "cursor-not-allowed opacity-50";
+const REVIEW_HELD_CLASS =
+  "border-dashed border-border bg-muted text-muted-foreground";
 
 /**
  * Why Publish is held, as words on screen beside it, so it is read without

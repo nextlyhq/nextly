@@ -158,7 +158,7 @@ test("a reviewer opens a submitted note at its changes and approves what they re
     await openNote(publisher.page, id);
     const publish = publishControl(publisher.page);
     await expect(publish).toBeVisible();
-    await expect(publish).not.toHaveAttribute("aria-disabled", "true");
+    await expect(publish).not.toHaveAttribute("data-review-held");
     await expectEditorAccessible(publisher.page);
   } finally {
     for (const person of people) await person.close();
