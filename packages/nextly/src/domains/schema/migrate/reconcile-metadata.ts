@@ -514,7 +514,7 @@ async function repairRegistryTimestampsFirst(
     logger.warn(
       `The registries' timestamps could not be checked for values in milliseconds, so the registry rows were not written and archived translations were not labelled: ${
         error instanceof Error ? error.message : String(error)
-      }. Run \`nextly migrate\` again.`
+      }. The next run repairs them, labels and writes.`
     );
     // Best effort: a database that cannot be written now is repaired by the next run anyway,
     // and a start before that run is told nothing, which is said.

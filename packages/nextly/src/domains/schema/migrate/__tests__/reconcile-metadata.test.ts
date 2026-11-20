@@ -9,6 +9,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { reconcileMigrationMetadata } from "../reconcile-metadata";
 
+// On SQLite the pass first repairs the registries' timestamps, which reads tables this fixture's
+// adapter does not have; that repair has suites of its own, so here it finds nothing to repair.
+vi.mock("../../../../database/repair-sqlite-registry-timestamps", () => ({
+  repairSqliteRegistryTimestamps: vi.fn(async () => ({ repaired: 0 })),
+}));
+
 const silent = {
   info: () => {},
   warn: () => {},

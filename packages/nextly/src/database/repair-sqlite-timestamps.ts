@@ -44,8 +44,9 @@ export interface TimestampRepairsDone {
 /**
  * Tells the start's mark that the registries' repair is owed again, where a start had recorded it
  * done: the mark goes back to the date alone, which a start reads as "the text repair has run,
- * the registries' has not". For a run that could not repair the registries after writing to
- * them. A mark that does not say the registries are done is left as it is.
+ * the registries' has not". For a `nextly migrate` whose registries' repair failed, so a start
+ * before the next run repairs them too. A mark that does not say the registries are done is left
+ * as it is.
  */
 export async function rearmRegistryTimestampRepair(
   adapter: DrizzleAdapter
