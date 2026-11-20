@@ -19,9 +19,9 @@
  * `SQLITE_PUSH_KEEPS_PART_WAY` says which, and moves its cases between the two. A save that rolled
  * back whole never reaches the judgement of what applied at all.
  *
- * A collection's update through the push does not hand the writer its registry write yet (the
- * collection metadata service writes the row after the writer returns), so its stop keeps its files
- * for `nextly migrate:resolve` as before: its cases are expected to fail until it does.
+ * A collection's update through the push settles the same way: the collection metadata service
+ * hands the writer its registry write for the settle, with the fields that applied, and brings
+ * this process's running shape to them, so a write and a read through the API reach what landed.
  *
  * Where what the settle writes fails, the save is left as it stopped, its record that it is in
  * progress kept, and the failure that stopped it is still the one reported, the settle's after it.
@@ -64,8 +64,14 @@ import { MetaService } from "../../../meta/services/meta-service";
 import { consoleLogger } from "../../../../shared/types";
 import { NO_CONSENT } from "../../migrate/data-loss-consent";
 import { parseSnapshotFile } from "../../migrate-create/snapshot-io";
+import {
+  acquireWriterHold,
+  setWriterHoldBounds,
+} from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
+import { calculateSchemaHash } from "../../services/schema-hash";
+import { loadUiSchema } from "../../ui-schema/loader";
 import { judgeStoppedSave } from "../stopped-save";
 
 // The judgement of what a stopped save applied, watched as it runs: a save that rolled back whole
@@ -73,6 +79,22 @@ import { judgeStoppedSave } from "../stopped-save";
 vi.mock("../stopped-save", async importOriginal => {
   const actual = await importOriginal<typeof import("../stopped-save")>();
   return { ...actual, judgeStoppedSave: vi.fn(actual.judgeStoppedSave) };
+});
+
+// A file written in full under its temporary name, stalled there while `settleStall.at` is set,
+// as a process stopped past its lease would be.
+const settleStall = vi.hoisted(() => ({
+  at: undefined as undefined | ((path: string) => Promise<void>),
+}));
+vi.mock("node:fs/promises", async importOriginal => {
+  const real = await importOriginal<typeof import("node:fs/promises")>();
+  const writeFile = (async (
+    ...args: Parameters<typeof real.writeFile>
+  ): Promise<void> => {
+    await real.writeFile(...args);
+    await settleStall.at?.(String(args[0]));
+  }) as typeof real.writeFile;
+  return { ...real, writeFile, default: { ...real, writeFile } };
 });
 
 // The registry writes every save path makes, refused while `registryRefused.when` answers yes.
@@ -125,6 +147,42 @@ const text = (name: string): BuilderField => ({ name, type: "text" });
 // addition: one field leaving and one of the same type arriving is taken as a rename of it.
 const number = (name: string): BuilderField => ({ name, type: "number" });
 
+/** The dialog's answers to a save's questions, in the request body as the admin sends them. */
+interface DialogAnswers {
+  resolutions?: Record<string, { action: "confirm_drop" }>;
+  renameResolutions?: Array<{
+    tableName: string;
+    fromColumn: string;
+    toColumn: string;
+    choice: "drop_and_add";
+  }>;
+}
+
+/** The dialog's confirmation by field name of each drop in `names`. */
+function dropsConfirmed(names: readonly string[]): DialogAnswers {
+  return {
+    resolutions: Object.fromEntries(
+      names.map(name => [name, { action: "confirm_drop" as const }])
+    ),
+  };
+}
+
+/**
+ * The dialog's answer that `fromColumn`, leaving, is not renamed to `toColumn`, arriving: dropped
+ * and the other added, its values given up, as the person answers the rename it offers.
+ */
+function notRenamed(
+  tableName: string,
+  fromColumn: string,
+  toColumn: string
+): DialogAnswers {
+  return {
+    renameResolutions: [
+      { tableName, fromColumn, toColumn, choice: "drop_and_add" },
+    ],
+  };
+}
+
 /** One of the Builder's save paths, and the road it applies its change by. */
 interface SavePath {
   name: string;
@@ -136,7 +194,15 @@ interface SavePath {
   /** The development push applies the change, rather than the save's file. */
   push?: boolean;
   create(t: TestNextly, fields: BuilderField[]): Promise<void>;
-  save(t: TestNextly, fields: BuilderField[]): Promise<unknown>;
+  /**
+   * Save `fields`, with the dialog's `answers` where the save asks questions: a save that runs its
+   * file refuses a drop of a column holding values, or a rename it offers, left unanswered.
+   */
+  save(
+    t: TestNextly,
+    fields: BuilderField[],
+    answers?: DialogAnswers
+  ): Promise<unknown>;
   /** Store an entry holding `values`, where the entity has entries of its own. */
   store?(t: TestNextly, values: Record<string, string | number>): Promise<void>;
   /** Read the entry back through the Direct API. */
@@ -185,7 +251,7 @@ const PATHS: readonly SavePath[] = [
         { name: "sts_posts", label: "sts_posts", fields }
       );
     },
-    save: async (t, fields) =>
+    save: async (t, fields, answers) =>
       dispatchCollections(
         {} as ServiceContainer,
         "applySchemaChanges",
@@ -194,6 +260,7 @@ const PATHS: readonly SavePath[] = [
           fields,
           confirmed: true,
           schemaVersion: await versionOf(t, "dynamic_collections", "sts_posts"),
+          ...answers,
         }
       ),
     store: async (t, values) => {
@@ -217,7 +284,7 @@ const PATHS: readonly SavePath[] = [
         { slug: "sts_hero", label: "sts_hero", fields }
       );
     },
-    save: async (t, fields) =>
+    save: async (t, fields, answers) =>
       dispatchSingles(
         "applySingleSchemaChanges",
         { slug: "sts_hero" },
@@ -225,6 +292,7 @@ const PATHS: readonly SavePath[] = [
           fields,
           confirmed: true,
           schemaVersion: await versionOf(t, "dynamic_singles", "sts_hero"),
+          ...answers,
         }
       ),
     store: async (t, values) => {
@@ -253,7 +321,7 @@ const PATHS: readonly SavePath[] = [
         { slug: "sts_card", label: "sts_card", fields }
       );
     },
-    save: async (t, fields) =>
+    save: async (t, fields, answers) =>
       dispatchComponents(
         "applyComponentSchemaChanges",
         { slug: "sts_card" },
@@ -261,6 +329,7 @@ const PATHS: readonly SavePath[] = [
           fields,
           confirmed: true,
           schemaVersion: await versionOf(t, "dynamic_components", "sts_card"),
+          ...answers,
         }
       ),
   },
@@ -513,6 +582,19 @@ describe.each(getConfiguredTestDialects())(
         .sort();
     }
 
+    /** The record that a save of the entity is in progress, as the database holds it. */
+    async function recordOf(
+      t: TestNextly,
+      path: SavePath
+    ): Promise<{ definitionAfter?: string; files?: string[] } | undefined> {
+      const entry = await new MetaService(t.adapter, consoleLogger).getEntry(
+        `builder-save-in-progress:${path.kind}:${path.slug}`
+      );
+      return entry.present
+        ? (entry.value as { definitionAfter?: string; files?: string[] })
+        : undefined;
+    }
+
     /** The field names the registry row records for the entity. */
     async function registryFields(
       t: TestNextly,
@@ -527,6 +609,44 @@ describe.each(getConfiguredTestDialects())(
         typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
       ) as { name?: string }[] | undefined;
       return (fields ?? []).map(field => String(field.name)).sort();
+    }
+
+    /** The registry row's stored fields, as saved, and its schema hash. */
+    async function storedRowOf(
+      t: TestNextly,
+      path: SavePath
+    ): Promise<{ fields: unknown; schemaHash: unknown }> {
+      clearRegistryRowCache();
+      const [row] = await t.adapter.select<{
+        fields: unknown;
+        schemaHash: unknown;
+      }>(path.registry, {
+        columns: ["fields", "schemaHash"],
+        where: { and: [{ column: "slug", op: "=", value: path.slug }] },
+      });
+      return {
+        fields:
+          typeof row?.fields === "string"
+            ? JSON.parse(row.fields)
+            : row?.fields,
+        schemaHash: row?.schemaHash,
+      };
+    }
+
+    /** The registry row's migration status. */
+    async function migrationStatusOf(
+      t: TestNextly,
+      path: SavePath
+    ): Promise<unknown> {
+      clearRegistryRowCache();
+      const [row] = await t.adapter.select<{ migrationStatus: unknown }>(
+        path.registry,
+        {
+          columns: ["migrationStatus"],
+          where: { and: [{ column: "slug", op: "=", value: path.slug }] },
+        }
+      );
+      return row?.migrationStatus;
     }
 
     /** The field names the definition file records for the entity. */
@@ -609,11 +729,68 @@ describe.each(getConfiguredTestDialects())(
       beforeEach(() => {
         vi.mocked(judgeStoppedSave).mockClear();
       });
-      // The collection update's push writes its registry row after the writer returns, so the
-      // writer has no registry write to settle it with: it keeps its files, as before.
-      const settles = path.push === true ? it.fails : it;
+      // Settled to what applied, the save writes another definition than the one it set out to:
+      // its record says so first, so a process stopped after that write leaves a record a later
+      // settle judges against what is on disk, not the shape first asked for.
+      (keepsPartWay(dialect, path) && path.push !== true ? it : it.skip)(
+        "brings its record to the applied shape before the definition is written to it",
+        async () => {
+          const t = await boot();
+          await path.create(t, [text("heading")]);
+          const definitionFile = join(basePath, DEFINITION);
+          const onDisk = () =>
+            existsSync(definitionFile)
+              ? readFileSync(definitionFile, "utf8")
+              : null;
+          // Each change to the save's record, with the definition as it stood at that moment.
+          const amended: { definitionAfter?: string; then: string | null }[] =
+            [];
+          const compareAndSet = MetaService.prototype.compareAndSet;
+          vi.spyOn(MetaService.prototype, "compareAndSet").mockImplementation(
+            async function (
+              this: MetaService,
+              ...args: Parameters<MetaService["compareAndSet"]>
+            ) {
+              if (args[0].startsWith("builder-save-in-progress:")) {
+                amended.push({
+                  definitionAfter: (args[2] as { definitionAfter?: string })
+                    .definitionAfter,
+                  then: onDisk(),
+                });
+              }
+              return compareAndSet.apply(this, args);
+            }
+          );
+          const failed = failStatement(t, adding(path.table, "beta"));
 
-      (keepsPartWay(dialect, path) ? settles : it.skip)(
+          const outcome = await outcomeOf(
+            path.save(t, [text("heading"), text("alpha"), text("beta")])
+          );
+
+          expect(failed(), "no statement adding `beta` was met").toBe(1);
+          expect(outcome.failed, "the save was reported as going through").toBe(
+            true
+          );
+          const settled = onDisk();
+          expect(definedFields(path), "the definition").toEqual([
+            "alpha",
+            "heading",
+          ]);
+          // The first change that gave the record the applied shape came before the definition held it.
+          const first = amended.find(a => a.definitionAfter === settled);
+          expect(
+            first,
+            "the record never held the applied shape"
+          ).toBeDefined();
+          expect(
+            first?.then,
+            "the record took it only once the definition was written"
+          ).not.toBe(settled);
+        },
+        300_000
+      );
+
+      (keepsPartWay(dialect, path) ? it : it.skip)(
         "stopped at its second addition, keeps the first: one file for it, recorded applied, the definition and the registry at that shape",
         async () => {
           const t = await boot();
@@ -679,6 +856,33 @@ describe.each(getConfiguredTestDialects())(
           if (path.read !== undefined) {
             expect.soft(await path.read(t)).toMatchObject({ heading: "Hello" });
           }
+          if (path.push === true) {
+            // The update's row records what landed as applied, not the request.
+            expect
+              .soft(await migrationStatusOf(t, path), "the row's status")
+              .toBe("applied");
+            // Its schema hash is the one of the fields it holds, not of those asked for.
+            const stored = await storedRowOf(t, path);
+            expect
+              .soft(stored.schemaHash, "the row's schema hash")
+              .toBe(
+                calculateSchemaHash(
+                  stored.fields as Parameters<typeof calculateSchemaHash>[0]
+                )
+              );
+            // This process's running shape reaches what landed: a value written to `alpha`
+            // through the API is read back.
+            await path.store?.(t, { heading: "Second", alpha: "Landed" });
+            const found = (await t.nextly.find({
+              collection: path.slug,
+            } as never)) as { items: Record<string, unknown>[] };
+            expect
+              .soft(
+                found.items.map(item => item.alpha),
+                "`alpha` read through the API"
+              )
+              .toContain("Landed");
+          }
           // The failure names each change the save asked for, as applied or not.
           expect(namedChanges(outcome.error), "the report").toEqual([
             { field: "alpha", change: "add", applied: true },
@@ -711,6 +915,66 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
+      // A save whose settings name a field (the title it uses, say) is settled only where the
+      // definition with what landed still holds: one naming a field that did not land is left as
+      // it stopped, for `nextly migrate:resolve`, and the definition still loads.
+      (keepsPartWay(dialect, path) && path.push === true ? it : it.skip)(
+        "whose title names the field that did not land, is not settled, keeps its files and still loads",
+        async () => {
+          const t = await boot();
+          await path.create(t, [text("heading")]);
+          const folderBefore = filesBelow(history());
+          const appliedBefore = await appliedFiles(t);
+          const failed = failStatement(t, adding(path.table, "beta"));
+
+          const outcome = await outcomeOf(
+            dispatchCollections(
+              {} as ServiceContainer,
+              "updateCollection",
+              { collectionName: path.slug },
+              {
+                fields: [text("heading"), text("alpha"), text("beta")],
+                useAsTitle: "beta",
+              }
+            )
+          );
+
+          expect(failed(), "no statement adding `beta` was met").toBe(1);
+          vi.restoreAllMocks();
+          vi.stubEnv("NODE_ENV", "development");
+          // The staging: `alpha`'s statement committed before `beta`'s failed.
+          const live = await liveColumns(t, path.table);
+          expect(live, "`alpha` was not added before `beta` failed").toContain(
+            "alpha"
+          );
+          expect(live).not.toContain("beta");
+          expect(outcome.failed, "the save was reported as going through").toBe(
+            true
+          );
+          if (!outcome.failed) return;
+          // Not settled: the stopped file kept, recorded nowhere, the row as before.
+          const sql = filesBelow(history()).filter(
+            f => f.endsWith(".sql") && !folderBefore.includes(f)
+          );
+          expect(sql, "the save's files").toHaveLength(1);
+          expect(
+            readFileSync(join(history(), sql[0]!), "utf8").split("-- DOWN")[0]
+          ).toMatch(/["`]beta["`]/);
+          expect
+            .soft(await appliedFiles(t), "the ledger")
+            .toEqual(appliedBefore);
+          expect
+            .soft(await registryFields(t, path), "the registry row")
+            .toEqual(["heading"]);
+          // The definition still loads.
+          await expect(
+            loadUiSchema({ projectRoot: basePath, uiSchemaFile: DEFINITION }),
+            "the definition"
+          ).resolves.toBeDefined();
+        },
+        300_000
+      );
+
       // The push drops a column holding data only on the dialog's answer for it, which these
       // saves do not send: on the push its drops are judged by the push's own tests.
       it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
@@ -722,8 +986,13 @@ describe.each(getConfiguredTestDialects())(
           const folderBefore = filesBelow(history());
           const failed = failStatement(t, adding(path.table, "beta"));
 
+          // Offered as a rename, answered as the drop and the addition it is.
           const outcome = await outcomeOf(
-            path.save(t, [text("heading"), text("beta")])
+            path.save(
+              t,
+              [text("heading"), text("beta")],
+              notRenamed(path.table, "old_note", "beta")
+            )
           );
 
           expect(failed(), "no statement adding `beta` was met").toBe(1);
@@ -766,6 +1035,152 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
+      // Settling removes the stopped file before it writes the replacement: overtaken by another
+      // writer before any of the replacement is in place, it puts the stopped file back, so no
+      // history the ledger names is lost.
+      it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
+        "overtaken while it settles, before its replacement is in place, puts the stopped file back",
+        async () => {
+          const restoreBounds = setWriterHoldBounds({
+            waitMs: 30_000,
+            leaseSeconds: 1,
+            renewMs: 600_000,
+          });
+          try {
+            const t = await boot();
+            await path.create(t, [text("heading"), number("old_note")]);
+            await path.store?.(t, { heading: "Hello", old_note: 7 });
+            const folderBefore = filesBelow(history());
+            const failed = failStatement(t, adding(path.table, "beta"));
+            let overtaken = false;
+            // The first file written once the statement has failed: the settle's replacement.
+            settleStall.at = async written => {
+              if (overtaken || failed() === 0) return;
+              if (!written.startsWith(history()) || !written.endsWith(".tmp")) {
+                return;
+              }
+              overtaken = true;
+              await new Promise(resolve => setTimeout(resolve, 1_200));
+              const other = await acquireWriterHold({
+                migrationsDir: history(),
+                command: "migrate:create",
+                whenHeld: "wait",
+              });
+              await other.release();
+            };
+
+            // Offered as a rename, answered as the drop and the addition it is.
+            const outcome = await outcomeOf(
+              path.save(
+                t,
+                [text("heading"), text("beta")],
+                notRenamed(path.table, "old_note", "beta")
+              )
+            );
+            settleStall.at = undefined;
+
+            expect(failed(), "no statement adding `beta` was met").toBe(1);
+            expect(
+              overtaken,
+              "the settle never stalled on its replacement"
+            ).toBe(true);
+            expect(outcome.failed).toBe(true);
+            // The stopped file is back, the only one the save left.
+            const sql = filesBelow(history()).filter(
+              f => f.endsWith(".sql") && !folderBefore.includes(f)
+            );
+            expect(sql, "the stopped save's file, put back").toHaveLength(1);
+            // And the record that the save is in progress describes it again: the shape the save
+            // asked for, not the applied one the settle took it to before it wrote.
+            expect(
+              (await recordOf(t, path))?.definitionAfter,
+              "the record's definition, put back"
+            ).toContain('"beta"');
+          } finally {
+            settleStall.at = undefined;
+            restoreBounds();
+          }
+        },
+        300_000
+      );
+
+      // Overtaken once its replacement's file is in place, the settle leaves the stopped file set
+      // aside for the stop to be settled again, and the record goes back to describing that stop.
+      it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
+        "overtaken once its replacement's file is in place, keeps the stop aside and puts the record back",
+        async () => {
+          const restoreBounds = setWriterHoldBounds({
+            waitMs: 30_000,
+            leaseSeconds: 1,
+            renewMs: 600_000,
+          });
+          try {
+            const t = await boot();
+            await path.create(t, [text("heading"), number("old_note")]);
+            await path.store?.(t, { heading: "Hello", old_note: 7 });
+            const folderBefore = filesBelow(history());
+            const failed = failStatement(t, adding(path.table, "beta"));
+            let overtaken = false;
+            // The definition's write once the statement has failed: the settle writes it after its
+            // replacement's files are in place.
+            settleStall.at = async path_ => {
+              if (overtaken || failed() === 0) return;
+              if (!path_.includes("builder.json") || !path_.endsWith(".tmp")) {
+                return;
+              }
+              overtaken = true;
+              await new Promise(resolve => setTimeout(resolve, 1_200));
+              const other = await acquireWriterHold({
+                migrationsDir: history(),
+                command: "migrate:create",
+                whenHeld: "wait",
+              });
+              await other.release();
+            };
+
+            const outcome = await outcomeOf(
+              path.save(
+                t,
+                [text("heading"), text("beta")],
+                notRenamed(path.table, "old_note", "beta")
+              )
+            );
+            settleStall.at = undefined;
+
+            expect(failed(), "no statement adding `beta` was met").toBe(1);
+            expect(overtaken, "the settle never stalled after its file").toBe(
+              true
+            );
+            expect(outcome.failed).toBe(true);
+            // The kept-aside answer, not the put-back one: the replacement was in place.
+            expect(
+              outcome.failed ? messageOf(outcome.error) : "",
+              "the stop kept set aside"
+            ).toMatch(/was kept, set aside/);
+            expect(
+              (await recordOf(t, path))?.definitionAfter,
+              "the record's definition, put back"
+            ).toContain('"beta"');
+            // Nor does it name the replacement left in the folder as the save's.
+            const replacement = filesBelow(history()).filter(
+              f => f.endsWith(".sql") && !folderBefore.includes(f)
+            );
+            expect(
+              replacement.length,
+              "the replacement left in place"
+            ).toBeGreaterThan(0);
+            expect(
+              (await recordOf(t, path))?.files ?? [],
+              "the record's files"
+            ).not.toEqual(expect.arrayContaining([replacement[0]]));
+          } finally {
+            settleStall.at = undefined;
+            restoreBounds();
+          }
+        },
+        300_000
+      );
+
       // As above: the push drops a column holding data only on the dialog's answer for it.
       it.runIf(keepsPartWay(dialect, path) && path.push !== true)(
         "whose second drop fails after the first committed, names that column again with its values readable",
@@ -787,7 +1202,9 @@ describe.each(getConfiguredTestDialects())(
             2
           );
 
-          const outcome = await outcomeOf(path.save(t, [text("heading")]));
+          const outcome = await outcomeOf(
+            path.save(t, [text("heading")], dropsConfirmed(["old_a", "old_b"]))
+          );
 
           expect(failed(), "no second drop was met").toBe(1);
           vi.restoreAllMocks();
@@ -866,7 +1283,7 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      (keepsPartWay(dialect, path) && path.push !== true ? it : it.skip)(
+      (keepsPartWay(dialect, path) ? it : it.skip)(
         "whose settle fails at its ledger write, is put back as it stopped, recorded in progress, and reports the stop first",
         async () => {
           const t = await boot();
@@ -905,9 +1322,12 @@ describe.each(getConfiguredTestDialects())(
           vi.stubEnv("NODE_ENV", "development");
           expect(outcome.failed).toBe(true);
           if (!outcome.failed) return;
-          // The stop's own failure first, then the settle's, never the settle's alone.
+          // The stop's own failure first, then the settle's, never the settle's alone. Through the
+          // push the stop is told as the push's failure, through a file as the file's.
           expect(messageOf(outcome.error)).toMatch(
-            /failed part-way, and the statements before the failure stayed applied: .*Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first\.$/s
+            path.push === true
+              ? /^(?!Recording).+ Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first\.$/s
+              : /failed part-way, and the statements before the failure stayed applied: .*Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first\.$/s
           );
           expect(namedChanges(outcome.error), "a report").toBeUndefined();
           // The stopped file, its snapshot and the definition as the save left them, and no

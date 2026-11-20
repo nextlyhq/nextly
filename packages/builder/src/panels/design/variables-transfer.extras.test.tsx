@@ -26,7 +26,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { EditClasses } from "../../block-style-actions";
+import type { EditClasses } from "../../styles/block-style-actions";
 import type { CatalogueFamilyView, FontCatalogue } from "./font-catalogue-view";
 import { FontChoicesContext } from "./font-family-field";
 import { exportDtcgWithTheme } from "./tokens-transfer";

@@ -23,7 +23,7 @@ import {
 import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { HOW_TEXT_WORKS_DOCS_HREF } from "../../docs-links";
+import { HOW_TEXT_WORKS_DOCS_HREF } from "../../shell/docs-links";
 import {
   TokensPanel,
   useVariablesHeader,

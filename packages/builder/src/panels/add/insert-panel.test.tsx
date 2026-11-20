@@ -44,7 +44,7 @@ import { NoticeSinkProvider } from "../../shell/builder-notices";
 import { InsertPanel } from "./insert-panel";
 import { besidePanel } from "./insert-panel-summon";
 import type { EditorState } from "../../editor-state";
-import { EMPTY_SELECTION } from "../../selection";
+import { EMPTY_SELECTION } from "../../canvas/selection";
 import { chromeStylesheetSource } from "../../styles/chrome-stylesheet";
 
 // The command primitives observe their list box to size it, and jsdom

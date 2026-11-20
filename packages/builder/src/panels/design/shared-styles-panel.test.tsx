@@ -28,7 +28,7 @@ import {
   type SharedStylesCount,
   type SharedStylesUsage,
   type SharedStyleUsesPage,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 import {
   SharedStylesHostSearch,
   SharedStylesPanel,

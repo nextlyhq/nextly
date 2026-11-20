@@ -30,7 +30,7 @@ import {
   type SharedStyleReach,
   type SharedStyleRow,
   type SharedStyleUsesPage,
-} from "../../shared-style-library";
+} from "../../styles/shared-style-library";
 
 import {
   KeepOrRemove,

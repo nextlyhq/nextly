@@ -187,6 +187,12 @@ function documentPath(scope: VersionScope): string {
     : `/collections/${scope.slug}/entries/${scope.entryId}`;
 }
 
+/**
+ * The part of a document a comparison may name: `shared`, the fields every
+ * language shares, compared on their own across languages.
+ */
+export type VersionComparisonPart = "shared";
+
 function basePath(scope: VersionScope): string {
   return `${documentPath(scope)}/versions`;
 }
@@ -438,20 +444,22 @@ export const versionApi = {
 
   /**
    * Compare two versions. A read of history, gated and field-redacted exactly
-   * like reading one version; both versions must share a locale. `from`/`to`
+   * like reading one version; both versions must share a locale, unless
+   * `part` is `shared`: the shared fields alone, across languages. `from`/`to`
    * are ordered older -> newer by the caller.
    */
   diff: (
     scope: VersionScope,
     from: number,
     to: number,
-    opts: { modifiedOnly?: boolean } = {}
+    opts: { modifiedOnly?: boolean; part?: VersionComparisonPart } = {}
   ): Promise<VersionDiff> => {
     const search = new URLSearchParams({
       from: String(from),
       to: String(to),
     });
     if (opts.modifiedOnly) search.set("modifiedOnly", "1");
+    if (opts.part !== undefined) search.set("part", opts.part);
     return protectedApi.get<VersionDiff>(
       `${basePath(scope)}/diff?${search.toString()}`
     );
@@ -468,15 +476,20 @@ export const versionApi = {
    * server pairs within that language, and without it takes the part with no
    * language, so a French address would be answered about another part. A
    * named version carries its own part, which the server takes instead.
+   *
+   * `part: "shared"` compares the shared fields across languages, from the
+   * shared part's own baselines (its approval, the newest publish in any
+   * language); it names no `locale`.
    */
   diffFromBaseline: (
     scope: VersionScope,
     baseline: string,
-    opts: { to?: number; locale?: string } = {}
+    opts: { to?: number; locale?: string; part?: VersionComparisonPart } = {}
   ): Promise<VersionDiff> => {
     const search = new URLSearchParams({ baseline });
     if (opts.to !== undefined) search.set("to", String(opts.to));
     if (opts.locale !== undefined) search.set("locale", opts.locale);
+    if (opts.part !== undefined) search.set("part", opts.part);
     return protectedApi.get<VersionDiff>(
       `${basePath(scope)}/diff?${search.toString()}`
     );

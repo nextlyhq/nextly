@@ -46,6 +46,15 @@ export interface MigrationDriftArgs {
    * moves between the main table and the translations table.
    */
   translationsTable?: string;
+  /**
+   * Set for a Schema Builder save's refusal. The save withdraws the files it
+   * wrote when it is refused, so `migrate:resolve --applied` would name a
+   * file that is gone, and `migrate:create` compares the definitions with the
+   * history, never with the table, so it captures nothing. The way on that
+   * works is the one named instead: put the table back as the history records
+   * it, by hand, then save again.
+   */
+  builderSave?: boolean;
 }
 
 /**
@@ -154,6 +163,8 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
     .map(d => `    ${d.kind} ${d.detail}`)
     .join("\n");
 
+  if (args.builderSave === true) return builderSaveDriftError(args, lines);
+
   const cause = args.pluginName
     ? [
         "  The database differs from the state this plugin module starts from,",
@@ -259,6 +270,44 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
             ? ["baseline"]
             : ["A", "B", "C"],
       unadoptedDatabase: args.unadoptedDatabase === true,
+    },
+  });
+}
+
+/**
+ * A Schema Builder save's drift refusal (`builderSave`): the differences, and the one way on that
+ * works for a save, which has changed nothing and kept none of its files. Neither the save's
+ * withdrawn file nor a command is named.
+ */
+function builderSaveDriftError(
+  args: MigrationDriftArgs,
+  lines: string
+): NextlyError {
+  const publicMessage = [
+    "The save was refused: schema drift detected",
+    "",
+    "  The table is not what the migration history records. It was changed",
+    "  outside the Schema Builder's saves: by hand, or by an earlier change",
+    "  that stopped part way. This save changed nothing.",
+    "",
+    `  Drift summary (${args.driftItems.length} differences):`,
+    lines,
+    "",
+    "  Way on: put the table back as the history records it, by hand: drop",
+    "  what is present (+), add back what is absent (-) and change back what",
+    "  differs (?), renaming a column back rather than dropping it where it",
+    "  holds values you keep. Then save again.",
+    "",
+    "  Details: https://docs.nextlyhq.com/guides/migration-drift",
+  ].join("\n");
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_DRIFT",
+    publicMessage,
+    logContext: {
+      migration: args.migration,
+      driftItems: args.driftItems,
+      suggestedActions: ["restore-by-hand"],
+      unadoptedDatabase: false,
     },
   });
 }

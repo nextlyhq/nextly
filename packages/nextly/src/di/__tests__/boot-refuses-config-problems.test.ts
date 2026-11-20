@@ -200,3 +200,30 @@ describe("a start given a define* entity with a public address its own rule refu
     expect(created.adapters).toBe(0);
   });
 });
+
+describe("a start given plain-object entities that break a rule across entities", () => {
+  // `defineConfig` refused these before, at import, whatever declared the entities; the start
+  // refuses them in its place, for plain objects too, so no site starts that did not before.
+  it("refuses two collections with one slug, before it connects", async () => {
+    const config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+      db: DB,
+    } as unknown as Parameters<typeof registerServices>[0];
+
+    const refused = await refusalOf(config);
+
+    expect(refused).toMatchObject({
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+    });
+    const paths = (
+      (refused as { publicData?: { errors?: Array<{ path?: string }> } })
+        .publicData?.errors ?? []
+    ).map(problem => problem.path);
+    expect(paths).toEqual(["collections[1].slug"]);
+    expect(created.adapters).toBe(0);
+  });
+});

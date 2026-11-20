@@ -209,7 +209,12 @@ describeEachDialect(
       return { exists, links: rows.map(row => row.id).sort() };
     }
 
-    async function resave(sent: Record<string, unknown>) {
+    // `confirmed` is the dialog's confirmation by field name of a change its preview warned drops
+    // the links, as the admin sends it.
+    async function resave(
+      sent: Record<string, unknown>,
+      confirmed?: Record<string, { action: "confirm_drop" }>
+    ) {
       const before = {
         stored: await storedTags(),
         junction: await linksOf(junction),
@@ -226,6 +231,7 @@ describeEachDialect(
             fields: [{ name: "body", type: "text" }, sent],
             confirmed: true,
             schemaVersion: await schemaVersion(),
+            ...(confirmed === undefined ? {} : { resolutions: confirmed }),
           }
         );
       } catch (error) {
@@ -272,11 +278,14 @@ describeEachDialect(
     // holding them goes, and an empty one for the other collection takes its place. (The review
     // before the save does not yet say so: that is the next change's.)
     it("becomes a many-to-many of the other collection when another is picked, its old links dropped", async () => {
-      const { after } = await resave({
-        ...SENT_TAGS,
-        relationTo: "lm_other",
-        options: { target: "lm_other", relationType: "manyToMany" },
-      });
+      const { after } = await resave(
+        {
+          ...SENT_TAGS,
+          relationTo: "lm_other",
+          options: { target: "lm_other", relationType: "manyToMany" },
+        },
+        { tags: { action: "confirm_drop" } }
+      );
       const report = JSON.stringify(after, null, 2);
       expect(after.outcome, report).toBe("accepted");
       expect(after.stored, report).toMatchObject({
@@ -361,12 +370,15 @@ describeEachDialect(
     // pins it. One link per entry needs no link table, so the table goes and the posts hold the
     // link in a column of their own.
     it("becomes one link when Allow multiple is turned off, its link table dropped", async () => {
-      const { after } = await resave({
-        ...SENT_TAGS,
-        relationTo: "lm_tags",
-        hasMany: false,
-        options: { target: "lm_tags", relationType: "manyToOne" },
-      });
+      const { after } = await resave(
+        {
+          ...SENT_TAGS,
+          relationTo: "lm_tags",
+          hasMany: false,
+          options: { target: "lm_tags", relationType: "manyToOne" },
+        },
+        { tags: { action: "confirm_drop" } }
+      );
       const report = JSON.stringify(after, null, 2);
       expect(after.outcome, report).toBe("accepted");
       expect(after.stored, report).toMatchObject({

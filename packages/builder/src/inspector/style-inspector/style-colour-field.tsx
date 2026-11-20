@@ -26,8 +26,8 @@ import {
 import { ChevronDown } from "lucide-react";
 import * as React from "react";
 
+import { isElement } from "../../canvas/dom-kind";
 import { ChoiceList } from "../../choice-list";
-import { isElement } from "../../dom-kind";
 import { useLiveGesture } from "../../live-gesture";
 import { HiddenColours } from "../../panels/design/built-in-colours";
 import {
@@ -54,9 +54,9 @@ import {
   contrastPartnerOf,
   contrastRatioText,
   type SiteVariable,
-} from "../../style-colour";
-import type { StyleControl } from "../../style-controls";
-import { readStyleValue, type StyleAddress } from "../../style-values";
+} from "../../styles/style-colour";
+import type { StyleControl } from "../../styles/style-controls";
+import { readStyleValue, type StyleAddress } from "../../styles/style-values";
 import { useFieldDescription } from "../css-hint";
 
 import { InheritedValue } from "./inherited-value";

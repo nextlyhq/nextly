@@ -73,6 +73,8 @@ function repository() {
     ),
     liveAuthors: vi.fn(async (ids: string[]) => new Set(ids)),
     scheduleRelease: vi.fn(async (..._args: unknown[]) => true),
+    // The recheck a committed schedule runs: nothing still scheduled holds these documents.
+    scheduledMembersFor: vi.fn(async () => []),
     // Publish now on a release already due: its event, with no move.
     recordPublishNow: vi.fn(async (..._args: unknown[]) => true),
     cancelRelease: vi.fn(async () => true),

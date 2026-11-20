@@ -18,8 +18,8 @@
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { CliError } from "../../errors";
 import type { DryRunPlan } from "../../dry-run";
+import { CliError } from "../../errors";
 
 import {
   detectPackageManager,

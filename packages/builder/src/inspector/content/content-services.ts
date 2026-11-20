@@ -15,8 +15,8 @@ import type {
 import * as React from "react";
 
 import type { BindingServices } from "../../bindings/binding-services";
+import type { OpenPassages } from "../../canvas/open-passages";
 import type { InlineRichTextEditorLoader } from "../../canvas/use-inline-rich-text";
-import type { OpenPassages } from "../../open-passages";
 import type { PreferenceStore } from "../../shell-state";
 import type { EditableProp } from "../inspector";
 

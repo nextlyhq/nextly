@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { toCodeFirstCollectionConfig } from "../../../domains/collections/services/collection-sync-service";
 import { serializeCollection } from "../../../domains/schema/services/code-generator";
+import { calculateSchemaHash } from "../../../domains/schema/services/schema-hash";
 import { resolveVersionsConfig } from "../../../domains/versions/resolve-config";
 import type {
   DynamicCollectionInsert,
@@ -35,6 +36,7 @@ async function demoted(
 ) {
   const registered: DynamicCollectionInsert[] = [];
   const updated: Partial<DynamicCollectionInsert>[] = [];
+  const updateOptions: unknown[] = [];
   let shown = "";
   const registry = {
     getCollectionBySlug: async () => existing,
@@ -44,9 +46,11 @@ async function demoted(
     },
     updateCollection: async (
       _slug: string,
-      data: Partial<DynamicCollectionInsert>
+      data: Partial<DynamicCollectionInsert>,
+      options?: unknown
     ) => {
       updated.push(data);
+      updateOptions.push(options);
       return data;
     },
   } as unknown as CollectionRegistryService;
@@ -61,7 +65,7 @@ async function demoted(
     },
   });
   expect(outcome).toBe("demoted");
-  return { registered, updated, shown };
+  return { registered, updated, updateOptions, shown };
 }
 
 /** The one record a demote with nothing registered writes. */
@@ -115,6 +119,58 @@ describe("a demoted collection's record", () => {
     const record = await registeredFor(coded({ status: true }));
     expect(record.status).toBe(true);
     expect(record.versions).toEqual(resolveVersionsConfig(undefined, true));
+  });
+
+  it("hands a record the code-first sync made to the Schema Builder: its source and lock in the one update", async () => {
+    const synced = {
+      ...asRecord({
+        slug: "articles",
+        labels: { singular: "Article", plural: "Articles" },
+        tableName: "dc_articles",
+        fields: [],
+        source: "code",
+        schemaHash: "older",
+      }),
+      locked: true,
+    };
+    const { registered, updated, updateOptions } = await demoted(
+      coded(),
+      synced
+    );
+    expect(registered).toEqual([]);
+    expect(updated).toHaveLength(1);
+    expect(updated[0]).toMatchObject({
+      source: "ui",
+      locked: false,
+      // As a newly registered demote records it, and the hash the sync compares fields by.
+      configPath: "demoted-from-code",
+      schemaHash: calculateSchemaHash(updated[0].fields as never),
+    });
+    // Asked of the registry as a hand-over, which is what lets a locked record be written.
+    expect(updateOptions).toEqual([{ handOver: "builder" }]);
+  });
+
+  it("keeps the table a record already names, whatever table the configuration now asks for", async () => {
+    // The configuration's `dbName` changed since the record was written: the entries are still
+    // in the table the record names, and a demote moves no table.
+    const synced = {
+      ...asRecord({
+        slug: "articles",
+        labels: { singular: "Article", plural: "Articles" },
+        tableName: "dc_articles",
+        fields: [],
+        source: "code",
+        schemaHash: "older",
+      }),
+      locked: true,
+    };
+    const { updated } = await demoted(coded({ dbName: "dc_renamed" }), synced);
+    expect(updated).toHaveLength(1);
+    expect(updated[0].tableName).toBe("dc_articles");
+    // A collection the registry does not hold yet takes the table its configuration names.
+    expect(
+      (await registeredFor(coded({ dbName: "dc_renamed" }))).tableName
+    ).toBe("dc_renamed");
   });
 
   it("keeps the lifecycle when it replaces a record already registered", async () => {

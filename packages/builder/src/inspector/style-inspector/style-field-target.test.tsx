@@ -12,7 +12,7 @@ import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "../../editor-state";
-import type { SharedStyleChange } from "../../shared-style-target";
+import type { SharedStyleChange } from "../../styles/shared-style-target";
 import { StyleTargetContext } from "./style-field-surroundings";
 import { useFieldTarget } from "./style-field-target";
 import type { StyleTarget } from "./style-target";

@@ -281,7 +281,7 @@ async function writeMasthead(): Promise<string> {
  * a working draft, a pin, a marker, an event with parts, a release member, a
  * schema event, a kept permission answer, an
  * activity row (and, for a collection, one from before kinds were recorded),
- * an archived translation, a lock and a preview link.
+ * an archived translation, a translated value's provenance, a lock and a preview link.
  */
 async function seedHistory(
   kind: RenamedEntityKind,
@@ -353,6 +353,22 @@ async function seedHistory(
     field: "title",
     value: "hola",
     archivedAt: now,
+  });
+  // Where a translated value came from. Written as a row: the entities here have no languages,
+  // so no save of theirs records one.
+  await adapter.insert("nextly_translation_provenance", {
+    id: randomUUID(),
+    scopeKind: kind,
+    scopeSlug: slug,
+    entryId,
+    locale: "es",
+    partState: "live",
+    fieldPath: "title",
+    valueFingerprint: "f1",
+    origin: "person",
+    actorKind: "person",
+    actorId: ANA.id,
+    writtenAt: now,
   });
   await adapter.insert("nextly_document_lock", {
     id: documentLockKey(kind, slug, entryId),

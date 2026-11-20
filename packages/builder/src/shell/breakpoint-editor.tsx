@@ -14,7 +14,7 @@ import {
   type BreakpointDef,
   type BreakpointIssue,
   type BreakpointSet,
-} from "../breakpoints";
+} from "../styles/breakpoints";
 
 /** What the container axis is called, where a site uses it. */
 const CONTAINER_TITLE = "Container widths";

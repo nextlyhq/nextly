@@ -22,9 +22,9 @@ import {
   type StyleValue,
 } from "@nextlyhq/blocks-engine";
 
-import { chainedStyleOp, type StackTiers } from "../../columns-layout";
+import { chainedStyleOp, type StackTiers } from "../../canvas/columns-layout";
 import type { BuilderOp } from "../../op-vocabulary";
-import { readStyleValue, type StyleAddress } from "../../style-values";
+import { readStyleValue, type StyleAddress } from "../../styles/style-values";
 
 /** The counts the Columns tiles offer. */
 export const GALLERY_COLUMNS: readonly number[] = [2, 3, 4];

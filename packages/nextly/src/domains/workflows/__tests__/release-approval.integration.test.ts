@@ -32,11 +32,16 @@ import type {
 } from "../../releases/readiness/check-sources";
 import { releaseCheckSources } from "../../releases/readiness/check-sources";
 import { createReleaseMutations } from "../../releases/release-mutations";
-import { RELEASE_MEMBERS_TABLE } from "../../releases/release-tables";
+import {
+  RELEASE_MEMBERS_TABLE,
+  RELEASES_TABLE,
+} from "../../releases/release-tables";
 import {
   IDS_PER_LOOKUP,
   ReleasesRepository,
+  type ReleasesDbApi,
 } from "../../releases/releases-repository";
+import { ReleasesService } from "../../releases/services/releases-service";
 import { updateReviewState } from "../review-state-repository";
 import { writeWorkflowSettings } from "../workflow-settings-repository";
 
@@ -117,19 +122,66 @@ async function notApprovedParts(
     .map(finding => (finding.detail as { parts?: unknown }).parts);
 }
 
-/** The drain's pass, run once, as the runner's sweep runs it. */
-function runDuePass(t: TestNextly) {
+/**
+ * The drain's pass, run once, as the runner's sweep runs it. `beforePublish`, when given, runs
+ * before each publish the pass writes, with the document it is about to write.
+ */
+function runDuePass(
+  t: TestNextly,
+  beforePublish?: (entryId: string) => Promise<void>
+) {
+  const mutations = createReleaseMutations({
+    contentApi: t.nextly,
+    lockServer: lockServerOf(t),
+  });
   return applyDueReleases({
     repository: new ReleasesRepository(t.adapter),
-    mutations: createReleaseMutations({
-      contentApi: t.nextly,
-      lockServer: lockServerOf(t),
-    }),
+    mutations: {
+      publish: async input => {
+        await beforePublish?.(input.ref.entryId);
+        return mutations.publish(input);
+      },
+      unpublish: input => mutations.unpublish(input),
+    },
     runAs: {
       findUser: id => Promise.resolve({ id, isActive: true }),
       listRoleSlugs: () => Promise.resolve([]),
     },
   });
+}
+
+/** The values every `<column> IN (...)` condition of a read's filter names, at any depth. */
+function inValues(where: unknown, column: string): unknown[] {
+  if (typeof where !== "object" || where === null) return [];
+  if (
+    "column" in where &&
+    where.column === column &&
+    "op" in where &&
+    where.op === "IN" &&
+    "value" in where &&
+    Array.isArray(where.value)
+  ) {
+    return where.value;
+  }
+  return Object.values(where).flatMap(nested =>
+    Array.isArray(nested)
+      ? nested.flatMap(item => inValues(item, column))
+      : inValues(nested, column)
+  );
+}
+
+/** The repository's flush of a release's documents, private to it, watched from here. */
+interface FlushesMembers {
+  revalidateMembersOf(releaseId: string): Promise<void>;
+}
+
+/** The releases whose documents the repository flushes from here on, as a reader's cache sees. */
+function watchFlushes(): () => string[] {
+  const flush = vi.spyOn(
+    ReleasesRepository.prototype as unknown as FlushesMembers,
+    "revalidateMembersOf"
+  );
+  return () => flush.mock.calls.map(([releaseId]) => releaseId);
 }
 
 /** Takes a part's approval away by writing its review row, as nothing that signals would. */
@@ -153,7 +205,8 @@ describe.each(getConfiguredTestDialects())(
   dialect => {
     it("reports each unapproved member going live, with its stage and whom it waits for, and never one coming down", async () => {
       const t = await boot(dialect);
-      // An approved page; one in legal assigned to carol; one never put in review, whose first
+      // An approved page; one in legal assigned to carol, who may not sign it off; one never put in
+      // review, whose first
       // stage has a default reviewer; one in legal with no one assigned and no default reviewer,
       // which waits for the roles that may sign it off; and a published page in review coming
       // down.
@@ -209,7 +262,10 @@ describe.each(getConfiguredTestDialects())(
             detail: {
               parts: ["shared"],
               stages: ["legal"],
-              waitsFor: ["user:carol"],
+              // R-2: carol can't take the step, so the part waits for the roles that may sign it off.
+              waitsFor: [
+                expect.stringMatching(new RegExp(`^roles:.*${signers}`)),
+              ],
             },
           },
           {
@@ -509,6 +565,48 @@ describe.each(getConfiguredTestDialects())(
       expect(visible).not.toContain(kept);
     });
 
+    it("shows a reader none of a due release joined to a held publish through a document outside the read", async () => {
+      // The first release holds the page read here and the Banner; the second holds the Banner and
+      // an unapproved post. The read decides the page alone, yet the run plans both releases as
+      // one component through the Banner and refuses all of it over the post.
+      const t = await boot(dialect);
+      const page = await doc(t, "pages");
+      await approve(t, "pages", page);
+      const banner = await saveBanner(t, "Approved");
+      await approveBanner(t, banner);
+      const bannerGoesLive = {
+        scopeKind: "single",
+        scopeSlug: "banner",
+        entryId: banner,
+        action: "publish",
+      } as const;
+      await arrange(t, [publishPage(page), bannerGoesLive], PAST);
+      // Due and approved, the first release alone: the read shows the page.
+      expect(await visiblePages(t)).toContain(page);
+
+      const post = await doc(t, "posts");
+      const joined = await arrange(
+        t,
+        [
+          bannerGoesLive,
+          {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: post,
+            action: "publish",
+          },
+        ],
+        PAST
+      );
+      expect(await hardCodes(t, joined.releaseId)).toContain("NOT_APPROVED");
+
+      expect(await visiblePages(t)).not.toContain(page);
+      // The run agrees: it writes none of the component.
+      const pass = await runDuePass(t);
+      expect(pass).toMatchObject({ applied: 0, published: 0 });
+      expect(await storedPageStatus(t, page)).toBe("draft");
+    });
+
     it("leaves a due release a pass began scheduled when a step withdraws a later member's approval", async () => {
       // Stopped, the page the cut-off pass wrote would stay live and the other never follow.
       const t = await boot(dialect);
@@ -535,10 +633,14 @@ describe.each(getConfiguredTestDialects())(
         { and: [{ column: "id", op: "=", value: receipted.id }] }
       );
 
+      const flushed = watchFlushes();
+
       await takeStep(t, "pages", waiting, null, "bounce", "Not yet.");
 
       expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
       expect(await stoppedNotices(t, arranged)).toBe(0);
+      // Kept scheduled, yet a reader is now shown nothing more of it: its pages are flushed.
+      expect(flushed()).toContain(arranged.releaseId);
     });
 
     it("leaves a due release scheduled when a pass writes one of its members after the stop judged it", async () => {
@@ -572,11 +674,158 @@ describe.each(getConfiguredTestDialects())(
         );
         return block.apply(this, args);
       });
+      const flushed = watchFlushes();
 
       await takeStep(t, "pages", waiting, null, "bounce", "Not yet.");
 
       expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
       expect(await stoppedNotices(t, arranged)).toBe(0);
+      expect(flushed()).toContain(arranged.releaseId);
+    });
+
+    it("keeps a component scheduled when a publish it wrote this pass is followed by one the gate refuses for approval", async () => {
+      // Both pages approved when the pass asks; the second loses its approval after the first is
+      // written, and its own publish gate refuses it. Stopped, the first page would stay live for
+      // good; scheduled, a later pass with the approval back finishes the release.
+      const t = await boot(dialect);
+      const pages = [await doc(t, "pages"), await doc(t, "pages")];
+      for (const page of pages) await approve(t, "pages", page);
+      const arranged = await arrange(t, pages.map(publishPage), PAST);
+      const order = await plannedOrder(t);
+      const [first, second] = order;
+      if (first === undefined || second === undefined) {
+        throw new Error("the pass plans fewer than two documents");
+      }
+      const approved = await stateOf(t, partOf("pages", second, null));
+      if (!approved) throw new Error("no review state for the second page");
+
+      const pass = await runDuePass(t, async entryId => {
+        if (entryId === second) await withdrawSilently(t, "pages", second);
+      });
+
+      expect(
+        pass.outcomes.map(outcome => [outcome.ref.entryId, outcome.failure])
+      ).toEqual([
+        [first, null],
+        [second, "NOT_APPROVED"],
+      ]);
+      expect(await storedPageStatus(t, first)).toBe("published");
+      expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
+
+      // The approval back as it was, the next pass writes the rest and settles the release.
+      const withdrawn = await stateOf(t, partOf("pages", second, null));
+      if (!withdrawn) throw new Error("no review state to restore");
+      expect(
+        await updateReviewState(
+          stateDb(t),
+          partOf("pages", second, null),
+          withdrawn.revision,
+          { stage: approved.stage, approval: approved.approval }
+        )
+      ).toBeTruthy();
+      await runDuePass(t);
+      expect(await storedPageStatus(t, second)).toBe("published");
+      expect(await releaseState(t, arranged.releaseId)).toBe("published");
+    });
+
+    it("keeps a component scheduled when a write landed unconfirmed and a later document is held", async () => {
+      // The first page's write and its receipt commit, then what runs after it fails and the
+      // pass cannot read the receipt back, so it records a failed write. The second page loses
+      // its approval and its gate refuses it. Stopped, the first page would stay live for good.
+      const t = await boot(dialect);
+      const pages = [await doc(t, "pages"), await doc(t, "pages")];
+      for (const page of pages) await approve(t, "pages", page);
+      const arranged = await arrange(t, pages.map(publishPage), PAST);
+      const [first, second] = await plannedOrder(t);
+      if (first === undefined || second === undefined) {
+        throw new Error("the pass plans fewer than two documents");
+      }
+      const repo = new ReleasesRepository(t.adapter);
+      const firstMember = (await repo.listMembers(arranged.releaseId)).find(
+        member => member.entryId === first
+      );
+      if (!firstMember) throw new Error("no member for the first page");
+      const applied = ReleasesRepository.prototype.isMemberApplied;
+      vi.spyOn(
+        ReleasesRepository.prototype,
+        "isMemberApplied"
+      ).mockImplementation(async function (
+        this: ReleasesRepository,
+        memberId,
+        revision
+      ) {
+        if (memberId === firstMember.id) throw new Error("connection reset");
+        return applied.call(this, memberId, revision);
+      });
+      const mutations = createReleaseMutations({
+        contentApi: t.nextly,
+        lockServer: lockServerOf(t),
+      });
+
+      const pass = await applyDueReleases({
+        repository: repo,
+        mutations: {
+          publish: async input => {
+            if (input.ref.entryId === second) {
+              await withdrawSilently(t, "pages", second);
+            }
+            await mutations.publish(input);
+            if (input.ref.entryId === first) {
+              throw new Error("a hook after the write failed");
+            }
+          },
+          unpublish: input => mutations.unpublish(input),
+        },
+        runAs: {
+          findUser: id => Promise.resolve({ id, isActive: true }),
+          listRoleSlugs: () => Promise.resolve([]),
+        },
+      });
+
+      expect(
+        pass.outcomes.map(outcome => [outcome.ref.entryId, outcome.failure])
+      ).toEqual([
+        [first, "WRITE_FAILED"],
+        [second, "NOT_APPROVED"],
+      ]);
+      expect(await storedPageStatus(t, first)).toBe("published");
+      expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
+    });
+
+    it("keeps a due release a pass began scheduled when its run meets a hold, and flushes what readers were shown", async () => {
+      const t = await boot(dialect);
+      const written = await doc(t, "pages");
+      const waiting = await doc(t, "pages");
+      await approve(t, "pages", written);
+      await approve(t, "pages", waiting);
+      const arranged = await arrange(
+        t,
+        [publishPage(written), publishPage(waiting)],
+        PAST
+      );
+      const repo = new ReleasesRepository(t.adapter);
+      const [release] = await repo.findReleases({ ids: [arranged.releaseId] });
+      const receipted = (await repo.listMembers(arranged.releaseId)).find(
+        member => member.entryId === written
+      );
+      if (!release || !receipted) throw new Error("no release or member");
+      // The receipt a cut-off pass left on the member it wrote.
+      await t.adapter.update(
+        RELEASE_MEMBERS_TABLE,
+        { appliedRevision: release.revision },
+        { and: [{ column: "id", op: "=", value: receipted.id }] }
+      );
+      await withdrawSilently(t, "pages", waiting);
+      const flushed = watchFlushes();
+
+      const pass = await runDuePass(t);
+
+      // The written member's action stands as applied; the other is held.
+      expect(pass.outcomes.map(outcome => outcome.failure)).toContain(
+        "NOT_APPROVED"
+      );
+      expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
+      expect(flushed()).toContain(arranged.releaseId);
     });
 
     it("never stops due releases over a publish their plan loses to a later takedown", async () => {
@@ -615,6 +864,55 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await releaseState(t, arranged.releaseId)).toBe("scheduled");
       expect(planned).not.toHaveBeenCalled();
+    });
+
+    it("plans only the component of the due release it stops, never every due release", async () => {
+      // The stopped release shares a page with a second, so both form one component; a third due
+      // release shares nothing and is no part of the stop's question.
+      const t = await boot(dialect);
+      const page = await doc(t, "pages");
+      const shared = await doc(t, "pages");
+      const apart = await doc(t, "pages");
+      for (const id of [page, shared, apart]) await approve(t, "pages", id);
+      const stopping = await arrange(
+        t,
+        [publishPage(page), publishPage(shared)],
+        PAST
+      );
+      const beside = await arrange(t, [publishPage(shared)], PAST);
+      const unrelated = await arrange(t, [publishPage(apart)], PAST);
+      const dueRead = vi.spyOn(ReleasesRepository.prototype, "findDueReleases");
+      const membersRead = vi.spyOn(
+        ReleasesRepository.prototype,
+        "listMembersOf"
+      );
+      // Only the stop's own reads: the step's read of the page walks the components of every page
+      // a due release decides, as any reader's does.
+      const readByStop: string[] = [];
+      const stop = ReleasesService.prototype.stopOnHardProblems;
+      vi.spyOn(
+        ReleasesService.prototype,
+        "stopOnHardProblems"
+      ).mockImplementation(async function (this: ReleasesService, ...args) {
+        const from = membersRead.mock.calls.length;
+        try {
+          return await stop.apply(this, args);
+        } finally {
+          readByStop.push(
+            ...membersRead.mock.calls.slice(from).flatMap(([ids]) => ids)
+          );
+        }
+      });
+
+      await takeStep(t, "pages", page, null, "bounce", "Not yet.");
+
+      expect(new Set(readByStop)).toEqual(
+        new Set([stopping.releaseId, beside.releaseId])
+      );
+      expect(dueRead).not.toHaveBeenCalled();
+      expect(await releaseState(t, stopping.releaseId)).toBe("blocked");
+      expect(await releaseState(t, beside.releaseId)).toBe("blocked");
+      expect(await releaseState(t, unrelated.releaseId)).toBe("scheduled");
     });
 
     it("binds no more ids in one statement than every dialect accepts, however many documents it judges", async () => {
@@ -663,8 +961,93 @@ describe.each(getConfiguredTestDialects())(
         )
       );
       expect(Math.max(...bound)).toBeLessThanOrEqual(IDS_PER_LOOKUP);
-      // Each document's review state is still read on its own, so a server dialect needs longer.
     }, 120_000);
+
+    it("binds no more release ids in one statement than every dialect accepts when a stop asks whether its component began", async () => {
+      const t = await boot(dialect);
+      // More releases than one run binds, none of them there: the stop asks whether a pass began
+      // the component before it moves anything, then finds nothing to move.
+      const entries = Array.from({ length: IDS_PER_LOOKUP + 1 }, () => ({
+        id: randomUUID(),
+        scheduledAt: PAST,
+      }));
+      // Every read made inside a transaction of this repository, as the stop's question reads.
+      const reads: { table: string; ids: unknown[] }[] = [];
+      const recording = <T extends object>(tx: T): T =>
+        new Proxy(tx, {
+          get(target, name) {
+            const value: unknown = Reflect.get(target, name);
+            if (typeof value !== "function") return value;
+            return (...args: unknown[]) => {
+              if (name === "select") {
+                const [table, options] = args as [
+                  string,
+                  { where?: { and?: { op?: string; value?: unknown }[] } },
+                ];
+                for (const condition of options?.where?.and ?? []) {
+                  if (condition.op === "IN" && Array.isArray(condition.value)) {
+                    reads.push({ table, ids: condition.value });
+                  }
+                }
+              }
+              return Reflect.apply(value, target, args);
+            };
+          },
+        });
+      const db: ReleasesDbApi = new Proxy(t.adapter, {
+        get(target, name) {
+          if (name === "transaction") {
+            return (work: Parameters<ReleasesDbApi["transaction"]>[0]) =>
+              target.transaction(tx => work(recording(tx)));
+          }
+          const value: unknown = Reflect.get(target, name);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+
+      expect(
+        await new ReleasesRepository(db).blockReleases(entries, {
+          unlessBegun: true,
+        })
+      ).toEqual([]);
+
+      const releaseReads = reads.filter(read => read.table === RELEASES_TABLE);
+      // Every release asked about, and no statement binding more than a run.
+      expect(new Set(releaseReads.flatMap(read => read.ids))).toEqual(
+        new Set(entries.map(entry => entry.id))
+      );
+      expect(
+        Math.max(...reads.map(read => read.ids.length))
+      ).toBeLessThanOrEqual(IDS_PER_LOOKUP);
+    }, 120_000);
+
+    it("stops a release scheduled while a step withdrew its approval, once the schedule has committed", async () => {
+      const t = await boot(dialect);
+      const page = await doc(t, "pages");
+      await approve(t, "pages", page);
+      const arranged = await arrange(t, [publishPage(page)], null);
+      expect(await hardCodes(t, arranged.releaseId)).toEqual([]);
+      const schedule = ReleasesRepository.prototype.scheduleRelease;
+      vi.spyOn(
+        ReleasesRepository.prototype,
+        "scheduleRelease"
+      ).mockImplementation(async function (this: ReleasesRepository, ...args) {
+        // The step lands after the schedule's checks and before its write, so the step's own
+        // recheck finds the release still a draft and passes it by.
+        await takeStep(t, "pages", page, null, "bounce", "Not yet.");
+        expect(await releaseState(t, arranged.releaseId)).toBe("draft");
+        return schedule.apply(this, args);
+      });
+
+      await t.nextly.releases.schedule({
+        id: arranged.releaseId,
+        at: LATER,
+        timezone: "UTC",
+      });
+
+      expect(await releaseState(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
 
     it("refuses Publish now for an unapproved member, even to a person who may publish without review", async () => {
       const t = await boot(dialect);
@@ -697,7 +1080,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedPageStatus(t, page)).toBe("draft");
     });
 
-    it("reads each member's review state once, and a scope's liveness and drafts once per batch", async () => {
+    it("reads a scope's review states, liveness and drafts once per batch, naming every member", async () => {
       const t = await boot(dialect);
       const pages: string[] = [];
       for (let i = 0; i < 20; i += 1) pages.push(await doc(t, "pages"));
@@ -730,24 +1113,22 @@ describe.each(getConfiguredTestDialects())(
       const count = (table: string | undefined) =>
         tables.filter(name => name === table).length;
       expect(findings).toHaveLength(20);
-      expect(count(REVIEW_STATES_TABLE)).toBe(20);
+      expect(count(REVIEW_STATES_TABLE)).toBe(1);
       expect(count(VERSIONS_TABLE)).toBe(1);
       expect(count(pagesTable)).toBe(1);
-      // Each member's review state read once, and the batch reads naming every member.
-      const readsOf = (table: string | undefined) =>
-        select.mock.calls
-          .filter(([name]) => name === table)
-          .map(([, options]) => JSON.stringify(options ?? {}));
-      const reviewReads = readsOf(REVIEW_STATES_TABLE);
-      expect(
-        pages.map(
-          page => reviewReads.filter(read => read.includes(`"${page}"`)).length
-        )
-      ).toEqual(pages.map(() => 1));
-      for (const page of pages) {
-        expect(readsOf(VERSIONS_TABLE)[0]).toContain(`"${page}"`);
-        expect(readsOf(pagesTable)[0]).toContain(`"${page}"`);
-      }
+      // Every batch read names every member in its filter's own `IN` on the document's column,
+      // not merely somewhere in the statement.
+      const namedBy = (table: string | undefined, column: string) =>
+        new Set(
+          select.mock.calls
+            .filter(([name]) => name === table)
+            .flatMap(([, options]) =>
+              inValues((options as { where?: unknown })?.where, column)
+            )
+        );
+      expect(namedBy(REVIEW_STATES_TABLE, "entryId")).toEqual(new Set(pages));
+      expect(namedBy(VERSIONS_TABLE, "entryId")).toEqual(new Set(pages));
+      expect(namedBy(pagesTable, "id")).toEqual(new Set(pages));
     });
   }
 );

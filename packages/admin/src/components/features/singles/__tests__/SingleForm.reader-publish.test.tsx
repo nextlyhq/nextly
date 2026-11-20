@@ -28,6 +28,13 @@ vi.mock("@admin/lib/api/protectedApi", async importOriginal => {
   };
 });
 
+// No workflow holds the Single: its review state says so once read, and
+// Publish waits for that answer.
+vi.mock("@admin/services/workflowApi", async importOriginal => ({
+  ...(await importOriginal<typeof import("@admin/services/workflowApi")>()),
+  fetchReviewState: () => Promise.resolve({ attached: false }),
+}));
+
 vi.mock("@admin/hooks/useUpdateAnswer", async importOriginal => ({
   ...(await importOriginal<typeof import("@admin/hooks/useUpdateAnswer")>()),
   useUpdateAnswer: () => "refused",
@@ -71,7 +78,10 @@ describe("a Single for a user who may publish it but not change it", () => {
     const onSubmit = vi.fn(async () => ({ ...draft, status: "published" }));
     render(<SingleForm schema={schema} document={draft} onSubmit={onSubmit} />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+    // Offered once the review state says no workflow holds it.
+    const publish = screen.getByRole("button", { name: "Publish" });
+    await waitFor(() => expect(publish).toBeEnabled());
+    await userEvent.click(publish);
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(onSubmit).toHaveBeenCalledWith({ status: "published" });

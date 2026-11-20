@@ -133,7 +133,7 @@ describe("node kinds are asked through dom-kind", () => {
         "canvas/canvas-escape.ts",
         "canvas/block-toolbar.tsx",
         "canvas/geometry-dom.ts",
-        "dom-kind.ts",
+        "canvas/dom-kind.ts",
         // The last file to carry one, converted together with the change
         // that hands it the canvas's document.
         "canvas/use-inline-text.ts",

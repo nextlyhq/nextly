@@ -22,9 +22,9 @@ import { CornerDownRight } from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "../../block-icon";
+import { isElement } from "../../canvas/dom-kind";
+import { withEntryContentField } from "../../canvas/entry-content-rules";
 import { usePublishInsertionPreview } from "../../canvas/insertion-preview";
-import { isElement } from "../../dom-kind";
-import { withEntryContentField } from "../../entry-content-rules";
 
 import type { EntryOffer } from "./insert-panel-offers";
 import { cardAnchor, NOWHERE, type Measurable } from "./insert-panel-summon";

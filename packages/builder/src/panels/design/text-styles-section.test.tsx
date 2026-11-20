@@ -25,8 +25,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import type { ClassListEdit } from "../../block-style-actions";
-import type { SharedStyleChange } from "../../shared-style-target";
+import type { ClassListEdit } from "../../styles/block-style-actions";
+import type { SharedStyleChange } from "../../styles/shared-style-target";
 import type {
   PageClassBlocks,
   SharedStylesAccess,

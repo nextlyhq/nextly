@@ -37,6 +37,8 @@ import {
   type DashboardLogger,
   type TableProbe,
 } from "../../dashboard/table-presence";
+import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
+import { quoteSqlLiteral } from "../../schema/utils/sql-literal";
 import {
   readLanguageRevisions,
   type SelectsRows,
@@ -704,6 +706,52 @@ export async function renameFieldProvenance(
       where
     );
   }
+}
+
+/**
+ * The statements that move one entity's records of a renamed translated field by hand, as
+ * `renameFieldProvenance` moves them: the field's own records; then each row's record whose new
+ * path would not fit the column is deleted, as the move drops it; then each other row's record
+ * under the field's name and the row separator is moved. Text for a developer finishing a rename
+ * whose move failed, never run here.
+ *
+ * @experimental
+ */
+export function renameFieldProvenanceStatements(
+  dialect: SupportedDialect,
+  rename: {
+    scopeKind: ProvenanceScopeKind;
+    scopeSlug: string;
+    from: string;
+    to: string;
+  }
+): string[] {
+  const id = (name: string) => quoteIdent(name, dialect);
+  const text = (value: string) => quoteSqlLiteral(value, dialect);
+  const mysql = dialect === "mysql";
+  const table = id(TRANSLATION_PROVENANCE_TABLE);
+  const path = id("field_path");
+  const scope = `${id("scope_kind")} = ${text(rename.scopeKind)} AND ${id("scope_slug")} = ${text(rename.scopeSlug)}`;
+  const prefix = `${rename.from}${ROW_PATH_SEPARATOR}`;
+  const substring = mysql ? "SUBSTRING" : "SUBSTR";
+  const rest = `${substring}(${path}, ${String(prefix.length + 1)})`;
+  const newPrefix = text(`${rename.to}${ROW_PATH_SEPARATOR}`);
+  const moved = mysql
+    ? `CONCAT(${newPrefix}, ${rest})`
+    : `${newPrefix} || ${rest}`;
+  const underPrefix = `${scope} AND ${substring}(${path}, 1, ${String(prefix.length)}) = ${text(prefix)}`;
+  // A row's new path is its old one with the field's name changed, so it fits the column while the
+  // old one is at most this long. Characters, not bytes: MySQL's LENGTH counts bytes.
+  const longestKept =
+    TRANSLATION_PROVENANCE_FIELD_PATH_LENGTH +
+    prefix.length -
+    `${rename.to}${ROW_PATH_SEPARATOR}`.length;
+  const length = mysql ? "CHAR_LENGTH" : "LENGTH";
+  return [
+    `UPDATE ${table} SET ${path} = ${text(rename.to)} WHERE ${scope} AND ${path} = ${text(rename.from)};`,
+    `DELETE FROM ${table} WHERE ${underPrefix} AND ${length}(${path}) > ${String(longestKept)};`,
+    `UPDATE ${table} SET ${path} = ${moved} WHERE ${underPrefix};`,
+  ];
 }
 
 /**
