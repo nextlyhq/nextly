@@ -56,6 +56,17 @@ const ARTICLES = defineCollection({
       name: "seo",
       fields: [text({ name: "headline" }), number({ name: "weight" })],
     }),
+    // A repeater inside a repeater: each level's rows keep their translations by their own ids.
+    repeater({
+      name: "sections",
+      fields: [
+        text({ name: "heading" }),
+        repeater({
+          name: "items",
+          fields: [text({ name: "label" }), number({ name: "qty" })],
+        }),
+      ],
+    }),
   ],
 });
 
@@ -342,6 +353,76 @@ describeEachDialect("one structure across languages", dialect => {
         "segundo",
         "back",
       ]);
+    },
+    BOOT_TIMEOUT
+  );
+
+  it(
+    "keeps each nested row's translation with it when the inner rows are reordered in another language",
+    async () => {
+      const { nextly } = await site();
+      type Item = { id: string; label?: string; qty?: number };
+      type Section = { id: string; heading?: string; items: Item[] };
+      const sectionsIn = async (id: string, locale: string) =>
+        (
+          (await nextly.findByID({ collection: "articles", id, locale })) as {
+            sections: Section[];
+          }
+        ).sections;
+      const created = await nextly.create({
+        collection: "articles",
+        locale: "en",
+        data: {
+          title: "Nested",
+          sections: [
+            {
+              heading: "Section",
+              items: [
+                { label: "apple", qty: 1 },
+                { label: "bread", qty: 2 },
+              ],
+            },
+          ],
+        },
+      });
+      const id = (created.item as { id: string }).id;
+      const [section] = await sectionsIn(id, "en");
+      const [apple, bread] = section!.items;
+      await write(nextly, id, "es", {
+        sections: [
+          {
+            id: section!.id,
+            heading: "Sección",
+            items: [
+              { id: apple!.id, label: "manzana", qty: 1 },
+              { id: bread!.id, label: "pan", qty: 2 },
+            ],
+          },
+        ],
+      });
+
+      // English reorders the inner rows and changes a shared value inside one.
+      await write(nextly, id, "en", {
+        sections: [
+          {
+            id: section!.id,
+            heading: "Section",
+            items: [
+              { id: bread!.id, label: "bread", qty: 3 },
+              { id: apple!.id, label: "apple", qty: 1 },
+            ],
+          },
+        ],
+      });
+
+      const [es] = await sectionsIn(id, "es");
+      expect(es!.heading).toBe("Sección");
+      expect(es!.items.map(item => [item.id, item.label, item.qty])).toEqual([
+        [bread!.id, "pan", 3],
+        [apple!.id, "manzana", 1],
+      ]);
+      const [en] = await sectionsIn(id, "en");
+      expect(en!.items.map(item => item.label)).toEqual(["bread", "apple"]);
     },
     BOOT_TIMEOUT
   );
