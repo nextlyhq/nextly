@@ -1756,6 +1756,23 @@ class SchemaLockHold {
     ]);
   }
 
+  /**
+   * One release, waiting for a busy SQLite database: a release given up on leaves the claim
+   * standing for its whole lease, and the next run refused for it. Not once the work has failed:
+   * its error is the run's, and nothing waits before it.
+   */
+  private releasing(release: () => Promise<void>): Promise<void> {
+    if (this.workFailed) return release();
+    // Nothing is renewed any more: the release is tried for as long as the wait allows.
+    return whileBusy(
+      this.options,
+      this.dialect,
+      this.busyBudget(),
+      () => undefined,
+      release
+    );
+  }
+
   /** Give back whatever is held, the field-group claim first and this lock's row last. */
   async releaseAll(): Promise<void> {
     const releases: Array<() => Promise<void>> = [];
@@ -1783,21 +1800,7 @@ class SchemaLockHold {
 
     let failed = false;
     for (const release of releases) {
-      // A busy SQLite database is waited for: a release given up on leaves the claim standing
-      // for its whole lease, and the next run refused for it.
-      // Not once the work has failed: its error is the run's, and nothing waits before it.
-      await (
-        this.workFailed
-          ? release()
-          : whileBusy(
-              this.options,
-              this.dialect,
-              this.busyBudget(),
-              // Nothing is renewed any more: the release is tried for as long as the wait allows.
-              () => undefined,
-              release
-            )
-      ).catch(() => {
+      await this.releasing(release).catch(() => {
         failed = true;
       });
     }

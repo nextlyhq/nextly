@@ -508,6 +508,13 @@ function isDuplicateColumn(error: unknown, dialect: MigrationDialect): boolean {
   return false;
 }
 
+type BusyStep = <R>(step: () => Promise<R>) => Promise<R>;
+
+/** The caller's wait for a busy database, or each step run as it is. */
+function busyStepOf(whileBusy: BusyStep | undefined): BusyStep {
+  return whileBusy ?? (step => step());
+}
+
 /**
  * Hold the migration lock for the duration of `fn`.
  *
@@ -595,8 +602,7 @@ export async function withMigrationSession<T>(
   fn: (session: MigrationSession) => Promise<T>
 ): Promise<T> {
   const { adapter, dialect, label, mode = "claim" } = args;
-  const whileBusy =
-    args.whileBusy ?? (<R>(step: () => Promise<R>): Promise<R> => step());
+  const whileBusy = busyStepOf(args.whileBusy);
   const timings = timingsFor(args.leaseSeconds);
 
   if (label.length === 0) {
