@@ -16,6 +16,8 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { apiKeyScope } from "../../../auth/authenticated-scope";
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
 import { defineCollection, text } from "../../../config";
 import {
   getConfiguredTestDialects,
@@ -122,6 +124,52 @@ async function listedForKey(
   };
 }
 
+/**
+ * The ids a REST list of `collection` keeps under `where` for the person `userId`, signed in as
+ * the admin is: a session, whose request carries a scope of its own (a person's, not a key's).
+ */
+async function listedForSession(
+  collection: string,
+  userId: string,
+  where: Record<string, unknown>
+): Promise<{ ids: string[]; total: number }> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId,
+      email: `${userId}@example.test`,
+      name: userId,
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET!
+  );
+  const path = ["collections", collection, "entries"];
+  const response = await createDynamicHandlers().GET(
+    new Request(
+      `http://localhost/api/${path.join("/")}?status=all&where=${encodeURIComponent(JSON.stringify(where))}`,
+      {
+        headers: {
+          cookie: `nextly_session=${token}`,
+          origin: "http://localhost",
+        },
+      }
+    ),
+    { params: Promise.resolve({ params: path }) }
+  );
+  const json = (await response.json()) as {
+    items?: { id: unknown }[];
+    meta?: { total?: number };
+  };
+  if (response.status >= 400) {
+    throw new Error(`list refused: ${response.status} ${JSON.stringify(json)}`);
+  }
+  return {
+    ids: (json.items ?? []).map(item => String(item.id)).sort(),
+    total: Number(json.meta?.total),
+  };
+}
+
 describe.each(getConfiguredTestDialects())(
   "a list's waiting filter (%s)",
   dialect => {
@@ -137,14 +185,19 @@ describe.each(getConfiguredTestDialects())(
         ["read", "pages"],
         ["sign-off", "pages"],
       ]);
+      // Sam is on the legal desk too: work assigned to the desk is his as much as his own.
+      const desk = await role(t, "legal-desk", [["sign-off", "pages"]]);
+      await giveRole(t, "sam", desk);
       const unassigned = await entry(t, "pages");
       const toSam = await entry(t, "pages");
+      const toDesk = await entry(t, "pages");
       const toBob = await entry(t, "pages");
       // In Writing, whose step needs an update Sam does not hold.
       const writing = await entry(t, "pages");
       for (const [id, stage, assignee] of [
         [unassigned, "legal", undefined],
         [toSam, "legal", { kind: "user" as const, id: "sam" }],
+        [toDesk, "legal", { kind: "role" as const, id: desk }],
         [toBob, "legal", { kind: "user" as const, id: "bob" }],
         [writing, "writing", undefined],
       ] as const) {
@@ -155,13 +208,22 @@ describe.each(getConfiguredTestDialects())(
       }
 
       expect(await listedFor(t, "pages", "sam", WAITING)).toEqual({
-        ids: [unassigned, toSam].sort(),
-        total: 2,
+        ids: [unassigned, toSam, toDesk].sort(),
+        total: 3,
       });
       expect(await listedFor(t, "pages", "bob", WAITING)).toEqual({
         ids: [unassigned, toBob].sort(),
         total: 2,
       });
+      // Signed in as the admin is: a session's request carries a person's scope, and the list
+      // keeps the same documents, and assigned-to-me those assigned to Sam by name or to his role.
+      expect(await listedForSession("pages", "sam", WAITING)).toEqual({
+        ids: [unassigned, toSam, toDesk].sort(),
+        total: 3,
+      });
+      expect(
+        await listedForSession("pages", "sam", { _assignedToMe: true })
+      ).toEqual({ ids: [toSam, toDesk].sort(), total: 2 });
       // A collection no workflow holds has nothing waiting: nothing, and no refusal.
       expect(await listedFor(t, "ledgers", "sam", WAITING)).toEqual({
         ids: [],

@@ -677,6 +677,16 @@ const WAITING_FILTER_CAP = 1000;
  */
 const IDS_PER_IN = 500;
 
+/**
+ * The scope of an API key's request, or undefined for anyone else's: a person's session carries a
+ * scope too (`actorType: "user"`), and stands for the person, never for a key.
+ */
+function keyScopeOf(
+  scope: AuthenticatedScope | undefined
+): AuthenticatedScope | undefined {
+  return scope?.actorType === "apiKey" ? scope : undefined;
+}
+
 /** The condition keeping the rows whose id is one of `ids`; none for no ids. */
 function idsCondition(idColumn: SQLWrapper, ids: readonly string[]): SQL {
   if (ids.length === 0) return sql`1 = 0`;
@@ -3028,7 +3038,7 @@ export class CollectionQueryService extends BaseService {
       ) {
         return { ids: [], capped: false };
       }
-      const scope = params.authenticatedScope;
+      const scope = keyScopeOf(params.authenticatedScope);
       const keyId = params.apiKeyId;
       if (scope !== undefined && !keyId) {
         return { ids: [], capped: false };
@@ -3036,14 +3046,11 @@ export class CollectionQueryService extends BaseService {
       // Loaded when asked: the workflows API reaches the services this module is read by.
       const { waitingEntryIds } = await import("../../../api/workflows");
       return waitingEntryIds(
-        {
-          user,
-          scope,
-          caller:
-            scope === undefined || !keyId
-              ? { kind: "user", userId }
-              : { kind: "key", keyId, userId, scope },
-        },
+        scope === undefined || !keyId
+          ? // A person, a session's request included: judged as the person, as the waiting
+            // list's own route judges them.
+            { user, scope: undefined, caller: { kind: "user", userId } }
+          : { user, scope, caller: { kind: "key", keyId, userId, scope } },
         params.collectionName,
         WAITING_FILTER_CAP
       );
@@ -3124,11 +3131,12 @@ export class CollectionQueryService extends BaseService {
     }
     // Loaded when asked: the workflow holders read the role services, which reach this module.
     const { holdersOf } = await import("../../workflows/holders");
+    const keyScope = keyScopeOf(params.authenticatedScope);
     return holdersOf(
       this.adapter,
-      params.authenticatedScope === undefined
+      keyScope === undefined
         ? { kind: "user", userId }
-        : { kind: "key", userId, scope: params.authenticatedScope }
+        : { kind: "key", userId, scope: keyScope }
     );
   }
 
