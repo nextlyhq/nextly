@@ -3880,8 +3880,6 @@ async function recordRegistryHistory(args: {
 // resolution UX:
 //
 //   - drop_table: no destructive-confirm event exists for tables yet.
-//   - change_column_type: only emits a warning, no resolution. A relation
-//     switched from one related entry to many is not held: it keeps every value.
 //   - change_column_nullable (NOT NULL adds on existing rows): pipeline
 //     classifier emits add_not_null_with_nulls + asks the user, BUT
 //     only when there are actually NULL rows. Tables with no NULLs flow
@@ -3889,8 +3887,12 @@ async function recordRegistryHistory(args: {
 //     correctly. This gate is therefore a no-op for the NOT NULL case
 //     today; kept here only as a future-proof slot.
 //
-// Pure-drop, mixed drop+add, type widenings, and additive changes all
-// pass through to the pipeline.
+// Pure-drop, mixed drop+add, type changes and additive changes all pass
+// through to the pipeline. A type change is judged there by the values its
+// column holds, as `db:sync` judges it (`typeChangeJudge`): a safe one is
+// applied, a lossy one is refused unless the data-loss consent names the
+// column (NEXTLY_ACCEPT_DATA_LOSS, as nobody is asked at a reload), and a
+// blocked one is refused naming why, each before any statement runs.
 function classifyForCodeFirst(
   operations: Operation[],
   _dialect: SupportedDialect
@@ -3901,15 +3903,6 @@ function classifyForCodeFirst(
   for (const op of operations) {
     if (op.type === "drop_table") {
       reasons.push(`drops table '${op.tableName}'`);
-    } else if (
-      op.type === "change_column_type" &&
-      op.conversion !== "referenceList"
-    ) {
-      // A relation switched from one related entry to many keeps every value, each id as a
-      // one-item list, so it is not held back for review as a plain retype is.
-      reasons.push(
-        `changes column '${op.columnName}' type from '${op.fromType}' to '${op.toType}'`
-      );
     } else if (op.type === "change_column_nullable" && !op.toNullable) {
       reasons.push(
         `adds NOT NULL to column '${op.columnName}' (would fail on existing rows without a default)`

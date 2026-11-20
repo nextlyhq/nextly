@@ -688,7 +688,7 @@ describe("reloadNextlyConfig", () => {
           {
             slug: "books",
             tableName: "dc_books",
-            fields: [{ name: "active", type: "checkbox" }],
+            fields: [{ name: "active", type: "text", required: true }],
           },
           {
             slug: "authors",
@@ -869,13 +869,13 @@ describe("reloadNextlyConfig", () => {
           {
             slug: "books",
             tableName: "dc_books",
-            fields: [{ name: "active", type: "checkbox" }],
+            fields: [{ name: "active", type: "text", required: true }],
           },
         ],
       },
     });
-    // The live `active` column is text; the config declares a checkbox. That is
-    // the type change the gate refuses, and it is the ONLY change in the batch.
+    // The live `active` column allows no value; the config makes it required. That is
+    // the NOT NULL addition the gate refuses, and it is the ONLY change in the batch.
     introspectSpy.mockResolvedValue(
       buildSnapshot([
         {
@@ -978,12 +978,12 @@ describe("reloadNextlyConfig", () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
-          // REFUSED: live `active` is text, the config declares a checkbox --
-          // a column type change the gate defers rather than applies.
+          // REFUSED: live `active` allows no value, the config makes it required --
+          // a NOT NULL addition the gate defers rather than applies.
           {
             slug: "books",
             tableName: "dc_books",
-            fields: [{ name: "active", type: "checkbox" }],
+            fields: [{ name: "active", type: "text", required: true }],
           },
           // APPLIED: purely additive, so this reload reaches the post-DDL
           // commit at all. Without it the deferred branch bails earlier and
@@ -1212,8 +1212,11 @@ describe("reloadNextlyConfig", () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         singles: [
-          // REFUSED: live `active` is text, the config declares a checkbox.
-          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // REFUSED: live `active` allows no value, the config makes it required.
+          {
+            slug: "settings",
+            fields: [{ name: "active", type: "text", required: true }],
+          },
           // APPLIED: additive, so the reload reaches the post-DDL commit.
           { slug: "theme", fields: [{ name: "accent", type: "text" }] },
         ],
@@ -1370,8 +1373,11 @@ describe("reloadNextlyConfig", () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         singles: [
-          // REFUSED: live `active` is text, the config declares a checkbox.
-          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // REFUSED: live `active` allows no value, the config makes it required.
+          {
+            slug: "settings",
+            fields: [{ name: "active", type: "text", required: true }],
+          },
           // APPLIED, but its metadata write fails below.
           { slug: "theme", fields: [{ name: "accent", type: "text" }] },
         ],
@@ -1428,8 +1434,11 @@ describe("reloadNextlyConfig", () => {
           },
         ],
         singles: [
-          // REFUSED: live `active` is text, the config declares a checkbox.
-          { slug: "settings", fields: [{ name: "active", type: "checkbox" }] },
+          // REFUSED: live `active` allows no value, the config makes it required.
+          {
+            slug: "settings",
+            fields: [{ name: "active", type: "text", required: true }],
+          },
         ],
       },
     });
@@ -1670,7 +1679,7 @@ describe("reloadNextlyConfig", () => {
     expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
   });
 
-  it("skips a column type change and logs a warning", async () => {
+  it("passes a column type change through to the pipeline, which judges it by its values", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
         collections: [
@@ -1695,11 +1704,14 @@ describe("reloadNextlyConfig", () => {
     const { reloadNextlyConfig } = await import("../reload-config");
     await reloadNextlyConfig({ resolver: buildResolver() });
 
-    expect(pipelineApplySpy).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalled();
-    const warningArg = warnSpy.mock.calls[0]?.[0] as string;
-    expect(warningArg).toContain("active");
-    expect(warningArg).toContain("type");
+    // The pipeline judges the change as db:sync does, refusing what would lose or cut a value; the
+    // reload holds nothing back for review on its own.
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(
+      warnSpy.mock.calls
+        .map(c => String(c[0]))
+        .find(s => s.includes("needs review"))
+    ).toBeUndefined();
   });
 
   it("passes a 3-drop / 1-add asymmetric change through to the pipeline", async () => {
@@ -3557,12 +3569,12 @@ describe("reloadNextlyConfig", () => {
       const edited = vi.fn(() => undefined);
       const { reloadNextlyConfig } = await import("../reload-config");
 
-      // `dc_refused` has a live `text` column the config declares as a
-      // checkbox: a column type change the gate refuses rather than applies.
+      // `dc_refused` has a live column allowing no value that the config makes
+      // required: a NOT NULL addition the gate refuses rather than applies.
       const refusedCollection = {
         slug: "refused",
         tableName: "dc_refused",
-        fields: [{ name: "active", type: "checkbox" }],
+        fields: [{ name: "active", type: "text", required: true }],
       };
       // The edited collection gains a column, so its own diff is additive and
       // DOES apply -- without that this reload would never reach the post-DDL
@@ -3655,7 +3667,7 @@ describe("reloadNextlyConfig", () => {
       const refusedCollection = {
         slug: "refused",
         tableName: "dc_refused",
-        fields: [{ name: "active", type: "checkbox" }],
+        fields: [{ name: "active", type: "text", required: true }],
       };
       const appliedCollection = {
         slug: SLUG,
