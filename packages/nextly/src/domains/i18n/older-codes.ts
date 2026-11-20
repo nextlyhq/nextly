@@ -15,6 +15,8 @@ import { TRANSLATION_PROVENANCE_TABLE } from "../../schemas/translation-provenan
 import { VERSIONS_TABLE } from "../../schemas/versions/types";
 import { introspectLiveColumns } from "../schema/pipeline/diff/introspect-live";
 
+import { standardLanguageCode } from "./config/standard-code";
+
 /**
  * A column a language code is stored in: one code, written after `prefix` where it has one, or a
  * JSON list of codes (`list`).
@@ -198,17 +200,21 @@ export async function storedOlderSpellings(
   translationTables: readonly string[],
   codes: readonly string[]
 ): Promise<StoredOlderSpelling[]> {
-  // The underscore form of each configured code that has a part after its language.
+  // Each configured code that has a part after its language, in any letter case.
   const byLowered = new Map(
     codes
       .filter(code => code.includes("-"))
-      .map(code => [code.replace(/-/g, "_").toLowerCase(), code] as const)
+      .map(code => [code.toLowerCase(), code] as const)
   );
   if (byLowered.size === 0) return [];
   const found = new Map<string, string>();
   for (const place of await codeColumnsOn(adapter, translationTables)) {
     for (const code of await underscoredCodesIn(adapter, place)) {
-      const to = byLowered.get(code.toLowerCase());
+      // Read as the conversion reads it (`standardLanguageCode`): every underscore a hyphen, so a
+      // spelling that mixes the two (`zh_Hant-TW`) is found as the one it converts to.
+      const to = byLowered.get(
+        (standardLanguageCode(code) ?? code).toLowerCase()
+      );
       if (to !== undefined) found.set(code, to);
     }
   }

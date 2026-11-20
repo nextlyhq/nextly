@@ -22,7 +22,11 @@ import { builtByFor } from "../../../domains/schema/pipeline/registered-collecti
 import type { ColumnOrigin } from "../../../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../../../errors/nextly-error";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
-import type { UpgradeSite, UpgradeStepContext } from "../upgrade-step";
+import {
+  NOTHING_CHANGED,
+  type UpgradeSite,
+  type UpgradeStepContext,
+} from "../upgrade-step";
 
 /**
  * The site a run of the data steps judges by, from the configuration the command loaded: its
@@ -186,7 +190,7 @@ export async function assertVersionHistoryReady(
       "The version history holds pending changes but is not laid out as this release keeps it " +
       `(it lacks ${PENDING_CHANGE_COLUMNS.join(", ")}). Run \`nextly migrate\` without --step, ` +
       "so its migrations add them before its data steps key and split the pending changes. " +
-      "Nothing was changed.",
+      NOTHING_CHANGED,
     logContext: { table: VERSIONS_TABLE, reason: HISTORY_NOT_LAID_OUT },
   });
 }

@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { MIGRATE_DATA_STEPS } from "../../../cli/commands/upgrade-steps";
+import { NextlyError } from "../../../errors";
 import { runStatement } from "../../schema/pipeline/_internal/run-statement";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { createDynamicHandlers } from "../../../routeHandler";
@@ -36,6 +37,7 @@ import {
   migrateData,
   openUpgradeDatabase,
   previewMigrateData,
+  refusalBeforeSchemaChanges,
   siteWithLanguages,
   storeUnderCode,
   type UpgradeDatabase,
@@ -516,6 +518,95 @@ describeEachDialect(
         expect(await storedLanguages()).toEqual(["PT_br", "en", "pt_BR"]);
       }
     );
+
+    /** A copy of the article's `pt_BR` translation row under `locale`: one language kept twice. */
+    async function translationAlsoUnder(locale: string): Promise<void> {
+      const table = sql.identifier("dc_articles_locales");
+      const [row] = await database!.adapter.queryStatement<
+        Record<string, unknown>
+      >(
+        sql`SELECT * FROM ${table} WHERE ${sql.identifier("_locale")} = ${"pt_BR"}`
+      );
+      const copy = Object.entries(row!).map(([column, value]) => [
+        column,
+        column === "_locale"
+          ? locale
+          : column === "id"
+            ? `${String(value)}-${locale}`
+            : value,
+      ]);
+      await runStatement(
+        database!.adapter.getDrizzle(),
+        database!.adapter.dialect,
+        sql`INSERT INTO ${table} (${sql.join(
+          copy.map(([column]) => sql.identifier(String(column))),
+          sql`, `
+        )}) VALUES (${sql.join(
+          copy.map(([, value]) => sql`${value}`),
+          sql`, `
+        )})`
+      );
+    }
+
+    // The translation tables can show one language kept under two spellings as they stand, so
+    // `nextly migrate` refuses it before its schema changes, ahead of the version history's check,
+    // which waits for the columns those changes add. Broken, that check comes first, its refusal is
+    // left for after the schema changes, and the collision is refused only then.
+    it("refuses one language under two spellings before the schema changes, on a version history of an earlier release", async () => {
+      await legacyArticle();
+      await translationAlsoUnder("pt-BR");
+      // The version history as an earlier release laid it out, still holding a pending change.
+      await runStatement(
+        database!.adapter.getDrizzle(),
+        database!.adapter.dialect,
+        sql`ALTER TABLE ${sql.identifier(VERSIONS_TABLE)} DROP COLUMN ${sql.identifier("changed_locales")}`
+      );
+
+      const refusal = await refusalBeforeSchemaChanges(
+        database!.adapter,
+        STANDARD
+      );
+
+      expect(NextlyError.isCode(refusal, "NEXTLY_LANGUAGE_CODES_COLLIDE")).toBe(
+        true
+      );
+      expect(await storedLanguages()).toEqual(["en", "pt-BR", "pt_BR"]);
+    });
+
+    // The conversion reads every underscore of a code as a hyphen (`standardLanguageCode`), so a
+    // spelling that mixes the two is converted; the discovery of what the rows hold reads it the
+    // same way. Broken, it looks the spelling up with only its hyphens read as underscores, never
+    // finds `zh_Hant-TW`, and leaves those rows out of reach of the language.
+    it("converts a stored spelling that mixes underscores and hyphens", async () => {
+      const MIXED = siteWithLanguages(["en", "zh-Hant-TW"], "en");
+      database = await openUpgradeDatabase(dialect);
+      const t = await bootSite(database, "upgraded", MIXED);
+      const created = await entriesOf(t).createEntry(
+        { collectionName: ARTICLES, overrideAccess: true, locale: "en" },
+        {
+          title: "hello",
+          summary: "s",
+          code: "code-mixed",
+          status: "published",
+        }
+      );
+      const id = (created.data as { id: string }).id;
+      await entriesOf(t).updateEntry(
+        {
+          collectionName: ARTICLES,
+          entryId: id,
+          locale: "zh-Hant-TW",
+          overrideAccess: true,
+        },
+        { title: "你好", status: "published", _overwrite: true }
+      );
+      await storeUnderCode(database, "zh-Hant-TW", "zh_Hant-TW");
+      expect(await storedLanguages()).toEqual(["en", "zh_Hant-TW"]);
+
+      await migrateData(database.adapter as never, MIXED);
+
+      expect(await storedLanguages()).toEqual(["en", "zh-Hant-TW"]);
+    });
 
     // A site that manages its languages in Settings keeps them in `nextly_languages`, each with the
     // codes it falls back to. The upgrade converts that registry with the content, so the site's

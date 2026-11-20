@@ -66,8 +66,11 @@ export interface StoredDataOfRun {
    * the steps.
    */
   confirmBeforeSchemaChanges: (step?: number) => Promise<void>;
-  /** Once the schema is up to date: runs the steps. */
-  takeAfterSchemaChanges: () => Promise<void>;
+  /**
+   * Once the schema is up to date: runs the steps. `schemaChanges` names what the command changed
+   * in the schema before them, which a refusal the steps make then says stays applied.
+   */
+  takeAfterSchemaChanges: (schemaChanges?: string) => Promise<void>;
   /** Where the steps were not taken: names passwords still stored as given. */
   warnOfPasswordsLeft: () => Promise<void>;
   /** The backup refusal the steps ended with after the schema changed, if any. */
@@ -296,9 +299,12 @@ export function storedDataOfRun(args: {
     // the schema changes could not see the work. Those have applied, so
     // the refusal is kept for the run to end with once its remaining deploy
     // work is done, rather than thrown past it.
-    takeAfterSchemaChanges: async () => {
+    takeAfterSchemaChanges: async schemaChanges => {
       try {
-        await runDataSteps(deps(true));
+        await runDataSteps({
+          ...deps(true),
+          ...(schemaChanges === undefined ? {} : { schemaChanges }),
+        });
         taken = true;
       } catch (error) {
         if (!isDataStepsBackupRefusal(error)) throw error;

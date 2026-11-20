@@ -42,7 +42,11 @@ import {
 import { NextlyError } from "../../../errors/nextly-error";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import { toSnakeCase } from "../../../shared/lib/case-conversion";
-import type { UpgradeReport, UpgradeStepContext } from "../upgrade-step";
+import {
+  NOTHING_CHANGED,
+  type UpgradeReport,
+  type UpgradeStepContext,
+} from "../upgrade-step";
 
 import {
   assertVersionHistoryReady,
@@ -371,7 +375,8 @@ async function plannedSplits(
       publicMessage:
         `Pending changes to one field were saved at the same moment for ${tied.join("; ")}, so ` +
         "which change came later cannot be told. Give the field the same value in those pending " +
-        "changes, or discard one of them, then run `nextly migrate` again. Nothing was changed.",
+        "changes, or discard one of them, then run `nextly migrate` again. " +
+        NOTHING_CHANGED,
       logContext: { ties: tied },
     });
   }

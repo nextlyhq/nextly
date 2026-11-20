@@ -117,8 +117,8 @@ import {
   syncUserFields,
 } from "./dev-build";
 import { ensureCoreTables, productionSyncRefusal } from "./dev-server";
-import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { createDebouncedSync } from "./dev-watcher";
+import { planWithStoredData, storedDataOfRun } from "./stored-data-of-run";
 import { syncSchemaInOrder } from "./sync-schema";
 import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 
@@ -498,7 +498,9 @@ export async function runDbSync(
     // the sync could not see, ends the run with the sync applied.
     if (takesDataSteps) {
       await runWithFieldTypes(configResult.fieldTypes, () =>
-        storedData.takeAfterSchemaChanges()
+        storedData.takeAfterSchemaChanges(
+          "the schema changes this sync applied"
+        )
       );
     }
     const storedDataRefused = storedData.refusal();
