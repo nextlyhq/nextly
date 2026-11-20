@@ -116,3 +116,29 @@ describe("resolveLocaleChain", () => {
     ]);
   });
 });
+
+// An older spelling of a configured language (`pt_BR` for `pt-BR`) is accepted for one release,
+// as the requested language and as a named fallback alike, and both are resolved to the code the
+// rows are stored under: a chain naming the older spelling reads no row in that language and falls
+// through to the default instead.
+describe("resolveLocaleChain with an older spelling", () => {
+  const regional = normalizeLocalization({
+    locales: ["en", "de", "pt-BR"],
+    defaultLocale: "en",
+  });
+
+  it("resolves a named fallback to its configured code", () => {
+    expect(resolveLocaleChain(regional, "de", "pt_BR")).toEqual([
+      "de",
+      "pt-BR",
+      "en",
+    ]);
+  });
+
+  it("resolves the requested language to its configured code", () => {
+    expect(resolveLocaleChain(regional, "pt_BR", undefined)).toEqual([
+      "pt-BR",
+      "en",
+    ]);
+  });
+});

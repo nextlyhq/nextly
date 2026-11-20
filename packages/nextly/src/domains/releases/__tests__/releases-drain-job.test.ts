@@ -104,6 +104,36 @@ describe("createReleasesDrainJob", () => {
     applyMock.mockReset();
   });
 
+  it("runs the pass on the repository its wiring hands it, the one whose flush reaches the pages", async () => {
+    // The wired repository carries the install's cache revalidator; one the job builds for itself
+    // has none, and a held release's flush would then clear nothing a reader is served.
+    const wired = { recordOverdueReleases: vi.fn(async () => {}) };
+    let captured: ApplyDueReleasesDeps | undefined;
+    applyMock.mockImplementation(async (deps: ApplyDueReleasesDeps) => {
+      captured = deps;
+      return NOTHING_DUE;
+    });
+    const job = createReleasesDrainJob({
+      db: {} as never,
+      contentApi: {} as never,
+      runAs: {} as never,
+      onOutcome: () => {},
+      repository: () => wired as never,
+    });
+
+    await job.handler(null as never, {
+      jobId: "releases-drain-1",
+      attempt: 1,
+      user: null,
+      now: CONTEXT_NOW,
+      content: {} as never,
+      deadline: new Date(CONTEXT_NOW.getTime() + 4_000),
+    });
+
+    expect(captured?.repository).toBe(wired);
+    expect(wired.recordOverdueReleases).toHaveBeenCalledTimes(1);
+  });
+
   it("stops when the runner's deadline arrives, on the same clock the pass reads", async () => {
     vi.useFakeTimers();
     const deps = await runHandler(4_000);

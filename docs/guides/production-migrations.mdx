@@ -76,6 +76,32 @@ The file it writes is marked in its header, so the deletion is visible in review
 
 It names what `nextly migrate` will ask consent for, judged the same way, and `nextly migrate` asks again on each database it runs on. A change that turns translation on or off, or moves a field in or out of translation, drops a column or table after its values move, so it is listed and asked about too.
 
+### Deleting a collection, Single or field group
+
+A migration that deletes a collection, Single or field group holds only the drops of its tables:
+its own, its translations table and its junction tables. `nextly migrate` removes the rest in the
+run that applies the file, once the file is recorded applied, under the consent the file was
+applied with:
+
+- in the registry write, the entity's registry row, with its autosaves, version pins, readers'
+  "seen" markers, dashboard pins and the record of the media its documents use;
+- once that write has committed, what it left in the tables every entity shares: its values in
+  each field group's shared table, nested ones included, its archived translations, the record of
+  where its translations came from, and its translation transition record. Each entity's go in one
+  transaction.
+
+The Schema Builder's delete in development removes the same rows, before its drops.
+
+The consent naming the entity's table covers these rows (`--accept-data-loss=dc_posts`), and
+`nextly migrate` lists each before asking. A run that stops part-way is finished by the next
+`nextly migrate`, even with nothing pending, without running any drop again or recording anything
+new. A run that cannot remove what a deleted entity left says so, naming the entity, and the next run removes it.
+
+If a run stops inside the delete file, nothing is removed. On PostgreSQL and SQLite the file rolls
+back and the next run applies it whole. On MySQL each drop commits as it runs, so the next run
+refuses, naming each drop as done or not done, until you finish the drops and record the file with
+`migrate:resolve`; the run after that removes the rows.
+
 ### Renaming a field
 
 A migration compares your config with the last snapshot, so a renamed field first looks like one
@@ -262,6 +288,8 @@ jobs:
 4. Vercel deploys the new app code.
 
 If step 2 or 3 fails, step 4 doesn't run.
+
+A blank migration (`nextly migrate:create --blank`) has no snapshot, and `nextly migrate:check` accepts it without one. It recognises a blank file by its `-- Parent:` header line or by the template's line `-- This is a blank migration file for custom SQL.`; keep at least one of them in the file's header, above `-- UP`. A localization migration (any file carrying `-- Generated: localization`) is the other file written without a snapshot: `nextly migrate:check` passes it without checking it against one, so the check does not catch an edit to it. Any other file with no snapshot fails the check with [`MISSING_SNAPSHOT`](/docs/cli/errors/missing-snapshot).
 
 **`NEXTLY_APPLIED_BY`** is read by nothing in the current codebase. The `nextly_schema_events` table has an `applied_by` column, but the migration runner does not populate it, so setting this variable has no effect today.
 
@@ -1313,6 +1341,28 @@ A release can add tables to Nextly's own core schema. An existing database gets 
 ### Core schema drift after an upgrade
 
 User migration files contain **user-schema only**. Nextly's own tables are owned by the Nextly package version, and `nextly migrate` brings them up to date before it applies your files, with the same consent for what that deletes as for the files: at a terminal it lists each deletion and asks once; with nobody to ask it refuses unless `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covers it. `nextly migrate --dry-run` names what it would delete. There is no separate command for it: `nextly upgrade --reconcile-core`, which earlier releases had, changes nothing now and names `nextly migrate`.
+
+### Two fields that share one column
+
+Two fields side by side may not share one stored value: two fields at an entity's top level whose names become one column (`Title` and `title`, `siteName` and `site_name`), or two fields of the same name inside one group or repeater. Earlier releases kept an entity that already held such a pair working. Now a start, a Builder save of its definition, `nextly migrate:create`, `nextly migrate` and `nextly migrate:check` refuse it with `FIELD_NAME_DUPLICATE` (`CONFIG_INVALID` in the CLI), naming the pair and what it shares:
+
+```text
+Collection 'posts': fields 'Title' and 'title' at the top level share the column 'title'. Rename one of them so each has its own column.
+```
+
+Rename one of the two fields so each has its own column or key:
+
+- **In your configuration:** rename it in the file and start again.
+- **In the Builder:** the app does not start, so the Builder cannot open. Rename the field in the Builder's definition file (`db.uiSchemaFile`, `./ui-schema.json` by default), then write and apply the migration:
+
+  ```bash
+  nextly migrate:create
+  nextly migrate
+  ```
+
+  The migration gives the renamed field its own column or key and records the new definition, and the start then goes on. Values stored under the shared column or key stay with the field that kept its name.
+
+A pair that shares no stored value, such as two names that differ only in letter case inside a group (two separate keys), keeps working where an entity already holds it, and `nextly migrate:check` warns about it. A change that adds such a pair is refused.
 
 ### Upgrading Nextly
 

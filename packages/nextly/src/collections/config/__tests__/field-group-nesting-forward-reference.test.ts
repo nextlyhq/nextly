@@ -10,43 +10,37 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { crossEntityProblems } from "../cross-entity-problems";
 import { defineConfig } from "../define-config";
 
 const text = { type: "text" as const, name: "title" };
 
 describe("a field group declared before the group it references", () => {
+  // Reported where the configuration is loaded or started, with every other problem in it.
   it("reports the cycle the forward edge participates in", () => {
-    const build = () =>
-      defineConfig({
-        collections: [],
-        fieldGroups: [
-          {
-            slug: "a",
-            label: { singular: "a" },
-            fields: [{ name: "b", type: "fieldGroup", fieldGroup: "b" }, text],
-          },
-          {
-            slug: "b",
-            label: { singular: "b" },
-            fields: [{ name: "a", type: "fieldGroup", fieldGroup: "a" }, text],
-          },
-        ],
-      } as never);
+    const fieldGroups = [
+      {
+        slug: "a",
+        label: { singular: "a" },
+        fields: [{ name: "b", type: "fieldGroup", fieldGroup: "b" }, text],
+      },
+      {
+        slug: "b",
+        label: { singular: "b" },
+        fields: [{ name: "a", type: "fieldGroup", fieldGroup: "a" }, text],
+      },
+    ];
 
-    expect(build).toThrow(
+    expect(crossEntityProblems({ fieldGroups })).toEqual([
       expect.objectContaining({
-        code: "VALIDATION_ERROR",
-        publicData: {
-          errors: [
-            expect.objectContaining({
-              path: "fieldGroups",
-              code: "FIELD_GROUP_CYCLE",
-              message: expect.stringContaining("a → b → a"),
-            }),
-          ],
-        },
-      })
-    );
+        path: "fieldGroups[0].fields",
+        code: "FIELD_GROUP_CYCLE",
+        message: expect.stringContaining("a → b → a"),
+      }),
+    ]);
+    expect(() =>
+      defineConfig({ collections: [], fieldGroups } as never)
+    ).not.toThrow();
   });
 });
 

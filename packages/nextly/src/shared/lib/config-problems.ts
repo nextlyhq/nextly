@@ -11,8 +11,10 @@
  *
  * @module shared/lib/config-problems
  */
+import { crossEntityProblems } from "../../collections/config/cross-entity-problems";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { validateCollectionConfig } from "../../collections/config/validate-config";
+import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { validateFieldGroupConfig } from "../../field-groups/config/validate-field-group";
 import type { SingleConfig } from "../../singles/config/types";
@@ -33,6 +35,12 @@ export interface ConfigProblem {
    * which the start never judged before.
    */
   declaredByDefine: boolean;
+  /**
+   * Whether it breaks a rule across entities (`crossEntityProblems`): one slug each, one table
+   * per field group, one Single per address, no cycle among field groups. `defineConfig` refused
+   * these at import, whatever declared the entities, so a start refuses them still.
+   */
+  crossEntity?: boolean;
 }
 
 /** The configuration's entities, as far as finding their problems reads them. */
@@ -43,27 +51,25 @@ export interface ConfigEntities {
 }
 
 /**
- * The mark a `define*` function leaves on every entity it returns, holding the names of the
- * system fields it added. A registered symbol, so a second copy of this module (the
+ * The mark a `define*` function leaves on every entity it returns, recording the system fields
+ * (`title`, `slug`) it added. A registered symbol, so a second copy of this module (the
  * configuration's bundle beside the runtime's) reads the same one; not enumerable, so no
  * comparison, serialisation or settings record of the entity sees it. The configuration keeps the
- * entity objects the app declared, so the mark is read on them.
+ * entity objects the app declared, so the mark is read on them. The fields themselves carry
+ * nothing, so every comparison of them is as it was.
  */
 const DECLARED_BY_DEFINE = Symbol.for("nextly.config.declaredByDefine");
 
 /** What the mark records of the `define*` call that returned the entity. */
 interface DefineRecord {
-  /** The system fields the call added, by name; each was put before the author's fields. */
-  systemFields: readonly string[];
+  /** The system fields the call added, as it added them. */
+  systemFields: readonly object[];
 }
 
-/**
- * `entity`, marked as one its `define*` function returned, having added `systemFields` (by
- * name) to the fields its author declared.
- */
+/** `entity`, marked as one its `define*` function returned, having added `systemFields`. */
 export function markDeclaredByDefine<T extends object>(
   entity: T,
-  systemFields: readonly string[] = []
+  systemFields: readonly object[] = []
 ): T {
   const record: DefineRecord = Object.freeze({
     systemFields: Object.freeze([...systemFields]),
@@ -82,25 +88,129 @@ function defineRecordOf(entity: unknown): DefineRecord | undefined {
 }
 
 /**
- * `entry` as its author declared it: without the system fields its `define*` call added. The
- * rules judge what an author wrote, as they did when the call threw; a collection declared with
- * no fields breaks the rule that it declare one, whatever the call added beside it. The first
- * field of each added name is the added one, which the call put first.
+ * Whether `field` is one of `systemFields`, or a copy of one: the same settings, each the same
+ * value. A plugin's setup may hand back a copy (`{ ...field }`, or the copy it was handed), and
+ * a field it adds of the same name declares settings of its own, so it is not one.
  */
-function asAuthored(entry: unknown, systemFields: readonly string[]): unknown {
-  if (systemFields.length === 0) return entry;
+function isSystemField(
+  field: unknown,
+  systemFields: readonly object[]
+): boolean {
+  if (typeof field !== "object" || field === null) return false;
+  const keys = Object.keys(field);
+  return systemFields.some(
+    added =>
+      added === field ||
+      (Object.keys(added).length === keys.length &&
+        keys.every(
+          key =>
+            (added as Record<string, unknown>)[key] ===
+            (field as Record<string, unknown>)[key]
+        ))
+  );
+}
+
+/**
+ * The rules about the fields an author declared, asked of those alone: that there is at least
+ * one, and that no two of them are one field declared twice (the sibling-field rule). A system
+ * field beside them is not the author's; whether one of theirs takes its column is asked below.
+ */
+const AUTHORED_RULES: ReadonlySet<string> = new Set([
+  "FIELDS_EMPTY",
+  "FIELD_NAME_DUPLICATE",
+]);
+
+/**
+ * The problems of `entry`. The rules about the author's own declarations are its validator's, of
+ * the fields its author declared, the system
+ * fields its `define*` call added set aside (`isSystemField`), as the rules judged it when that
+ * call threw. A collection with no field of its own breaks the rule that it declare one, and an
+ * author's field may share a system field's name where it takes no column of its own (a
+ * column-less `Title` beside the added `title`), which the rules would otherwise call one name
+ * declared twice.
+ *
+ * And the one question the system fields raise beside them: whether another field takes a column
+ * one of them holds, asked as `defineCollection` asks it before adding them
+ * (`columnsDeclaredBy`). A field a plugin's setup adds by a system field's name does, and the
+ * table could not be made, so it is reported.
+ */
+
+function entryProblems<
+  P extends { path: string; code: string; message: string },
+>(
+  entry: unknown,
+  validate: (entry: unknown) => readonly P[],
+  systemFields: readonly object[]
+): Array<P | ColumnClash> {
   const fields = (entry as { fields?: unknown } | null)?.fields;
-  if (!Array.isArray(fields)) return entry;
-  const added = new Set(systemFields);
-  return {
-    ...(entry as object),
-    fields: fields.filter((field: unknown) => {
-      const name = (field as { name?: unknown } | null)?.name;
-      if (typeof name !== "string" || !added.has(name)) return true;
-      added.delete(name);
-      return false;
-    }),
-  };
+  if (systemFields.length === 0 || !Array.isArray(fields)) {
+    return [...validate(entry)];
+  }
+  const { added, authored } = splitSystemFields(fields, systemFields);
+  // Each rule is asked of the fields it is about. The rules about the author's own declarations
+  // (`AUTHORED_RULES`) of the fields the author declared; every other rule, which resolves a
+  // field by its name (an index, the title field, the address field), of the entity as the
+  // commands use it, system fields and all.
+  return [
+    ...validate(entry).filter(problem => !AUTHORED_RULES.has(problem.code)),
+    ...validate({ ...(entry as object), fields: authored }).filter(problem =>
+      AUTHORED_RULES.has(problem.code)
+    ),
+    ...systemColumnClashes(added, authored),
+  ];
+}
+
+/** A field that takes a column a system field holds. */
+interface ColumnClash {
+  path: string;
+  code: string;
+  message: string;
+}
+
+/**
+ * `fields`, split into the system fields the `define*` call added and the author's. Each system
+ * field is matched once: a second copy of one (a setup's own `{ ...title }`) is the author's.
+ */
+function splitSystemFields(
+  fields: readonly unknown[],
+  systemFields: readonly object[]
+): { added: unknown[]; authored: unknown[] } {
+  const unmatched = [...systemFields];
+  const added: unknown[] = [];
+  const authored: unknown[] = [];
+  for (const field of fields) {
+    const at = unmatched.findIndex(system => isSystemField(field, [system]));
+    if (at === -1) {
+      authored.push(field);
+      continue;
+    }
+    added.push(field);
+    unmatched.splice(at, 1);
+  }
+  return { added, authored };
+}
+
+/** Each of `authored` that takes a column one of `added` holds, asked as `defineCollection` asks. */
+function systemColumnClashes(
+  added: readonly unknown[],
+  authored: readonly unknown[]
+): ColumnClash[] {
+  const nameOf = (field: unknown) => String((field as { name?: unknown }).name);
+  const clashes: ColumnClash[] = [];
+  for (const system of added) {
+    const [column] = columnsDeclaredBy([system as { name?: unknown }]);
+    if (column === undefined) continue;
+    for (const field of authored) {
+      if (!columnsDeclaredBy([field as { name?: unknown }]).has(column))
+        continue;
+      clashes.push({
+        path: "fields",
+        code: "FIELD_NAME_DUPLICATE",
+        message: `Field '${nameOf(field)}' takes the column '${column}', which the system field '${nameOf(system)}' already holds. Rename it.`,
+      });
+    }
+  }
+  return clashes;
 }
 
 /** `path` within the entity at `kind[index]`, as a path in the whole configuration. */
@@ -131,6 +241,9 @@ function asUsed(
   effective: readonly unknown[] | undefined
 ): unknown[] {
   if (effective === undefined) return [...declared];
+  // Where nothing transformed the configuration, the effective entities are the declared ones:
+  // each is itself, so two with one slug are each judged as themselves.
+  const held = new Set<unknown>(effective);
   const byPlace = new Map<string, unknown>();
   const bySlug = new Map<string, unknown>();
   for (const entity of effective) {
@@ -143,6 +256,7 @@ function asUsed(
     if (slug !== undefined && !bySlug.has(slug)) bySlug.set(slug, entity);
   }
   return declared.map((entity, index) => {
+    if (held.has(entity)) return entity;
     const traced = byPlace.get(`${kind}[${index}]`);
     if (traced !== undefined) return traced;
     const slug = slugOf(entity);
@@ -176,7 +290,8 @@ export function configurationProblems(
     effective?.fieldGroups
   );
 
-  // Only a type nothing offers: a registered type's option problems are each validator's own.
+  // Only a type nothing offers: a registered type's option problems, and a missing type, are
+  // each validator's own.
   const fieldTypes = fieldDeclarationIssues(
     {
       collections: collections as CollectionConfig[],
@@ -184,7 +299,7 @@ export function configurationProblems(
       fieldGroups: fieldGroups as FieldGroupConfig[],
     },
     (kind, index) => `${kind}[${index}]`,
-    { options: false }
+    { options: false, missingType: false }
   );
 
   // Each kind with the validator that judges it, in the order problems are listed.
@@ -221,8 +336,10 @@ export function configurationProblems(
       // The mark is on the entity the app declared; a setup's copy of it does not carry it.
       const record = defineRecordOf(declaredEntries[index]);
       const byDefine = record !== undefined;
-      for (const error of validate(
-        asAuthored(entry, record?.systemFields ?? [])
+      for (const error of entryProblems(
+        entry,
+        validate,
+        record?.systemFields ?? []
       )) {
         problems.push({
           ...error,
@@ -239,6 +356,14 @@ export function configurationProblems(
         }
       }
     });
+  }
+  // The rules across entities, judged over the entities as the commands use them.
+  for (const problem of crossEntityProblems({
+    collections,
+    singles,
+    fieldGroups,
+  })) {
+    problems.push({ ...problem, declaredByDefine: false, crossEntity: true });
   }
   return problems;
 }

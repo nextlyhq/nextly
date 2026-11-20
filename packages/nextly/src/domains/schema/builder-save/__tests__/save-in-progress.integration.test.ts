@@ -838,15 +838,16 @@ describe.each(getConfiguredTestDialects())(
       }, 300_000);
 
       // A row of a stopped save whose process stopped before its marker: the next save puts the
-      // marker back before it goes on, so the commands with no database see the part-way save.
+      // marker back before it goes on, so the commands with no database see the part-way save. Left
+      // by another host outside development, which changed no table, so a save goes on beside it:
+      // a record of this host is settled before the save instead (`settle-left-save`).
       it("a standing record without its marker gets it back before a later save goes on", async () => {
         const t = await boot();
         await path.create([text("heading")]);
-        // Left on this host, by an app handed its adapter as this one is: the marker refuses here.
         const left = {
           ...stoppedRecord(path, "a-stopped-host"),
-          host: hostname(),
           database: "unknown",
+          applies: false,
         };
         await new MetaService(t.adapter, consoleLogger).set(
           `${RECORD_KEY_PREFIX}${path.kind}:${path.slug}`,
@@ -860,7 +861,40 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(await recordRow(t, path)).toEqual(left);
         expect(entityMarkers(path)).toEqual([left]);
-        expect(await refusal(markersRefuse())).toBe("CONFLICT");
+        // Another host's: one line of notice here, not a refusal.
+        const notices: string[] = [];
+        expect(await refusal(markersRefuse(notices))).toBe("none");
+        expect(notices.join(" ")).toContain("a-stopped-host");
+      }, 300_000);
+
+      // Another host's save that applied its own files may have changed this database part-way,
+      // and only that host's start, which has its files, settles it: a save of the entity here is
+      // refused, its marker still put back first.
+      it("a standing record of another host's applying save refuses a later save of the entity", async () => {
+        const t = await boot();
+        await path.create([text("heading")]);
+        const left = {
+          ...stoppedRecord(path, "a-stopped-host"),
+          database: "unknown",
+          applies: true,
+        };
+        await new MetaService(t.adapter, consoleLogger).set(
+          `${RECORD_KEY_PREFIX}${path.kind}:${path.slug}`,
+          left
+        );
+        const definitionBefore = definitionText();
+
+        const answer = await path
+          .save(t, [text("heading"), text("alpha")])
+          .catch((error: unknown) => error);
+
+        expect(
+          answer instanceof Response ? answer.ok : !(answer instanceof Error),
+          "the save was not refused"
+        ).toBe(false);
+        expect(definitionText()).toBe(definitionBefore);
+        expect(await recordRow(t, path)).toEqual(left);
+        expect(entityMarkers(path)).toEqual([left]);
       }, 300_000);
 
       // A row that is not a save's record still stands for one: both readers refuse, and a save of
@@ -1503,12 +1537,16 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      // Nothing settles a record yet, so a later save leaves one it finds as it was: the stopped
-      // save's record, its definition text included, is what settling it reads.
+      // A later save beside another host's save made outside development leaves the record it
+      // finds as it was: the stopped save's record, its definition text included, is what settling
+      // it reads.
       it("a record left by a stopped process stays as it was through a later save", async () => {
         const t = await boot();
         await path.create([text("heading")]);
-        const left = stoppedRecord(path, "a-stopped-host");
+        const left = {
+          ...stoppedRecord(path, "a-stopped-host"),
+          applies: false,
+        };
         await new MetaService(t.adapter, consoleLogger).set(
           `${RECORD_KEY_PREFIX}${path.kind}:${path.slug}`,
           left

@@ -61,6 +61,22 @@ vi.mock("../../cli/utils/config-loader", () => ({
   }),
 }));
 vi.mock("../../cli/commands/migrate", () => ({ migrateCore }));
+// A start with no Builder save left part-way: the settle before the migrate step has nothing to
+// hold it back, and takes its lock on an adapter this double does not give one to. These cases are
+// about the plugin modules that step runs.
+vi.mock("../../domains/schema/builder-save/settle-left-save", () => ({
+  settleLeftSaves: async () => [],
+}));
+vi.mock("../../domains/schema/pipeline/locks", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../domains/schema/pipeline/locks")
+  >()),
+  withMigrateLock: async (
+    _adapter: unknown,
+    _dialect: unknown,
+    work: () => Promise<unknown>
+  ) => ({ ran: true, value: await work() }),
+}));
 vi.mock("../../cli/utils/adapter", () => ({
   validateDatabaseEnv: () => ({ valid: true, errors: [] }),
 }));
@@ -68,7 +84,8 @@ vi.mock("../../cli/utils/adapter", () => ({
 const schemaRegistry = { assertRelationsResolve: () => {} };
 vi.mock("../../di/container", () => ({
   container: {
-    has: () => true,
+    // No Builder save writer registered: the start reads the process's own folder and config.
+    has: (name: string) => name !== "builderSaveSetup",
     get: (name: string) =>
       name === "permissionSeedService"
         ? permissionSeedService

@@ -8,7 +8,11 @@
  * unknown verdict has to fail closed and be retried. These pin that contract and
  * the cheap-path short-circuits that avoid touching the registry at all.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getComponentBySlugSpy } = vi.hoisted(() => ({
   getComponentBySlugSpy: vi.fn(),
@@ -30,6 +34,9 @@ import {
   schemaDraftSplit,
   schemaDraftsEnabled,
 } from "../draft-split-eligibility";
+
+// A case that stands in for an earlier release's layout leaves the one every installation runs.
+afterEach(() => _resetPerLanguageStorage());
 
 /** A localized drafts collection with `fields`. */
 const draftsCollection = (fields: FieldConfig[]) => ({
@@ -86,7 +93,8 @@ describe("schemaDraftsEnabled", () => {
 
   // An unlocalized collection's draft has no language, while the component
   // stores one value per language: the schema read says why drafts are off.
-  it("reports the localized-component rule for an unlocalized collection", async () => {
+  it("reports the localized-component rule for an unlocalized collection (an earlier release's layout)", async () => {
+    setPerLanguageStorage(false);
     getComponentBySlugSpy.mockResolvedValue({
       fields: [{ name: "heading", type: "text" }],
       localized: true,
@@ -125,7 +133,8 @@ describe("schemaDraftsEnabled", () => {
 
   // The authored config is authoritative: no `localized` there means the
   // collection is untranslated, so the public authored form asks the rule.
-  it("reports the localized-component rule for an authored collection without `localized`", async () => {
+  it("reports the localized-component rule for an authored collection without `localized` (an earlier release's layout)", async () => {
+    setPerLanguageStorage(false);
     getComponentBySlugSpy.mockResolvedValue({
       fields: [{ name: "heading", type: "text" }],
       localized: true,

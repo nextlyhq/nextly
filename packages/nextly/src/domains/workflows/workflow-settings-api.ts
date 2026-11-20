@@ -20,12 +20,16 @@ import { isAbsolute, relative, sep } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { and, countDistinct, eq, inArray, or } from "drizzle-orm";
 
 import type { RequestActor } from "../../auth/request-actor";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
-import { REVIEW_STATES_TABLE } from "../../schemas/review-states";
+import {
+  REVIEW_STATES_TABLE,
+  reviewStatesTables,
+} from "../../schemas/review-states";
 import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
 import type { Logger } from "../../services/shared";
 import { consoleLogger } from "../../shared/types";
@@ -325,40 +329,142 @@ function projectPath(path: string | null): string | null {
 /** The columns that name one document of a review state, which a count of documents counts once. */
 const DOCUMENT_COLUMNS = ["scopeKind", "scopeSlug", "entryId"];
 
+/** The Drizzle query builder the grouped count reads with, in the form all three dialects share. */
+interface StageCountsDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        groupBy(...columns: unknown[]): Promise<Record<string, unknown>[]>;
+      };
+    };
+  };
+}
+
+/** A grouped count's key: one stage of one collection or Single. */
+const stageKey = (kind: string, slug: string, stage: string): string =>
+  `${kind}\u0000${slug}\u0000${stage}`;
+
 /**
- * How many documents are recorded in each stage of `registered`, one count per stage, each
- * counting a document once however many of its parts are there. A part recorded in a stage the
- * workflow no longer has reads as its first stage (`implicit-stage`), so it is counted there.
+ * How many documents are recorded in each stage of each collection and Single every registered
+ * workflow is attached to, but each workflow's first stage, in ONE grouped read keyed by
+ * {@link stageKey}. It filters and groups by `scopeKind`, `scopeSlug` and `stage`, the review
+ * states' own index for counts per stage, and counts each document once however many of its parts
+ * are there (one document is one `entryId` within one collection or Single). A first stage is
+ * counted on its own ({@link firstStageCount}): a part in a stage the workflow no longer has joins
+ * it, and a document with parts in both must still count once.
+ */
+async function groupedStageCounts(
+  adapter: DrizzleAdapter,
+  workflows: readonly RegisteredWorkflow[]
+): Promise<Map<string, number>> {
+  const stages = new Set(
+    workflows.flatMap(({ workflow }) =>
+      workflow.stages
+        .map(stage => stage.name)
+        .filter(name => name !== workflow.firstStage)
+    )
+  );
+  const byKind = [
+    ["collection", workflows.flatMap(each => [...each.collections])],
+    ["single", workflows.flatMap(each => [...each.singles])],
+  ] as const;
+  const scopes = byKind.filter(([, slugs]) => slugs.length > 0);
+  const counts = new Map<string, number>();
+  if (stages.size === 0 || scopes.length === 0) return counts;
+  const { nextlyReviewStates: t } = reviewStatesTables(
+    adapter.getCapabilities().dialect
+  );
+  const rows = await adapter
+    .getDrizzle<StageCountsDb>()
+    .select({
+      kind: t.scopeKind,
+      slug: t.scopeSlug,
+      stage: t.stage,
+      documents: countDistinct(t.entryId),
+    })
+    .from(t)
+    .where(
+      or(
+        ...scopes.map(([kind, slugs]) =>
+          and(
+            eq(t.scopeKind, kind),
+            inArray(t.scopeSlug, [...slugs]),
+            inArray(t.stage, [...stages])
+          )
+        )
+      )
+    )
+    .groupBy(t.scopeKind, t.scopeSlug, t.stage);
+  for (const row of rows) {
+    // A count answers a string or a bigint on some drivers.
+    const documents = Number(row.documents);
+    if (!Number.isFinite(documents)) continue;
+    counts.set(
+      stageKey(String(row.kind), String(row.slug), String(row.stage)),
+      documents
+    );
+  }
+  return counts;
+}
+
+/**
+ * How many documents are recorded in the first stage of `registered`: those in it, and those with
+ * a part in a stage the workflow no longer has, which reads as its first stage
+ * (`implicit-stage`); each once.
+ */
+async function firstStageCount(
+  adapter: DrizzleAdapter,
+  registered: RegisteredWorkflow
+): Promise<number> {
+  const { workflow } = registered;
+  const slugs = attachedTo(registered);
+  if (slugs.length === 0) return 0;
+  return adapter.count(REVIEW_STATES_TABLE, {
+    // Collections and Singles share one namespace of slugs, so the slug alone names each.
+    where: {
+      and: [
+        { column: "scopeSlug", op: "IN", value: [...slugs] },
+        {
+          or: [
+            { column: "stage", op: "=", value: workflow.firstStage },
+            {
+              column: "stage",
+              op: "NOT IN",
+              value: workflow.stages.map(stage => stage.name),
+            },
+          ],
+        },
+      ],
+    },
+    distinctOn: DOCUMENT_COLUMNS,
+  });
+}
+
+/**
+ * How many documents are recorded in each stage of `registered`: its first stage read on its own,
+ * every other from `grouped` ({@link groupedStageCounts}), summed over its collections and Singles,
+ * each a different document.
  */
 async function stageCountsOf(
   adapter: DrizzleAdapter,
-  registered: RegisteredWorkflow
+  registered: RegisteredWorkflow,
+  grouped: ReadonlyMap<string, number>
 ): Promise<Record<string, number>> {
   const { workflow } = registered;
-  const slugs = attachedTo(registered);
-  const names = workflow.stages.map(stage => stage.name);
+  const scopes = [
+    ...registered.collections.map(slug => ["collection", slug] as const),
+    ...registered.singles.map(slug => ["single", slug] as const),
+  ];
   const counts: Record<string, number> = {};
-  for (const name of names) {
-    if (slugs.length === 0) {
-      counts[name] = 0;
-      continue;
-    }
-    const inStage =
+  for (const { name } of workflow.stages) {
+    counts[name] =
       name === workflow.firstStage
-        ? {
-            or: [
-              { column: "stage", op: "=" as const, value: name },
-              { column: "stage", op: "NOT IN" as const, value: names },
-            ],
-          }
-        : { column: "stage", op: "=" as const, value: name };
-    counts[name] = await adapter.count(REVIEW_STATES_TABLE, {
-      // Collections and Singles share one namespace of slugs, so the slug alone names each.
-      where: {
-        and: [{ column: "scopeSlug", op: "IN", value: [...slugs] }, inStage],
-      },
-      distinctOn: DOCUMENT_COLUMNS,
-    });
+        ? await firstStageCount(adapter, registered)
+        : scopes.reduce(
+            (sum, [kind, slug]) =>
+              sum + (grouped.get(stageKey(kind, slug, name)) ?? 0),
+            0
+          );
   }
   return counts;
 }
@@ -373,7 +479,10 @@ export async function listWorkflowSummaries(
   adapter: DrizzleAdapter
 ): Promise<WorkflowSummary[]> {
   const summaries: WorkflowSummary[] = [];
-  for (const registered of registeredWorkflows()) {
+  const workflows = registeredWorkflows();
+  // Every workflow's stages but the first, counted in one read.
+  const grouped = await groupedStageCounts(adapter, workflows);
+  for (const registered of workflows) {
     const { workflow, collections, singles } = registered;
     const grantable = grantableActions(workflow);
     const shown = await readStagePresentation(adapter, workflow);
@@ -399,7 +508,7 @@ export async function listWorkflowSummaries(
         exemptFields: [...workflow.onEdit.exemptFields],
       },
       afterPublish: workflow.afterPublish,
-      stageCounts: await stageCountsOf(adapter, registered),
+      stageCounts: await stageCountsOf(adapter, registered, grouped),
       collections: [...collections],
       singles: [...singles],
     });
@@ -746,7 +855,7 @@ async function viewOf(
         .map(([other]) => other),
     };
   }
-  // Each stage's reviewer asked as a write would ask, so the read never says one holds the step
+  // Each stage's reviewer is checked as a write checks it, so the read never says one holds the step
   // that a save would refuse.
   const defaultReviewerHolds: Record<string, HolderAnswer> = {};
   for (const [stage, reviewer] of Object.entries(

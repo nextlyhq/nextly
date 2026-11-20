@@ -95,7 +95,15 @@ export interface WorkflowsNamespace {
   ): Promise<{ assigned: ReviewDocument[]; refused: NamedRefusal[] }>;
   /** What waits for the caller, a page at a time. A checked call only: it names who waits. */
   waiting(
-    args: WorkflowCallArgs & { page?: number; limit?: number }
+    args: WorkflowCallArgs & {
+      page?: number;
+      limit?: number;
+      /**
+       * An opaque position: pass `nextBefore` back as `before` to get the next page; this list runs
+       * oldest first. Additive to `page`, which works as it always has.
+       */
+      before?: string;
+    }
   ): Promise<{ items: WaitingPart[]; meta: PaginationMeta }>;
   /** The registered workflows, each with its stages, steps and attachments. */
   list(
@@ -248,6 +256,7 @@ export function createWorkflowsNamespace(
         return operations.waiting(asker, {
           ...(a.page === undefined ? {} : { page: a.page }),
           ...(a.limit === undefined ? {} : { limit: a.limit }),
+          ...(a.before === undefined ? {} : { before: a.before }),
         });
       }),
     list: (args = {}) =>

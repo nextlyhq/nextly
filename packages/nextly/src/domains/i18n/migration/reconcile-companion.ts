@@ -283,7 +283,7 @@ export function buildCompanionReconcileSql(
  * unknown. Stated rather than merely omitted, so a later author decides it with the fact rather
  * than rediscovering it.
  */
-function buildUpdatedAtBackfill(args: {
+export function buildUpdatedAtBackfill(args: {
   companionTable: string;
   slug: string;
   dialect: SupportedDialect;

@@ -38,6 +38,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { LoadConfigResult } from "../cli/utils/config-loader";
 import type { SchemaRegistry } from "../database/schema-registry";
 import type { FieldGroupNaming } from "../domains/field-groups/services/field-group-storage-names";
+import { perLanguageStorageEnabled } from "../domains/i18n/per-language-storage";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   PluginMigrationSet,
@@ -76,8 +77,8 @@ export async function runBootTimeApplyIfDev(opts?: {
 
   const label = callerLabel(opts?.caller);
   try {
-    // Step 1: Apply pending SQL migrations first (lock-guarded, safe across workers)
-    const registeredByMigrate = await applyPendingMigrations(label);
+    // Steps 0 and 1: settle what an earlier process left, then apply pending SQL migrations.
+    const { registeredByMigrate, held } = await settleThenMigrate(label);
 
     // Step 1.5: Register collections from migration metadata
     // NOTE: This runs OUTSIDE the migrate lock. Multiple Next.js dev workers may
@@ -85,7 +86,11 @@ export async function runBootTimeApplyIfDev(opts?: {
     // can both check existence, then both insert), but slug unique constraints
     // prevent duplicates. If a worker loses the race, it continues normally.
     // Any metadata-table-to-physical-table mismatch self-heals on next boot.
-    const registeredFromSnapshots = await registerMigrationMetadata(label);
+    // Not while a save stays unsettled: this takes every snapshot as applied, and the ones of
+    // the files step 1 held back are not, so an entity would be registered for tables not there.
+    const registeredFromSnapshots = held
+      ? 0
+      : await registerMigrationMetadata(label);
 
     // Migration-created collections and singles need permissions just like
     // code-first ones. Either step may have registered them — the migrate
@@ -108,12 +113,21 @@ export async function runBootTimeApplyIfDev(opts?: {
     await loadingDefinitions(() => reloadDynamicTables(label));
 
     // Step 2: Apply code-first schema changes
-    const { reloadNextlyConfig } = await import("./reload-config");
-    // As a start's reload: it lands without comparing the schema when nothing
-    // changed since the last start. A reload that refused the configuration
-    // brought nothing in line, so this start records nothing new.
-    if ((await reloadNextlyConfig({ atStart: true })) === "refused") {
+    // Not while a save stays unsettled: the reload's statements would change the tables its
+    // record is judged against, and could change them before its remaining files run.
+    if (held) {
+      consoleLogger.warn(
+        `${label} Code-first schema changes were not applied at this start: a Builder save left part-way is not settled (named above).`
+      );
       markStartIncomplete();
+    } else {
+      const { reloadNextlyConfig } = await import("./reload-config");
+      // As a start's reload: it lands without comparing the schema when nothing
+      // changed since the last start. A reload that refused the configuration
+      // brought nothing in line, so this start records nothing new.
+      if ((await reloadNextlyConfig({ atStart: true })) === "refused") {
+        markStartIncomplete();
+      }
     }
 
     // Step 3: every relation a declared table names resolves, now that the
@@ -203,18 +217,191 @@ export function checkRelationsBeforePlugins(
  * `nextly migrate` reads them. The directory need not exist: what its absence
  * means differs by caller, so each asks about it on its own.
  */
-async function bootMigrateConfig(): Promise<{
-  configResult: LoadConfigResult;
+/**
+ * Steps 0 and 1 of a development start. Step 0 settles a Builder save an earlier process left
+ * part-way, before anything reads the migration files it wrote: one left pending keeps its record,
+ * its remaining files run in step 1, and the record clears only once they are recorded applied.
+ * Step 1 applies pending SQL migrations (lock-guarded, safe across workers), but not while a save
+ * of this host stays unsettled: its files may be among the pending ones, and running them over a
+ * save nothing could judge would change the database its record describes.
+ *
+ * Answers what the migrate run registered, and whether a save's files stay unrun at the end of
+ * step 1 (`held`): unsettled from the start, or still pending or left once the migrate step has
+ * had its run. The start's later schema steps wait while it is held.
+ */
+async function settleThenMigrate(
+  label: string
+): Promise<{ registeredByMigrate: number; held: boolean }> {
+  const settled = await settleLeftSavesAtStart(label);
+  if (settled.unsettled) {
+    consoleLogger.warn(
+      `${label} Pending migrations were not applied at this start: a Builder save left part-way is not settled (named above), and its files may be among them. Clear its record by hand as the warning says, then start again.`
+    );
+    markStartIncomplete();
+    return { registeredByMigrate: 0, held: true };
+  }
+  const registeredByMigrate = await applyPendingMigrations(label);
+  const rerun = [...settled.pending, ...settled.rowless];
+  if (rerun.length === 0) return { registeredByMigrate, held: false };
+  // A save left pending, settled again now its remaining files have had their run: recorded
+  // applied, it is whole and its record clears; still pending (the files this start ran are not
+  // the ones it wrote), the record stays, refusing a Builder save until they run. A save that
+  // applied whole with no registry row is settled again too: the migrate step adds the row from
+  // the newest applied snapshot, which the settle then brings to the saved shape.
+  const again = await settleLeftSavesAtStart(label, rerun);
+  if (again.pending.length > 0) {
+    consoleLogger.warn(
+      `${label} A Builder save stopped between its migration files, and the rest of them did not run at this start, so its record stays. Run \`nextly migrate\` from the project's base path, then start again.`
+    );
+    markStartIncomplete();
+  }
+  return {
+    registeredByMigrate,
+    held: again.unsettled || again.pending.length > 0,
+  };
+}
+
+/**
+ * Settle every Builder save this host's earlier process left part-way (`settleLeftSaves`), under the
+ * schema lock, so two development workers starting together do not both settle one. A failure is
+ * logged and the start goes on: the records stay, refusing what they refuse, and the next start
+ * tries again. Answers whether a save stays unsettled (one left as it is, or one whose own settle
+ * failed, or a settle that never had the lock), which keeps the start from running the pending
+ * migrations its files may be among. A settle that throws, wherever it stopped, is taken as
+ * unsettled too: a record it judged left before the throw would otherwise go unanswered.
+ * Also answers the records left pending, kept until their remaining files run; `only` settles
+ * those again once the start's migrate step has had its run.
+ */
+async function settleLeftSavesAtStart(
+  label: string,
+  only?: readonly string[]
+): Promise<{ unsettled: boolean; pending: string[]; rowless: string[] }> {
+  const none = { unsettled: false, pending: [], rowless: [] };
+  try {
+    const { container } = await import("../di/container");
+    const adapter = container.get<DrizzleAdapter | undefined>("adapter");
+    if (!adapter) return none;
+    const [{ settleLeftSaves }, { settleRegistryWriter }, { withMigrateLock }] =
+      await Promise.all([
+        import("../domains/schema/builder-save/settle-left-save"),
+        import("../domains/schema/builder-save/settle-registry"),
+        import("../domains/schema/pipeline/locks"),
+      ]);
+    // Where the app's saves write, as the writer took it: the project root its records and markers
+    // are kept under, its migration folder and its database. Without a writer registered, the
+    // process's own folder and config, as the migrate step reads them (`startProject`).
+    const project = await startProject();
+    const where = {
+      projectRoot: project.root,
+      migrationsDir: project.migrationsDir,
+      database: project.database,
+    };
+    const outcome = await withMigrateLock(
+      adapter,
+      adapter.getCapabilities().dialect,
+      () =>
+        settleLeftSaves({
+          adapter,
+          projectRoot: where.projectRoot,
+          migrationsDir: where.migrationsDir,
+          database: where.database,
+          logger: {
+            info: message => consoleLogger.info(`${label} ${message}`),
+            warn: message => consoleLogger.warn(`${label} ${message}`),
+          },
+          // A pending save keeps its record until its remaining files are recorded applied.
+          keepPending: true,
+          ...(only === undefined ? {} : { only: new Set(only) }),
+          writeRegistry: settleRegistryWriter(adapter),
+        }),
+      {
+        command: "the development start's settle of a left Builder save",
+        releaseOnInterrupt: false,
+      }
+    );
+    // A settle that never ran (the lock not had) says nothing of what stands: taken as unsettled.
+    if (!outcome.ran) return { unsettled: true, pending: [], rowless: [] };
+    return {
+      // A save that applied whole whose record stays over a saved definition it cannot read holds
+      // the start back as a left one does: its registry row may stand stale, and the start's
+      // registration from snapshots inserts only absent rows, so nothing here would correct it.
+      unsettled: outcome.value.some(
+        settled =>
+          settled.outcome === "left" || settled.keptFor === "saved-definition"
+      ),
+      pending: outcome.value
+        .filter(settled => settled.outcome === "pending")
+        .map(settled => settled.id),
+      // One with no registry row to bring up does not: the migrate step adds the row from the
+      // newest applied snapshot, and the record is settled again after it (`settleThenMigrate`).
+      rowless: outcome.value
+        .filter(settled => settled.keptFor === "registry-row")
+        .map(settled => settled.id),
+    };
+  } catch (error) {
+    consoleLogger.warn(
+      `${label} A Builder save left part-way could not be settled (${error instanceof Error ? error.message : String(error)}). Its record stays, and the next development start tries again.`
+    );
+    return { unsettled: true, pending: [], rowless: [] };
+  }
+}
+
+/**
+ * The project a development start works in: where the app's Builder saves write, as the writer
+ * took it (`builderSaveSetup`): its root, its migration folder and its database. Without a writer
+ * registered, the process's own folder and config. Every step of the start reads this one answer,
+ * so its settle, its migrate step and its registration from snapshots read the same folder.
+ */
+async function startProject(): Promise<{
+  root: string;
   migrationsDir: string;
+  database: string | undefined;
 }> {
+  const { container } = await import("../di/container");
+  if (container.has("builderSaveSetup")) {
+    const setup = container.get<{
+      projectRoot: string;
+      migrationsDir: string;
+      database: string;
+    }>("builderSaveSetup");
+    return {
+      root: setup.projectRoot,
+      migrationsDir: setup.migrationsDir,
+      database: setup.database,
+    };
+  }
   const path = await import("path");
   const { loadConfig } = await import("../cli/utils/config-loader");
   const configResult = await loadConfig({ cwd: process.cwd() });
-  const migrationsDir = path.join(
-    process.cwd(),
-    configResult.config.db.migrationsDir
-  );
-  return { configResult, migrationsDir };
+  return {
+    root: process.cwd(),
+    migrationsDir: path.join(
+      process.cwd(),
+      configResult.config.db.migrationsDir
+    ),
+    database: undefined,
+  };
+}
+
+/**
+ * The app's configuration, read as a start has always read it, from the process's own directory,
+ * with the project's root and migration folder (`startProject`). Not read from the project's
+ * root: an app may hand its configuration to `getNextly` and give a `basePath` that holds no
+ * configuration file, and a start that could not read one there would apply no pending migration.
+ */
+async function bootMigrateConfig(): Promise<{
+  configResult: LoadConfigResult;
+  root: string;
+  migrationsDir: string;
+}> {
+  const { loadConfig } = await import("../cli/utils/config-loader");
+  const project = await startProject();
+  const configResult = await loadConfig({ cwd: process.cwd() });
+  return {
+    configResult,
+    root: project.root,
+    migrationsDir: project.migrationsDir,
+  };
 }
 
 /**
@@ -235,7 +422,7 @@ async function bootMigrateConfig(): Promise<{
  */
 async function registerMigrationMetadata(label: string): Promise<number> {
   try {
-    const { migrationsDir } = await bootMigrateConfig();
+    const { migrationsDir } = await startProject();
     const fs = await import("fs");
     const path = await import("path");
 
@@ -374,7 +561,7 @@ async function seedPermissionsForMigrationCollections(
  */
 async function applyPendingMigrations(label: string): Promise<number> {
   try {
-    const { configResult, migrationsDir } = await bootMigrateConfig();
+    const { configResult, root, migrationsDir } = await bootMigrateConfig();
 
     // A configured plugin's modules run whether or not the app has a
     // migrations directory: they ship with the plugin, and every reader
@@ -468,7 +655,7 @@ async function applyPendingMigrations(label: string): Promise<number> {
       "../domains/schema/migrate/resolved-schema"
     );
     const resolvedSchema = await resolveDeclaredSchema({
-      projectRoot: process.cwd(),
+      projectRoot: root,
       config: configResult.config,
       deferredExtends: configResult.deferredExtends,
     });
@@ -804,7 +991,8 @@ async function startFingerprints(
   const salt = await fingerprintOf([
     getCoreVersion(),
     dialect,
-    config.perLanguageStorage === true,
+    // The layout every installation keeps (a test may stand in for an earlier release's).
+    perLanguageStorageEnabled(),
     config.localization ?? null,
     builds.extensionFingerprint,
     allFieldTypes()

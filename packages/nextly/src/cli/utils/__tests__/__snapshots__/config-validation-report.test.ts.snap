@@ -12,11 +12,19 @@ exports[`a configuration with several problems > reports every problem with its 
 "✗ \`nextly.config.ts\` has 3 problems, so it cannot be used.
   Why:  collections[0].slug: Collection address 'Blog Posts' must start with a lowercase letter and contain only lowercase letters, numbers, hyphens and underscores
           Fix: use a lowercase address, such as 'blog-posts'.
-        collections[1].fields: Collection 'notes': fields 'body' and 'body' at the top level have the same name. Rename one of them.
+        collections[1].fields: Collection 'notes': fields 'body' and 'body' at the top level share the column 'body'. Rename one of them so each has its own column.
         collections[1].score.type: Invalid field type 'acme-rating'. No built-in type, and no installed plugin offers it on this surface.
           Fix: use a built-in field type, or install the plugin that offers this one.
         3 problems.
   Next: Fix each problem listed, then run the command again.
   Docs: https://nextlyhq.com/docs/cli/errors/config-invalid  (CONFIG_INVALID)
+"
+`;
+
+exports[`a project with no configuration > is refused in one sentence, naming the paths looked in, -c and create-nextly-app 1`] = `
+"✗ No Nextly configuration file was found in <project>.
+  Why:  Looked for \`nextly.config.ts\`, \`nextly.config.mts\`, \`nextly.config.js\` or \`nextly.config.mjs\` in the project folder, \`src/\` and \`config/\`.
+  Next: Pass \`-c\` the path of your configuration file, or start a new project with \`npx create-nextly-app\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-missing  (CONFIG_MISSING)
 "
 `;

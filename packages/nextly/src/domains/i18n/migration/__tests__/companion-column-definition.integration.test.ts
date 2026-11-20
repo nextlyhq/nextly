@@ -109,6 +109,28 @@ describeEachDialect(
       return Number(row?.version ?? 1);
     }
 
+    /**
+     * The collection's settings save, which its push applies against the live tables, so a
+     * companion column already there is judged as the field's; the refusal, or undefined. The
+     * schema dialog runs its migration file instead, planned from the history, where such a column
+     * is drift (below).
+     */
+    async function saveInSettings(
+      slug: string,
+      fields: Field[],
+      localized = true
+    ): Promise<unknown> {
+      return dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: slug },
+        { fields, localized }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+    }
+
     /** The schema dialog's apply, answered as the admin confirms it; the refusal, or undefined. */
     async function saveInDialog(
       slug: string,
@@ -192,7 +214,7 @@ describeEachDialect(
         companion: await columnsOf("dc_cdef_posts_locales"),
       };
 
-      const refusal = await saveInDialog("cdef_posts", [
+      const refusal = await saveInSettings("cdef_posts", [
         translated(HEADING),
         translated(CODE),
       ]);
@@ -225,7 +247,7 @@ describeEachDialect(
         `${transitionAdd("cdef_posts", CODE)} NOT NULL${dialect === "sqlite" ? " DEFAULT ''" : ""}`
       );
 
-      const refusal = await saveInDialog("cdef_posts", [
+      const refusal = await saveInSettings("cdef_posts", [
         translated(HEADING),
         translated(CODE),
       ]);
@@ -248,7 +270,7 @@ describeEachDialect(
         `ALTER TABLE ${q("dc_cdef_posts_locales")} ADD COLUMN ${q("code")} INTEGER`
       );
 
-      const refusal = await saveInDialog("cdef_posts", [
+      const refusal = await saveInSettings("cdef_posts", [
         translated(HEADING),
         translated({ ...CODE, unique: true }),
       ]);
@@ -266,7 +288,7 @@ describeEachDialect(
       await addAsTheTransitionDoes("cdef_posts", CODE);
 
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(CODE),
         ])
@@ -275,6 +297,37 @@ describeEachDialect(
         "heading",
         "code",
       ]);
+    });
+
+    // The schema dialog runs its migration file, planned from the history, which records no such
+    // column: the translations table is not what it says, so the save is refused as `nextly
+    // migrate` refuses drift, before anything changes, naming the column and the ways to recover.
+    it("refuses the same save through the schema dialog as drift, with the ways to recover, and changes nothing", async () => {
+      await create("cdef_posts", true, [translated(HEADING)]);
+      await addAsTheTransitionDoes("cdef_posts", CODE);
+      const before = {
+        main: await columnsOf("dc_cdef_posts"),
+        companion: await columnsOf("dc_cdef_posts_locales"),
+      };
+
+      const refusal = await saveInDialog("cdef_posts", [
+        translated(HEADING),
+        translated(CODE),
+      ]);
+
+      expect(refusal).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      const said = (refusal as { publicMessage?: string }).publicMessage ?? "";
+      expect(said).toContain("dc_cdef_posts_locales.code");
+      // A Builder save's drift refusal: the one way on that works for a save, the table put back by hand.
+      expect(said).toContain("The save was refused: schema drift detected");
+      expect(said).toContain("put the table back as the history records it");
+      expect((await recordedFields("cdef_posts")).map(f => f.name)).toEqual([
+        "heading",
+      ]);
+      expect(await columnsOf("dc_cdef_posts")).toEqual(before.main);
+      expect(await columnsOf("dc_cdef_posts_locales")).toEqual(
+        before.companion
+      );
     });
 
     // A text column holds any bounded string: PostgreSQL's text has no limit, MySQL's holds what any
@@ -287,7 +340,7 @@ describeEachDialect(
       const column = await columnOf("dc_cdef_posts_locales", "code");
 
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(CODE),
         ])
@@ -304,7 +357,7 @@ describeEachDialect(
       await create("cdef_posts", true, [translated(HEADING)]);
       await addAsTheTransitionDoes("cdef_posts", price(8, 2));
 
-      const refusal = await saveInDialog("cdef_posts", [
+      const refusal = await saveInSettings("cdef_posts", [
         translated(HEADING),
         translated(price(10, 2)),
       ]);
@@ -331,14 +384,14 @@ describeEachDialect(
       const wider = await columnOf("dc_cdef_posts_locales", "price");
 
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(price(10, 2)),
         ])
       ).toBeUndefined();
       // The next save, of another change, plans nothing for the column: it is not narrowed.
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(price(10, 2)),
           { name: "extra", type: "text", localized: false },
@@ -371,7 +424,7 @@ describeEachDialect(
       });
       await query(createCompanion);
 
-      const refusal = await saveInDialog(
+      const refusal = await saveInSettings(
         "cdef_plain",
         [translated(HEADING), translated({ name: "code", type: "number" })],
         true
@@ -401,7 +454,7 @@ describeEachDialect(
       const moved = await joinMovedPartWay();
 
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(price(10, 2)),
         ])
@@ -420,7 +473,7 @@ describeEachDialect(
     it("refuses that retry when the change narrows the field, saying how to finish it", async () => {
       const moved = await joinMovedPartWay();
 
-      const refusal = await saveInDialog("cdef_posts", [
+      const refusal = await saveInSettings("cdef_posts", [
         translated(HEADING),
         translated(price(8, 2)),
       ]);
@@ -466,7 +519,7 @@ describeEachDialect(
       const moved = await columnOf("dc_cdef_posts_locales", "summary");
 
       expect(
-        await saveInDialog("cdef_posts", [
+        await saveInSettings("cdef_posts", [
           translated(HEADING),
           translated(summary("long")),
         ])
@@ -496,15 +549,18 @@ describeEachDialect(
         );
       }
 
-      const refusal = await saveInDialog("cdef_posts", [HEADING], false);
+      const refusal = await saveInSettings("cdef_posts", [HEADING], false);
 
       if (dialect === "sqlite") {
-        // On SQLite the collation rides on a column the migration history does not record, so the
-        // save is refused as drift first, with the way on, before the move is judged.
-        const told = `${refusal instanceof Error ? refusal.message : String(refusal)}`;
-        expect(told).toContain("schema drift detected");
-        expect(told).toContain("+ dc_cdef_posts_locales.note present in DB");
-        expect(told).toContain("put the table back as the history records it");
+        // The settings save's push judges the move before anything runs: the field's companion
+        // column has a collation of its own, which the new column would not have.
+        expect(errorsOf(refusal)).toEqual([
+          expect.objectContaining({
+            path: "fields.heading",
+            code: "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
+            message: expect.stringMatching(/own collation/),
+          }),
+        ]);
       } else {
         expect(errorsOf(refusal)).toEqual([
           expect.objectContaining({
@@ -554,7 +610,7 @@ describeEachDialect(
           })
         );
 
-        const refusal = await saveInDialog("cdef_posts", [HEADING], false);
+        const refusal = await saveInSettings("cdef_posts", [HEADING], false);
 
         expect(errorsOf(refusal)).toEqual([
           expect.objectContaining({

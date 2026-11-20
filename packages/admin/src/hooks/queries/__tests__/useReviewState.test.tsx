@@ -1,7 +1,8 @@
 /**
  * A document's review state as the editor holds it: asked once per document,
  * an answer (not an error) where no workflow is attached, and asked again
- * after a step or an assignment moves it.
+ * after a step or an assignment moves it. A step also marks the workflows list
+ * stale, since it moves a document from one stage's count to another's.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
@@ -106,6 +107,25 @@ describe("useReviewState", () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: reviewKeys.document(post),
     });
+  });
+
+  it("marks the workflows list stale after a step, whose counts per stage it moved", async () => {
+    const queryClient = client();
+    queryClient.setQueryData(["workflows", "list"], { items: [], meta: {} });
+    stepSpy.mockResolvedValue({ message: "Step taken.", item: {} });
+    const { result } = renderHook(() => useTakeStep(post), {
+      wrapper: wrapperFor(queryClient),
+    });
+    await result.current.mutateAsync({
+      step: "submit",
+      parts: [null],
+      seen: [{ part: null, revision: 0, version: "v1" }],
+    });
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryState(["workflows", "list"])?.isInvalidated
+      ).toBe(true)
+    );
   });
 
   it("asks the document's review state again after an assignment", async () => {

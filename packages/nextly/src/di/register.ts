@@ -91,7 +91,8 @@ import type { LanguageRegistry } from "../domains/i18n/language-registry";
 import {
   mainTableFields,
   publishesPerLanguage,
-  setPerLanguageStorage,
+  perLanguageStorageEnabled,
+  warnPerLanguageStorageSetting,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
 import { LanguageSettingsService } from "../domains/i18n/services/language-settings-service";
@@ -369,7 +370,10 @@ import {
   takesDevelopmentStartHold,
   withDevelopmentStartSchemaLock,
 } from "./development-start-schema-lock";
-import { readLayoutScanEntities } from "./layout-scan-entities";
+import {
+  declaredLaidOutEntitiesAsStored,
+  readLayoutScanEntities,
+} from "./layout-scan-entities";
 import {
   type LoadedBuilderEntity,
   loadBuilderEntities,
@@ -630,11 +634,9 @@ export interface NextlyServiceConfig {
   webhookAuditEnabled?: boolean;
 
   /**
-   * Whether every translatable field is kept per language from the start
-   * (`experimental.perLanguageStorage`). Carried from the sanitized config; absent, which is off,
-   * when built without app config.
-   *
-   * @experimental
+   * What the configuration wrote of the deprecated `experimental.perLanguageStorage`, which
+   * chooses no layout: read only so the start warns a site that still writes it. Absent where it
+   * writes nothing.
    */
   perLanguageStorage?: boolean;
 }
@@ -1342,7 +1344,21 @@ async function registerServicesOnce(
       await refuseMixedStorageInConfig(
         adapter,
         transformedConfig,
-        transformedConfig.perLanguageStorage === true
+        // The layout this installation keeps, which no configuration chooses any longer.
+        perLanguageStorageEnabled()
+      );
+      // Every installation keeps its translatable fields per language: the setting no longer
+      // chooses a layout, and a site that still sets it is told so.
+      warnPerLanguageStorageSetting(
+        transformedConfig.perLanguageStorage,
+        message => resolvedLogger.warn?.(message)
+      );
+      // A configured code written the earlier way (`pt_BR`) is read in standard form (`pt-BR`):
+      // the start says so, and refuses while rows are still stored under the older spelling.
+      await refuseOlderCodesStillStored(
+        adapter,
+        transformedConfig,
+        resolvedLogger
       );
 
       // ----------------------------------------
@@ -1694,7 +1710,6 @@ async function resolveBootConfig(
   // registry registers no table before this either, and the choice is made here once: a reload
   // refuses to change it. A site restarted over the database it laid out would otherwise register
   // its tables as if the setting were off, naming translatable columns its main tables lack.
-  setPerLanguageStorage(transformedSetupConfig.perLanguageStorage === true);
   const {
     config: contributedConfig,
     deferredExtends,
@@ -1859,7 +1874,13 @@ function validateBootContributions(
   // site serving one is told of each problem, with where and what to do, and starts as it did;
   // every command refuses it. A plugin's contributions keep the checks of their own type below.
   const problems = configurationProblems(declaredConfig, transformedConfig);
-  if (problems.some(problem => problem.declaredByDefine)) {
+  // Refused for an entity declared through `define*`, and for any rule across entities, which
+  // `defineConfig` refused at import before.
+  if (
+    problems.some(
+      problem => problem.declaredByDefine || problem.crossEntity === true
+    )
+  ) {
     throw NextlyError.validation({
       errors: problems.map(({ path, code, message }) => ({
         path,
@@ -2312,7 +2333,9 @@ async function reconcileBuilderTargets<T>(
   });
   // A field extended onto a Builder entity joins that entity's fields, so a pair it would make
   // with one already there is judged against the entity's registry row, before anything below
-  // writes.
+  // writes. A pair sharing a stored value is refused even where the row already holds it: the start
+  // stops, and the way out is to rename one of the two in the Builder's definition file, then
+  // `nextly migrate:create` and `nextly migrate`.
   await assertConfiguredSiblingFields(
     {
       collections: entities.collections,
@@ -6469,6 +6492,86 @@ async function entitiesTheLayoutCanRefuse<T extends { tableName: string }>(
 }
 
 /**
+ * For each configured code the configuration writes the earlier way, a warning naming the code it
+ * is read as; and a refusal while the database still stores rows under an older spelling of a
+ * configured language, since the site would read that language under the standard code and find
+ * nothing. `nextly migrate` moves them. The older spellings are found from the rows as well as the
+ * configuration, so a configuration already corrected to the standard code is still refused.
+ *
+ * The scan reads every translation table, so a start that finds nothing records it in `nextly_meta`
+ * for the languages it was configured with (`OLDER_CODES_CHECKED_KEY`), and a later start with the
+ * same languages does not scan again. Recording is an optimisation: a database it cannot be written
+ * to is scanned at each start instead.
+ */
+async function refuseOlderCodesStillStored(
+  adapter: DrizzleAdapter,
+  config: NextlyServiceConfig,
+  logger: Logger
+): Promise<void> {
+  const olderCodes = config.localization?.olderCodes ?? [];
+  for (const { from, to } of olderCodes) {
+    logger.warn(
+      `localization names the language "${from}", which is read as "${to}". Write "${to}" in the ` +
+        `configuration: the older spelling is accepted for one release.`
+    );
+  }
+  const codes = (config.localization?.locales ?? []).map(locale =>
+    typeof locale === "string" ? locale : locale.code
+  );
+  const {
+    OLDER_CODES_CHECKED_KEY,
+    olderCodesCheckedFor,
+    storedOlderSpellings,
+    tablesHoldingCode,
+  } = await import("../domains/i18n/older-codes");
+  const { MetaService } = await import("../domains/meta/services/meta-service");
+  const meta = new MetaService(adapter, logger);
+  const checked = olderCodesCheckedFor(codes);
+  const recorded = await meta
+    .get<string>(OLDER_CODES_CHECKED_KEY)
+    .catch(() => null);
+  if (olderCodes.length === 0 && recorded === checked) return;
+  const declared = await declaredLaidOutEntitiesAsStored(adapter, config);
+  const entities = [
+    ...declared,
+    ...(await readLayoutScanEntities(
+      adapter,
+      new Set(declared.map(entity => entity.tableName)),
+      startRegistryNow()
+    )),
+  ];
+  const translationTables: string[] = [];
+  for (const entity of entities) {
+    const table = `${entity.tableName}_locales`;
+    if (await adapter.tableExists(table)) translationTables.push(table);
+  }
+  const spellings = new Map(olderCodes.map(({ from, to }) => [from, to]));
+  for (const { from, to } of await storedOlderSpellings(
+    adapter,
+    translationTables,
+    codes
+  )) {
+    spellings.set(from, to);
+  }
+  for (const [from, to] of spellings) {
+    const holding = await tablesHoldingCode(adapter, translationTables, from);
+    if (holding.length === 0) continue;
+    throw new NextlyError({
+      code: "NEXTLY_LANGUAGE_CODES_NOT_UPGRADED",
+      publicMessage:
+        `This database still stores content under the language code "${from}", which the site now ` +
+        `reads as "${to}". Run \`nextly migrate\` to move it, then restart.`,
+      logContext: { from, to, tables: holding },
+    });
+  }
+  await meta.set(OLDER_CODES_CHECKED_KEY, checked).catch((error: unknown) => {
+    logger.debug(
+      `Could not record that no older language code is stored: ${String(error)}`
+    );
+  });
+}
+
+/**
  * Refuses the boot of a site keeping every translatable field per language over a database whose
  * main tables still hold the translatable columns of an entity: one its configuration declares, or
  * one the Schema Builder made, read from the registries (`readLayoutScanEntities`).
@@ -6479,72 +6582,12 @@ async function refuseMixedStorageInConfig(
   // Which layout the setting chooses: a database laid out in the other is refused.
   perLanguage: boolean
 ): Promise<void> {
-  const [
-    { refuseMixedStorage },
-    { resolveSingleTableName },
-    { resolveCollectionTableName },
-    { readStoredFieldGroupTables, storedOrNewTableName },
-  ] = await Promise.all([
-    import("../domains/i18n/per-language-storage-layout"),
-    import("../domains/singles/services/resolve-single-table-name"),
-    import("../domains/schema/utils/resolve-table-name"),
-    import("../domains/field-groups/services/field-group-stored-tables"),
-  ]);
-  // A declared field group's table as its registry row names it, or, for one the registry does
-  // not hold yet, its name under the naming this site's storage is on. So it is matched with its
-  // own registry row below rather than judged a second time as a Builder entity, and the
-  // undeclared-languages check reads its real translation table. Only read when the configuration
-  // declares a group. A registry that cannot be read is left to the registry scan below, which
-  // refuses naming the registry it could not read.
-  const storedFieldGroups =
-    (config.fieldGroups ?? []).length === 0
-      ? undefined
-      : await readStoredFieldGroupTables(adapter);
-  const fieldGroupTableOf = (slug: string): string =>
-    storedOrNewTableName(
-      storedFieldGroups?.usable === true
-        ? storedFieldGroups
-        : { tables: new Map(), naming: "legacy" },
-      slug
-    );
-  type Entity = Parameters<typeof refuseMixedStorage>[1][number];
-  const fieldsOf = (entity: { fields?: unknown }) =>
-    (entity.fields ?? []) as Entity["fields"];
-  const entities: Entity[] = [
-    ...(config.collections ?? []).map(
-      (c): Entity => ({
-        kind: "collection",
-        slug: c.slug,
-        tableName: resolveCollectionTableName(
-          c.slug,
-          (c as { dbName?: string }).dbName
-        ),
-        fields: fieldsOf(c),
-        localized: (c as { localized?: unknown }).localized,
-      })
-    ),
-    ...(config.singles ?? []).map(
-      (s): Entity => ({
-        kind: "single",
-        slug: s.slug,
-        tableName: resolveSingleTableName({
-          slug: s.slug,
-          dbName: (s as { dbName?: string }).dbName,
-        }),
-        fields: fieldsOf(s),
-        localized: (s as { localized?: unknown }).localized,
-      })
-    ),
-    ...(config.fieldGroups ?? []).map(
-      (g): Entity => ({
-        kind: "component",
-        slug: g.slug,
-        tableName: fieldGroupTableOf(g.slug),
-        fields: fieldsOf(g),
-        localized: (g as { localized?: unknown }).localized,
-      })
-    ),
-  ];
+  const { refuseMixedStorage } = await import(
+    "../domains/i18n/per-language-storage-layout"
+  );
+  // Each declared field group under its stored table, so it is matched with its own registry row
+  // and the undeclared-languages check reads its real translation table.
+  const entities = await declaredLaidOutEntitiesAsStored(adapter, config);
   const declaredTables = new Set(entities.map(entity => entity.tableName));
   // At a development start, an entity whose declaration a start already brought in line under the
   // same settings is not read again: nothing about its layout can have changed since.
@@ -6557,13 +6600,12 @@ async function refuseMixedStorageInConfig(
   );
   // The Schema Builder's entities, by their registered tables; one the configuration also declares
   // is judged as the configuration describes it.
-  judged.push(
-    ...(await readLayoutScanEntities(
-      adapter,
-      declaredTables,
-      startRegistryNow()
-    ))
+  const builderEntities = await readLayoutScanEntities(
+    adapter,
+    declaredTables,
+    startRegistryNow()
   );
+  judged.push(...builderEntities);
   await refuseMixedStorage(
     adapter,
     await entitiesTheLayoutCanRefuse(adapter, judged, perLanguage),
@@ -6586,9 +6628,11 @@ async function refuseMixedStorageInConfig(
       await storedLanguageReader(adapter).rows()
     );
     if (stored === undefined) {
+      // Every entity the site holds, the Schema Builder's too: a translation kept by one known
+      // only from its registry row reads as gone as surely as one the configuration declares.
       await refuseUndeclaredLanguages(
         adapter,
-        entities,
+        [...entities, ...builderEntities],
         IMPLICIT_LANGUAGE.code
       );
     }
