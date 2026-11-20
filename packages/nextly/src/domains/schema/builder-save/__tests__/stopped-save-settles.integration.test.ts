@@ -1104,9 +1104,12 @@ describe.each(getConfiguredTestDialects())(
           vi.stubEnv("NODE_ENV", "development");
           expect(outcome.failed).toBe(true);
           if (!outcome.failed) return;
-          // The stop's own failure first, then the settle's, never the settle's alone.
+          // The stop's own failure first, then the settle's, never the settle's alone. Through the
+          // push the stop is told as the push's failure, through a file as the file's.
           expect(messageOf(outcome.error)).toMatch(
-            /failed part-way, and the statements before the failure stayed applied: .*Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first\.$/s
+            path.push === true
+              ? /^(?!Recording).+ Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first\.$/s
+              : /failed part-way, and the statements before the failure stayed applied: .*Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first\.$/s
           );
           expect(namedChanges(outcome.error), "a report").toBeUndefined();
           // The stopped file, its snapshot and the definition as the save left them, and no
