@@ -33,7 +33,15 @@ import {
   onTestFinished,
 } from "vitest";
 
-import { defineCollection, number, select, text } from "../../../../../config";
+import {
+  defineCollection,
+  number,
+  relationship,
+  select,
+  text,
+  textarea,
+  upload,
+} from "../../../../../config";
 import { makeTestContext } from "../../../../../database/__tests__/integration/helpers/test-db";
 import { toMinimalEntities } from "../../../migrate-create/config-entities";
 import { generateMigration } from "../../../migrate-create/generate";
@@ -394,6 +402,71 @@ function cases(open: () => { connection: Connection; slug: string }) {
     });
     // The migration's own statements alone pair nothing: why every file of the change is given.
     await expect(judgedOn(next.main)).resolves.toBeUndefined();
+  });
+
+  // An entity the file moves from the Schema Builder to code keeps the column the Builder made
+  // until the file runs: on MySQL the Builder's text is unbounded and code's is 255 characters, so
+  // a longer value is judged before the file narrows the column. Elsewhere both make one column.
+  it("judges an entity the file moves from the Schema Builder to code by the column each makes", async () => {
+    const { connection, slug, first } = await holding(
+      () => textarea({ name: "heading" }),
+      { r1: "x".repeat(300) }
+    );
+    const recorded = first.snapshot.entities!.collections[slug];
+    const owned = (source: "builder" | "code") => ({
+      ...first.snapshot.entities!,
+      collections: {
+        [slug]: {
+          source,
+          settings: {
+            ...recorded.settings,
+            fields: [{ name: "heading", type: "text" }],
+          },
+        },
+      },
+    });
+
+    const outcome = refuseFileTypeChanges(connection.db, {
+      filename: "20261118_transfer.sql",
+      before: owned("builder"),
+      target: owned("code"),
+      statements: [],
+      dialect: connection.dialect,
+    });
+
+    if (connection.dialect === "mysql") {
+      await expect(outcome).rejects.toMatchObject({
+        publicData: {
+          errors: [expect.objectContaining({ path: "fields.heading" })],
+        },
+      });
+    } else {
+      await expect(outcome).resolves.toBeUndefined();
+    }
+  });
+
+  // A single relationship to authors made a list of media links: the file's conversion carries
+  // each row's id into a list, a link it now reads as a media item's. That conversion guards the
+  // shape only, so a row holding an author is judged here, and refused, before it runs.
+  it("judges a relationship whose shape and targets the file changes, over a held link", async () => {
+    const { connection, slug, first } = await holding(
+      () => relationship({ name: "heading", relationTo: "authors" }),
+      { r1: "author-1" }
+    );
+    const next = await create(
+      slug,
+      connection.dialect,
+      () => upload({ name: "heading", relationTo: "media", hasMany: true }),
+      2
+    );
+    // The file converts the column itself: the change is the one its conversion carries.
+    expect(next.statements.join("\n")).toMatch(/heading/i);
+
+    await expect(judge(connection, first, next)).rejects.toMatchObject({
+      publicData: {
+        errors: [expect.objectContaining({ path: "fields.heading" })],
+      },
+    });
   });
 
   it("judges nothing for a file with no snapshot before it", async () => {
