@@ -43,6 +43,7 @@ import { clearRegistryRowCache } from "../../domains/dynamic-collections/service
 import { DynamicCollectionService } from "../../domains/dynamic-collections/services/dynamic-collection-service";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { fieldsAsFirstPushed } from "../../domains/i18n/migration/archive-preflight";
+import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import {
   publishesPerLanguage,
   storesPerLanguage,
@@ -1279,7 +1280,11 @@ const COLLECTIONS_METHODS: Record<
               : undefined,
             // A translated field's values the push's companion step drops are confirmed by name
             // as on the file road, the counted deletions included (`dialogConfirmations`).
-            ...dialogConfirmationsBeside(tableName, resolutions, confirmedDeletions),
+            ...dialogConfirmationsBeside(
+              tableName,
+              resolutions,
+              confirmedDeletions
+            ),
           };
           let pushedSummary: PushSummary | undefined;
           // A push that fails after changing the database keeps its files, recorded applied
@@ -1498,6 +1503,26 @@ const COLLECTIONS_METHODS: Record<
                 : { acknowledgedConversions }),
               ...confirmedDeletionsAnswer(confirmedDeletions),
             },
+          }).catch(async (error: unknown) => {
+            // The change landed, its file recorded and its fields with it: only the renamed
+            // field's provenance move failed, and logged the statements that finish it. The row's
+            // version moves on as its fields did, so a client holding the old one is refused, as a
+            // Single's does; the answer says the change landed (`provenanceNotMoved`). Where the
+            // row cannot be written either, that is logged too, and the answer stays the move's.
+            // A push that fails part way is not this: its failure is thrown below, its files kept.
+            if (isProvenanceNotMoved(error)) {
+              const landed = fields as unknown as FieldDefinition[];
+              refreshRuntime(landed);
+              try {
+                await writeRow(landed, false);
+              } catch (rowError) {
+                consoleLogger.error(
+                  `[applySchemaChanges] The registry row of '${p.collectionName}' was not written after its rename, so its version did not move on: ${rowError instanceof Error ? rowError.message : String(rowError)}`
+                );
+              }
+              bumpSchemaVersion();
+            }
+            throw error;
           });
           // Thrown before the registry row is written: the row keeps the fields the database
           // held before, as the kept files record the change still to finish.

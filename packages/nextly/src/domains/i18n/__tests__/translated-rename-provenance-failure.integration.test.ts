@@ -489,13 +489,12 @@ describeEachDialect(
         message = error instanceof Error ? error.message : String(error);
       }
 
-      const said = `Collection "${name}" was saved only in part: its change landed in the database, but its translations step failed, so the translation records of "heading" were not moved to "title2". Until they are, no language of title2 can be found out of date. A developer can move them with the statements in the server log. `;
-      expect(message?.slice(0, said.length)).toBe(said);
-      // The kept file's steps follow, which bring the registry in step.
-      expect(message, "the steps after it").toContain(
-        "nextly migrate:resolve --applied"
+      // The save runs its own migration file, which is recorded as it ran, so no step is left for
+      // `nextly migrate` and the answer names only the records that stayed.
+      expect(message).toBe(
+        `Collection "${name}" was saved only in part: its change landed in the database, but its translations step failed, so the translation records of "heading" were not moved to "title2". Until they are, no language of title2 can be found out of date. A developer can move them with the statements in the server log.`
       );
-      // The change landed in the database, and the registry row stayed as it was.
+      // The change landed in the database, and the registry row carries it.
       expect(
         await companionColumns(`dc_${name}`),
         "the translations columns"
@@ -503,7 +502,13 @@ describeEachDialect(
       expect(await provenancePaths(name), "the provenance").toContain(
         "heading"
       );
-      expect(await recorded("dynamic_collections", name)).toEqual(before);
+      // Its version moves on with its fields, as a Single's does.
+      const after = await recorded("dynamic_collections", name);
+      expect(after).toEqual({
+        fields: ["title2", "views"],
+        schemaVersion: before.schemaVersion + 1,
+        localized: true,
+      });
       const log = logged().join("\n");
       for (const statement of finishingStatements(
         dialect,
@@ -512,6 +517,36 @@ describeEachDialect(
       )) {
         expect(log, "the server log").toContain(statement);
       }
+
+      // A client still holding the version from before the rename is refused, and the row
+      // stays; one holding the version the rename moved it to saves.
+      const saveAt = (schemaVersion: number) =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: name },
+          {
+            fields: [...RENAMED, { name: "note", type: "text" }],
+            confirmed: true,
+            localized: true,
+            schemaVersion,
+          }
+        );
+      await expect(saveAt(before.schemaVersion)).rejects.toThrow(
+        expect.objectContaining({
+          logContext: expect.objectContaining({
+            expected: before.schemaVersion,
+            actual: after.schemaVersion,
+          }),
+        })
+      );
+      expect(await recorded("dynamic_collections", name)).toEqual(after);
+      await saveAt(after.schemaVersion);
+      expect(await recorded("dynamic_collections", name)).toEqual({
+        fields: ["title2", "views", "note"],
+        schemaVersion: after.schemaVersion + 1,
+        localized: true,
+      });
     });
 
     it("gives statements that move the records as the move itself does, dropping a path that no longer fits", async () => {
