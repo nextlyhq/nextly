@@ -4,6 +4,9 @@
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { usesJunctionTable } from "../field-rules";
+
+import { fieldsStoredOnRow } from "./field-column-descriptor";
 
 // A single field change: what the field was and what it became
 export interface FieldChange {
@@ -117,7 +120,8 @@ function getChangeReason(
     return "constraint_changed";
   if (
     oldField.relationTo !== newField.relationTo ||
-    isSet(oldField.hasMany) !== isSet(newField.hasMany)
+    isSet(oldField.hasMany) !== isSet(newField.hasMany) ||
+    movesLinkStorage(oldField, newField)
   )
     return "relation_changed";
   return "options_changed";
@@ -152,8 +156,22 @@ function hasFieldChanged(
   // Compare relationship config
   if (oldField.relationTo !== newField.relationTo) return true;
   if (isSet(oldField.hasMany) !== isSet(newField.hasMany)) return true;
+  // A many-to-many keeps its links in a link table of its own: moving into or out of one moves
+  // every link, whatever else the field keeps.
+  if (movesLinkStorage(oldField, newField)) return true;
 
   return false;
+}
+
+/**
+ * Whether a relationship's links move into or out of a link table of their own, by the one rule
+ * that says which fields have one (`usesJunctionTable`).
+ */
+function movesLinkStorage(
+  oldField: FieldDefinition,
+  newField: FieldDefinition
+): boolean {
+  return usesJunctionTable(oldField) !== usesJunctionTable(newField);
 }
 
 // Whether a yes-or-no setting is on. A field made through the REST API, the Direct API or code may
@@ -162,4 +180,20 @@ function hasFieldChanged(
 // field read as a change, even one that only relabelled it.
 function isSet(value: boolean | undefined): boolean {
   return value === true;
+} /**
+ * The field diff a Schema Builder dialog shows and asks about: over the fields stored on the row,
+ * so a field inside a group with no name, a column of the row too (`fieldsStoredOnRow`), is added,
+ * changed or removed as that column rather than hidden in its group. What the dialog's preview
+ * lists for the person to confirm, and what a save that runs its file asks before it drops.
+ */
+export function rowFieldDiff(
+  oldFields: readonly FieldDefinition[],
+  newFields: readonly FieldDefinition[],
+  options: { localized?: boolean; newLocalized?: boolean } = {}
+): FieldDiffResult {
+  return computeFieldDiff(
+    fieldsStoredOnRow(oldFields),
+    fieldsStoredOnRow(newFields),
+    options
+  );
 }

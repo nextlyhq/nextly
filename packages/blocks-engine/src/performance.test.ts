@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { migrateDocument } from "./migration";
+import { migrateDocument } from "./migrate-document";
 import {
   SCALE_BREAKPOINTS,
   fiveThousandNodePage,

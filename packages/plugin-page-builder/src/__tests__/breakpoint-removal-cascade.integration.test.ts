@@ -28,6 +28,7 @@ process.env.NEXTLY_SECRET =
 import {
   DOCUMENT_FORMAT_VERSION,
   expandSlotDefaults,
+  fluidValue,
   makeNode,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -2019,6 +2020,68 @@ describe.each(getConfiguredTestDialects())(
 
         expect((await undo(cookie, removed)).status).toBe(200);
 
+        expect((await storedClasses(t)).has("c-code")).toBe(false);
+      });
+
+      it("stores a code fluid text style's override across the site's range, which keeps following it and an undo takes out", async () => {
+        // Made with "Fluid…" across the code's own range (the default, 360 to
+        // 1280px); the site stores another range, so it draws the code's
+        // style across that one, and so must the override the strip stores.
+        const sizes = { small: 16, large: 32 };
+        const code = {
+          id: "c-code",
+          slug: "code",
+          label: "Code",
+          orderIndex: 5,
+          locked: true,
+          role: "text",
+          styles: {
+            base: {
+              base: { fontSize: fluidValue(sizes, { min: 360, max: 1280 }) },
+              mobile: { color: "#777777" },
+            },
+          },
+          fluidSizes: { base: sizes },
+        };
+        const { t, cookie } = await boot({ classes: [code] } as SiteStyleData);
+        const range = async (min: number, max: number) =>
+          t.nextly.updateSingle({
+            slug: SITE_STYLE_SLUG,
+            data: {
+              tokens: { tokens: [], fluidRange: { min, max } },
+              _overwrite: true,
+            },
+            overrideAccess: true,
+          });
+        await range(400, 800);
+
+        const saved = await save(cookie, [TABLET]);
+        // The strip's write passes the lock guard: it meets the locked code
+        // style across the same range the strip stripped it at.
+        expect(saved.status).toBe(200);
+        const removed = runIdOf(saved);
+        expect((await storedClasses(t)).get("c-code")).toMatchObject({
+          locked: true,
+          fluidSizes: { base: sizes },
+          styles: {
+            base: {
+              base: { fontSize: fluidValue(sizes, { min: 400, max: 800 }) },
+            },
+          },
+        });
+
+        // A later range change remakes the override, as any stored text
+        // style made with "Fluid…" follows the range.
+        await range(500, 900);
+        expect((await storedClasses(t)).get("c-code")?.styles).toEqual({
+          base: {
+            base: { fontSize: fluidValue(sizes, { min: 500, max: 900 }) },
+          },
+        });
+
+        // The undo meets the code's style across the range now stored, so the
+        // override is still exactly the strip's and is taken out.
+        expect((await undo(cookie, removed)).status).toBe(200);
         expect((await storedClasses(t)).has("c-code")).toBe(false);
       });
 

@@ -10,8 +10,8 @@
  * hiding the blocks whose conditions don't match. That view is the author's
  * own, for the session, and changes nothing stored. An eye and the words on
  * the press, as the header's own Preview: an icon alone is a guess at what
- * it opens. On a narrow bar the words step aside, their tooltip and name
- * staying.
+ * it opens. On a crowded bar, once the page title is at its shortest, the
+ * words step aside, their tooltip and name staying.
  *
  * The preview renders the saved document only, so with unsaved changes the
  * press saves a draft first, and the menu says so: the author sees what the
@@ -225,9 +225,10 @@ export function PreviewButton({
   const words = (
     <>
       <Eye className="size-4" aria-hidden="true" />
-      {/* The words give way on a bar narrower than 1400px, as the device
-          labels do, and stay the button's name for a screen reader. */}
-      <span className="@max-[1400px]/topbar:sr-only">Preview</span>
+      {/* The word steps aside once the bar is crowded, after the page
+          title has shortened as far as it goes (the builder's top bar
+          measures it), and stays the button's name for a screen reader. */}
+      <span data-topbar-word="">Preview</span>
     </>
   );
 

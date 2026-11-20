@@ -226,6 +226,8 @@ const RESOURCE_PATHS: Partial<Record<Row["target"], string>> = {
   users: "users",
   roles: "roles",
   providers: "email-providers",
+  // Only its list is asked: the Activity is read only.
+  deliveries: "email-deliveries",
 };
 
 /**
@@ -425,7 +427,7 @@ const DIRECT_CALLS: Record<
 
 /**
  * The Direct API read of a target that is not an entry: a list of media, of
- * users or of roles, as the REST door asks each.
+ * users, of roles or of email deliveries, as the REST door asks each.
  */
 const DIRECT_SYSTEM_READS: Partial<
   Record<Row["target"], (n: Nextly, as: CheckedCaller) => Promise<unknown>>
@@ -433,6 +435,7 @@ const DIRECT_SYSTEM_READS: Partial<
   media: (n, as) => n.media.find(as),
   users: (n, as) => n.users.find(as),
   roles: (n, as) => n.roles.find(as),
+  deliveries: (n, as) => n.emailDeliveries.find(as),
 };
 
 async function direct(world: World, row: Row, who: CallerHandle) {

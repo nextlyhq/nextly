@@ -120,6 +120,51 @@ describe("reading how widely variables are used", () => {
   });
 });
 
+describe("reading how widely variables are used together", () => {
+  it("asks for each group's variables and the groups, and hands back each group's count in order", async () => {
+    const together = [
+      { documents: 4, byKind: { ...NONE, pages: 4 }, complete: true },
+      { documents: 1, byKind: { ...NONE, pages: 1 }, complete: false },
+    ];
+    readAnswer = {
+      whole: true,
+      counting: false,
+      mayCount: false,
+      variables: {},
+      together,
+    };
+    const { result } = renderHook(() => useVariablesClient());
+    const groups = [
+      ["font.display", "font.quote"],
+      ["font.quote", "font.code"],
+    ];
+    const read = await result.current.usageTogether?.(groups, signal);
+    expect(reads).toEqual([
+      {
+        path: variableUsagePath(
+          ["font.display", "font.quote", "font.code"],
+          groups
+        ),
+      },
+    ]);
+    expect(read).toEqual(together);
+  });
+
+  it("fails rather than answering no counts when the server counts no groups", async () => {
+    // A server from before groups were counted answers each variable only.
+    readAnswer = {
+      whole: true,
+      counting: false,
+      mayCount: false,
+      variables: {},
+    };
+    const { result } = renderHook(() => useVariablesClient());
+    await expect(
+      result.current.usageTogether?.([["font.display", "font.quote"]], signal)
+    ).rejects.toThrow();
+  });
+});
+
 describe("reading where a variable is used", () => {
   it("asks for the page named, gives each document where it opens, and a shared style or block default none", async () => {
     readAnswer = {

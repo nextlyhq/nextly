@@ -48,8 +48,8 @@ import {
 import { z } from "nextly/zod";
 
 import { COMPONENTS_SLUG } from "./collections/components";
-import { componentStoreShape } from "./component-facts-route";
 import type { ActionBy } from "./component-actions-contract";
+import { componentStoreShape } from "./component-facts-route";
 import {
   DEFINITION_ACTIONS_ROUTE_PATH,
   type DefinitionActionRequest,

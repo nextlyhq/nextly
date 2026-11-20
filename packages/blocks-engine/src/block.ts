@@ -11,7 +11,11 @@
  */
 import type { ContentModel } from "./content-model";
 import type { BlockNode, BlockPart, NodeStyles, TokenRef } from "./document";
-import type { MigrationMap, MigrationRenames } from "./migration";
+import type {
+  MigrationDrops,
+  MigrationMap,
+  MigrationRenames,
+} from "./migration";
 import type { BoundValue } from "./resolve-bindings";
 
 /** Why a block needs JavaScript in the browser. */
@@ -700,6 +704,15 @@ export interface BlockDefinition<
    * @experimental
    */
   renames?: MigrationRenames;
+  /**
+   * Props each upgrade step drops, keyed by from-version
+   * (`{ 1: ["content"] }`): removed once that step has run, with any value
+   * bound to them and any component exposure into them, so an upgrade leaves
+   * nothing addressing a prop the block no longer has.
+   *
+   * @experimental
+   */
+  drops?: MigrationDrops;
   /** Required: what the block is, for docs, the palette, and agents. */
   description: string;
   /** Required: a worked instance, for previews and few-shot prompting. */

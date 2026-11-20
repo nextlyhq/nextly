@@ -382,4 +382,28 @@ describe("placementRepairRule", () => {
     expect(plan.steps).toEqual([]);
     expect(plan.remainingPlacements).toEqual([]);
   });
+
+  it("finds a block the placement rule refuses, and nothing on a page it allows", () => {
+    const linked = page(
+      node(
+        "card",
+        "t/box",
+        { link: "/go" },
+        { children: [node("cta", "t/button")] }
+      )
+    );
+    const allowed = page(
+      node("card", "t/box", {}, { children: [node("cta", "t/button")] })
+    );
+    const context = { sources: sources() };
+    expect(placementRepairRule.finds?.(linked, context)).toBe(true);
+    expect(placementRepairRule.finds?.(allowed, context)).toBe(false);
+    // Without nesting rules there is nothing to judge a placement by, and
+    // `apply` moves nothing.
+    expect(
+      placementRepairRule.finds?.(linked, {
+        sources: { definitions: registryBlockSource() },
+      })
+    ).toBe(false);
+  });
 });

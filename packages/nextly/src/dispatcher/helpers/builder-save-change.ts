@@ -21,13 +21,11 @@ import type {
   CollectionSaveDeps,
   CollectionSavePreview,
 } from "../../domains/schema/builder-save/collection-save";
+import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
-import { busyTableLeftNothing } from "../../domains/schema/busy-table/report";
-import type { PipelineResult } from "../../domains/schema/pipeline/pushschema-pipeline";
-import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { NextlyError } from "../../errors/nextly-error";
 import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
@@ -42,6 +40,8 @@ import { getAdapterFromDI, getLoggerFromDI } from "./di";
  */
 const loadCollectionSave = () =>
   import("../../domains/schema/builder-save/collection-save");
+const loadStoppedSave = () =>
+  import("../../domains/schema/builder-save/stopped-save");
 const loadEntitySave = () =>
   import("../../domains/schema/builder-save/entity-save");
 
@@ -108,7 +108,8 @@ export async function writeBuilderSchemaChange(
    * Whether `apply`'s push has landed (`landingPush`): a failure after it,
    * such as a companion reconcile, leaves the main table changed, so the
    * files describing that change are kept, recorded applied nowhere, and the
-   * failure is still thrown.
+   * failure is thrown saying the database holds part of the change, naming
+   * the kept files and what to run next.
    */
   landed?: () => boolean,
   /**
@@ -117,20 +118,42 @@ export async function writeBuilderSchemaChange(
    * busy table and on SQLite with foreign keys off, and records it applied; `afterFile` then
    * brings what the file does not reach in step (the companion's reconcile, planned from the
    * companion as the file left it). A failure of `afterFile` leaves the file recorded applied.
+   *
+   * `registry`, the caller's registry write for the save, runs inside the last file's
+   * transaction, after its ledger row, so the change and the row the registry keeps of it commit
+   * or roll back together, and a failed write leaves the save as it was. On every other road the
+   * caller writes it after this returns. It is handed the fields the row records: the save's, or,
+   * where the file stops part way and is settled to what of it applied, those that applied.
    */
   fileRoad?: {
     pushWhen: () => Promise<boolean>;
     afterFile: () => Promise<void>;
+    /**
+     * The questions the push asks before it changes anything, asked of the save's file where it
+     * runs instead, before anything is written: a rename the request does not answer, or a drop it
+     * does not confirm, refuses the save as the push refuses it (`refuseUnansweredDialogQuestions`).
+     */
+    questions?: () => Promise<void>;
+    registry?: (fields: readonly FieldDefinition[]) => Promise<void>;
+    /**
+     * After `registry`, for a file that stopped part way and was settled to what applied: what
+     * the caller does after an apply (its runtime tables), given the fields the row recorded.
+     */
+    settled?: (fields: readonly FieldDefinition[]) => void;
   }
-): Promise<void> {
+): Promise<{ registryWritten: boolean }> {
   if (deps === undefined) {
     await apply();
-    return;
+    return { registryWritten: false };
   }
   // Asked before the save writes anything, as a change reaching a relation's storage is judged
   // against the live table; only where the answer is used, a save the writer runs.
   const runsFile =
     deps.applies && fileRoad !== undefined && !(await fileRoad.pushWhen());
+  // Outside development the push runs after the files are written (`appliedAfter`) and asks only of
+  // the main table's columns, while the translations table's and the link tables' drops follow it:
+  // the questions are asked there too, before anything is written, as the collection's road asks.
+  if (runsFile || !deps.applies) await fileRoad?.questions?.();
   const { save } = saveOfSchemaChange({
     ...change,
     row: {
@@ -144,74 +167,46 @@ export async function writeBuilderSchemaChange(
   });
   const { writeEntitySave } = await loadEntitySave();
   if (runsFile) {
-    await writeEntitySave(deps, save, apply, { runsFile: true });
+    const registry = fileRoad.registry;
+    const { appliedFieldsOf } = await loadStoppedSave();
+    await writeEntitySave(deps, save, apply, {
+      runsFile: true,
+      ...(registry === undefined
+        ? {}
+        : {
+            inLastTransaction: () => registry(change.fields),
+            // A file that stops part way is settled to what of it applied: the row then records
+            // the fields as far as the database holds them.
+            onSettled: async report => {
+              const applied = appliedFieldsOf(
+                change.stored.fields as unknown as FieldDefinition[],
+                change.fields,
+                report
+              );
+              await registry(applied);
+              fileRoad.settled?.(applied);
+            },
+          }),
+    });
     await fileRoad.afterFile();
-    return;
+    return { registryWritten: fileRoad.registry !== undefined };
   }
-  // Held in an object, as the apply below sets it from inside the writer.
-  const failed: { error?: unknown } = {};
-  await writeEntitySave(deps, save, async () => {
+  // A failure after the push landed keeps the files, and is told as a collection's is: what the
+  // database holds, the files kept and what to run next (`partWayPush`).
+  const pushed = partWayPush(async onLanded => {
     try {
       await apply();
-      return undefined;
-    } catch (error) {
-      if (landed?.() !== true) throw error;
-      failed.error = error;
-      return "partly-applied";
+    } finally {
+      if (landed?.() === true) onLanded();
     }
   });
-  if ("error" in failed) throw failed.error;
-}
-
-/**
- * A schema dialog's push that notes once one of its pushes may have changed
- * the database, for `writeBuilderSchemaChange` to tell a failure before the
- * main table changed from one after it: a push that succeeded, and on MySQL
- * any push that failed, since MySQL commits each schema statement as it runs,
- * so a push refused part way may have left some of them applied. The one
- * exception is a busy table's stop that says itself nothing ran
- * (`leftNothing`): its files are withdrawn, as a refusal anywhere else.
- */
-export function landingPush(
-  push: (desired: DesiredSchema) => Promise<PipelineResult>,
-  dialect: "postgresql" | "mysql" | "sqlite"
-): {
-  push: (desired: DesiredSchema) => Promise<PipelineResult>;
-  landed: () => boolean;
-} {
-  let landed = false;
-  return {
-    push: async desired => {
-      try {
-        const result = await push(desired);
-        if (
-          result.success ||
-          (dialect === "mysql" && !leftNothing(result.error?.details))
-        ) {
-          landed = true;
-        }
-        return result;
-      } catch (error) {
-        if (dialect === "mysql" && !leftNothing(error)) landed = true;
-        throw error;
-      }
-    },
-    landed: () => landed,
-  };
-}
-
-/**
- * Whether `error` is a busy table's stop that left nothing of the push and
- * applied nothing before it in the run, as the stop itself records it
- * (`busyTableLeftNothing`, and the stop's `appliedBefore`), never read from
- * its message.
- */
-function leftNothing(error: unknown): boolean {
-  if (!NextlyError.is(error) || !busyTableLeftNothing(error)) return false;
-  const stop = (
-    error.logContext as { stop?: { appliedBefore?: readonly string[] } }
-  ).stop;
-  return (stop?.appliedBefore ?? []).length === 0;
+  const written = await writeEntitySave(deps, save, pushed.appliedBy);
+  pushed.throwIfFailed(
+    written?.files ?? [],
+    written?.checked,
+    written?.settleFailure
+  );
+  return { registryWritten: false };
 }
 
 /**

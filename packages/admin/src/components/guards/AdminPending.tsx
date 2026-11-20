@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * What the admin shows when the server has kept it waiting too long, and when
- * the server could not say who is signed in.
+ * What the admin shows when the server has kept it waiting too long, when it
+ * is busy and asked the admin to wait, and when it could not say who is
+ * signed in.
  *
  * The wait itself is drawn by the admin's frame: the screen's outline, a line
  * under the bar, then a message once the server is plainly starting. A server
@@ -13,7 +14,7 @@
 import { Button } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import type React from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   DelayedReveal,
@@ -139,6 +140,75 @@ export function AdminNoRole({
           Sign out
         </Button>
       </div>
+    </StatusFrame>
+  );
+}
+
+/** One refusal from a busy server: how long it asked the admin to wait. */
+export interface ServerBusyWait {
+  readonly retryAfterSeconds: number;
+}
+
+/**
+ * The server is up but refused for now (a 429) and said how long to wait.
+ * Counts that wait down, then asks again by itself; "Try again now" asks
+ * sooner. A status rather than an alert: nothing is wrong that the visitor
+ * must act on. The ticking count is hidden from screen readers, which would
+ * otherwise read it out every second; they are told the whole wait once.
+ *
+ * Each `wait` is one refusal, told apart by identity: a second refusal starts
+ * its own wait, even one of the same length.
+ */
+export function AdminBusy({
+  wait,
+  onRetry,
+}: {
+  wait: ServerBusyWait;
+  onRetry: () => void;
+}): React.JSX.Element {
+  const { retryAfterSeconds } = wait;
+  const [secondsLeft, setSecondsLeft] = useState(retryAfterSeconds);
+  // A new refusal while this screen stays drawn restarts the count from its
+  // own wait, set during render so the stale count is never drawn.
+  const [counting, setCounting] = useState(wait);
+  if (counting !== wait) {
+    setCounting(wait);
+    setSecondsLeft(retryAfterSeconds);
+  }
+  // The latest retry, read when the wait ends, so a new function from the
+  // parent's render does not restart the count.
+  const retry = useRef(onRetry);
+  useEffect(() => {
+    retry.current = onRetry;
+  }, [onRetry]);
+  // The retry is timed on its own from the start of the wait, not by the
+  // count, so it comes when the server said whatever the count's renders do.
+  useEffect(() => {
+    const tick = setInterval(
+      () => setSecondsLeft(left => Math.max(left - 1, 0)),
+      1_000
+    );
+    const due = setTimeout(
+      () => retry.current(),
+      wait.retryAfterSeconds * 1_000
+    );
+    return () => {
+      clearInterval(tick);
+      clearTimeout(due);
+    };
+  }, [wait]);
+  return (
+    <StatusFrame role="status">
+      <p className="text-lg font-semibold text-foreground">
+        The server is busy.
+      </p>
+      <p aria-hidden className="max-w-md text-base text-muted-foreground">
+        Trying again in {secondsLeft} s.
+      </p>
+      <p className="sr-only">Trying again in {retryAfterSeconds} seconds.</p>
+      <Button variant="outline" onClick={onRetry}>
+        Try again now
+      </Button>
     </StatusFrame>
   );
 }

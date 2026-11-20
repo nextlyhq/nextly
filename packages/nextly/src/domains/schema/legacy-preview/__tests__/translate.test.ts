@@ -5,6 +5,8 @@
 // pipeline preview output + synthetic field arrays; the live-DB row
 // counting is mocked.
 
+import type { SQL } from "drizzle-orm";
+import { SQLiteDialect } from "drizzle-orm/sqlite-core";
 import { afterEach, describe, it, expect, vi } from "vitest";
 
 import type { ClassifierEvent } from "../../pipeline/resolution/types";
@@ -207,19 +209,10 @@ describe("translatePipelinePreviewToLegacy", () => {
       { name: "title", type: "text" } as FieldDefinition,
     ];
 
-    // Mock db: SQLite shape (.all returns rows synchronously).
-    // Translator calls countRows first (one call upfront), then
-    // countNulls once per removed field. Order: [countRows, countNulls(body)].
-    // Total = 100, nulls = 25 → non-null = 75.
-    let callIndex = 0;
-    const responses = [{ count: 100 }, { count: 25 }];
-    const dbMock = {
-      all: vi.fn().mockImplementation(() => {
-        const response = responses[callIndex] ?? { count: 0 };
-        callIndex += 1;
-        return [response];
-      }),
-    };
+    // 100 rows, 25 of them without a body: the body holds 75 values.
+    const { db: dbMock } = countingDb({
+      dc_posts: { rows: 100, nulls: { body: 25 } },
+    });
 
     const result = await translatePipelinePreviewToLegacy(emptyPreview, {
       tableName: "dc_posts",
@@ -307,8 +300,10 @@ describe("translatePipelinePreviewToLegacy", () => {
 //
 // A count the preview cannot read must never read as "nothing is deleted",
 // and a field's values are counted where they are stored. The SQLite double
-// below answers each count query from the table and column it names, and
-// records every query, so a test sees both what was counted and where.
+// below answers each count query from the table and column it names, read
+// from the query as SQLite would be sent it, and records every query's text,
+// so a test sees both what was counted and where. A column's values
+// (`COUNT("column")`) are its table's rows less its nulls.
 
 interface CountTable {
   /** Rows in the table, or an Error the row count throws. */
@@ -317,30 +312,36 @@ interface CountTable {
   nulls: Record<string, number | Error>;
 }
 
+const sqliteDialect = new SQLiteDialect();
+
 function countingDb(tables: Record<string, CountTable>) {
   const queries: string[] = [];
   const db = {
-    all: vi.fn().mockImplementation((query: unknown) => {
-      const text = JSON.stringify(query);
+    all: vi.fn().mockImplementation((query: SQL) => {
+      const text = sqliteDialect.sqlToQuery(query).sql;
       queries.push(text);
-      const name = Object.keys(tables).find(t => text.includes(`\\"${t}\\"`));
-      if (!name) throw new Error(`no such table in ${text}`);
-      const table = tables[name];
-      const isNullCount = text.includes("IS NULL");
-      if (!isNullCount) {
-        if (table.rows instanceof Error) throw table.rows;
-        return [{ count: table.rows }];
-      }
-      const column = Object.keys(table.nulls).find(c =>
-        text.includes(`\\"${c}\\" IS NULL`)
-      );
-      if (!column) throw new Error(`no such column in ${text}`);
-      const nulls = table.nulls[column];
-      if (nulls instanceof Error) throw nulls;
-      return [{ count: nulls }];
+      return [{ count: countOf(tables, text) }];
     }),
   };
   return { db, queries };
+}
+
+/**
+ * The count `text` asks of `tables`: a column's values (`COUNT("column")`), its table's rows less
+ * its nulls, or else the table's rows. A table or column the double does not hold throws, as
+ * SQLite does.
+ */
+function countOf(tables: Record<string, CountTable>, text: string): number {
+  const name = Object.keys(tables).find(t => text.includes(`"${t}"`));
+  if (!name) throw new Error(`no such table in ${text}`);
+  const table = tables[name];
+  if (table.rows instanceof Error) throw table.rows;
+  const column = /COUNT\("([^"]+)"\)/i.exec(text)?.[1];
+  if (column === undefined) return table.rows;
+  const nulls = table.nulls[column];
+  if (nulls === undefined) throw new Error(`no such column: ${column}`);
+  if (nulls instanceof Error) throw nulls;
+  return table.rows - nulls;
 }
 
 const text = (name: string, extra: Record<string, unknown> = {}) =>
@@ -489,7 +490,8 @@ describe("a removal the preview cannot count, and where it counts", () => {
       rowCountUnknown: true,
       classification: "destructive",
     });
-    expect(queries.some(q => q.includes("IS NULL"))).toBe(false);
+    // Nothing is stored in a column of the row to count, so nothing is asked of the database.
+    expect(queries).toEqual([]);
   });
 
   it("classes a hasMany toggle as deleting data, in both directions", async () => {
@@ -523,6 +525,56 @@ describe("a removal the preview cannot count, and where it counts", () => {
           ),
         ])
       );
+    }
+  });
+
+  // A group with no name only lays fields out: a relationship inside it is a field of the row, so a
+  // change to it is classed and warned of as at the top.
+  it("classes a relationship's change inside a group with no name as at the top", async () => {
+    const laidOut = (field: Record<string, unknown>) =>
+      ({ type: "group", label: "Details", fields: [field] }) as FieldDefinition;
+    const cases = [
+      {
+        change: "a hasMany toggle",
+        before: { name: "authors", type: "relationship", relationTo: "users" },
+        after: {
+          name: "authors",
+          type: "relationship",
+          relationTo: "users",
+          hasMany: true,
+        },
+        warned: "between one and many related entries",
+      },
+      {
+        change: "a many-to-many made a single link",
+        before: {
+          name: "authors",
+          type: "relationship",
+          relationTo: "users",
+          options: { target: "users", relationType: "manyToMany" },
+        },
+        after: {
+          name: "authors",
+          type: "relationship",
+          relationTo: "users",
+          options: { target: "users", relationType: "manyToOne" },
+        },
+        warned: "authors",
+      },
+    ];
+    for (const { change, before, after, warned } of cases) {
+      const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+        tableName: "dc_posts",
+        currentFields: [laidOut(before)],
+        newFields: [laidOut(after)],
+        db: {},
+        dialect: "sqlite",
+      });
+      expect(
+        result.changes.changed.find(row => row.name === "authors"),
+        change
+      ).toMatchObject({ classification: "destructive" });
+      expect(result.warnings.join(" "), change).toContain(warned);
     }
   });
 
@@ -591,7 +643,8 @@ describe("a removal the preview cannot count, and where it counts", () => {
       rowCount: 0,
       classification: "safe",
     });
-    expect(queries.some(q => q.includes("IS NULL"))).toBe(false);
+    // Nothing is stored in a column of the row to count, so nothing is asked of the database.
+    expect(queries).toEqual([]);
   });
 
   it("keeps a hasMany flag spelled false where it was absent from being a toggle", async () => {
@@ -695,5 +748,196 @@ describe("a removal the preview cannot count, and where it counts", () => {
 
       expect(result.hasChanges).toBe(true);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A many-to-many made something else drops its link table: the preview counts the links there and
+// names what the field becomes.
+
+describe("a many-to-many leaving its link table", () => {
+  const manyToMany = (options: Record<string, unknown> = {}) =>
+    ({
+      name: "tags",
+      type: "relationship",
+      relationTo: "tags",
+      options: { target: "tags", relationType: "manyToMany", ...options },
+    }) as FieldDefinition;
+  const singleLink = {
+    name: "tags",
+    type: "relationship",
+    relationTo: "tags",
+  } as FieldDefinition;
+
+  /** A SQLite double answering every count with `answer`, recording each query. */
+  function linkCountDb(answer: number | Error) {
+    const queries: string[] = [];
+    const db = {
+      all: vi.fn().mockImplementation((query: unknown) => {
+        queries.push(JSON.stringify(query));
+        if (answer instanceof Error) throw answer;
+        return [{ count: answer }];
+      }),
+    };
+    return { db, queries };
+  }
+
+  async function leaving(
+    before: FieldDefinition,
+    after: FieldDefinition,
+    db: unknown
+  ) {
+    return translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "dc_posts",
+      currentFields: [before],
+      newFields: [after],
+      db,
+      dialect: "sqlite",
+    });
+  }
+
+  it("counts the links in a link table whose name the database must quote", async () => {
+    const { db, queries } = linkCountDb(2);
+    const result = await leaving(
+      manyToMany({ junctionTable: "post-tag-links" }),
+      singleLink,
+      db
+    );
+    expect(queries.some(query => query.includes("post-tag-links"))).toBe(true);
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 2,
+      classification: "destructive",
+    });
+    expect(result.changes.changed[0]).not.toHaveProperty("rowCountUnknown");
+  });
+
+  it("keeps a link count it could not read unknown on the changed row", async () => {
+    const { db } = linkCountDb(new Error("locked"));
+    const result = await leaving(manyToMany(), singleLink, db);
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 0,
+      rowCountUnknown: true,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' from many-to-many to a single link drops its link table and every link it holds: could not count them."
+    );
+  });
+
+  // The save drops a single link's column and makes an empty link table: its links go with the
+  // column, so the change is destructive, counted where the column holds them.
+  it("calls a single link made a many-to-many destructive, counting the links its column drops", async () => {
+    const { db } = countingDb({ dc_posts: { rows: 5, nulls: { tags: 2 } } });
+    const result = await leaving(singleLink, manyToMany(), db);
+    expect(result.changes.changed[0]).toMatchObject({
+      reason: "relation_changed",
+      rowCount: 3,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' from a single link to many-to-many drops the column holding its 3 links; its new link table starts empty."
+    );
+  });
+
+  // A group with no name only lays its fields out: a many-to-many inside it is the row's own, and
+  // leaving its link table drops the links as one beside the group does.
+  it("counts the links a many-to-many inside a group with no name drops, as one beside it", async () => {
+    const { db, queries } = linkCountDb(2);
+    const inAGroup = (field: FieldDefinition) =>
+      ({
+        type: "group",
+        label: "Links",
+        fields: [field],
+      }) as unknown as FieldDefinition;
+    const result = await leaving(
+      inAGroup(manyToMany({ junctionTable: "post-tag-links" })),
+      inAGroup(singleLink),
+      db
+    );
+    expect(queries.some(query => query.includes("post-tag-links"))).toBe(true);
+    expect(result.changes.changed).toEqual([
+      expect.objectContaining({
+        name: "tags",
+        rowCount: 2,
+        classification: "destructive",
+      }),
+    ]);
+    expect(result.warnings).toContain(
+      "Changing 'tags' from many-to-many to a single link drops its link table and the 2 links it holds."
+    );
+  });
+
+  // A field group's many-to-many keeps its ids in its own row, with no link table to drop.
+  it("applies no link table to a field group's many-to-many", async () => {
+    const { db, queries } = linkCountDb(2);
+    const result = await translatePipelinePreviewToLegacy(emptyPreview, {
+      tableName: "comp_meta",
+      currentFields: [manyToMany()],
+      newFields: [singleLink],
+      db,
+      dialect: "sqlite",
+      builtBy: "fieldGroup",
+    });
+    expect(queries).toEqual([]);
+    expect(result.changes.changed[0]).not.toHaveProperty("rowCountUnknown");
+    expect(
+      result.warnings.some(warning => warning.includes("link table"))
+    ).toBe(false);
+  });
+
+  // Kept a many-to-many but pointed at another collection: the save drops the old link table and
+  // starts an empty one for the new target, so the links go.
+  it("calls a many-to-many pointed at another collection destructive, counting the links it drops", async () => {
+    const { db } = linkCountDb(4);
+    const result = await leaving(
+      manyToMany(),
+      {
+        name: "tags",
+        type: "relationship",
+        relationTo: "topics",
+        options: { target: "topics", relationType: "manyToMany" },
+      } as FieldDefinition,
+      db
+    );
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 4,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' to link to 'topics' instead drops its link table and the 4 links it holds; its new link table starts empty."
+    );
+  });
+
+  // A list of links kept in its column holds several links in each entry, so the warning names
+  // the entries whose links it drops rather than counting them as links.
+  it("names the entries whose list of links goes when the list becomes a many-to-many", async () => {
+    const { db } = countingDb({ dc_posts: { rows: 5, nulls: { tags: 3 } } });
+    const result = await leaving(
+      { ...singleLink, hasMany: true } as FieldDefinition,
+      manyToMany(),
+      db
+    );
+    expect(result.changes.changed[0]).toMatchObject({
+      rowCount: 2,
+      classification: "destructive",
+    });
+    expect(result.warnings).toContain(
+      "Changing 'tags' from a list of links to many-to-many drops the column holding the links of its 2 entries; its new link table starts empty."
+    );
+  });
+
+  it("names what the field becomes when it is no longer a link", async () => {
+    const { db } = linkCountDb(2);
+    const result = await leaving(
+      manyToMany(),
+      { name: "tags", type: "text" } as FieldDefinition,
+      db
+    );
+    expect(result.warnings).toContain(
+      "Changing 'tags' from many-to-many to a text field drops its link table and the 2 links it holds."
+    );
+    expect(
+      result.warnings.some(warning => warning.includes("a single link"))
+    ).toBe(false);
   });
 });

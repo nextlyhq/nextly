@@ -51,7 +51,9 @@ import type {
   UndoEmailTemplateUpdateArgs,
 } from "../types/email";
 import type {
+  ActivityEntry,
   ActivityPage,
+  AddressSearchPage,
   CancelQueuedEmailArgs,
   CreateEmailProviderArgs,
   CreateEmailTemplateArgs,
@@ -64,8 +66,10 @@ import type {
   DirectAPIConfig,
   EmailLastSentArgs,
   EmailOverdueArgs,
+  FindEmailActivityArgs,
   FindEmailDeliveriesArgs,
   FindEmailDeliveryByIDArgs,
+  SearchEmailActivityArgs,
   FindEmailProviderByIDArgs,
   FindEmailProvidersArgs,
   FindEmailTemplateByIDArgs,
@@ -271,6 +275,18 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
 export interface EmailDeliveriesNamespace {
   /** Delivery records, newest first, by outcome, template, provider and time. */
   find(args?: FindEmailDeliveriesArgs): Promise<ActivityPage<DeliveryActivity>>;
+  /**
+   * Queued emails and the deliveries of sends not queued, merged newest
+   * first under one cursor, by status, template, provider and time.
+   */
+  activity(args?: FindEmailActivityArgs): Promise<ActivityPage<ActivityEntry>>;
+  /**
+   * The merged Activity for one exact address, found by its digests under
+   * the current and previous secrets, with a notice that older records
+   * cannot be found. Recorded in the activity log as the caller's search,
+   * without the address.
+   */
+  search(args: SearchEmailActivityArgs): Promise<AddressSearchPage>;
   /** Queued emails, newest first, by state, template and time. */
   findQueued(
     args?: FindQueuedEmailsArgs
@@ -305,6 +321,17 @@ export function createEmailDeliveriesNamespace(
     async find(args = {}) {
       await checked(args);
       return ctx.emailDeliveryActivity.listDeliveries(args);
+    },
+    async activity(args = {}) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.listActivity(args);
+    },
+    async search(args) {
+      await checked(args);
+      return ctx.emailDeliveryActivity.searchByAddress(
+        args,
+        directApiActor(ctx.defaultConfig, args)
+      );
     },
     async findQueued(args = {}) {
       await checked(args);

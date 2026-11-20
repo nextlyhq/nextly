@@ -42,9 +42,14 @@ export function RepairNotice({
 }: {
   editor: EditorState;
 }): React.JSX.Element | null {
-  // The store's object changes with every document it holds, so this plans
-  // once per document rather than once per render.
-  const plan = React.useMemo(() => editor.planRepair(), [editor]);
+  // Planned once per document and per set of rules it is judged by, which
+  // `planRepair` changes with. Not once per store object: that changes with
+  // the selection too, so each click would plan the whole page again.
+  const { document, planRepair } = editor;
+  const plan = React.useMemo(
+    () => planRepair(document),
+    [document, planRepair]
+  );
   const [reviewing, setReviewing] = React.useState(false);
   const [refused, setRefused] = React.useState<string | undefined>();
   const headingId = React.useId();

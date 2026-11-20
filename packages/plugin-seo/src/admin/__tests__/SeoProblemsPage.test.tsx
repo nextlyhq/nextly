@@ -12,7 +12,7 @@
  * the document; the table is read here.
  */
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
@@ -399,5 +399,106 @@ describe("the severity filter", () => {
     expect(screen.getByText("No errors found")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Show all problems" }));
     expect(tableRows()).toHaveLength(1);
+  });
+});
+
+/**
+ * Lays every element out `width` pixels wide for one test, as jsdom lays
+ * nothing out: the list reads its own width to choose its columns.
+ */
+function atWidth(width: number): void {
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "clientWidth"
+  );
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get: () => width,
+  });
+  onTestFinished(() => {
+    if (original !== undefined) {
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", original);
+    }
+  });
+}
+
+/** The table's column heads, as a screen reader names them. */
+const heads = () =>
+  within(screen.getByRole("table"))
+    .getAllByRole("columnheader")
+    .map(head => head.textContent);
+
+describe("the table at each width", () => {
+  // The list's own width beside the admin's menus: 664px in a 1024px
+  // window, 886px in a 1280px one, 1046px in a 1440px one.
+  it("keeps every column where they all fit beside the problem's words", () => {
+    atWidth(1046);
+    serving(LIST);
+    render(<SeoProblemsPage />);
+    expect(heads()).toEqual([
+      "Details",
+      "Severity",
+      "Problem",
+      "Where",
+      "Pages",
+      "Fix",
+    ]);
+  });
+
+  it.each([664, 886])(
+    "at %ipx folds where it is and its fix under the problem, so nothing is cut off",
+    width => {
+      atWidth(width);
+      serving(LIST);
+      render(<SeoProblemsPage />);
+      expect(heads()).toEqual(["Details", "Severity", "Problem"]);
+      expect(tableRows()).toEqual([
+        [
+          "Error",
+          "Content type with no public addressNo public addressWhole siteCopy a note for a developer",
+        ],
+        [
+          "Warning",
+          "Same title on several pagesGoogle may show only one of them. Give each page its own title.2 pagesReview 2 pages",
+        ],
+        [
+          "Notice",
+          "Title longer than Google showsTitle is 71 characters1 pageShorten the title",
+        ],
+      ]);
+      // The fix is the same control as the wide table's, under its problem.
+      const row = rowOf("Same title on several pages");
+      fireEvent.click(
+        within(row).getByRole("button", { name: "Review 2 pages" })
+      );
+      expect(
+        screen
+          .getAllByRole("region", { name: /Same title on several pages/ })
+          .some(region => region.closest("table") !== null)
+      ).toBe(true);
+    }
+  );
+
+  it.each([358, 664, 1046])(
+    "at %ipx lets a problem's words break inside a long word, so none runs past its card",
+    width => {
+      // A message can name an environment variable, a word too long for a
+      // phone's card; without a break inside it, it runs past the edge.
+      atWidth(width);
+      serving(LIST);
+      render(<SeoProblemsPage />);
+      for (const words of screen.getAllByText("No public address")) {
+        expect(words).toHaveClass("[overflow-wrap:anywhere]");
+      }
+    }
+  );
+
+  it("keeps every column for the cards a narrow screen draws instead", () => {
+    // Below the table's own 28rem the list is drawn as cards, each naming
+    // every column, so nothing is folded there.
+    atWidth(358);
+    serving(LIST);
+    render(<SeoProblemsPage />);
+    expect(heads()).toHaveLength(6);
   });
 });

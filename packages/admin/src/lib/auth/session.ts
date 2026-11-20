@@ -33,9 +33,18 @@ interface Session {
  * answers late or with a 5xx, and reading that as "no session" would send a
  * signed-in person to the login screen; the admin shows the server as
  * unavailable instead and lets them try again.
+ *
+ * A 429 is the one non-answer from a server that is up: it refused for now
+ * and said how long to wait. That wait travels with the error
+ * (`retryAfterSeconds`), so the admin can say the server is busy and ask
+ * again when told, rather than call it unreachable.
  */
 export class SessionUnavailableError extends Error {
-  constructor(readonly status: number | null) {
+  constructor(
+    readonly status: number | null,
+    /** For a 429, the seconds to wait before asking again; otherwise null. */
+    readonly retryAfterSeconds: number | null = null
+  ) {
     super(
       status === null
         ? "The server could not be reached."
@@ -43,6 +52,53 @@ export class SessionUnavailableError extends Error {
     );
     this.name = "SessionUnavailableError";
   }
+}
+
+/** The wait after a 429 that names none: the server's limits count by the minute. */
+const SERVER_BUSY_DEFAULT_WAIT_SECONDS = 10;
+
+/** The longest wait a 429 can set before the admin asks again by itself. */
+const MAX_WAIT_SECONDS = 60 * 60;
+
+/** A `Retry-After` header in seconds: a number of seconds, or a date to wait until. */
+function retryAfterHeaderSeconds(value: string | null): number | null {
+  const trimmed = value?.trim() ?? "";
+  if (/^\d+$/.test(trimmed)) return Number(trimmed);
+  const until = Date.parse(trimmed);
+  return Number.isNaN(until) ? null : (until - Date.now()) / 1000;
+}
+
+/** The `error.data.retryAfterSeconds` of the server's error envelope, if the body has one. */
+async function retryAfterBodySeconds(
+  response: Response
+): Promise<number | null> {
+  try {
+    const body: unknown = await response.json();
+    const seconds = (
+      body as { error?: { data?: { retryAfterSeconds?: unknown } } } | null
+    )?.error?.data?.retryAfterSeconds;
+    return typeof seconds === "number" && Number.isFinite(seconds)
+      ? seconds
+      : null;
+  } catch {
+    // A 429 from a proxy in front of the server need not be JSON.
+    return null;
+  }
+}
+
+/**
+ * How long a 429 asks the admin to wait, in whole seconds: its `Retry-After`
+ * header, else the body's `retryAfterSeconds`, else the default. At least one
+ * second, so a past date or a zero never turns the wait into a tight loop, and
+ * at most an hour, which a browser timer holds exactly (a far-off date would
+ * overflow one and fire at once).
+ */
+async function rateLimitWaitSeconds(response: Response): Promise<number> {
+  const seconds =
+    retryAfterHeaderSeconds(response.headers.get("Retry-After")) ??
+    (await retryAfterBodySeconds(response)) ??
+    SERVER_BUSY_DEFAULT_WAIT_SECONDS;
+  return Math.min(MAX_WAIT_SECONDS, Math.max(1, Math.ceil(seconds)));
 }
 
 /** Only these answers mean the request reached the server and holds no session. */
@@ -105,6 +161,13 @@ export async function getSession(): Promise<Session | null> {
   }
 
   if (!response.ok) {
+    // Rate limited: up but busy, with how long it asked the admin to wait.
+    if (response.status === 429) {
+      throw new SessionUnavailableError(
+        429,
+        await rateLimitWaitSeconds(response)
+      );
+    }
     if (!isSignedOutStatus(response.status)) {
       // Not cached: the next ask goes back to the server, which may be up by then.
       throw new SessionUnavailableError(response.status);

@@ -37,6 +37,7 @@ import {
   SINGLE_SHOWN_ON_SECTION_COMPONENT,
   OVERVIEW_PAGE_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
+  SET_BUILDER_VIEW_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
   TEMPLATE_DESIGN_DETAILS_COMPONENT,
   TEMPLATE_OWN_DESIGNS_COMPONENT,
@@ -53,6 +54,7 @@ import type {
   DeleteComponentReplacement as DeleteComponentReplacementPart,
 } from "./DeleteComponentAction";
 import type { PageBuilderView as PageBuilderViewPart } from "./editor/PageBuilderView";
+import type { SetBuilderView as SetBuilderViewPart } from "./editor/set-builder-view";
 import { registerEntryDesignColumn } from "./entry-design-column";
 import type { EntryDesignSection as EntryDesignSectionPart } from "./EntryDesignSection";
 import type { FontsPage as FontsPagePart } from "./fonts/FontsPage";
@@ -132,6 +134,11 @@ const PageBuilderView: typeof PageBuilderViewPart = lazyPart(() =>
     m => m.PageBuilderView
   )
 );
+const SetBuilderView: typeof SetBuilderViewPart = lazyPart(() =>
+  withEditorStylesheet(import("./editor/set-builder-view")).then(
+    m => m.SetBuilderView
+  )
+);
 const RemoveLayoutToolbarSlot: typeof RemoveLayoutToolbarSlotPart = lazyPart(
   () => import("./RemoveLayoutAction").then(m => m.RemoveLayoutToolbarSlot)
 );
@@ -187,6 +194,9 @@ const COMPONENTS = {
   // The editor itself, drawn by the admin as a view of the document at the
   // address the blocks field's card links to.
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
+  // A header & footer set in the builder: its header and footer around a
+  // placeholder for the page, with its settings beside them.
+  [SET_BUILDER_VIEW_COMPONENT]: SetBuilderView,
   // The New page dialog's body, opened from "+ New" on a list whose
   // entries open in the builder.
   [NEW_PAGE_DIALOG_COMPONENT]: NewPageCreateDialog,
@@ -259,6 +269,7 @@ export {
   PageBuilderOverview,
   PageBuilderView,
   RemoveLayoutToolbarSlot,
+  SetBuilderView,
   ShownOnSection,
   TemplateAddressField,
   TemplateCollectionField,

@@ -8,8 +8,11 @@
  * It reads and writes through the same site-style client the editor does
  * (`useSiteStyle`, and the writers `SiteFontsScreen` owns), so a font added
  * here is in every font picker of the builder, and one added there is listed
- * here. The page is registered for those who may change the site's design
- * (`update-site-style`), the same permission every font route asks.
+ * here. The screen sits in the same Variables studio the Design panel wraps
+ * it in, so it says where each font is used and sets the Body and Headings
+ * fonts as the builder does. The page is registered for those who may change
+ * the site's design (`update-site-style`), the same permission every font
+ * route asks.
  *
  * @module admin/fonts/FontsPage
  */
@@ -18,7 +21,12 @@ import { useId, useMemo, type JSX } from "react";
 
 import { readSiteStyleRecord } from "../../site-style-record";
 import { SiteFontsScreen } from "../editor/site-style-fonts";
-import { offerableFaces, renderedTokens } from "../editor/site-style-studios";
+import {
+  offerableFaces,
+  offerableTokens,
+  renderedTokens,
+  TokensStudio,
+} from "../editor/site-style-studios";
 import { PLUGIN_SOURCE } from "../editor/stored-document";
 import { PageBuilderBreadcrumb } from "../page-breadcrumb";
 import { useSiteStyle } from "../site-style-client";
@@ -41,6 +49,9 @@ export function FontsPage(): JSX.Element {
     [config]
   );
   const read = useSiteStyle(configSiteStyle);
+  // The text styles Site text rows follow, so a font one draws is guarded
+  // here as in the builder.
+  const classes = read.siteStyle?.classes;
   return (
     <div className="min-h-[calc(100vh-4rem)] w-full max-w-full px-4 py-6 @sm/content:px-6 @sm/content:py-8 @2xl/content:px-8">
       <PageBuilderBreadcrumb page={FONTS_PAGE_NAME} />
@@ -55,16 +66,23 @@ export function FontsPage(): JSX.Element {
       </div>
       {/* The builder's own tokens, so the screen draws as it does there. */}
       <div className="nx-builder-tokens nx-fonts-page">
-        <SiteFontsScreen
-          labelledBy={heading}
-          faces={offerableFaces(read.siteStyle, read.pending, read.error)}
-          codeFaces={configSiteStyle.fonts}
-          tokens={renderedTokens(read.siteStyle, read.pending, read.error)}
-          absence={read.error !== null ? "failed" : "pending"}
-          storedFaces={read.stored?.fonts}
-          storedPending={read.pending}
-          unreadableFonts={read.unreadableFonts}
-        />
+        <TokensStudio
+          merged={offerableTokens(read.siteStyle, read.pending, read.error)}
+          supplied={configSiteStyle.tokens}
+          pending={read.pending}
+          {...(classes === undefined ? {} : { classes })}
+        >
+          <SiteFontsScreen
+            labelledBy={heading}
+            faces={offerableFaces(read.siteStyle, read.pending, read.error)}
+            codeFaces={configSiteStyle.fonts}
+            tokens={renderedTokens(read.siteStyle, read.pending, read.error)}
+            absence={read.error !== null ? "failed" : "pending"}
+            storedFaces={read.stored?.fonts}
+            storedPending={read.pending}
+            unreadableFonts={read.unreadableFonts}
+          />
+        </TokensStudio>
       </div>
     </div>
   );

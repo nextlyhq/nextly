@@ -46,6 +46,17 @@ export interface NextlyExtension {
    * author wrote.
    */
   description?: string | null;
+  /**
+   * The group a colour is listed under in the Design panel, when it has one.
+   * Display only, as the label is: the path the token is written at is its
+   * code name, which a group never changes.
+   */
+  group?: string;
+  /**
+   * The two sizes in px a fluid size was made from, when "Fluid…" made it,
+   * so it reopens with them and a change of the fluid range remakes it.
+   */
+  fluid?: { small: number; large: number };
 }
 
 /** A DTCG group or token; the format is a tree of plain JSON. */

@@ -17,6 +17,8 @@
  *   take the stage's primary step, else the roles that may; no one in a stage with no step out.
  * - Each part names its last move: the latest workflow event that involved it, not the document's
  *   latest and not its first.
+ * - Each part's stage, and each waiting item's, is named as Settings shows it: the label and
+ *   colour saved for it, else the code's label and no colour.
  * - Each step out of a part's stage says whether the caller may take it, judged as the step itself
  *   judges its caller (its permission, a person for an approval, no self-approval where refused),
  *   and whether it is the stage's primary step.
@@ -49,6 +51,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { defineCollection, text } from "../../../config";
+import { getSchema } from "../../../api/singles-detail";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { listRoleSlugsForUserOrRefuse } from "../../../services/lib/permissions";
@@ -66,7 +69,9 @@ import {
   giveRole,
   person,
   role,
+  saveIn,
   seedState,
+  shownVersion,
   stateDb,
   stateOf,
   superAdminRole,
@@ -599,6 +604,41 @@ describe.each(getConfiguredTestDialects())(
         expect(steps.bounce.mayTake).toBe(true);
       });
 
+      it("tells the caller whether they may publish it without review, as the publish gate judges it", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "una", [
+          ["read", PAGES],
+          ["publish-without-review", PAGES],
+        ]);
+        await person(app(), "nan", [["read", PAGES]]);
+        const id = await entry(app(), PAGES);
+        const document = { collection: PAGES, id };
+        // A key holding the permission itself: an emergency publish is a person's act.
+        const key: Who = {
+          kind: "key",
+          owner: "una",
+          grants: [
+            ["read", PAGES],
+            ["publish-without-review", PAGES],
+          ],
+        };
+
+        const holder = await door.reviewState(
+          { kind: "person", id: "una" },
+          document
+        );
+        const other = await door.reviewState(
+          { kind: "person", id: "nan" },
+          document
+        );
+        const byKey = await door.reviewState(key, document);
+
+        expect(holder.mayPublishWithoutReview).toBe(true);
+        expect(other.mayPublishWithoutReview).toBe(false);
+        expect(byKey.mayPublishWithoutReview).toBe(false);
+      });
+
       it("marks the stage's primary step, and only it", async () => {
         current = await bootSteps(dialect);
         await people();
@@ -623,6 +663,114 @@ describe.each(getConfiguredTestDialects())(
         ]);
       });
 
+      it("marks the steps that need a comment: a request for changes always, any other that asks", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        const id = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, id, null), "legal", {
+          definitionHash: HASH,
+        });
+
+        const steps = (await onlyPart(door, id)).steps as Doc[];
+
+        expect(steps.map(step => [step.name, step.commentRequired])).toEqual([
+          ["clear", false],
+          ["bounce", true],
+          ["park", true],
+        ]);
+      });
+
+      it.runIf(door.name === "REST")(
+        "names a collection's workflow in its schema read, before any document exists, and null where none is attached",
+        async () => {
+          current = await bootSteps(dialect, undefined, {
+            collections: [plain],
+          });
+          await people();
+          await person(app(), "carol", [
+            ["read", PLAIN],
+            ["update", PLAIN],
+          ]);
+
+          const held = await rest(
+            "GET",
+            ["collections", "schema", PAGES],
+            ALICE
+          );
+          const free = await rest("GET", ["collections", "schema", PLAIN], {
+            kind: "person",
+            id: "carol",
+          });
+
+          expect(held.workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+          expect(free.workflow).toBeNull();
+
+          // A visitor is refused the read, so the workflow is never named to one.
+          const anonymous = await createDynamicHandlers().GET(
+            new Request(`http://localhost/api/collections/schema/${PAGES}`, {
+              headers: { origin: "http://localhost" },
+            }),
+            {
+              params: Promise.resolve({
+                params: ["collections", "schema", PAGES],
+              }),
+            }
+          );
+          expect(anonymous.status).toBe(401);
+          expect(await anonymous.text()).not.toContain("editorial");
+        }
+      );
+
+      it.runIf(door.name === "REST")(
+        "names a Single's workflow in its schema read, and never to a visitor",
+        async () => {
+          current = await bootSteps(dialect);
+          await person(app(), "dana", [["read", "banner"]]);
+
+          const read = await rest("GET", ["singles", "banner", "schema"], {
+            kind: "person",
+            id: "dana",
+          });
+
+          expect(read.workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+          // The exported schema helper a site can mount names it the same way.
+          const mounted = await getSchema(
+            new Request("http://localhost/api/singles/banner/schema", {
+              headers: {
+                ...(await headersFor({ kind: "person", id: "dana" })),
+                origin: "http://localhost",
+              },
+            }),
+            "banner"
+          );
+          expect(mounted.status).toBe(200);
+          expect(((await mounted.json()) as Doc).workflow).toEqual({
+            slug: "editorial",
+            label: "Editorial",
+          });
+
+          // A visitor is refused the read, so the workflow is never named to one.
+          const anonymous = await createDynamicHandlers().GET(
+            new Request("http://localhost/api/singles/banner/schema", {
+              headers: { origin: "http://localhost" },
+            }),
+            {
+              params: Promise.resolve({
+                params: ["singles", "banner", "schema"],
+              }),
+            }
+          );
+          expect(anonymous.status).toBe(401);
+          expect(await anonymous.text()).not.toContain("editorial");
+        }
+      );
+
       it("answers a document of a collection with no workflow as no workflow and no parts", async () => {
         current = await bootSteps(dialect, undefined, {
           collections: [plain],
@@ -644,7 +792,11 @@ describe.each(getConfiguredTestDialects())(
           })
         );
 
-        expect(state).toEqual({ workflow: null, parts: [] });
+        expect(state).toEqual({
+          workflow: null,
+          parts: [],
+          mayPublishWithoutReview: false,
+        });
         expect(step).toEqual({ status: 400, code: "VALIDATION_ERROR" });
       });
 
@@ -1038,6 +1190,46 @@ describe.each(getConfiguredTestDialects())(
             .map(item => (item.document as Doc).entryId)
             .sort()
         ).toEqual([...ids].sort());
+      });
+
+      it("names each part's stage, here and in what waits, as Settings shows it: its label and colour, else the code's label and none", async () => {
+        current = await bootSteps(dialect);
+        await people();
+        await writeWorkflowSettings(
+          stateDb(app()),
+          "editorial",
+          { stages: { writing: { label: "Drafting", colour: "#16a34a" } } },
+          null,
+          null
+        );
+        const drafting = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, drafting, null), "writing", {
+          definitionHash: HASH,
+          assignee: { kind: "user", id: "alice" },
+        });
+        const legal = await entry(app(), PAGES);
+        await seedState(app(), partOf(PAGES, legal, null), "legal", {
+          definitionHash: HASH,
+        });
+
+        expect(await onlyPart(door, drafting)).toMatchObject({
+          stage: "writing",
+          stageLabel: "Drafting",
+          stageColour: "#16a34a",
+        });
+        expect(await onlyPart(door, legal)).toMatchObject({
+          stage: "legal",
+          stageLabel: "Legal check",
+          stageColour: null,
+        });
+        const waiting = await door.waiting(ALICE, { page: 1, limit: 10 });
+        expect(waiting.items).toEqual([
+          expect.objectContaining({
+            stage: "writing",
+            stageLabel: "Drafting",
+            stageColour: "#16a34a",
+          }),
+        ]);
       });
 
       it("names a part's assignee as who it waits for, before its stage's default reviewer", async () => {
@@ -1465,13 +1657,20 @@ describe.each(getConfiguredTestDialects())(
         };
         const SAM: Who = { kind: "person", id: "sam" };
         const statements = async () => {
-          // Once to warm what a first call caches, then counted.
-          await door.waiting(SAM, { page: 1, limit: 50 });
-          return (
-            await statementsOf(dialect, () =>
+          // The stored schema count is read again once SCHEMA_VERSION_READ_INTERVAL_MS has passed,
+          // so a slower call could count that read too. Its clock is frozen and the count read once
+          // on it, so neither call below reads it again.
+          vi.useFakeTimers({ toFake: ["performance"] });
+          try {
+            await storedSchemaSeq(app().adapter, { fresh: true });
+            // Once to warm what a first call caches, then counted.
+            await door.waiting(SAM, { page: 1, limit: 50 });
+            return await statementsOf(dialect, () =>
               door.waiting(SAM, { page: 1, limit: 50 })
-            )
-          ).length;
+            );
+          } finally {
+            vi.useRealTimers();
+          }
         };
 
         await seed(3);
@@ -1481,7 +1680,11 @@ describe.each(getConfiguredTestDialects())(
         expect(
           (await door.waiting(SAM, { page: 1, limit: 50 })).meta
         ).toMatchObject({ total: 15 });
-        expect(many).toBe(few);
+        // Both lists in the message, so a failure names the statement that differs.
+        expect(
+          many.length,
+          `3 parts:\n${few.join("\n")}\n\n15 parts:\n${many.join("\n")}`
+        ).toBe(few.length);
       });
 
       it("reads exactly as many parts as it may whole, and cuts nothing it read in full", async () => {
@@ -1575,28 +1778,83 @@ describe.each(getConfiguredTestDialects())(
         ).toBe(few.length);
       });
 
-      it("marks the total a floor when there is more waiting than it reads", async () => {
-        // More parts wait than one list reads: the total counts those read, and says it is a floor.
-        // None of these documents exists, so none is readable, and the total read is 0 — yet more
-        // may wait past the cap, which `totalCapped` says rather than a bare 0.
+      it("marks the total a floor when it stops before reading everything", async () => {
+        // 6 parts Sam may move come first, then 1,000 no one may read. Page 1 needs 6 (its 5 and one
+        // more, to know there is a next), which the first window holds, so it stops there: the
+        // total it found is a floor, and there is a next page. Page 2 reads to the end: exact.
         current = await bootSteps(dialect);
         await people();
         await person(app(), "sam", [
           ["read", PAGES],
           ["sign-off", PAGES],
         ]);
-        for (let n = 0; n <= 1000; n += 1) {
+        const earlier = new Date("2026-11-01T10:00:00.000Z");
+        for (let n = 0; n < 6; n += 1) {
+          await seedState(
+            app(),
+            partOf(PAGES, await entry(app(), PAGES), null),
+            "legal",
+            { definitionHash: HASH, enteredAt: earlier }
+          );
+        }
+        for (let n = 0; n < 1000; n += 1) {
           await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
             definitionHash: HASH,
           });
         }
+        const SAM: Who = { kind: "person", id: "sam" };
 
-        const page = await door.waiting(
-          { kind: "person", id: "sam" },
-          { page: 1, limit: 10 }
-        );
-        expect(page.items).toEqual([]);
-        expect(page.meta).toMatchObject({ total: 0, totalCapped: true });
+        const first = await door.waiting(SAM, { page: 1, limit: 5 });
+        expect(first.items).toHaveLength(5);
+        expect(first.meta).toMatchObject({
+          total: 6,
+          totalCapped: true,
+          hasNext: true,
+        });
+        const second = await door.waiting(SAM, { page: 2, limit: 5 });
+        expect(second.items).toHaveLength(1);
+        expect(second.meta).toMatchObject({ total: 6, hasNext: false });
+        expect(second.meta.totalCapped).toBeUndefined();
+      });
+
+      it("reaches every page of work past what one request reads", async () => {
+        // 1,005 parts no one may read come first, then 10 Sam may: more hidden parts than one window
+        // holds. The list reads on, a window at a time, until it has the page and one more, so both
+        // pages of 5 are reachable and the first says there is a next.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        for (let n = 0; n < 1005; n += 1) {
+          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
+            definitionHash: HASH,
+          });
+        }
+        const later = new Date("2026-11-03T10:00:00.000Z");
+        const readable: string[] = [];
+        for (let n = 0; n < 10; n += 1) {
+          const id = await entry(app(), PAGES);
+          readable.push(id);
+          await seedState(app(), partOf(PAGES, id, null), "legal", {
+            definitionHash: HASH,
+            enteredAt: later,
+          });
+        }
+        const SAM: Who = { kind: "person", id: "sam" };
+
+        const first = await door.waiting(SAM, { page: 1, limit: 5 });
+        const second = await door.waiting(SAM, { page: 2, limit: 5 });
+        expect(first.items).toHaveLength(5);
+        expect(first.meta).toMatchObject({ hasNext: true });
+        expect(second.items).toHaveLength(5);
+        expect(second.meta).toMatchObject({ total: 10, hasNext: false });
+        expect(
+          [...first.items, ...second.items]
+            .map(item => (item.document as Doc).entryId)
+            .sort()
+        ).toEqual([...readable].sort());
       });
 
       it("lists for a key scoped to one role only that role's work", async () => {
@@ -1770,6 +2028,83 @@ describe.each(getConfiguredTestDialects())(
           expect.objectContaining({ single: "banner", code: "NOT_FOUND" }),
         ]);
         expect(JSON.stringify(answer.refused)).not.toContain(String(banner.id));
+      });
+
+      it("names each part's version under review: a language's newest, and the shared part's newest in any language", async () => {
+        current = await bootSteps(dialect);
+        await person(app(), "alice", [
+          ["read", POSTS],
+          ["update", POSTS],
+        ]);
+        const id = await entry(app(), POSTS);
+        // Spanish saved after English, so the shared part's newest version is the Spanish one.
+        await saveIn(app(), POSTS, id, "es", { title: "Hola" });
+
+        const parts = partsOf(
+          await door.reviewState(ALICE, { collection: POSTS, id })
+        );
+        const reviewed = (part: string | null) =>
+          parts.find(each => each.part === part)?.reviewedVersionNo;
+
+        // The same version core reviews and approves for each part.
+        expect(reviewed("en")).toBe(await shownVersion(app(), POSTS, id, "en"));
+        expect(reviewed("es")).toBe(await shownVersion(app(), POSTS, id, "es"));
+        expect(reviewed(null)).toBe(await shownVersion(app(), POSTS, id, null));
+        expect(reviewed(null)).toBe(reviewed("es"));
+        expect(Number(reviewed("en"))).toBeLessThan(Number(reviewed("es")));
+        // A language never saved has nothing under review.
+        expect(reviewed("ar")).toBeNull();
+
+        // English saved again, after Spanish: the shared part's version under review moves with it.
+        await saveIn(app(), POSTS, id, "en", { title: "Hello again" });
+        const later = partsOf(
+          await door.reviewState(ALICE, { collection: POSTS, id })
+        );
+        const reviewedLater = (part: string | null) =>
+          later.find(each => each.part === part)?.reviewedVersionNo;
+        expect(reviewedLater("en")).toBe(
+          await shownVersion(app(), POSTS, id, "en")
+        );
+        expect(reviewedLater(null)).toBe(
+          await shownVersion(app(), POSTS, id, null)
+        );
+        expect(reviewedLater(null)).toBe(reviewedLater("en"));
+        expect(reviewedLater("es")).toBe(reviewed("es"));
+        expect(Number(reviewedLater("es"))).toBeLessThan(
+          Number(reviewedLater("en"))
+        );
+      });
+
+      it("reads the version history once, however many parts the document has", async () => {
+        // Each part's version under review comes from one grouped read: a document kept in three
+        // languages and a shared part reads the history as often as one kept in none.
+        current = await bootSteps(dialect);
+        await person(app(), "alice", [
+          ["read", POSTS],
+          ["update", POSTS],
+          ["read", PAGES],
+          ["update", PAGES],
+        ]);
+        const post = await entry(app(), POSTS);
+        await saveIn(app(), POSTS, post, "es", { title: "Hola" });
+        await saveIn(app(), POSTS, post, "ar", { title: "Marhaba" });
+        const page = await entry(app(), PAGES);
+        const historyReads = async (collection: string, id: string) =>
+          (
+            await statementsOf(dialect, () =>
+              door.reviewState(ALICE, { collection, id })
+            )
+          ).filter(statement => statement.includes("nextly_versions"));
+
+        const onePart = await historyReads(PAGES, page);
+        const fourParts = await historyReads(POSTS, post);
+        // The reads did reach the history: a count of none would equal none.
+        expect(onePart.length).toBeGreaterThan(0);
+        // Both lists in the message, so a failure names the statement that differs.
+        expect(
+          fourParts.length,
+          `1 part:\n${onePart.join("\n")}\n\n4 parts:\n${fourParts.join("\n")}`
+        ).toBe(onePart.length);
       });
 
       it("names no last move for a part that never moved, though another part did", async () => {
@@ -1989,6 +2324,8 @@ describe.each(getConfiguredTestDialects())(
       expect(steps.park.mayTake).toBe(true);
       expect(steps.clear.mayTake).toBe(false);
       expect(steps.bounce.mayTake).toBe(false);
+      // Trusted code may publish past the workflow, as the publish gate lets it.
+      expect(state.mayPublishWithoutReview).toBe(true);
       // As the step itself answers trusted code.
       expect(clear).toBe("FORBIDDEN");
     });

@@ -4,13 +4,14 @@ import { Badge, Button, Skeleton } from "@nextlyhq/ui";
 import type { JSX } from "react";
 
 import { Lock, User } from "@admin/components/icons";
+import type { OpenActivity } from "@admin/hooks/queries/useEmailActivity";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { formatRelativeTime } from "@admin/lib/dashboard";
 
-import { notStoredLabel } from "./activity-choices";
 import {
   RECIPIENT_KIND_LABELS,
   outcomeBadge,
+  providerLabel,
   whatHappened,
   type ActivityRow,
 } from "./activity-model";
@@ -31,9 +32,13 @@ export interface ActivityListProps {
   isLoading: boolean;
   /** Whether any filter narrows the list, for the empty state's words. */
   filtered: boolean;
+  /** Whether the rows are a search by address's, for the empty state's words. */
+  searching?: boolean;
   hasMore: boolean;
   isLoadingMore: boolean;
   onLoadMore: () => void;
+  /** Opens a row's detail sheet; rows aren't openable without it. */
+  onOpen?: (open: OpenActivity) => void;
 }
 
 /**
@@ -57,6 +62,8 @@ function whenText(at: Date): string {
 /** Everything one row shows, worked out once for the table and the card alike. */
 interface RowView {
   key: string;
+  /** Which sheet this row opens. */
+  open: OpenActivity;
   when: string;
   ago: string;
   badge: ReturnType<typeof outcomeBadge>;
@@ -67,6 +74,11 @@ interface RowView {
   person: string | null;
   provider: string;
   recipient: string;
+  /**
+   * Provider and recipient on one line, for widths that hide their columns:
+   * whichever of the two is known, or null when neither is.
+   */
+  compact: string | null;
   happened: ReturnType<typeof whatHappened>;
 }
 
@@ -75,43 +87,43 @@ function emailOf(
   row: ActivityRow,
   names: ActivityNames
 ): { email: string; emailIsSlug: boolean } {
-  if (row.templateSlug === null) {
-    return {
-      email: row.source === "queued" ? "No template recorded" : "No template",
-      emailIsSlug: false,
-    };
+  if (row.template === "none")
+    return { email: "No template", emailIsSlug: false };
+  if (row.template === "not-recorded") {
+    return { email: "Template not recorded", emailIsSlug: false };
   }
-  const name = names.template(row.templateSlug);
+  const { slug } = row.template;
+  const name = names.template(slug);
   return name === undefined
-    ? { email: row.templateSlug, emailIsSlug: true }
+    ? { email: slug, emailIsSlug: true }
     : { email: name, emailIsSlug: false };
 }
 
-/** Whether the send named a person on the site, or the recipient was erased since. */
+/** Whether a delivery's recipient was erased since. */
 function personOf(row: ActivityRow): string | null {
-  if (row.source !== "delivery") return null;
-  if (row.erased) return "Erased";
-  return row.namedPerson ? "Named a person" : null;
+  return row.erased ? "Erased" : null;
 }
 
-/** The provider a delivery went through; a queued row has none to show yet. */
-function providerOf(row: ActivityRow, names: ActivityNames): string {
-  if (row.source !== "delivery") return "—";
-  const { id, type } = row.provider;
-  if (id === null) return notStoredLabel(type);
-  return names.provider(id) ?? type;
-}
-
-/** To, Cc or Bcc for a delivery; a queued row has none to show yet. */
+/** To, Cc or Bcc, every kind a row went to; none to show before it is tried. */
 function recipientOf(row: ActivityRow): string {
-  return row.source === "delivery"
-    ? RECIPIENT_KIND_LABELS[row.recipientKind]
-    : "—";
+  if (row.recipientKinds === null || row.recipientKinds.length === 0) {
+    return "—";
+  }
+  return row.recipientKinds.map(kind => RECIPIENT_KIND_LABELS[kind]).join(", ");
+}
+
+/**
+ * Provider and recipient as one line: a queued email not yet tried still
+ * knows who it goes to, so each part shows when it is known.
+ */
+function compactOf(provider: string, recipient: string): string | null {
+  const known = [provider, recipient].filter(part => part !== "—");
+  return known.length > 0 ? known.join(" · ") : null;
 }
 
 /** Which attempt a queued email is on, once it has made one. */
 function attemptOf(row: ActivityRow): string | null {
-  return row.source === "queued" && row.attempts > 0
+  return row.source === "queued" && row.attempts !== null && row.attempts > 0
     ? `Attempt ${row.attempts}`
     : null;
 }
@@ -119,6 +131,7 @@ function attemptOf(row: ActivityRow): string | null {
 function viewOf(row: ActivityRow, names: ActivityNames, now: Date): RowView {
   return {
     key: `${row.source}:${row.id}`,
+    open: { source: row.source, id: row.id },
     when: whenText(row.at),
     ago: formatRelativeTime(row.at.toISOString(), now.getTime(), "short"),
     badge: outcomeBadge(row),
@@ -126,25 +139,45 @@ function viewOf(row: ActivityRow, names: ActivityNames, now: Date): RowView {
     ...emailOf(row, names),
     queued: row.source === "queued",
     person: personOf(row),
-    provider: providerOf(row, names),
+    provider: providerLabel(row.provider, names.provider),
+    compact: compactOf(
+      providerLabel(row.provider, names.provider),
+      recipientOf(row)
+    ),
     recipient: recipientOf(row),
     happened: whatHappened(row, now),
   };
 }
 
-function EmailCell({ view }: { view: RowView }) {
+function EmailCell({
+  view,
+  onOpen,
+}: {
+  view: RowView;
+  onOpen?: (open: OpenActivity) => void;
+}) {
+  const nameClass = view.emailIsSlug
+    ? "break-all font-mono text-xs"
+    : "break-words font-medium";
   return (
     <div className="min-w-0 space-y-1">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span
-          className={
-            view.emailIsSlug
-              ? "break-all font-mono text-xs"
-              : "break-words font-medium"
-          }
-        >
-          {view.email}
-        </span>
+        {onOpen ? (
+          // The way into the row's sheet from the keyboard; a click anywhere
+          // on the row opens it too.
+          <button
+            type="button"
+            className={`${nameClass} rounded-sm text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+            onClick={event => {
+              event.stopPropagation();
+              onOpen(view.open);
+            }}
+          >
+            {view.email}
+          </button>
+        ) : (
+          <span className={nameClass}>{view.email}</span>
+        )}
         {view.queued && (
           <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             Queued
@@ -181,17 +214,18 @@ function HappenedCell({ view }: { view: RowView }) {
           {view.happened.detail}
         </div>
       )}
-      {view.happened.note && (
-        <div className="text-xs text-muted-foreground">
-          {view.happened.note}
-        </div>
-      )}
     </div>
   );
 }
 
 /** At tablet width and up: a table, one row per delivery or queued email. */
-function ActivityTable({ views }: { views: RowView[] }) {
+function ActivityTable({
+  views,
+  onOpen,
+}: {
+  views: RowView[];
+  onOpen?: (open: OpenActivity) => void;
+}) {
   return (
     <div className="hidden overflow-hidden rounded-lg border border-border md:block">
       <table className="w-full table-fixed text-sm">
@@ -227,7 +261,8 @@ function ActivityTable({ views }: { views: RowView[] }) {
           {views.map(view => (
             <tr
               key={view.key}
-              className="border-b border-border align-top last:border-b-0"
+              className={`border-b border-border align-top last:border-b-0${onOpen ? " cursor-pointer hover:bg-muted/40" : ""}`}
+              onClick={onOpen ? () => onOpen(view.open) : undefined}
             >
               <td className="px-4 py-3">
                 <div className="whitespace-nowrap">{view.when}</div>
@@ -237,15 +272,15 @@ function ActivityTable({ views }: { views: RowView[] }) {
                 <OutcomeCell view={view} />
               </td>
               <td className="px-4 py-3">
-                <EmailCell view={view} />
-                {view.provider !== "—" && (
+                <EmailCell view={view} onOpen={onOpen} />
+                {view.compact && (
                   // Below the width that shows the Provider and Recipient
                   // columns, carried under the email instead.
                   <div
                     data-compact-details
                     className="mt-1 break-words text-xs text-muted-foreground xl:hidden"
                   >
-                    {view.provider} · {view.recipient}
+                    {view.compact}
                   </div>
                 )}
               </td>
@@ -267,16 +302,23 @@ function ActivityTable({ views }: { views: RowView[] }) {
 }
 
 /** At phone width: a card per delivery or queued email, carrying the same. */
-function ActivityCards({ views }: { views: RowView[] }) {
+function ActivityCards({
+  views,
+  onOpen,
+}: {
+  views: RowView[];
+  onOpen?: (open: OpenActivity) => void;
+}) {
   return (
     <div className="space-y-3 md:hidden">
       {views.map(view => (
         <article
           key={view.key}
-          className="space-y-3 rounded-lg border border-border bg-card p-4"
+          className={`space-y-3 rounded-lg border border-border bg-card p-4${onOpen ? " cursor-pointer" : ""}`}
+          onClick={onOpen ? () => onOpen(view.open) : undefined}
         >
           <div className="flex items-start justify-between gap-3">
-            <EmailCell view={view} />
+            <EmailCell view={view} onOpen={onOpen} />
             <OutcomeCell view={view} />
           </div>
           <HappenedCell view={view} />
@@ -296,6 +338,19 @@ function ActivityCards({ views }: { views: RowView[] }) {
   );
 }
 
+/** Why the list is empty: a search that found nothing, filters, or a quiet time. */
+function emptyText(searching: boolean, filtered: boolean): string {
+  if (searching) {
+    // Filtered, an empty search shows only that nothing sent there matches.
+    return filtered
+      ? "Nothing sent to this address matches these filters."
+      : "Nothing was sent to this address in this time.";
+  }
+  return filtered
+    ? "Nothing matches these filters."
+    : "No email has been sent in this time.";
+}
+
 /**
  * The Activity list: every delivery and queued email, newest first, as a
  * table at tablet width and up and as cards on a phone, with "Load more" at
@@ -307,9 +362,11 @@ export function ActivityList({
   now,
   isLoading,
   filtered,
+  searching = false,
   hasMore,
   isLoadingMore,
   onLoadMore,
+  onOpen,
 }: ActivityListProps): JSX.Element {
   const views = rows.map(row => viewOf(row, names, now));
   return (
@@ -332,14 +389,12 @@ export function ActivityList({
         </div>
       ) : views.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-          {filtered
-            ? "Nothing matches these filters."
-            : "No email has been sent in this time."}
+          {emptyText(searching, filtered)}
         </div>
       ) : (
         <>
-          <ActivityTable views={views} />
-          <ActivityCards views={views} />
+          <ActivityTable views={views} onOpen={onOpen} />
+          <ActivityCards views={views} onOpen={onOpen} />
         </>
       )}
       {hasMore && !isLoading && (

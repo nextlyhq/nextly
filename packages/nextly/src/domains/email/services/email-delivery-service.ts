@@ -26,8 +26,22 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, desc, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
+import {
+  and,
+  desc,
+  eq,
+  getTableColumns,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
+import { loadedDialect } from "../../../database/dialect-tables";
 import { toDbError } from "../../../database/errors";
 import { getDialectTables } from "../../../database/index";
 import { NextlyError } from "../../../errors";
@@ -67,6 +81,14 @@ import {
   type EmailDeliveryStatus,
 } from "../delivery-record";
 import { eraseRecipientDeliveries } from "../erase-recipient";
+import {
+  originCondition,
+  providerExists,
+  providerRead,
+  providersTablePresent,
+  type FilterableOrigin,
+  type ProviderRead,
+} from "../provider-origin";
 import { pruneSendClaims } from "../prune";
 import type { ResolvedEmailRetentionConfig } from "../retention-config";
 import {
@@ -138,6 +160,9 @@ interface EmailDeliveryRow {
   templateDigest: string | null;
   failureKind: string | null;
   failureStatus: number | null;
+  providerOrigin: string | null;
+  /** Whether its provider row exists, read with the row. */
+  providerExists: unknown;
   createdAt: Date;
 }
 
@@ -172,6 +197,11 @@ export interface EmailDeliveryRecord {
   templateVersion: DeliveryTemplateVersion | "not-recorded";
   /** The provider's structured answer, for a failed recipient. */
   failure: DeliveryFailure | null;
+  /**
+   * The provider as it reads now: its id only while it exists, its type,
+   * and where it came from (`provider-origin`).
+   */
+  provider: ProviderRead;
   createdAt: Date;
 }
 
@@ -186,6 +216,12 @@ export interface EmailDeliveryRecord {
  */
 function toDeliveryRecord(row: EmailDeliveryRow): EmailDeliveryRecord {
   return {
+    provider: providerRead(
+      row.providerType,
+      row.providerId,
+      row.providerOrigin,
+      row.providerExists
+    ),
     id: row.id,
     providerId: row.providerId,
     providerType: row.providerType,
@@ -239,6 +275,14 @@ function failureOfRow(row: EmailDeliveryRow): DeliveryFailure | null {
 export interface ListDeliveriesOptions {
   /** One record, by its id. */
   id?: string;
+  /**
+   * Only records that stand on their own: a send that was not queued, or
+   * an attempt of a queued email whose row has since been pruned (the queue
+   * keeps a settled email 7 days, the log its records far longer).
+   */
+  standalone?: true;
+  /** Only records whose provider reads as this origin now. */
+  providerOrigin?: FilterableOrigin;
   /** The attempts of one queued email. */
   queuedId?: string;
   /** Hash of the address to look for; callers pass an address, not a hash. */
@@ -888,6 +932,7 @@ export class EmailDeliveryService extends BaseService {
       messageId: input.messageId ?? null,
       keyDigest: input.keyDigest ?? null,
       queuedId: input.queuedId ?? null,
+      providerOrigin: input.providerOrigin ?? null,
       ...templateVersionColumns(input.templateVersion),
       failureKind: input.failure?.kind ?? null,
       failureStatus: input.failure?.status ?? null,
@@ -950,6 +995,15 @@ export class EmailDeliveryService extends BaseService {
     return typeof maxAge === "number" ? new Date(now.getTime() - maxAge) : null;
   }
 
+  /** Records with no queued email still kept to read them under. */
+  private standsAlone(): SQL {
+    const queue = loadedDialect(this.dialect).tables.emailQueue;
+    return or(
+      isNull(this.deliveries.queuedId),
+      sql`not exists (select 1 from ${queue} where ${queue.id} = ${this.deliveries.queuedId})`
+    ) as SQL;
+  }
+
   /**
    * List recorded deliveries, newest first.
    *
@@ -960,6 +1014,12 @@ export class EmailDeliveryService extends BaseService {
   async list(
     options: ListDeliveriesOptions = {}
   ): Promise<EmailDeliveryRecord[]> {
+    let present: boolean;
+    try {
+      present = await providersTablePresent(this.db as never, this.dialect);
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
     const filters = [
       options.recipient !== undefined
         ? inArray(
@@ -995,6 +1055,15 @@ export class EmailDeliveryService extends BaseService {
         ? sql`CAST(${this.deliveries.providerType} AS BINARY) = CAST(${options.providerType} AS BINARY)`
         : undefined,
       options.id !== undefined ? eq(this.deliveries.id, options.id) : undefined,
+      options.standalone ? this.standsAlone() : undefined,
+      options.providerOrigin !== undefined
+        ? originCondition(
+            this.deliveries,
+            options.providerOrigin,
+            this.dialect,
+            present
+          )
+        : undefined,
       options.queuedId !== undefined
         ? eq(this.deliveries.queuedId, options.queuedId)
         : undefined,
@@ -1028,7 +1097,15 @@ export class EmailDeliveryService extends BaseService {
     let rows: unknown[];
     try {
       rows = await this.db
-        .select()
+        .select({
+          ...getTableColumns(this.deliveries),
+          // Read with the row, as the origin filter tests it.
+          providerExists: providerExists(
+            this.deliveries,
+            this.dialect,
+            present
+          ),
+        })
         .from(this.deliveries)
         .where(filters.length > 0 ? and(...filters) : undefined)
         // `id` breaks the tie, and what that buys is DETERMINISM, not

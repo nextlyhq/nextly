@@ -351,6 +351,50 @@ describe("RepairNotice", () => {
     ).toBeTruthy();
   });
 
+  it("plans once per document, not again for a selection", () => {
+    const seen: { editor?: EditorState; plans: number } = { plans: 0 };
+    // One document object, as a host holds its page: a new one each render
+    // would be a new baseline, which plans again rightly.
+    const initialDocument = rowHolding(headline("extra"));
+    function Host() {
+      const editor = useEditorState({ initialDocument });
+      seen.editor = editor;
+      const { planRepair } = editor;
+      // The store's own planner, counted, kept as stable as the store keeps it.
+      const counted = React.useCallback(
+        (document?: BlockDocument) => {
+          seen.plans += 1;
+          return planRepair(document);
+        },
+        [planRepair]
+      );
+      const watched = React.useMemo(
+        () => ({ ...editor, planRepair: counted }),
+        [editor, counted]
+      );
+      return <RepairNotice editor={watched} />;
+    }
+    render(<Host />);
+    expect(seen.plans).toBe(1);
+
+    // A selection gives the store a new object and the page stays the same.
+    act(() => {
+      seen.editor!.select("kept");
+    });
+    expect(seen.editor!.selectedId).toBe("kept");
+    expect(seen.plans).toBe(1);
+
+    // An edit gives it a new page, which is planned again.
+    act(() => {
+      seen.editor!.apply({
+        kind: "update",
+        id: "kept",
+        patch: { props: { note: "x" } },
+      });
+    });
+    expect(seen.plans).toBe(2);
+  });
+
   it("plans under the caps the editor applies edits under", () => {
     // The row is missing the headline it starts with. Adding it would pass
     // the editor's own node cap, so no repair the apply would refuse is

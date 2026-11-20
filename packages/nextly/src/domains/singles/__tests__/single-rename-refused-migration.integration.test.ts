@@ -8,7 +8,8 @@
  * that is no longer there until it is saved again.
  *
  * The refusal is staged by holding the migration runner, since what a database refuses differs by
- * dialect and the point is what happens after any refusal, not which one.
+ * dialect and the point is what happens after any refusal, not which one: the service's own
+ * statements, and the save's migration file, which a translated Single's save runs in development.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -36,6 +37,20 @@ vi.mock("../../schema/services/apply-migration-statements", async original => {
     ) => {
       if (refusal.on) throw new Error("the database refused the migration");
       return actual.applyMigrationWhole(args);
+    },
+  };
+});
+
+vi.mock("../../schema/busy-table/run-unit", async original => {
+  const actual =
+    await original<typeof import("../../schema/busy-table/run-unit")>();
+  return {
+    ...actual,
+    runUnitInTries: async (
+      ...args: Parameters<typeof actual.runUnitInTries>
+    ) => {
+      if (refusal.on) throw new Error("the database refused the migration");
+      return actual.runUnitInTries(...args);
     },
   };
 });

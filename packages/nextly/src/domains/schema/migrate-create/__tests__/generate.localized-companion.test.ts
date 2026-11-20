@@ -419,40 +419,37 @@ describe("generateMigration — localized companion emission", () => {
       expect(sql).toContain("nextly_i18n_archive");
     });
 
-    it("does not try to restore a translatable field ADDED in the same edit", async () => {
-      // `summary` never existed in the companion, so restoring it from there would emit SQL
-      // that fails on apply. It must be left to the normal diff instead.
+    it("refuses a translatable field ADDED in the same edit, and writes nothing", async () => {
+      // `summary` never existed in the companion, so only the main file could add it. But the
+      // disable runs before the main file and puts `body` back, and the runner runs a main file
+      // only over the table its snapshot starts from: the main file would stand at neither end.
+      // So the two changes are made in two runs, and this one is refused before any file is
+      // written.
       await seedLocalized();
+      const before = await listSqlFiles(migrationsDir);
 
-      const result = await generateMigration({
-        name: "disable_and_add",
-        dialect: "sqlite",
-        migrationsDir,
-        defaultLocale: "en",
-        collections: [
-          {
-            ...plainPages,
-            fields: [...plainPages.fields, { name: "summary", type: "text" }],
-          },
-        ],
-        singles: [],
-        components: [],
-        nonInteractive: true,
-        now: NOW,
-      });
-
-      const files = await listSqlFiles(migrationsDir);
-      const disableFile = files.find(f =>
-        f.includes("disable_localization_pages")
+      await expect(
+        generateMigration({
+          name: "disable_and_add",
+          dialect: "sqlite",
+          migrationsDir,
+          defaultLocale: "en",
+          collections: [
+            {
+              ...plainPages,
+              fields: [...plainPages.fields, { name: "summary", type: "text" }],
+            },
+          ],
+          singles: [],
+          components: [],
+          nonInteractive: true,
+          now: NOW,
+        })
+      ).rejects.toThrow(
+        /turns translation off and changes its table in other ways/
       );
-      expect(disableFile).toBeDefined();
-      const sql = await readFile(resolve(migrationsDir, disableFile!), "utf-8");
-      // `body` was in the companion → restored. `summary` was not → never read from it.
-      expect(sql).toContain(`"body"`);
-      expect(sql).not.toContain(`"summary"`);
-      // The new column is added by the ordinary main migration instead.
-      const mainSql = await readFile(result!.sqlPath, "utf-8");
-      expect(mainSql).toContain(`ADD COLUMN "summary"`);
+
+      expect(await listSqlFiles(migrationsDir)).toEqual(before);
     });
 
     it("does NOT fire when fields are added to a never-localized collection", async () => {

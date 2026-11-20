@@ -32,3 +32,25 @@ export interface WrittenLayout {
   readonly id: string;
   readonly title: string;
 }
+
+/**
+ * Where a new set is made, from one of three starts: a copy of the site
+ * default, the starter header and footer, or empty.
+ */
+export const LAYOUT_NEW_ROUTE_PATH = "/layouts/new";
+
+/** What a new set starts from. */
+export type NewLayoutStart = "copy-default" | "starter" | "empty";
+
+/** Every start, in the order the dialog offers them. */
+export const NEW_LAYOUT_STARTS: readonly NewLayoutStart[] = [
+  "copy-default",
+  "starter",
+  "empty",
+];
+
+/** What the new set write is sent. */
+export interface NewLayoutBody {
+  readonly title: string;
+  readonly start: NewLayoutStart;
+}

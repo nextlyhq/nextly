@@ -14,7 +14,12 @@ import {
 const maps: ReferenceMaps = {
   components: new Map([["c-src", "c-dst"]]),
   classes: new Map([["k-src", "k-dst"]]),
-  tokens: new Map([["color.src", "color.dst"]]),
+  tokens: {
+    ids: new Map([["color.src", "color.dst"]]),
+    identities: ["color.src"],
+    from: "--site-",
+    to: "--site-",
+  },
   breakpoints: new Map([["tablet", "md"]]),
   media: new Map([["m-src", "m-dst"]]),
 };
@@ -332,6 +337,92 @@ describe("rewriteDocument", () => {
       "v-dark": { label: "Dark", overrides: { photo: "m-dst" } },
     });
     expect(rewritten.exposed).toEqual(definition.exposed);
+  });
+});
+
+describe("a file from a site with another variable prefix", () => {
+  /** A file written under `--acme-`, read on a site writing `--site-`. */
+  const acme: ReferenceMaps = {
+    ...maps,
+    tokens: {
+      ids: new Map([
+        ["color.src", "color.dst"],
+        ["color.kept", "color.kept"],
+      ]),
+      identities: ["color.src", "color.kept"],
+      from: "--acme-",
+      to: "--site-",
+    },
+  };
+
+  it("points every var() of a carried variable here, in styles and custom CSS", () => {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      settings: {
+        styles: {
+          base: { base: { backgroundColor: "var(--acme-color-kept)" } },
+        },
+        customCss: ".mark { color: var(--acme-color-src); }",
+      },
+      nodes: [
+        {
+          id: "box",
+          type: "core/box",
+          version: 1,
+          props: {},
+          styles: {
+            base: {
+              base: {
+                boxShadow: "0 0 4px var(--acme-color-src)",
+                color: "var( --acme-color-kept, red)",
+                // Not one of the file's variables: CSS the author typed.
+                outlineColor: "var(--acme-color-src-dark)",
+                borderColor: { $token: "color.src" },
+              },
+            },
+          },
+          customCss: "selector { border-color: var(--acme-color-kept); }",
+        },
+      ],
+    };
+    const rewritten = rewriteDocument(document, acme, lookups);
+    expect(rewritten.settings).toEqual({
+      styles: {
+        base: { base: { backgroundColor: "var(--site-color-kept)" } },
+      },
+      customCss: ".mark { color: var(--site-color-dst); }",
+    });
+    expect(rewritten.nodes[0]?.styles).toEqual({
+      base: {
+        base: {
+          boxShadow: "0 0 4px var(--site-color-dst)",
+          color: "var( --site-color-kept, red)",
+          outlineColor: "var(--acme-color-src-dark)",
+          borderColor: { $token: "color.dst" },
+        },
+      },
+    });
+    expect(rewritten.nodes[0]?.customCss).toBe(
+      "selector { border-color: var(--site-color-kept); }"
+    );
+  });
+
+  it("points a shared style's var() here", () => {
+    expect(
+      rewriteClass(
+        {
+          id: "k-src",
+          slug: "card",
+          orderIndex: 0,
+          styles: { base: { base: { color: "var(--acme-color-src)" } } },
+        },
+        "k-dst",
+        "card",
+        0,
+        acme
+      ).styles
+    ).toEqual({ base: { base: { color: "var(--site-color-dst)" } } });
   });
 });
 

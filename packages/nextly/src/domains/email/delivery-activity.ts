@@ -16,6 +16,12 @@
  * Lists answer `{ items, meta }`, walked by cursor: `meta.nextBefore` is the
  * `before` that reads the next page.
  *
+ * A search by address (`searchByAddress`) is the merged Activity narrowed to
+ * one exact address, matched by its keyed digests under the current and the
+ * previous secrets (`recipientDigests`), never by the address itself. Each
+ * search is recorded in the activity log without the address
+ * (`address-search-activity`), and the address is neither stored nor logged.
+ *
  * Who may read is decided before any of this runs: `read-email-deliveries`,
  * asked by the REST routes and by a checked Direct API call alike
  * (`SYSTEM_READ_POLICY.emailDeliveries`).
@@ -36,23 +42,44 @@ import {
   lte,
   max,
   or,
+  sql,
   type SQL,
 } from "drizzle-orm";
 import { z } from "zod";
 
 import type { PaginationMeta } from "../../api/response-shapes";
+import type { RequestActor } from "../../auth/request-actor";
 import { loadedDialect } from "../../database/dialect-tables";
 import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
+import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
+import {
+  adapterForReads,
+  runReadsInTransaction,
+} from "../../shared/lib/read-transaction-scope";
 
+import {
+  recordAddressSearch,
+  searchRecordable,
+} from "./address-search-activity";
 import { deliveriesTableFor } from "./deliveries-table";
-import type {
-  DeliveryFailureKind,
-  DeliveryTemplateVersion,
-  EmailDeliveryRecipientKind,
-  EmailDeliveryStatus,
+import {
+  recipientDigests,
+  type DeliveryFailureKind,
+  type DeliveryTemplateVersion,
+  type EmailDeliveryRecipientKind,
+  type EmailDeliveryStatus,
 } from "./delivery-record";
 import type { EmailFailure } from "./failure";
+import {
+  FILTERABLE_ORIGINS,
+  originCondition,
+  providerExists,
+  providerRead,
+  providersTablePresent,
+  type FilterableOrigin,
+  type ProviderRead,
+} from "./provider-origin";
 import {
   LATE_QUEUED_EMAIL_COUNTED,
   LATE_QUEUED_EMAIL_MS,
@@ -69,6 +96,7 @@ import type {
   EmailDeliveryRecord,
   EmailDeliveryService,
 } from "./services/email-delivery-service";
+import { isSendableAddress } from "./services/recipients";
 
 /** What happened to one recipient of one send: `DeliveryActivity["outcome"]`. */
 type DeliveryOutcome = EmailDeliveryStatus;
@@ -81,10 +109,10 @@ export interface DeliveryActivity {
   /** The template it was sent from, or null for a send without one. */
   templateSlug: string | null;
   /**
-   * The stored provider that carried it, when one still exists, and its
-   * registered type, which outlives it.
+   * The provider that carried it: the stored one's id while it exists, its
+   * registered type, which outlives it, and where it came from.
    */
-  provider: { id: string | null; type: string };
+  provider: ProviderRead;
   recipientKind: EmailDeliveryRecipientKind;
   /** Why it failed, with anything address-shaped removed; null when sent. */
   failureReason: string | null;
@@ -114,7 +142,7 @@ interface DeliveryAttempt {
   createdAt: Date;
   outcome: DeliveryOutcome;
   recipientKind: EmailDeliveryRecipientKind;
-  provider: { id: string | null; type: string };
+  provider: ProviderRead;
   /** The provider's answer, structured: never its own text. */
   failureKind: DeliveryFailureKind | null;
   failureStatus: number | null;
@@ -275,6 +303,26 @@ const QUEUED_FILTER = z.object({
   ...common,
 });
 
+const ACTIVITY_FILTER = z.object({
+  status: z
+    .enum(["waiting", "retrying", "sending", "sent", "failed", "cancelled"])
+    .optional(),
+  providerType: z.string().min(1).max(50).optional(),
+  providerOrigin: z.enum(FILTERABLE_ORIGINS).optional(),
+  ...common,
+});
+
+// Exactly the addresses the send path takes (`isSendableAddress`), with no
+// bound of its own, so any address email can go to can be searched for. Its
+// own value is never put in a message: a refusal names the field, not what
+// was entered.
+const ADDRESS_SEARCH = ACTIVITY_FILTER.extend({
+  address: z
+    .string()
+    .trim()
+    .refine(isSendableAddress, "Enter one whole email address."),
+});
+
 const SLUGS = z.array(z.string().min(1).max(255)).max(MAX_SLUGS);
 
 /** @experimental How the delivery list is narrowed. */
@@ -293,6 +341,86 @@ export interface DeliveryActivityFilter {
   before?: string;
   /** At most 100; 50 when not given. */
   limit?: number | string;
+}
+
+/**
+ * @experimental One row of the merged Activity: a queued email, or a
+ * delivery of a send that was not queued. A queued email's own deliveries
+ * are its timeline, not rows of their own.
+ */
+export interface ActivityEntry {
+  kind: "delivery" | "queued";
+  id: string;
+  createdAt: Date;
+  /** A delivery's outcome, or where a queued email stands. */
+  status: DeliveryOutcome | QueuedEmailStanding;
+  /**
+   * The template it was sent from; `none` for a message without one;
+   * `not-recorded` when that was not recorded.
+   */
+  template: { slug: string } | "none" | "not-recorded";
+  /** Its provider; null for a queued email not yet tried. */
+  provider: ProviderRead | null;
+  /**
+   * The kinds of recipient it went to: a delivery's own, a queued email's
+   * every kind; null when not recorded.
+   */
+  recipientKinds: EmailDeliveryRecipientKind[] | null;
+  /** Why it (last) failed, with nothing address-shaped in it. */
+  failureReason: string | null;
+  /** A queued email's attempts so far; null for a delivery, or when unknown. */
+  attempts: number | null;
+  /** When a queued email's next attempt is due, while one is to follow. */
+  nextAttemptAt: Date | null;
+  /** Whether a delivery's recipient has been erased since. */
+  erased: boolean;
+}
+
+/** @experimental How the merged Activity is narrowed. */
+export interface ActivityFilter {
+  status?: DeliveryOutcome | QueuedEmailStanding;
+  template?: string;
+  /** A provider's registered type. */
+  providerType?: string;
+  /** Where the provider came from; a row not recorded matches none. */
+  providerOrigin?: FilterableOrigin;
+  /** Created at or after; a `Date` or an ISO 8601 instant. */
+  from?: Date | string;
+  /** Created at or before; a `Date` or an ISO 8601 instant. */
+  to?: Date | string;
+  /** The `meta.nextBefore` of the page before. */
+  before?: string;
+  /** At most 100; 50 when not given. */
+  limit?: number | string;
+}
+
+/**
+ * @experimental A search of the merged Activity by one exact address, with
+ * its filters. Matched by the address's keyed digests, so only a whole
+ * address finds anything, however it is cased or written
+ * (`Name <address>` included).
+ */
+export interface AddressSearch extends ActivityFilter {
+  address: string;
+}
+
+/**
+ * What a search by address says beside what it found: records written under
+ * a secret no longer configured hold a digest nothing computed now matches.
+ */
+const ADDRESS_SEARCH_NOTICE =
+  "Only records sent under the current secret, or a previous secret still " +
+  "configured, can be found by address. Older records can't be found this " +
+  "way.";
+
+/**
+ * @experimental One page of a search by address, in the list envelope, its
+ * `meta.notice` saying which records a search cannot reach
+ * (`ADDRESS_SEARCH_NOTICE`).
+ */
+export interface AddressSearchPage {
+  items: ActivityEntry[];
+  meta: PaginationMeta & { notice: string };
 }
 
 /** @experimental How the queued-email list is narrowed. */
@@ -417,6 +545,12 @@ interface QueueRow {
   held: unknown;
   failure: string | null;
   templateSlug: string | null;
+  messageKind: string | null;
+  recipientKinds: string | null;
+  providerType: string | null;
+  providerId: string | null;
+  providerOrigin: string | null;
+  providerExists: unknown;
   createdAt: number | string;
   updatedAt: number | string;
   settledAt: number | string | null;
@@ -448,8 +582,37 @@ export class EmailDeliveryActivity {
     this.dialect = adapter.getCapabilities().dialect;
   }
 
+  // Inside `inSnapshot`, its reads run on the snapshot's transaction.
   private get db(): ActivityDb {
-    return this.adapter.getDrizzle<ActivityDb>();
+    return adapterForReads(this.adapter).getDrizzle<ActivityDb>();
+  }
+
+  /**
+   * Run `work`'s reads, this reader's and the delivery reader's, on one
+   * snapshot: a transaction that is REPEATABLE READ and read-only on
+   * PostgreSQL and MySQL. The two halves of the merged Activity then
+   * describe one moment, never a queued email pruned or sent between them.
+   *
+   * Not on SQLite: its one connection is every writer's too, so a write made
+   * meanwhile outside a transaction (a delivery recorded without one) would
+   * join this one, and be lost if it rolled back. There the halves are read
+   * in turn, as they were before.
+   */
+  private inSnapshot<T>(work: () => Promise<T>): Promise<T> {
+    if (this.dialect === "sqlite") return work();
+    return this.run(() =>
+      this.adapter.transaction(tx => runReadsInTransaction(tx, work, "none"), {
+        isolationLevel: "repeatable read",
+        readOnly: true,
+      })
+    );
+  }
+
+  /** Whether the providers table exists (`providersTablePresent`). */
+  private providersPresent(): Promise<boolean> {
+    return this.run(() =>
+      providersTablePresent(this.db as never, this.dialect)
+    );
   }
 
   /** Run a read, turning a driver's failure into the API's error. */
@@ -506,18 +669,7 @@ export class EmailDeliveryActivity {
     const after = decodeCursor(options.before);
     const limit = options.limit ?? DEFAULT_LIMIT;
     const queue = loadedDialect(this.dialect).tables.emailQueue;
-    const conditions = [
-      stateCondition(queue, options.state),
-      options.template ? eq(queue.templateSlug, options.template) : undefined,
-      options.from ? gte(queue.createdAt, options.from.getTime()) : undefined,
-      options.to ? lte(queue.createdAt, options.to.getTime()) : undefined,
-      after
-        ? or(
-            lt(queue.createdAt, after.at),
-            and(eq(queue.createdAt, after.at), lt(queue.id, after.id))
-          )
-        : undefined,
-    ].filter(condition => condition !== undefined);
+    const conditions = queueWindow(queue, options.state, options, after);
 
     const rows = await this.queueRows(conditions, limit + 1);
     const jobs = await this.jobsOf(
@@ -538,6 +690,7 @@ export class EmailDeliveryActivity {
     limit: number
   ): Promise<QueueRow[]> {
     const queue = loadedDialect(this.dialect).tables.emailQueue;
+    const present = await this.providersPresent();
     return (await this.run(() =>
       this.db
         .select({
@@ -549,6 +702,13 @@ export class EmailDeliveryActivity {
           held: isNotNull(queue.message),
           failure: queue.failure,
           templateSlug: queue.templateSlug,
+          messageKind: queue.messageKind,
+          recipientKinds: queue.recipientKinds,
+          providerType: queue.providerType,
+          providerId: queue.providerId,
+          providerOrigin: queue.providerOrigin,
+          // Read with the row, as the origin filter tests it.
+          providerExists: providerExists(queue, this.dialect, present),
           createdAt: queue.createdAt,
           updatedAt: queue.updatedAt,
           settledAt: queue.settledAt,
@@ -706,6 +866,199 @@ export class EmailDeliveryActivity {
   }
 
   /**
+   * The merged Activity, newest first: every queued email, and every
+   * delivery of a send that was not queued, under one cursor and one set of
+   * filters. Each side is filtered, ordered and limited in the database, one
+   * page past the limit, and the two pages are merged by time and id, which
+   * is the order the cursor walks.
+   *
+   * @throws {NextlyError} `VALIDATION_ERROR` for a filter it cannot read.
+   */
+  async listActivity(
+    filter: ActivityFilter = {}
+  ): Promise<ActivityPage<ActivityEntry>> {
+    return this.activityPage(parsed(ACTIVITY_FILTER, filter));
+  }
+
+  /**
+   * The merged Activity narrowed to one exact address: the deliveries of
+   * sends not queued that went to it, and the queued emails it is a
+   * recipient of, or that a delivery to it belongs to, under the merged
+   * Activity's cursor and filters. Found by the address's digests under
+   * the current and previous secrets; older records are not found, which
+   * the answer's `meta.notice` says.
+   *
+   * The search is recorded in the activity log as `actor`'s, with how many
+   * it found and never the address. When that record cannot be written the
+   * search is not answered.
+   *
+   * @throws {NextlyError} `VALIDATION_ERROR` for an address or filter it
+   * cannot read; `INTERNAL_ERROR` when the search could not be recorded.
+   */
+  async searchByAddress(
+    // Or a body as a route received it, which the search's schema reads.
+    search: AddressSearch | Readonly<Record<string, unknown>>,
+    actor?: RequestActor | null
+  ): Promise<AddressSearchPage> {
+    const { address, ...filter } = parsed(ADDRESS_SEARCH, search);
+    // A precondition: a search no entry could name is refused before it
+    // reads anything.
+    if (!searchRecordable(actor)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "user",
+            code: "INVALID",
+            message:
+              "A search by address is recorded by who made it: name the user making it.",
+          },
+        ],
+      });
+    }
+    // And outside any transaction the caller holds: its entry is written on
+    // a transaction of its own, and on SQLite's one connection would join the
+    // caller's, to be rolled back after the search was answered.
+    assertNoOpenTransaction(this.adapter, "emailDeliveries.search");
+    let page: ActivityPage<ActivityEntry>;
+    try {
+      page = await this.activityPage(filter, address);
+    } catch (error) {
+      throw searchFailure(error);
+    }
+    try {
+      await recordAddressSearch({ actor, found: page.items.length });
+    } catch (error) {
+      throw NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+        logContext: { reason: "address-search-not-recorded" },
+      });
+    }
+    return {
+      items: page.items,
+      meta: { ...page.meta, notice: ADDRESS_SEARCH_NOTICE },
+    };
+  }
+
+  /**
+   * One page of the merged Activity under `options`, narrowed to
+   * `address`'s records when one is given, read on one snapshot.
+   */
+  private activityPage(
+    options: z.infer<typeof ACTIVITY_FILTER>,
+    address?: string
+  ): Promise<ActivityPage<ActivityEntry>> {
+    const after = decodeCursor(options.before);
+    return this.inSnapshot(() => this.readPage(options, after, address));
+  }
+
+  /** {@link activityPage}'s reads. */
+  private async readPage(
+    options: z.infer<typeof ACTIVITY_FILTER>,
+    after: Cursor | undefined,
+    address: string | undefined
+  ): Promise<ActivityPage<ActivityEntry>> {
+    const limit = options.limit ?? DEFAULT_LIMIT;
+    const outcome =
+      options.status === "sent" || options.status === "failed"
+        ? options.status
+        : undefined;
+    // Both read on one snapshot (`inSnapshot`): an email settled and pruned
+    // meanwhile is either the queued row or its deliveries, never both or
+    // neither.
+    const queued = await this.queuedEntries(options, after, limit + 1, address);
+    // A state only a queued email can be in matches no delivery.
+    const deliveries =
+      options.status !== undefined && outcome === undefined
+        ? []
+        : await this.deliveries.list({
+            standalone: true,
+            // Hashed by the delivery reader, as every lookup by address is.
+            recipient: address,
+            status: outcome,
+            templateSlug: options.template,
+            providerType: options.providerType,
+            providerOrigin: options.providerOrigin,
+            from: options.from,
+            to: options.to,
+            before: after
+              ? { createdAt: new Date(after.at), id: after.id }
+              : undefined,
+            limit: limit + 1,
+          });
+    const entries = [...deliveries.map(deliveryEntry), ...queued]
+      .sort(newestFirst)
+      .slice(0, limit + 1);
+    return pageOf(
+      entries,
+      limit,
+      after !== undefined,
+      entry => ({ at: entry.createdAt.getTime(), id: entry.id }),
+      entry => entry
+    );
+  }
+
+  /** The queued emails of one merged page, as its rows. */
+  private async queuedEntries(
+    options: z.infer<typeof ACTIVITY_FILTER>,
+    after: Cursor | undefined,
+    limit: number,
+    address: string | undefined
+  ): Promise<ActivityEntry[]> {
+    const queue = loadedDialect(this.dialect).tables.emailQueue;
+    const present = await this.providersPresent();
+    const conditions = [
+      ...queueWindow(queue, options.status, options, after),
+      ...this.providerConditions(queue, options, present),
+      ...(address !== undefined ? [this.sentTo(queue, address)] : []),
+    ];
+    const rows = await this.queueRows(conditions, limit);
+    const jobs = await this.jobsOf(
+      rows.flatMap(row => (row.jobId ? [row.jobId] : []))
+    );
+    return rows.map(row =>
+      queuedEntry(row, row.jobId ? jobs.get(row.jobId) : undefined)
+    );
+  }
+
+  /** The merged Activity's provider filters, on the queue's columns. */
+  private providerConditions(
+    queue: QueueTable,
+    options: z.infer<typeof ACTIVITY_FILTER>,
+    present: boolean
+  ): SQL[] {
+    const conditions: SQL[] = [];
+    if (options.providerType) {
+      conditions.push(eq(queue.providerType, options.providerType));
+      // By its exact bytes on MySQL, as the delivery reader compares it.
+      if (this.dialect === "mysql") {
+        conditions.push(
+          sql`CAST(${queue.providerType} AS BINARY) = CAST(${options.providerType} AS BINARY)`
+        );
+      }
+    }
+    if (options.providerOrigin) {
+      conditions.push(
+        originCondition(queue, options.providerOrigin, this.dialect, present)
+      );
+    }
+    return conditions;
+  }
+
+  /**
+   * The queued emails `address` is a recipient of, or that a delivery to it
+   * belongs to: a recipient a send filter added has a delivery and no
+   * recipient row. Matched by every digest the address could have been
+   * stored under; an erased or pruned email's recipients are gone, so it is
+   * not found.
+   */
+  private sentTo(queue: QueueTable, address: string): SQL {
+    const digests = recipientDigests(address);
+    const recipients = loadedDialect(this.dialect).tables.emailQueueRecipients;
+    const deliveries = deliveriesTableFor(this.dialect);
+    return sql`(${queue.id} in (select ${recipients.queuedId} from ${recipients} where ${inArray(recipients.recipientHash, digests)}) or ${queue.id} in (select ${deliveries.queuedId} from ${deliveries} where ${inArray(deliveries.recipientHash, digests)}))`;
+  }
+
+  /**
    * How many queued emails are more than 15 minutes past due, which means
    * the jobs trigger is not running (`queued-email-warning`).
    */
@@ -730,7 +1083,7 @@ function deliveryOf(record: EmailDeliveryRecord): DeliveryActivity {
     createdAt: record.createdAt,
     outcome: record.status,
     templateSlug: record.templateSlug,
-    provider: { id: record.providerId, type: record.providerType },
+    provider: record.provider,
     recipientKind: record.recipientKind,
     failureReason: record.status === "sent" ? null : record.error,
     namedPerson: record.namedPerson,
@@ -813,7 +1166,117 @@ function isHeld(held: unknown): boolean {
   return held === true || Number(held) === 1;
 }
 
+/** Newest first, then by id, as every list here and its cursor order rows. */
+function newestFirst(a: ActivityEntry, b: ActivityEntry): number {
+  const byTime = b.createdAt.getTime() - a.createdAt.getTime();
+  if (byTime !== 0) return byTime;
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
+
+/** A delivery of a send that was not queued, as a merged row. */
+function deliveryEntry(record: EmailDeliveryRecord): ActivityEntry {
+  return {
+    kind: "delivery",
+    id: record.id,
+    createdAt: record.createdAt,
+    status: record.status,
+    // A record from before versions knows its slug, never that it had none.
+    template: record.templateSlug
+      ? { slug: record.templateSlug }
+      : record.templateVersion === "none"
+        ? "none"
+        : "not-recorded",
+    provider: record.provider,
+    recipientKinds: [record.recipientKind],
+    failureReason: record.status === "sent" ? null : record.error,
+    attempts: null,
+    nextAttemptAt: null,
+    erased: record.recipientHash === null,
+  };
+}
+
+const RECIPIENT_KINDS = new Set(["to", "cc", "bcc"]);
+
+/** A queued email as a merged row. */
+function queuedEntry(row: QueueRow, job: JobRow | undefined): ActivityEntry {
+  const activity = queuedOf(row, job);
+  return {
+    kind: "queued",
+    id: row.id,
+    createdAt: activity.createdAt,
+    status: activity.state,
+    template:
+      row.messageKind === "message"
+        ? "none"
+        : row.templateSlug
+          ? { slug: row.templateSlug }
+          : "not-recorded",
+    provider:
+      row.providerType === null
+        ? null
+        : providerRead(
+            row.providerType,
+            row.providerId,
+            row.providerOrigin,
+            row.providerExists
+          ),
+    recipientKinds:
+      row.recipientKinds === null
+        ? null
+        : (row.recipientKinds
+            .split(",")
+            .filter(kind =>
+              RECIPIENT_KINDS.has(kind)
+            ) as EmailDeliveryRecipientKind[]),
+    failureReason: activity.lastFailure?.reason ?? null,
+    attempts: activity.attempts,
+    nextAttemptAt: activity.nextAttemptAt,
+    erased: false,
+  };
+}
+
 type QueueTable = ReturnType<typeof loadedDialect>["tables"]["emailQueue"];
+
+/**
+ * A failed search's error with nothing of its query: a driver's error
+ * quotes its statement's parameters, and a search's are the address's
+ * digests. A refusal of what was asked is the caller's to read, and passes.
+ */
+function searchFailure(error: unknown): NextlyError {
+  if (error instanceof NextlyError && error.code === "VALIDATION_ERROR") {
+    return error;
+  }
+  return NextlyError.internal({
+    logContext: {
+      reason: "address-search-failed",
+      ...(error instanceof NextlyError ? { code: error.code } : {}),
+    },
+  });
+}
+
+/**
+ * What both queue lists narrow by alike: the state, the template, the time
+ * window and the cursor, each when given.
+ */
+function queueWindow(
+  queue: QueueTable,
+  state: QueuedEmailStanding | undefined,
+  options: { template?: string; from?: Date; to?: Date },
+  after: Cursor | undefined
+): SQL[] {
+  return [
+    stateCondition(queue, state),
+    options.template ? eq(queue.templateSlug, options.template) : undefined,
+    options.from ? gte(queue.createdAt, options.from.getTime()) : undefined,
+    options.to ? lte(queue.createdAt, options.to.getTime()) : undefined,
+    after
+      ? or(
+          lt(queue.createdAt, after.at),
+          and(eq(queue.createdAt, after.at), lt(queue.id, after.id))
+        )
+      : undefined,
+  ].filter((condition): condition is SQL => condition !== undefined);
+}
 
 /** The condition for a queued email's state as its reader names it. */
 function stateCondition(

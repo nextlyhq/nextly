@@ -522,6 +522,10 @@ export async function runFieldGroupMigration(
             ...(args.lockWaitMs !== undefined
               ? { waitMs: args.lockWaitMs }
               : {}),
+            // The run's own bounds, for a busy SQLite database met while the lock is taken.
+            ...(busyTable === undefined
+              ? {}
+              : { busyBounds: busyTable.bounds }),
             releaseOnInterrupt: true,
             logger: {
               warn: message => logger.warn(message),

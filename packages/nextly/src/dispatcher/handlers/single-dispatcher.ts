@@ -53,9 +53,16 @@ import {
   fieldsWithLeavingSettingsDeferred,
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
+import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
+import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
+import {
+  FirstQuestionWatch,
+  landingPush,
+  nextSteps,
+} from "../../domains/schema/builder-save/landing-push";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
@@ -86,7 +93,10 @@ import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
-import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
+import type {
+  SingleMetadataService,
+  UpdateSingleSchemaResult,
+} from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { resolveBuilderVersions } from "../../domains/versions/builder-versions";
 import {
@@ -94,6 +104,7 @@ import {
   schemaDraftSplit,
 } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
+import { attachedWorkflowSummary } from "../../domains/workflows/registry";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
@@ -103,7 +114,10 @@ import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-s
 import { assertAddressAllowed } from "../../shared/address-rule";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { consoleLogger } from "../../shared/types";
-import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
+import {
+  registryInFileTransaction,
+  writeAppliedFieldsRow,
+} from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -117,7 +131,6 @@ import {
   builderSaveDeps,
   checkBuilderSaveHistory,
   reviewBuilderSchemaChange,
-  landingPush,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -238,6 +251,105 @@ const SINGLE_SLUG_FIELD: SingleField = {
     message: "Slug must be lowercase with hyphens only (e.g., my-entry-slug)",
   },
 };
+
+/**
+ * The version history, cache-revalidation and webhook settings a Single's schema save asks for,
+ * as the registry columns that hold them.
+ */
+function requestedSettings(b: {
+  versions?: boolean;
+  versionsMaxPerDoc?: number | false;
+  revalidate?: boolean;
+  webhooks?: boolean;
+}): Record<string, unknown> {
+  const settings: Record<string, unknown> = {};
+  // Version history toggle. The registry column holds the resolved config
+  // every runtime reader tests, so the boolean is normalized before it is
+  // stored; off writes null. `status` is deliberately not passed to the
+  // resolver: it aliases to a versioned config for back-compat, which would
+  // stop the toggle from turning versioning off on a Draft/Published single.
+  // Retention without the on/off switch is ambiguous — the resolver needs
+  // the enabled state — so a retention-only patch is rejected rather than
+  // silently ignored. Mirrors the schema-detail routes.
+  if (b.versionsMaxPerDoc !== undefined && b.versions === undefined) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "versionsMaxPerDoc",
+          code: "MISSING_DEPENDENCY",
+          message: "versionsMaxPerDoc requires versions to be set.",
+        },
+      ],
+    });
+  }
+  if (b.versions !== undefined) {
+    settings.versions = resolveBuilderVersions(b.versions, b.versionsMaxPerDoc);
+  }
+  // Cache-revalidation toggle, normalized to the resolved config the write
+  // path reads; on writes null (standard tags), off writes the disable config.
+  if (b.revalidate !== undefined) {
+    settings.revalidate = resolveBuilderRevalidate(b.revalidate);
+  }
+  // Webhook recording toggle, normalized to the resolved policy boot reads;
+  // on writes null (record), off writes the stored opt-out.
+  if (b.webhooks !== undefined) {
+    settings.webhooks = resolveBuilderWebhooks(b.webhooks);
+  }
+  return settings;
+}
+
+/**
+ * What a Single's schema save answers: thrown where its leaving settings were refused or its
+ * migration failed past its main change (its row written either way), else the toast's copy.
+ */
+function schemaSaveAnswer(
+  slug: string,
+  saved: Pick<
+    UpdateSingleSchemaResult,
+    "migrationStatus" | "refusedSettings" | "failure"
+  >
+): string {
+  // Leaving settings the database refused: the admin is told which setting on which field.
+  refuseRefusedLeavingSettings(slug, saved.refusedSettings);
+  // This save's migration failed past its main change: told as a failure, never as pending.
+  if (saved.failure) throw failedSingleMigration(slug, saved.failure);
+  // The status drives the toast copy, so admins see "applied" vs "pending" at once. A save asking
+  // nothing of the schema keeps the status the last migration reached.
+  if (saved.migrationStatus === "applied") {
+    return `Single "${slug}" schema updated and migration applied successfully`;
+  }
+  return saved.migrationStatus === "failed"
+    ? `Single "${slug}" updated. Its last schema change is still recorded as failed.`
+    : `Single "${slug}" schema updated. Migration pending - run migrations to apply changes.`;
+}
+
+/**
+ * A Single's schema save whose migration failed past its main change: its row was written, so a
+ * retry has one describing the table, and the admin is told why it failed and what to do. Where
+ * the writer kept the save's files, recorded applied nowhere, the steps that finish the change
+ * (`nextSteps`); else the save tried again.
+ */
+function failedSingleMigration(
+  slug: string,
+  failure: {
+    reason: string;
+    keptFiles: readonly string[];
+    checked?: string | null;
+    next?: string;
+  }
+): NextlyError {
+  const { reason, keptFiles, checked, next: instead } = failure;
+  const one = keptFiles.length === 1;
+  const next =
+    keptFiles.length === 0
+      ? (instead ?? "Save it again to retry.")
+      : `Its migration ${one ? "file" : "files"} ${keptFiles.join(", ")} ${one ? "was" : "were"} kept and not recorded applied. ${nextSteps(keptFiles, checked)}`;
+  return new NextlyError({
+    code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    publicMessage: `Single "${slug}" was saved, but its migration failed: ${reason}. ${next}`,
+    logContext: { op: "updateSingleSchema", slug, keptFiles: [...keptFiles] },
+  });
+}
 
 /**
  * Inject synthetic title/slug fields into UI-created Singles so the
@@ -546,8 +658,6 @@ async function singleSaveTakesPush(args: {
     newFields: args.newFields,
     wasStored: args.layout.wasStored,
     isStored: args.layout.isStored,
-    wasStatus: args.layout.wasPublishedPerLanguage,
-    status: args.layout.isPublishedPerLanguage,
     renamed: args.companionRename,
     liveTable: async () =>
       (await introspectLiveSnapshot(args.db, args.dialect, [args.tableName]))
@@ -1157,6 +1267,14 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             enrichedData as unknown as SingleWithFields
           ),
           ...draftSplitResponseFields(draftSplit),
+          // The workflow that holds this Single's publishing, so the editor
+          // knows whether a review state is coming before it reads one: one
+          // with none publishes without waiting. `null` where none is
+          // attached; read by signed-in callers only, as the route is.
+          workflow: attachedWorkflowSummary(
+            "single",
+            String((single as { slug?: string }).slug ?? "")
+          ),
         } as Record<string, unknown>,
       ]);
       // As the Builder's editor reads it: a relationship the earlier Builder stored gets the
@@ -1218,41 +1336,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // managed on the companion (moving existing rows between the two is the `nextly migrate`
       // path — the dev toggle provisions the companion without touching main-table data).
       if (b.localized !== undefined) updateData.localized = b.localized;
-      // Version history toggle. The registry column holds the resolved config
-      // every runtime reader tests, so the boolean is normalized before it is
-      // stored; off writes null. `status` is deliberately not passed to the
-      // resolver: it aliases to a versioned config for back-compat, which would
-      // stop the toggle from turning versioning off on a Draft/Published single.
-      // Retention without the on/off switch is ambiguous — the resolver needs
-      // the enabled state — so a retention-only patch is rejected rather than
-      // silently ignored. Mirrors the schema-detail routes.
-      if (b.versionsMaxPerDoc !== undefined && b.versions === undefined) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "versionsMaxPerDoc",
-              code: "MISSING_DEPENDENCY",
-              message: "versionsMaxPerDoc requires versions to be set.",
-            },
-          ],
-        });
-      }
-      if (b.versions !== undefined) {
-        updateData.versions = resolveBuilderVersions(
-          b.versions,
-          b.versionsMaxPerDoc
-        );
-      }
-      // Cache-revalidation toggle, normalized to the resolved config the write
-      // path reads; on writes null (standard tags), off writes the disable config.
-      if (b.revalidate !== undefined) {
-        updateData.revalidate = resolveBuilderRevalidate(b.revalidate);
-      }
-      // Webhook recording toggle, normalized to the resolved policy boot reads;
-      // on writes null (record), off writes the stored opt-out.
-      if (b.webhooks !== undefined) {
-        updateData.webhooks = resolveBuilderWebhooks(b.webhooks);
-      }
+      Object.assign(updateData, requestedSettings(b));
       const wasLocalized = existing.localized === true;
       const isLocalized =
         b.localized !== undefined ? b.localized === true : wasLocalized;
@@ -1290,11 +1374,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // The schema change and the registry row are written by one service call, because a lock has
       // to cover both and cannot do that from here: the DDL would already have run by the time a
       // lock taken inside the registry service was acquired.
-      const {
-        record: updated,
-        migrationStatus,
-        refusedSettings,
-      } = await svc.metadata.updateSingleSchema({
+      const saved = await svc.metadata.updateSingleSchema({
         slug,
         existing,
         updateData,
@@ -1313,16 +1393,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         statusRequested: b.status !== undefined,
       });
 
-      // Leaving settings the database refused: the admin is told which setting on which field.
-      refuseRefusedLeavingSettings(slug, refusedSettings);
-
-      // Migration status drives the toast copy so admins see "applied"
-      // vs "pending" immediately.
-      const message =
-        migrationStatus === "applied"
-          ? `Single "${slug}" schema updated and migration applied successfully`
-          : `Single "${slug}" schema updated. Migration pending - run migrations to apply changes.`;
-      return respondMutation(message, updated);
+      return respondMutation(schemaSaveAnswer(slug, saved), saved.record);
     },
   },
 
@@ -1724,6 +1795,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             recordedFields: recordedFieldsOf(single),
           };
 
+          // A failed push changed nothing where it stopped at its first question, asked before
+          // any statement; any other failure on MySQL or SQLite may have changed it.
+          const firstQuestion = new FirstQuestionWatch();
           const landing = landingPush(
             builderSchemaPush({
               dialect,
@@ -1736,8 +1810,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 eventResolutions ?? [],
                 legacyBundle,
               ],
+              firstQuestion,
             }),
-            dialect
+            dialect,
+            firstQuestion
           );
           // Notes once the push may have changed the database, so a failure after it keeps the
           // files that record it.
@@ -1788,7 +1864,61 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 })
               : undefined,
           };
-          await writeBuilderSchemaChange(
+          const newSchemaVersion = currentVersion + 1;
+          // The registry's row of the save: the fields it applied, whether it is translated, and
+          // the advanced schema version, written with the stored version in one transaction and the
+          // cached rows cleared after it (`writeAppliedFieldsRow`).
+          // Handed the fields that applied where the save's file stopped part way and was settled.
+          const writeRow = (
+            stored: readonly unknown[] = fields
+          ): Promise<void> =>
+            writeAppliedFieldsRow(adapter, {
+              table: "dynamic_singles",
+              slug,
+              fields: stored as FieldConfig[],
+              localized: isLocalized,
+              schemaVersion: newSchemaVersion,
+            });
+          // Post-apply: refresh in-memory runtime schema. Thread `localized` so the main
+          // table omits translatable columns, then register the companion runtime table so
+          // per-language reads/writes resolve in this process without a restart.
+          const refreshRuntime = (stored: readonly unknown[]): void => {
+            try {
+              const { table: freshTable } = generateRuntimeSchema(
+                tableName,
+                stored as FieldDefinition[],
+                dialect,
+                { localized: layout.isStored, status: single.status === true }
+              );
+              getSchemaRegistryFromDI()?.registerDynamicSchema(
+                tableName,
+                freshTable
+              );
+              if (layout.isStored) {
+                const companion = buildCompanionRuntimeTable({
+                  slug,
+                  tableName,
+                  fields: fields as FieldDefinition[],
+                  dialect,
+                  localized: true,
+                  // As saved, not as the record read before the save.
+                  status: layout.isPublishedPerLanguage,
+                });
+                if (companion) {
+                  getSchemaRegistryFromDI()?.registerDynamicSchema(
+                    companion.companionTableName,
+                    companion.table
+                  );
+                }
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              consoleLogger.warn(
+                `[applySingleSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
+              );
+            }
+          };
+          const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
             () => pushAndReconcileCompanion(push, desired, "single", companion),
             {
@@ -1835,10 +1965,56 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   tableName,
                 }),
               afterFile: () => reconcileBuilderCompanion("single", companion),
+              // The push's questions, asked of the file before anything is written: a rename the
+              // request does not answer, or a drop it does not confirm, refuses the save as the
+              // push refuses it.
+              questions: () =>
+                refuseUnansweredDialogQuestions({
+                  desired,
+                  db,
+                  dialect,
+                  tableName,
+                  // The builder that made the table, which the offered rename is judged by.
+                  builtBy: "collection",
+                  oldFields: (single.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  wasLocalized,
+                  isLocalized,
+                  renameResolutions: renameResolutions ?? [],
+                  eventResolutions: eventResolutions ?? [],
+                  ...(legacyBundle === undefined
+                    ? {}
+                    : { legacy: legacyBundle }),
+                }),
+              // On the file road the row is written in the file's own transaction, so a failed
+              // write leaves the save as it was and is answered as the failure it is. Not where the
+              // translations table is reconciled after the file: the row would then record the
+              // change before that step holds it, so it is written after it, as before.
+              ...(registryInFileTransaction(layout)
+                ? { registry: writeRow, settled: refreshRuntime }
+                : {}),
             }
-          );
-
-          const newSchemaVersion = currentVersion + 1;
+          ).catch(async (error: unknown) => {
+            // The change landed, its file recorded and its fields with it: only the renamed
+            // field's provenance move failed, and logged the statements that finish it. The row's
+            // version moves on as its fields did, so a client holding the old one is refused; the
+            // answer says the change landed (`provenanceNotMoved`). Where the row cannot be
+            // written either, that is logged too, and the answer stays the move's: it is what says
+            // what landed and where the statements are. The running shape follows the table
+            // first, whatever the row write does, as the table has the change either way.
+            if (isProvenanceNotMoved(error)) {
+              refreshRuntime(fields);
+              try {
+                await writeRow();
+              } catch (rowError) {
+                (getLoggerFromDI() ?? consoleLogger).error(
+                  `[applySingleSchemaChanges] The registry row of '${slug}' was not written after its rename, so its version did not move on: ${rowError instanceof Error ? rowError.message : String(rowError)}`
+                );
+              }
+            }
+            throw error;
+          });
 
           // Post-apply: update dynamic_singles fields JSON + schema_hash, advance
           // schema_version so the optimistic-lock check above sees a new value on the
@@ -1849,15 +2025,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // version the database did not persist.
           let versionPersisted = true;
           try {
-            // The row and the stored schema version in one transaction, and the
-            // cached rows cleared after it (`writeAppliedFieldsRow`).
-            await writeAppliedFieldsRow(adapter, {
-              table: "dynamic_singles",
-              slug,
-              fields: fields as FieldConfig[],
-              localized: isLocalized,
-              schemaVersion: newSchemaVersion,
-            });
+            // Written already, in the file's transaction, where the save ran its file.
+            if (!registryWritten) await writeRow();
           } catch (err) {
             versionPersisted = false;
             const msg = err instanceof Error ? err.message : String(err);
@@ -1867,43 +2036,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             );
           }
 
-          // Post-apply: refresh in-memory runtime schema. Thread `localized` so the main
-          // table omits translatable columns, then register the companion runtime table so
-          // per-language reads/writes resolve in this process without a restart.
-          try {
-            const { table: freshTable } = generateRuntimeSchema(
-              tableName,
-              fields as FieldDefinition[],
-              dialect,
-              { localized: layout.isStored, status: single.status === true }
-            );
-            getSchemaRegistryFromDI()?.registerDynamicSchema(
-              tableName,
-              freshTable
-            );
-            if (layout.isStored) {
-              const companion = buildCompanionRuntimeTable({
-                slug,
-                tableName,
-                fields: fields as FieldDefinition[],
-                dialect,
-                localized: true,
-                // As saved, not as the record read before the save.
-                status: layout.isPublishedPerLanguage,
-              });
-              if (companion) {
-                getSchemaRegistryFromDI()?.registerDynamicSchema(
-                  companion.companionTableName,
-                  companion.table
-                );
-              }
-            }
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            consoleLogger.warn(
-              `[applySingleSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
-            );
-          }
+          refreshRuntime(fields);
 
           return respondAction(`Schema applied for single '${slug}'`, {
             newSchemaVersion: versionPersisted

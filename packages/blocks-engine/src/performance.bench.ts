@@ -3,7 +3,7 @@ import { test } from "vitest";
 import { byteCapRefusal } from "./byte-cap";
 import { keptJsonBytes } from "./kept-sizes";
 import { DEFAULT_LIMITS, editorForestShape } from "./limits";
-import { migrateDocument } from "./migration";
+import { migrateDocument } from "./migrate-document";
 import { applyOp } from "./ops";
 import {
   SCALE_BREAKPOINTS,

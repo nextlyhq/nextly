@@ -370,7 +370,7 @@ describe("the settings sheet with content settings", () => {
     // Every section's own Reset, Data's holding the Collection.
     for (const section of ["Content", "Display"]) {
       await userEvent.click(
-        screen.getByRole("button", { name: `Reset ${section} to defaults` })
+        screen.getByRole("button", { name: `Reset to defaults, ${section}` })
       );
     }
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -465,7 +465,7 @@ describe("the settings sheet with content settings", () => {
     const onSave = open({ collection: "posts", by: "title", items: 9 });
     for (const section of ["Content", "Display"]) {
       await userEvent.click(
-        screen.getByRole("button", { name: `Reset ${section} to defaults` })
+        screen.getByRole("button", { name: `Reset to defaults, ${section}` })
       );
     }
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -476,7 +476,7 @@ describe("the settings sheet with content settings", () => {
   it("resets one section alone: Content's Reset leaves what Display holds", async () => {
     const onSave = open({ collection: "posts", by: "title", items: 9 });
     await userEvent.click(
-      screen.getByRole("button", { name: "Reset Content to defaults" })
+      screen.getByRole("button", { name: "Reset to defaults, Content" })
     );
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());

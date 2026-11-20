@@ -39,7 +39,7 @@ import type { ValidationIssue } from "../validation";
 
 import type { TypographicElement } from "./compile-page-states";
 import { customPropertiesReferenced } from "./css-value-check";
-import type { FluidSizes } from "./fluid-value";
+import { isFluidSizes, type FluidSizes } from "./fluid-value";
 import {
   MAX_NAMED_CLASS_NAME_LENGTH,
   textStylesOf,
@@ -457,20 +457,6 @@ const JUDGED_AS: readonly (readonly [string, string])[] = [
   // A colour on hover is a colour.
   ["hoverColor", "color"],
 ];
-
-/** Whether a value is two sizes in px, as "Fluid…" stores them. */
-function isFluidSizes(value: unknown): value is FluidSizes {
-  return (
-    isPlainRecord(value) &&
-    Object.keys(value).every(key => key === "small" || key === "large") &&
-    typeof value.small === "number" &&
-    typeof value.large === "number" &&
-    Number.isFinite(value.small) &&
-    Number.isFinite(value.large) &&
-    value.small > 0 &&
-    value.large > 0
-  );
-}
 
 /**
  * A text style named by a row is a text style's id: a short string. Whether

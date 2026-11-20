@@ -217,6 +217,11 @@ export {
   planRetargetExposure,
   VISIBILITY_PROP_PATH,
 } from "../exposure-planners";
+// The settings of a component a block's prop may follow, judged as the save
+// judges a follower, and whether a binding is one, whose fallback composing
+// never reads. Published because the editor's data picker lists them and the
+// save refuses the rest, and a rule spelled twice drifts.
+export { followableSettingsOf, followsSetting } from "../setting-bindings";
 export type {
   ExposeRequest,
   ExposureEdit,

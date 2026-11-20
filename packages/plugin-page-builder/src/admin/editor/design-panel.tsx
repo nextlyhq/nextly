@@ -259,9 +259,11 @@ export function DesignPanel({
   /**
    * The Fonts screen, drawn in the panel's place while its view is open,
    * inside the frame so it reads what the tabs read. Handed the way back to
-   * the Type tab it opens from. Absent, the panel has no Fonts screen.
+   * the Type tab it opens from, which focuses what `focus` selects there
+   * once drawn ("Manage fonts…" when none is named). Absent, the panel has
+   * no Fonts screen.
    */
-  fonts?: (close: () => void) => React.ReactNode;
+  fonts?: (close: (focus?: string) => void) => React.ReactNode;
   /** A group asked for from outside the panel, shown once its tab is open. */
   revealRequest?: DesignRevealRequest;
   /** Told the count of each reveal request the panel has answered. */
@@ -313,11 +315,19 @@ export function DesignPanel({
   );
   const searching = search.trim() !== "";
   // Back to Type, with focus on the "Manage fonts…" that opened the screen
-  // once the tab is drawn again.
-  const close = React.useCallback(() => {
-    view.choose("type");
-    focusWhenDrawn(root, "[data-fonts-manage]", REVEAL_TRIES);
-  }, [view]);
+  // once the tab is drawn again, or on what the screen sent the author to,
+  // such as the Headings font's picker.
+  const close = React.useCallback(
+    (focus?: string) => {
+      view.choose("type");
+      // Handed straight to a button's onClick, `close` is given the click:
+      // only a selector names where focus goes.
+      const target =
+        typeof focus === "string" ? focus : "[data-fonts-manage]";
+      focusWhenDrawn(root, target, REVEAL_TRIES);
+    },
+    [view]
+  );
   if (fontsOpen) {
     // In the panel's place, the canvas beside it untouched: the frame keeps
     // its providers, and the tabs come back as they were on the way back.

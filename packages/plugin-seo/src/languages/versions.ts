@@ -11,6 +11,8 @@
  *
  * @module languages/versions
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import {
   getCachedNextly,
   languageAddressOf,
@@ -71,6 +73,15 @@ export async function heldLanguages(
   collection: string,
   ids: readonly string[]
 ): Promise<Map<string, HeldLanguages>> {
+  const known = heldKnown.getStore();
+  if (known?.collection === collection && ids.every(id => known.ids.has(id))) {
+    return new Map(
+      ids.flatMap(id => {
+        const languages = known.held.get(id);
+        return languages === undefined ? [] : [[id, languages] as const];
+      })
+    );
+  }
   const held = new Map<string, HeldLanguages>();
   for (const row of await addressesOf(ctx, collection, ids)) {
     if (row.holder === null || row.address === null) continue;
@@ -81,6 +92,28 @@ export async function heldLanguages(
     held.set(row.holder.id, languages);
   }
   return held;
+}
+
+/** What a `withHeldLanguages` read found, while its work runs. */
+const heldKnown = new AsyncLocalStorage<{
+  collection: string;
+  ids: ReadonlySet<string>;
+  held: ReadonlyMap<string, HeldLanguages>;
+}>();
+
+/**
+ * `work`, run with `heldLanguages` answering for the pages `ids` of
+ * `collection` from `held`, what one read for all of them found: a batch of
+ * pages checked one by one then costs that one read. Any other page is read
+ * as before.
+ */
+export function withHeldLanguages<T>(
+  collection: string,
+  ids: readonly string[],
+  held: ReadonlyMap<string, HeldLanguages>,
+  work: () => Promise<T>
+): Promise<T> {
+  return heldKnown.run({ collection, ids: new Set(ids), held }, work);
 }
 
 /**

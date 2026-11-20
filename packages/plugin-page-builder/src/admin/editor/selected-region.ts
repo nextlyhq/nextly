@@ -26,6 +26,7 @@ import {
 } from "../page-layout";
 
 import type { EditedLook, LookEditingState } from "./look-editing";
+import { useSetRegions, type SetMode } from "./set-regions";
 
 /** The selected region and what reads it. */
 export interface SelectedRegion {
@@ -138,13 +139,19 @@ export function usePageRegions<T extends FieldValues>(
   canvasRoot: HTMLElement | null,
   editors: RegionEditors,
   /** The look edited on its own, which a selected region leaves. */
-  look: LookEditingState
+  look: LookEditingState,
+  /**
+   * The header & footer set whose own screen this is: its regions are its
+   * form's working areas, rather than a page's Layout's.
+   */
+  set?: SetMode
 ): ReturnType<typeof usePageLayoutRegions> & {
   readonly selectedRegion: SelectedRegion;
   /** The look edited on its own, leaving the region when one is chosen. */
   readonly lookEditing: LookEditingState;
 } {
-  const drawn = usePageLayoutRegions(control, canvasRoot);
+  const pageDrawn = usePageLayoutRegions(control, canvasRoot);
+  const drawn = useSetRegions(control, set, canvasRoot) ?? pageDrawn;
   const areas = useMemo(
     (): readonly RegionArea[] => drawn.canvas.map(region => region.area),
     [drawn.canvas]

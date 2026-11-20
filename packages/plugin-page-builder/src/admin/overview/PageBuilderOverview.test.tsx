@@ -265,7 +265,9 @@ describe("where the overview says the builder is used", () => {
     expect(empty.textContent).toContain(
       "No collection or Single has a Page Builder field yet."
     );
-    expect(empty.textContent).toContain("Add a Blocks field");
+    expect(empty.textContent).toContain(
+      "Add one in the Schema Builder (choose Blocks) or in code"
+    );
     expect(within(uses).queryAllByRole("link")).toHaveLength(0);
   });
 });

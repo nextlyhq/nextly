@@ -80,10 +80,16 @@ import { PreviewPanes } from "../PreviewMode/PreviewPanes";
 import { previewRevisionOf } from "../PreviewMode/previewRevision";
 import { isRemovedFromCode } from "../removed-from-code-notice";
 import { RemovedFromCodeNotice } from "../RemovedFromCodeNotice";
+import { storedStampOf } from "../review/review-words";
+import { ReviewChanges } from "../review/ReviewChanges";
+import { ReviewStatusLine } from "../review/ReviewStatusLine";
+import { StepRefusalNote } from "../review/StepRefusalNote";
+import { useEditorReview } from "../review/useEditorReview";
 import { TranslationPanes } from "../TranslationMode/TranslationPanes";
 import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
+import { HISTORY_REASON } from "./document-actions";
 import { pluginDocumentLock } from "./document-lock-affordances";
 import {
   topLevelFieldNames,
@@ -1315,6 +1321,33 @@ export function EntryForm({
       pluginSurfaces.sectionProps
     );
 
+  // The workflow's next step, where a workflow holds this document's
+  // publishing: read for the saved document, in the language being edited.
+  const review = useEditorReview({
+    document:
+      savedEntryId === ""
+        ? undefined
+        : {
+            scopeKind: "collection",
+            scopeSlug: collection.name,
+            entryId: savedEntryId,
+          },
+    locale,
+    isDirty: hasUnsavedWork,
+    storedStamp: storedStampOf(entry),
+    // A past version on screen, or a save or recovery on its way, holds
+    // the review's steps outside the header as the header holds its own.
+    held:
+      viewingVersion !== null
+        ? HISTORY_REASON
+        : isSubmitting
+          ? "Saving…"
+          : undefined,
+    // The schema read says whether a workflow holds this collection, so a
+    // collection without one offers Publish while the review state is read.
+    workflowExpected: collection.workflow != null,
+  });
+
   const documentActionsInput: DocumentActionBindingsInput = {
     mode,
     hasStatus,
@@ -1348,6 +1381,9 @@ export function EntryForm({
       ? { onDelete: handleDelete }
       : {}),
     onDiscardWorkingDraft: handleDiscardWorkingDraft,
+    ...(review.binding === undefined ? {} : { review: review.binding }),
+    // Known before the entry exists, so a new one leads with Save draft.
+    workflowAttached: collection.workflow != null,
   };
 
   // A save refused because the entry changed since: who changed it and when,
@@ -1816,6 +1852,33 @@ export function EntryForm({
                                           hasStatus ? editedStatus : undefined
                                         }
                                       />
+                                      <ReviewStatusLine
+                                        status={editedStatus.status}
+                                        hasWorkingDraft={
+                                          editedStatus.hasWorkingDraft
+                                        }
+                                        part={review.part}
+                                        parts={review.parts}
+                                        className={DOCUMENT_COLUMN_INSET}
+                                      />
+                                      <StepRefusalNote
+                                        refusal={review.refusal}
+                                        onDismiss={review.clearRefusal}
+                                        className={DOCUMENT_COLUMN_INSET}
+                                      />
+                                      {savedEntryId === "" ? null : (
+                                        <ReviewChanges
+                                          scope={{
+                                            kind: "collection",
+                                            slug: collection.name,
+                                            entryId: savedEntryId,
+                                          }}
+                                          parts={review.onScreen}
+                                          allParts={review.parts}
+                                          hold={review.hold}
+                                          className={DOCUMENT_COLUMN_INSET}
+                                        />
+                                      )}
                                       <EntryMetaStrip
                                         panelCarriesId={panelDocked}
                                         documentId={entry?.id}
@@ -1969,6 +2032,9 @@ export function EntryForm({
                                         {...(locale === undefined
                                           ? {}
                                           : { locale })}
+                                        // The Review section's steps wait
+                                        // for what holds the header's.
+                                        reviewHold={review.stepsHold}
                                         {...(switchLocale === undefined
                                           ? {}
                                           : { onLocaleChange: switchLocale })}
@@ -2011,6 +2077,7 @@ export function EntryForm({
           </DocumentHistoryContext.Provider>
         </EntryLocaleProvider>
         {conflictDialog}
+        {review.dialog}
       </UnsavedWorkProvider>
     </UnsavedChangesGuard>
   );

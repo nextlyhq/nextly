@@ -8,6 +8,7 @@
  * @module admin/bindings-report/page-rows
  */
 import { useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
+import { useMemo } from "react";
 
 import type {
   BindingsToFixItem,
@@ -51,10 +52,17 @@ export function usePageBindingsToFix(field: string): PageBindingsToFix {
     key === undefined
       ? undefined
       : report.data?.items.find(entry => entry.documentKey === key);
-  const rows = (item?.rows ?? []).filter(
-    row =>
-      (row.blocksField === undefined || row.blocksField === field) &&
-      row.inAnotherLanguage !== true
+  // Kept while the entry and the field are the same: a new list each render
+  // gave the page checks, which read these rows, new facts on every click and
+  // keystroke, and every check ran again over a page that had not changed.
+  const rows = useMemo(
+    () =>
+      (item?.rows ?? []).filter(
+        row =>
+          (row.blocksField === undefined || row.blocksField === field) &&
+          row.inAnotherLanguage !== true
+      ),
+    [item, field]
   );
   return { key, item, rows };
 }

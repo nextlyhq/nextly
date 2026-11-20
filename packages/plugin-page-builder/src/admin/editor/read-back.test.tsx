@@ -2,30 +2,27 @@
 /**
  * A read of the saved entry, as the editor takes it in: a read that holds the
  * document already on screen is kept as the object the editor holds, so the
- * editor redraws nothing and walks the page no further; a read that differs
+ * editor redraws nothing and plans the page no further; a read that differs
  * is taken once.
  *
  * The chain from the form to the editor is the editor's own: the field's
  * value and its stored copy pass through `useReadBack` into the real editor
  * state (`useEditorState`), with the real repair notice beside it, which
- * plans the page's repair, a walk of the whole page, whenever the editor
- * changes. What is counted is every redraw of what the editor draws and the
- * engine's whole-page walks.
+ * plans the page's repair whenever the page it holds changes. What is counted
+ * is every redraw of what the editor draws and every repair the notice plans.
+ * Plans rather than the engine's whole-page walks: a page with nothing to
+ * repair is planned without one, so a walk count would read zero either way.
  *
  * @module admin/editor/read-back.test
  */
-import {
-  documentWork,
-  type BlockDocument,
-  type BlockNode,
-} from "@nextlyhq/blocks-engine";
+import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
 import {
   RepairNotice,
   useEditorState,
   type EditorState,
 } from "@nextlyhq/builder/shell";
 import { act, cleanup, render, renderHook } from "@testing-library/react";
-import { memo, useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { sameJsonValue, useReadBack, type ReadBack } from "./read-back";
@@ -106,8 +103,8 @@ describe("useReadBack", () => {
   });
 });
 
-/** Every draw of what the editor draws, counted. */
-const draws = { editor: 0 };
+/** Every draw of what the editor draws, and every repair planned, counted. */
+const draws = { editor: 0, plans: 0 };
 
 /** Stands in for everything drawn from the editor: drawn when it changes. */
 const Drawn = memo(function Drawn({ editor }: { editor: EditorState }) {
@@ -143,9 +140,22 @@ function Host({
   );
   const editor = useEditorState({ initialDocument, stored: storedDocument });
   held = editor;
+  // The store's own planner, counted, kept as stable as the store keeps it.
+  const { planRepair } = editor;
+  const counted = useCallback(
+    (document?: BlockDocument) => {
+      draws.plans += 1;
+      return planRepair(document);
+    },
+    [planRepair]
+  );
+  const watched = useMemo(
+    () => ({ ...editor, planRepair: counted }),
+    [editor, counted]
+  );
   return (
     <>
-      <RepairNotice editor={editor} />
+      <RepairNotice editor={watched} />
       <Drawn editor={editor} />
     </>
   );
@@ -168,11 +178,11 @@ function editAndHand(): BlockDocument {
 }
 
 /** The work a rerender with these values costs. */
-function costOf(rerender: () => void): { draws: number; walks: number } {
-  const walksBefore = documentWork().walks;
+function costOf(rerender: () => void): { draws: number; plans: number } {
   draws.editor = 0;
+  draws.plans = 0;
   rerender();
-  return { draws: draws.editor, walks: documentWork().walks - walksBefore };
+  return { draws: draws.editor, plans: draws.plans };
 }
 
 for (const steady of [true, false]) {
@@ -181,8 +191,8 @@ for (const steady of [true, false]) {
     () => {
       it(
         steady
-          ? "that matches what is shown draws nothing and walks nothing, after the save's own one move"
-          : "draws and walks again for every read that matches",
+          ? "that matches what is shown draws nothing and plans nothing, after the save's own one move"
+          : "draws and plans again for every read that matches",
         () => {
           const view = render(
             <Host opened={OPENED} stored={OPENED} steady={steady} />
@@ -216,12 +226,12 @@ for (const steady of [true, false]) {
             );
           });
           if (steady) {
-            expect(reads).toEqual({ draws: 0, walks: 0 });
+            expect(reads).toEqual({ draws: 0, plans: 0 });
           } else {
             // The control: the counters see the work a read costs when it is
             // taken as it comes.
             expect(reads.draws).toBe(2);
-            expect(reads.walks).toBeGreaterThan(0);
+            expect(reads.plans).toBeGreaterThan(0);
           }
         }
       );
@@ -242,7 +252,7 @@ describe("a read of the saved entry that differs from what is shown", () => {
       view.rerender(<Host opened={saved} stored={fromServer(theirs)} steady />);
     });
     expect(differs.draws).toBe(1);
-    expect(differs.walks).toBeGreaterThan(0);
+    expect(differs.plans).toBeGreaterThan(0);
   });
 });
 
@@ -309,7 +319,7 @@ describe("a page holding blocks stored at an older version", () => {
   it("stays steady when a read answers with the page already upgraded", () => {
     // A save from the entry form, or another reader, stores the page at the
     // current versions while this editor still holds what it opened: the same
-    // document, so nothing is drawn or walked again.
+    // document, so nothing is drawn or planned again.
     const view = render(
       <Host opened={STORED_AT_VERSION_1} stored={STORED_AT_VERSION_1} steady />
     );
@@ -317,6 +327,6 @@ describe("a page holding blocks stored at an older version", () => {
     const read = costOf(() =>
       view.rerender(<Host opened={upgraded} stored={upgraded} steady />)
     );
-    expect(read).toEqual({ draws: 0, walks: 0 });
+    expect(read).toEqual({ draws: 0, plans: 0 });
   });
 });

@@ -525,6 +525,20 @@ describe("a form saved before this version", () => {
     ).toEqual(["field-0", "email", "field-2"]);
   });
 
+  it("drops a value bound to its method with the method, keeping its other bindings", () => {
+    const action = { $bind: "inbox" };
+    const { doc } = migrateDocument(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ ...v1, bindings: { method: { $bind: "verb" }, action } }],
+      },
+      migrationSourceFor(resolver)
+    );
+    expect(doc.nodes[0]?.props).not.toHaveProperty("method");
+    expect(doc.nodes[0]?.bindings).toEqual({ action });
+  });
+
   it("keeps words its button had", () => {
     const { doc } = migrateDocument(
       {

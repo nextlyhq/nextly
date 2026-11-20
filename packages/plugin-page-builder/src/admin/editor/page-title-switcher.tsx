@@ -173,8 +173,13 @@ function SwitcherMenu({
         <button
           ref={trigger}
           type="button"
-          // At the editor's control height, as the rest of the top bar.
-          className="inline-flex h-[var(--nx-builder-control-height)] min-w-0 max-w-[16rem] items-center gap-1 rounded-md px-1.5 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          // At the editor's control height, as the rest of the top bar. The
+          // control the bar shortens first (`data-topbar-shortens`), down to
+          // a floor that keeps the title's first letters, so the bar's other
+          // controls stay whole; the whole title is its tooltip.
+          data-topbar-shortens=""
+          title={title}
+          className="inline-flex h-[var(--nx-builder-control-height)] min-w-[4.5rem] max-w-[16rem] items-center gap-1 rounded-md px-1.5 text-sm font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={`${title}: switch page`}
         >
           <span className="truncate">{title}</span>
@@ -196,7 +201,9 @@ function SwitcherMenu({
         {newPage === undefined ? null : (
           <>
             <DropdownMenuItem
-              className="font-medium text-primary"
+              // In the text colour, set apart by its weight: a brand's
+              // primary is a fill and can fall under AA as small text.
+              className="font-medium text-foreground"
               onSelect={() => {
                 newPageAfterClose.current = true;
               }}

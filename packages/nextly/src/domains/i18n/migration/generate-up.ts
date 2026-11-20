@@ -121,7 +121,8 @@ function buildCompanionCreateStatement(
     statusDef +
     updatedAtDef +
     documentDefs +
-    `${colDefs},\n` +
+    // A translations table whose last translated field became shared keeps no column of its own.
+    (colDefs === "" ? "" : `${colDefs},\n`) +
     `  PRIMARY KEY (${COMPANION_KEY_COLUMNS.map(c => q(c, dialect)).join(", ")}),\n` +
     `  FOREIGN KEY (${q("_parent", dialect)}) REFERENCES ${q(mainTable, dialect)} (${q("id", dialect)}) ON DELETE CASCADE\n` +
     `)`

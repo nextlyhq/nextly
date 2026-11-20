@@ -158,6 +158,16 @@ test("a Google font added in Design is previewed, picked in the inspector, and l
       panel.getByRole("button", { name: /^Big Shoulders/ })
     ).toHaveCount(0);
 
+    // No preview is added until the author asks for previews. (`check`
+    // can't say: it answers true for a family no face has.)
+    expect(
+      await page.evaluate(() =>
+        [...document.fonts].some(
+          face => face.family.replace(/"/g, "") === "nx-preview-fixture-sans"
+        )
+      )
+    ).toBe(false);
+    await panel.getByRole("button", { name: "Show previews" }).click();
     // The row's preview loads in the editor's own document, from the
     // catalogue's file host, under a name no site family can have.
     await expect

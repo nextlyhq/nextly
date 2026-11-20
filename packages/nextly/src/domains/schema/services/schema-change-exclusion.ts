@@ -77,10 +77,18 @@ export async function withSchemaChangeExcluded<T>(
   const { withBuilderWriterScope } = await import(
     "../migrate-create/writer-hold"
   );
+  // Loaded on demand, as the writer hold is.
+  const { withSaveRecords } = await import("../builder-save/save-in-progress");
   // A migration this change writes is written holding the project's
-  // migration files, refused at once where another writer holds them.
+  // migration files, refused at once where another writer holds them. A
+  // save's record that it is in progress is cleared once the whole change
+  // has ended, its registry write included, as its outcome allows.
   const held = () =>
-    withBuilderWriterScope(args.label, work, args.migrationsDir);
+    withBuilderWriterScope(
+      args.label,
+      () => withSaveRecords(work, args.logger),
+      args.migrationsDir
+    );
   const { adapter } = args;
   if (!adapter) return held();
 

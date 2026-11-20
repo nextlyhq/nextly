@@ -70,6 +70,13 @@ export function registerDbSyncCommand(program: Command): void {
       "Move a code-owned collection to UI (writes to dynamic_collections)"
     )
     .option("--yes", "Answer a confirmation that is not a data-loss consent")
+    // Read only on a database holding data an earlier release stored, which
+    // the run brings up to date once it has synced, as `nextly migrate` does.
+    .option(
+      "--backup-confirmed",
+      "Confirm the database is backed up, so the run can bring data an earlier Nextly release stored up to date: hash stored passwords, remove passwords from version history, convert retired manage permissions (required without a terminal; ignored when there is nothing of the kind)",
+      false
+    )
     // The data-loss consent for the push's column drops, handed on as
     // NEXTLY_ACCEPT_DATA_LOSS (`exportDataLossConsent`). Only drops: renames
     // and type changes still need a terminal to answer their prompts.

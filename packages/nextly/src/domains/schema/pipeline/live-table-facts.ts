@@ -108,6 +108,54 @@ async function probeReturnsRow(
   return (await rowsOf<unknown>(db, dialect, probe)).length > 0;
 }
 
+/**
+ * Of `names` (lower-cased), those some relation of the database already has, compared without
+ * regard to case: a table, a view, or anything else a `CREATE TABLE` of the name would meet.
+ * A `CREATE TABLE IF NOT EXISTS` of such a name makes nothing and says nothing, so only a name
+ * this leaves out is one the statement is sure to create.
+ *
+ * Every kind of relation counts, and more than the name could ever meet:
+ * - PostgreSQL: any `pg_class` entry outside the system schemas, whatever its kind (a table, a
+ *   partitioned table, a view, a materialised view, a foreign table, a sequence, an index, a
+ *   composite type) and whatever its schema, a session's temporary schema included;
+ * - MySQL: any `information_schema.TABLES` row of the database, a view among them;
+ * - SQLite: any entry of `sqlite_master` or `sqlite_temp_master`.
+ */
+export async function readTakenRelationNames(
+  db: unknown,
+  dialect: SupportedDialect,
+  names: readonly string[]
+): Promise<Set<string>> {
+  if (names.length === 0) return new Set();
+  const namesIn = sql.join(
+    names.map(name => sql`${name.toLowerCase()}`),
+    sql`, `
+  );
+  const query =
+    dialect === "postgresql"
+      ? // Folded under the "C" collation, letter by letter in ASCII alone, as the names asked
+        // are: the database's own locale may fold an ASCII letter to another (Turkish `I`), and
+        // a relation so named must not read as absent.
+        sql`SELECT lower(c.relname::text COLLATE "C") AS name FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE lower(c.relname::text COLLATE "C") IN (${namesIn})
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname NOT LIKE 'pg_toast%'`
+      : dialect === "mysql"
+        ? sql`SELECT lower(TABLE_NAME) AS name FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND lower(TABLE_NAME) IN (${namesIn})`
+        : sql`SELECT lower(name) AS name FROM sqlite_master
+              WHERE lower(name) IN (${namesIn})
+              UNION ALL
+              SELECT lower(name) AS name FROM sqlite_temp_master
+              WHERE lower(name) IN (${namesIn})`;
+  const rows = await rowsOf<{ name?: unknown }>(db, dialect, query);
+  return new Set(
+    rows.flatMap(row => (typeof row.name === "string" ? [row.name] : []))
+  );
+}
+
 export async function tableHasRows(
   db: unknown,
   dialect: SupportedDialect,
@@ -1079,6 +1127,61 @@ export async function readForeignKeyColumns(
     sql`PRAGMA foreign_key_list(${sql.identifier(tableName)})`
   )) as SqliteForeignKeyRow[];
   for (const row of rows) record(row.from, null);
+  return out;
+}
+
+/**
+ * Each column of `tableName` that carries a foreign key, with the tables its keys reference,
+ * named exactly as the database names them, so two tables a name can tell apart stay apart:
+ * PostgreSQL's `regclass` text, bare for an unquoted name on the search path and quoted for
+ * any other (`"Posts"` is not `posts`), MySQL's name in the current database, and SQLite's
+ * lower-cased, as its names are compared without case. A column without a key has no entry.
+ */
+export async function readForeignKeyTargets(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const record = (column: string, target: string) => {
+    out.set(column, [...(out.get(column) ?? []), target]);
+  };
+
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT a.attname AS column_name, c.confrelid::regclass::text AS target
+          FROM pg_constraint c
+          JOIN unnest(c.conkey) AS k(attnum) ON true
+          JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+          WHERE c.contype = 'f' AND c.conrelid = to_regclass(${tableName})`
+    )) as { rows: { column_name: string; target: string }[] };
+    for (const row of result.rows) record(row.column_name, row.target);
+    return out;
+  }
+
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{
+      COLUMN_NAME: string;
+      REFERENCED_TABLE_NAME: string;
+      REFERENCED_TABLE_SCHEMA: string;
+    }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_TABLE_SCHEMA
+            FROM information_schema.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = ${tableName}
+              AND REFERENCED_TABLE_NAME IS NOT NULL
+              AND REFERENCED_TABLE_SCHEMA = DATABASE()`
+      )
+    );
+    for (const row of rows) record(row.COLUMN_NAME, row.REFERENCED_TABLE_NAME);
+    return out;
+  }
+
+  const rows = (await (db as SqliteAll).all(
+    sql`PRAGMA foreign_key_list(${sql.identifier(tableName)})`
+  )) as (SqliteForeignKeyRow & { table: string })[];
+  for (const row of rows) record(row.from, row.table.toLowerCase());
   return out;
 }
 

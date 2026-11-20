@@ -51,6 +51,7 @@ const {
   namedHostRetryDelay,
   useCanvasPageContext,
   usePictureContext,
+  useRenewedForForms,
   visitorListWords,
 } = await import("./canvas-page-context");
 const { canvasListReadsIn } = await import("../list-entries-client");
@@ -121,22 +122,16 @@ describe("the canvas's page context", () => {
     expect(result.current).toBe(first);
   });
 
-  it("is made afresh for a new round of picked forms, so a Form changed in its own tab is drawn again", () => {
+  it("is copied for a new round of picked forms, so a Form changed in its own tab is drawn again", () => {
+    const { result: context } = renderHook(() => useCanvasPageContext());
     const { result, rerender } = renderHook(
       ({ round }: { round: number }) =>
-        useCanvasPageContext(
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          round
-        ),
+        useRenewedForForms(context.current, round),
       { initialProps: { round: 0 } }
     );
     const first = result.current;
+    // Round 0 is the editor's one object itself.
+    expect(first).toBe(context.current);
     rerender({ round: 0 });
     expect(result.current).toBe(first);
     rerender({ round: 1 });

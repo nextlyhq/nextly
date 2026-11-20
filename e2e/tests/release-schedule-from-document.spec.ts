@@ -1,6 +1,7 @@
 /**
  * Scheduling a document from its editor, in a real browser: the Publish
- * split's arrow offers Publish now and Schedule…, and one dialog puts the
+ * split's arrow offers Schedule… beside Publish now and Choose what to
+ * publish…, and one dialog puts the
  * document on its own at a time, with an existing release, or in a new one,
  * to go live or come down. The banner above the document then lists each
  * release holding it, with what the reader may do to each.
@@ -78,8 +79,11 @@ test("offers Publish now and Schedule… on the Publish split", async ({
   const id = await post(page, stamp);
   await openPost(page, `Release e2e ${stamp}`, id);
   await page.getByRole("button", { name: "More ways to publish" }).click();
+  // Every way to publish, Schedule… last: "Choose what to publish…" picks
+  // the languages and shared fields that go live, and is offered beside it.
   await expect(page.getByRole("menuitem")).toHaveText([
     "Publish now",
+    "Choose what to publish…",
     "Schedule…",
   ]);
   await page.keyboard.press("Escape");
@@ -369,7 +373,7 @@ test.describe("a reader who may not create releases", () => {
     await reader?.context.close();
   });
 
-  test("is offered no Schedule…, so the Publish split has no arrow", async ({
+  test("is offered no Schedule… on the Publish split's arrow", async ({
     page,
   }) => {
     const stamp = stamped();
@@ -378,9 +382,16 @@ test.describe("a reader who may not create releases", () => {
     await readerPage.setViewportSize({ width: 1440, height: 900 });
     try {
       await openPost(readerPage, `Release e2e ${stamp}`, id);
-      await expect(
-        readerPage.getByRole("button", { name: "More ways to publish" })
-      ).toHaveCount(0);
+      // The arrow stays for the other ways this reader may publish: they
+      // may publish posts, so "Choose what to publish…" is theirs. Schedule…
+      // alone is gone from it.
+      await readerPage
+        .getByRole("button", { name: "More ways to publish" })
+        .click();
+      await expect(readerPage.getByRole("menuitem")).toHaveText([
+        "Publish now",
+        "Choose what to publish…",
+      ]);
     } finally {
       await readerPage.close();
     }

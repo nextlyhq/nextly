@@ -505,6 +505,49 @@ describe("Manage fonts… from a Font control in Design", () => {
     );
   });
 
+  it("goes back to Type with focus on the Body or Headings picker it is sent to", async () => {
+    // A font's "Headings font" link: back to Type, onto that role's picker.
+    const choose = vi.fn();
+    const panel = (view: string): React.JSX.Element => (
+      <DesignPanel
+        view={{ current: view, choose }}
+        fonts={close => (
+          <button
+            type="button"
+            onClick={() => close('[data-font-role="heading"]')}
+          >
+            Headings font
+          </button>
+        )}
+        tabs={{
+          colours: () => null,
+          type: () => (
+            <>
+              <button type="button" data-font-role="body">
+                Body picker
+              </button>
+              <button type="button" data-font-role="heading">
+                Headings picker
+              </button>
+              <button type="button" data-fonts-manage="">
+                Manage fonts…
+              </button>
+            </>
+          ),
+          spacing: () => null,
+          styles: () => null,
+        }}
+      />
+    );
+    const view = render(panel(FONTS_SCREEN_VIEW));
+    fireEvent.click(screen.getByRole("button", { name: "Headings font" }));
+    expect(choose).toHaveBeenCalledWith("type");
+    view.rerender(panel("type"));
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toBe("Headings picker")
+    );
+  });
+
   it("puts a Design search away when the screen sends the author to a variable", () => {
     // The screen's "Edit this variable": back to Type, onto the fonts group.
     // A search kept from before the screen opened would hide that group.

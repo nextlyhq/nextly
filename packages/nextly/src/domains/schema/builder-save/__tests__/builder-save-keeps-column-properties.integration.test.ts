@@ -9,10 +9,10 @@
  * be the one before with only the named change applied (`helpers/table-definition.ts`), so a
  * property nobody listed here is held too.
  *
- * Every road a Builder save takes to the database is driven: an untranslated collection's schema
- * dialog, a Single's and a field group's schema dialog, and a Single's settings save run the
- * migration file the save writes where the save moves no values; a collection's settings save and a
- * translated collection's dialog run the development push. A SQLite rebuild that cannot keep what
+ * Every road a Builder save takes to the database is driven: a collection's schema dialog,
+ * translated or not, a Single's and a field group's schema dialog, and a Single's settings save run
+ * the migration file the save writes where the save moves no values; a collection's settings save
+ * runs the development push. A SQLite rebuild that cannot keep what
  * it would drop must refuse, say why, and leave the table as it was. A file over a default given by
  * hand, which its snapshot does not record, is refused as drift and changes nothing.
  *
@@ -168,12 +168,9 @@ const ROADS: Road[] = [
       ),
   },
   {
-    name: "a translated collection's shared field (the push)",
+    name: "a translated collection's shared field (its migration file)",
     table: "dc_posts",
-    known: pushedCollection(
-      "a translated collection stays on the push until the file road judges its companion " +
-        "against the live one, as the push does"
-    ),
+    runsFile: true,
     async create(t, fields) {
       await t.getService("collectionService").createCollection(
         {
@@ -223,6 +220,39 @@ const ROADS: Road[] = [
           fields,
           confirmed: true,
           // The version the Single stands at, as the Builder sends it.
+          schemaVersion: (
+            await t.getService("singleRegistryService").getSingle("hero")
+          ).schemaVersion,
+          ...(renamed === undefined
+            ? {}
+            : {
+                renameResolutions: [
+                  {
+                    tableName: "single_hero",
+                    fromColumn: "heading",
+                    toColumn: renamed,
+                    choice: "rename",
+                  },
+                ],
+              }),
+        }
+      ),
+  },
+  {
+    // Translation turned on in the same save: the fields here are shared, so no value moves and
+    // the save's own file runs, the companion brought in step after it.
+    name: "a Single's schema dialog turning translation on (its migration file)",
+    table: "single_hero",
+    runsFile: true,
+    create: createHero,
+    save: async (t, fields, renamed) =>
+      dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "hero" },
+        {
+          fields,
+          confirmed: true,
+          localized: true,
           schemaVersion: (
             await t.getService("singleRegistryService").getSingle("hero")
           ).schemaVersion,
@@ -294,6 +324,44 @@ const ROADS: Road[] = [
                 renameResolutions: [
                   {
                     tableName: "comp_card",
+                    fromColumn: "heading",
+                    toColumn: renamed,
+                    choice: "rename",
+                  },
+                ],
+              }),
+        }
+      ),
+  },
+  {
+    // Translation turned on in the same save, as for the Single above.
+    name: "a field group turning translation on (its migration file)",
+    table: "comp_band",
+    runsFile: true,
+    async create(_t, fields) {
+      await dispatchComponents(
+        "createComponent",
+        {},
+        { slug: "band", label: "Band", fields }
+      );
+    },
+    save: async (t, fields, renamed) =>
+      dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "band" },
+        {
+          fields,
+          confirmed: true,
+          localized: true,
+          schemaVersion: (
+            await t.getService("fieldGroupRegistryService").getComponent("band")
+          ).schemaVersion,
+          ...(renamed === undefined
+            ? {}
+            : {
+                renameResolutions: [
+                  {
+                    tableName: "comp_band",
                     fromColumn: "heading",
                     toColumn: renamed,
                     choice: "rename",

@@ -2,18 +2,22 @@
 
 import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
 import type { JSX } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { AlertCircle } from "@admin/components/icons";
 import {
   EMAIL_PROVIDER_READ_PERMISSIONS,
   EMAIL_TEMPLATE_READ_PERMISSIONS,
+  EMAIL_TEMPLATE_UPDATE_PERMISSIONS,
   holdsAny,
 } from "@admin/constants/email-hub";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useEmailActivity,
   useQueuedEmailOverdue,
   type EmailActivityResult,
+  type AddressSearchRequest,
+  type OpenActivity,
 } from "@admin/hooks/queries/useEmailActivity";
 import { useEmailProviders } from "@admin/hooks/queries/useEmailProviders";
 import { useEmailTemplates } from "@admin/hooks/queries/useEmailTemplates";
@@ -21,14 +25,16 @@ import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermission
 import type { EmailProviderRecord } from "@admin/services/emailProviderApi";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
-import { providerChoices, templateChoices } from "./activity-choices";
-import type { ActivityFilter } from "./activity-model";
+import { providerTypeChoices, templateChoices } from "./activity-choices";
+import { activityQuery, type ActivityFilter } from "./activity-model";
+import { ActivityDetailSheet } from "./ActivityDetailSheet";
 import {
   ActivityFilters,
   DEFAULT_ACTIVITY_FILTER,
   isFiltered,
 } from "./ActivityFilters";
 import { ActivityList, type ActivityNames } from "./ActivityList";
+import { AddressSearch } from "./AddressSearch";
 import { OverdueBanner } from "./OverdueBanner";
 
 /** The most providers the name lookup and the provider filter read at once. */
@@ -53,7 +59,8 @@ export function useTickingNow(intervalMs = CLOCK_TICK_MS): Date {
 
 /**
  * The Email hub's Activity tab: the late-queue banner, the filters and the
- * newest-first list of every delivery and queued email.
+ * newest-first merged Activity of queued email and unqueued sends, or, after
+ * a search by one exact address, only what went to it, under the same filters.
  *
  * Templates and providers are named from the hub's own lists when the reader
  * may read them, and by their slug or type otherwise; the filters offer them
@@ -61,36 +68,77 @@ export function useTickingNow(intervalMs = CLOCK_TICK_MS): Date {
  */
 export function ActivityScreen(): JSX.Element {
   const [filter, setFilter] = useState<ActivityFilter>(DEFAULT_ACTIVITY_FILTER);
-  const activity = useEmailActivity(filter);
+  // The search the list shows, if any. Each search gets its own number, so
+  // the same address searched again is read again, and the address itself
+  // is held only here, never in the page's address or a cache key.
+  const [search, setSearch] = useState<AddressSearchRequest | null>(null);
+  const searches = useRef(0);
+  // This mount's own name for its searches, so a screen mounted again never
+  // reads an earlier mount's search under the same number.
+  const scope = useId();
+  const activity = useEmailActivity(filter, { search: search ?? undefined });
+  // A filter changed on a search's results asks again, as a search of its
+  // own: each is recorded, so none is made but by the reader's own change.
+  const changeFilter = (next: ActivityFilter) => {
+    setFilter(next);
+    // A choice that changes nothing (the window already chosen, say) asks
+    // nothing again.
+    if (search && !sameFilter(next, search.filter)) {
+      searches.current += 1;
+      setSearch({ ...search, id: searches.current, filter: next });
+    }
+  };
   const overdue = useQueuedEmailOverdue();
   const lists = useActivityLists();
   const now = useTickingNow();
   const filtered = isFiltered(filter);
+  const [open, setOpen] = useState<OpenActivity | null>(null);
 
   return (
     <div className="space-y-4">
       <OverdueBanner overdue={overdue.data} />
+      <AddressSearch
+        searching={search !== null}
+        onSearch={address => {
+          searches.current += 1;
+          setSearch({ scope, id: searches.current, address, filter });
+        }}
+        onClear={() => setSearch(null)}
+      />
       <ActivityFilters
         filter={filter}
-        onChange={setFilter}
+        onChange={changeFilter}
         templates={templateChoices(
           lists.templates,
           activity.rows,
           filter.template
         )}
-        providers={providerChoices(
+        providers={providerTypeChoices(
           lists.providers,
           activity.rows,
-          filter.provider
+          filter.providerType
         )}
       />
-      <ProviderFilterNote provider={filter.provider} />
+      {search && activity.notice && (
+        // The server's word on which records a search by address can't reach.
+        <Alert variant="info" role="note">
+          <AlertDescription>{activity.notice}</AlertDescription>
+        </Alert>
+      )}
       <ActivityCount
         shown={activity.rows.length}
         more={activity.hasMore}
+        searching={search !== null}
+        // No count for a search not answered yet, or one that failed with
+        // nothing found: it has found nothing to count.
+        pending={
+          search !== null &&
+          (activity.isLoading ||
+            (activity.isError && activity.rows.length === 0))
+        }
         filtered={filtered}
         onClear={() =>
-          setFilter({ ...DEFAULT_ACTIVITY_FILTER, window: filter.window })
+          changeFilter({ ...DEFAULT_ACTIVITY_FILTER, window: filter.window })
         }
       />
       <ActivityBody
@@ -98,23 +146,17 @@ export function ActivityScreen(): JSX.Element {
         names={lists.names}
         now={now}
         filtered={filtered}
+        searching={search !== null}
+        onOpen={setOpen}
+      />
+      <ActivityDetailSheet
+        open={open}
+        onClose={() => setOpen(null)}
+        names={lists.names}
+        now={now}
+        fixTemplateHref={lists.fixTemplateHref}
       />
     </div>
-  );
-}
-
-/** Shown while a provider is chosen: what that choice leaves out of the list. */
-export function ProviderFilterNote({
-  provider,
-}: {
-  provider: ActivityFilter["provider"];
-}): JSX.Element | null {
-  if (!provider) return null;
-  return (
-    <p className="text-xs text-muted-foreground">
-      No queued email is listed while a provider is chosen: queued email can’t
-      be narrowed by provider yet, so only the delivery log is.
-    </p>
   );
 }
 
@@ -126,6 +168,7 @@ function useActivityLists(): {
   templates: EmailTemplateRecord[] | undefined;
   providers: EmailProviderRecord[] | undefined;
   names: ActivityNames;
+  fixTemplateHref: (slug: string) => string | undefined;
 } {
   const { hasPermission } = useCurrentUserPermissions();
   const readsTemplates = holdsAny(
@@ -154,9 +197,23 @@ function useActivityLists(): {
     () => new Map((providers ?? []).map(p => [p.id, p.name])),
     [providers]
   );
+  // "Fix template" opens the template's own edit page, so it is offered only
+  // to a reader who may edit templates, for a template the hub's list holds.
+  const editsTemplates = holdsAny(
+    hasPermission,
+    EMAIL_TEMPLATE_UPDATE_PERMISSIONS
+  );
+  const templateIds = useMemo(
+    () => new Map((templates ?? []).map(t => [t.slug, t.id])),
+    [templates]
+  );
   return {
     templates,
     providers,
+    fixTemplateHref: slug => {
+      const id = editsTemplates ? templateIds.get(slug) : undefined;
+      return id ? buildRoute(ROUTES.EMAIL_MESSAGES_EDIT, { id }) : undefined;
+    },
     names: {
       template: slug => templateNames.get(slug),
       provider: id => providerNames.get(id),
@@ -164,23 +221,31 @@ function useActivityLists(): {
   };
 }
 
-/** How many rows are shown, whether filtered, and the way to clear the filters. */
+/**
+ * How many rows are shown, whether they are a search's, whether filtered,
+ * and the way to clear the filters.
+ */
 function ActivityCount({
   shown,
   more,
+  searching,
+  pending,
   filtered,
   onClear,
 }: {
   shown: number;
   more: boolean;
+  searching: boolean;
+  pending: boolean;
   filtered: boolean;
   onClear: () => void;
 }): JSX.Element {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
-      <span>
+      <span hidden={pending}>
         {shown}
-        {more ? "+" : ""} shown, newest first
+        {more ? "+" : ""} {searching ? "found for this address" : "shown"},
+        newest first
         {filtered ? " · filtered" : ""}
       </span>
       {filtered && (
@@ -207,17 +272,25 @@ function ActivityBody({
   names,
   now,
   filtered,
+  searching,
+  onOpen,
 }: {
   activity: EmailActivityResult;
   names: ActivityNames;
   now: Date;
   filtered: boolean;
+  searching: boolean;
+  onOpen: (open: OpenActivity) => void;
 }): JSX.Element {
   if (activity.isError && activity.rows.length === 0) {
     return (
       <Alert variant="destructive">
         <AlertCircle className="h-4 w-4" aria-hidden />
-        <AlertTitle>Activity couldn’t be loaded</AlertTitle>
+        <AlertTitle>
+          {searching
+            ? "The search couldn’t be made"
+            : "Activity couldn’t be loaded"}
+        </AlertTitle>
         <AlertDescription>
           <p>{activity.error?.message ?? "Try again in a moment."}</p>
           <Button
@@ -257,10 +330,24 @@ function ActivityBody({
         now={now}
         isLoading={activity.isLoading}
         filtered={filtered}
+        searching={searching}
         hasMore={activity.hasMore}
         isLoadingMore={activity.isLoadingMore}
         onLoadMore={activity.loadMore}
+        onOpen={onOpen}
       />
     </>
+  );
+}
+
+/**
+ * Whether two filter choices ask the same of the Activity: compared as the
+ * server is asked them (`activityQuery`) and by their window, so a filter
+ * added there is compared here too.
+ */
+function sameFilter(a: ActivityFilter, b: ActivityFilter): boolean {
+  return (
+    a.window === b.window &&
+    JSON.stringify(activityQuery(a)) === JSON.stringify(activityQuery(b))
   );
 }

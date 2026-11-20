@@ -7,6 +7,7 @@
 import {
   cleanup,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -47,6 +48,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       ? { value: formTitle, writable: true, set: () => true }
       : null,
   useCurrentUserId: () => userId,
+  usePluginClientConfig: () => clientConfig,
   devicePreferenceStore: (key: string) => ({
     read: () => kept.get(key) ?? null,
     write: (value: string) => {
@@ -54,6 +56,9 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
     },
   }),
 }));
+
+/** The plugin's client config, as the site sets it. */
+let clientConfig: Record<string, unknown> | undefined;
 
 /** The page on screen's title as its form holds it, or undefined for none. */
 let formTitle: string | undefined;
@@ -233,6 +238,55 @@ beforeEach(() => {
   window.history.replaceState({}, "", "/");
 });
 afterEach(cleanup);
+
+describe("on a site that draws its header and footer in code", () => {
+  afterEach(() => {
+    clientConfig = undefined;
+  });
+
+  it("draws no Header & footer group and says why, with the docs", async () => {
+    clientConfig = { siteHeaderFooter: "code" };
+    await mount([item("a", "Home")]);
+    expect(
+      screen.queryByRole("region", { name: "Header & footer" })
+    ).toBeNull();
+    const line = screen.getByText(
+      "This site draws its header and footer in code."
+    );
+    expect(line.querySelector("a")?.getAttribute("href")).toContain(
+      "a-site-that-draws-its-header-and-footer-in-code"
+    );
+  });
+
+  it("draws the group and no line on a site whose header and footer are the Page Builder's", async () => {
+    await mount([item("a", "Home")]);
+    expect(
+      screen.getByRole("region", { name: "Header & footer" })
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("This site draws its header and footer in code.")
+    ).toBeNull();
+  });
+});
+
+describe("the page being edited", () => {
+  it("is one object while it names the same page", () => {
+    const { result, rerender } = renderHook(() => usePagesPanel(true));
+    const first = result.current.currentPage;
+    expect(first).toEqual({ collection: "pages", id: "current" });
+    // A new identity object naming the same page, as a host may give each
+    // render.
+    identity = { kind: "collection", slug: "pages", documentId: "current" };
+    rerender();
+    expect(result.current.currentPage).toBe(first);
+    identity = { kind: "collection", slug: "pages", documentId: "other" };
+    rerender();
+    expect(result.current.currentPage).toEqual({
+      collection: "pages",
+      id: "other",
+    });
+  });
+});
 
 describe("the list", () => {
   it("heads a group with the collection's plural name when it has one", async () => {

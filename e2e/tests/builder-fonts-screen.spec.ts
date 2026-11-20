@@ -234,7 +234,10 @@ test("fits the narrowest panel, with no row scrolling sideways", async ({
       each =>
         each.scrollWidth > each.clientWidth + 1 &&
         getComputedStyle(each).overflowX !== "visible" &&
-        getComputedStyle(each).textOverflow !== "ellipsis"
+        getComputedStyle(each).textOverflow !== "ellipsis" &&
+        // Text only a screen reader reads sits in a 1px box that is never
+        // drawn, so nobody can scroll it; anything drawn is still checked.
+        !(each.clientWidth <= 1 && each.clientHeight <= 1)
     );
     return scrolled === undefined ? null : scrolled.className;
   });

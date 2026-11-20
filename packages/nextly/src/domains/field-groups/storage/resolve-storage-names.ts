@@ -145,13 +145,14 @@ export function isFieldGroupRegistry(tableName: string): boolean {
  * 2. A table whose stored name this migration did not generate (an author's
  *    `dbName`) is never renamed, while its column always is. Table generation
  *    and column generation are independent by construction.
- * 3. The DDL that creates a field-group table writes the current release's
- *    spelling, so a group created after a migration carries the legacy column
- *    while its siblings carry the migrated one until the creator flips too.
+ * 3. A group created by an earlier release after a migration carries the legacy
+ *    column while its siblings carry the migrated one. This release creates a
+ *    group under its site's naming, but storage an earlier release left stays
+ *    as it was made.
  *
  * A table the catalog does not describe, including one that does not exist yet,
- * resolves to the legacy spelling: that is what the DDL writes, so a table
- * about to be created is addressed correctly rather than refused.
+ * resolves to the column it is created with (`typeColumnForNewTable`), so a
+ * table about to be created is addressed correctly rather than refused.
  */
 export function chooseTypeColumns(
   catalog: readonly TableColumns[],
@@ -204,12 +205,29 @@ function chooseTableColumns(
     resolved.set(table, {
       typeColumn:
         entry === undefined
-          ? STORAGE_FORMAT.columns.type
+          ? typeColumnForNewTable(table)
           : chooseTypeColumn(entry.columns, rules),
       columns: entry?.columns,
     });
   }
   return resolved;
+}
+
+/**
+ * The discriminator a table the catalog does not describe yet is created with, decided by the
+ * name it is being created under.
+ *
+ * A group is created under the naming its site's storage is on (`field-group-storage-names`): a
+ * site that has migrated, or a new one, creates `fg_<slug>` with the migrated column, and a site
+ * that has not creates `comp_<slug>` with the legacy one. So the name alone says which, and the
+ * pipeline that builds the table and the runtime that binds it read the same answer from it. Any
+ * other name keeps the legacy column, which is what every table created before the current names
+ * carries.
+ */
+export function typeColumnForNewTable(table: string): string {
+  return table.toLowerCase().startsWith(MIGRATION_TARGET.tablePrefix)
+    ? MIGRATION_TARGET.columnType
+    : STORAGE_FORMAT.columns.type;
 }
 
 /** The discriminator on one table's column list. */

@@ -7,7 +7,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { firstPublishedAs } from "./first-fill-hook";
+import {
+  firstPublishedAs,
+  OWN_SET_COMPONENT_CONTEXT_KEY,
+} from "./first-fill-hook";
 
 const live = (area: string | null) => ({
   id: "c1",
@@ -37,6 +40,24 @@ describe("a component's first publish as a header or footer", () => {
         user: { id: "u1" },
       })
     ).toEqual({ id: "c1", area: "footer", by: "u1" });
+  });
+
+  it("does not count a header made for a set of its own, which the default must not take", () => {
+    expect(
+      firstPublishedAs({
+        data: live("header"),
+        user: { id: "u1" },
+        context: { [OWN_SET_COMPONENT_CONTEXT_KEY]: true },
+      })
+    ).toBeNull();
+    // Any other context still counts.
+    expect(
+      firstPublishedAs({
+        data: live("header"),
+        user: { id: "u1" },
+        context: { somethingElse: true },
+      })
+    ).not.toBeNull();
   });
 
   it("does not count a publish nobody made: a seed's, a script's", () => {

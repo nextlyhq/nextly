@@ -342,6 +342,123 @@ describe("how widely variables are used", () => {
   });
 });
 
+describe("how widely variables are used together", () => {
+  const design = holding("read-renamed_site-style");
+  /** Two variables sharing a page: p2 names both. */
+  const shared = {
+    "t-a": [{ collection: "pages", documents: ["p1", "p2"] }],
+    "t-b": [
+      { collection: "pages", documents: ["p2", "p3"] },
+      { collection: "components", documents: ["k1"] },
+    ],
+    "t-c": [{ collection: "pages", documents: ["p1"] }],
+  };
+  const read = (req: Request, health: UsageIndexHealth = WHOLE) =>
+    readVariableUsage(
+      req,
+      design,
+      usageOf(health, shared).source,
+      siteStyleOf(async () => [styleNaming("c-hero", "Hero", "t-a")]),
+      NO_BLOCKS
+    );
+
+  it("counts each document once across the variables of a group, in the order asked", async () => {
+    const answer = await read(
+      new Request(
+        `http://local${variableUsagePath(
+          ["t-a", "t-b", "t-c"],
+          [
+            ["t-a", "t-b"],
+            ["t-a", "t-c"],
+          ]
+        )}`
+      )
+    );
+    // Numbers only: no document, shared style, block type or variable named.
+    expect(answer.together).toEqual([
+      {
+        documents: 4,
+        byKind: { pages: 3, components: 1, patterns: 0, layouts: 0 },
+        complete: true,
+      },
+      {
+        documents: 2,
+        byKind: { pages: 2, components: 0, patterns: 0, layouts: 0 },
+        complete: true,
+      },
+    ]);
+    // Each variable's own count is as before.
+    expect(answer.variables["t-b"]?.documents).toBe(3);
+  });
+
+  it("says a group's count is a floor while the index is not whole", async () => {
+    const answer = await read(
+      new Request(
+        `http://local${variableUsagePath(["t-a", "t-b"], [["t-a", "t-b"]])}`
+      ),
+      NOT_WHOLE
+    );
+    expect(answer.together?.[0]?.complete).toBe(false);
+  });
+
+  it("answers no groups where none are asked, as before", async () => {
+    const answer = await read(usageRequest("t-a", "t-b"));
+    expect(Object.hasOwn(answer, "together")).toBe(false);
+  });
+
+  it("names a group's variables among the ids asked, whatever ids the path is handed", () => {
+    // A member not among the ids is asked too, once, and a repeated id is
+    // named by where it is first.
+    expect(
+      new URL(
+        `http://local${variableUsagePath(["t-a", "t-a"], [["t-b", "t-a", "t-b"]])}`
+      ).search
+    ).toBe("?id=t-a&id=t-a&id=t-b&together=2%2C0%2C2");
+  });
+
+  it("refuses a group naming no id asked, or none, too many groups, and an unread spelling", async () => {
+    const ids = "id=t-a&id=t-b";
+    const many = Array.from({ length: 51 }, () => "together=0%2C1").join("&");
+    for (const query of [
+      `${ids}&together=2`,
+      `${ids}&together=`,
+      `${ids}&together=0%2Cx`,
+      `${ids}&together=-1`,
+      `${ids}&together=0%2C%2C1`,
+      `${ids}&${many}`,
+      `${ids}&together=${Array.from({ length: 51 }, () => "0").join("%2C")}`,
+    ]) {
+      expect(
+        await refusal(
+          read(new Request(`http://local/variables/usage?${query}`))
+        )
+      ).toMatchObject({ code: "VALIDATION_ERROR" });
+    }
+  });
+
+  it("is refused, before anything is read, to a caller who may not read Design", async () => {
+    const usage = vi.fn(() => usageOf(WHOLE, shared).source);
+    const [usageRoute] = variableRoutes({
+      defaults: undefined,
+      usage,
+      blocks: NO_BLOCKS,
+      inUse: () => ({
+        inUse: async () => undefined,
+        stillUsed: { uses: async () => [] },
+      }),
+    });
+    const req = new Request(
+      `http://local${variableUsagePath(["t-a", "t-b"], [["t-a", "t-b"]])}`
+    );
+    for (const ctx of [holding("read-pages"), { ...holding(), caller: null }]) {
+      expect(
+        await refusal(usageRoute!.handler(req, ctx as never))
+      ).toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect(usage).not.toHaveBeenCalled();
+  });
+});
+
 describe("where a variable is used", () => {
   const named = async (collection: string, ids: readonly string[]) =>
     collection === "secret" ? null : ids.map(id => ({ id, title: `T ${id}` }));

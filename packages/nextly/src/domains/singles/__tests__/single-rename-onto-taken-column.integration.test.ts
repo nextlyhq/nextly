@@ -326,15 +326,12 @@ describeEachDialect(
       );
     });
 
-    // A rename that leaves translation runs in steps that each commit: the companion column is
-    // renamed first, then the main table gains the new column, then the companion's values are
-    // copied over and its column dropped. A save stopped after the main-table step leaves the new
-    // column on both tables and the old one on neither, so saving again is not a move onto a
-    // taken column: the check passes it, as it passes any move whose old column is gone.
-    //
-    // What the finished retry reads back is the companion reconcile's to answer, not this check's,
-    // and is not asserted here.
-    it("does not refuse saving again a rename leaving translation that stopped after its main-table step", async () => {
+    // A rename that leaves translation runs the save's migration file, which gives the main table
+    // the new column and is recorded applied, then the companion step, which moves the values over
+    // and drops the old companion column. A save stopped between them leaves the translations table
+    // as the history does not record it: saving again is refused as `nextly migrate` refuses drift,
+    // with every language still on the companion, and never as a move onto a taken column.
+    it("refuses as drift, not as a move onto a taken column, saving again a rename leaving translation that stopped after its main-table step", async () => {
       await hero(true);
       const leaving = [
         { name: "headline", type: "text", localized: false },
@@ -347,16 +344,19 @@ describeEachDialect(
       // Past its main-table step a save records the fields it made (reported as a failed
       // migration), so saving again renames nothing and the check is not asked.
       expect(await registeredFieldNames()).toEqual(["headline", "body"]);
-      // Where the stop left the columns: the new one on both tables, the old one on neither.
+      // Where the stop left the columns: the new one on the main table, the old one on the
+      // companion, with its languages.
       expect(await columnsOf("single_hero")).toContain("headline");
-      const companion = await columnsOf("single_hero_locales");
-      expect(companion).toContain("headline");
-      expect(companion).not.toContain("heading");
+      const companionBefore = (await storedHeadings()).companion;
+      expect(companionBefore.length, "the languages are there").toBeGreaterThan(
+        0
+      );
 
       const again = await refusal(save(leaving, { localized: true }));
 
-      expect(again).toBeUndefined();
+      expect(again).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
       expect(await registeredFieldNames()).toEqual(["headline", "body"]);
+      expect((await storedHeadings()).companion).toEqual(companionBefore);
     });
 
     it("refuses a translated field renamed as it leaves translation, onto a column its companion has, before archiving", async () => {

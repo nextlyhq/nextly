@@ -133,12 +133,11 @@ export function FieldTypePicker<T extends string>({
               <Icon className="h-5 w-5" />
             </div>
             <div className="flex min-w-0 flex-col gap-0.5">
-              <span
-                className={cn(
-                  "truncate text-sm font-semibold",
-                  isSelected ? "text-primary" : "text-foreground"
-                )}
-              >
+              {/* In the text colour, selected or not: the primary token is a
+                  fill a brand may set to any colour, and text drawn in it on
+                  its own tint can fall under AA. The card's border, tint and
+                  check mark the selection in the brand. */}
+              <span className="truncate text-sm font-semibold text-foreground">
                 {entry.label}
               </span>
               <span className="line-clamp-1 text-xs leading-normal text-muted-foreground">

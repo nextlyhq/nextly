@@ -55,6 +55,12 @@ import { buildExtensionSchema } from "../../domains/schema/extension/build-exten
 import type { SchemaContribution } from "../../domains/schema/extension/run-hooks";
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import {
+  blankLineHeader,
+  blankLineIn,
+  nothingToRecordNotice,
+  refuseUnrecordableMerge,
+} from "../../domains/schema/migrate/history-line";
+import {
   consentCovers,
   consentToCover,
   countDeletions,
@@ -63,6 +69,7 @@ import {
   type DataLossConsent,
   type Deletion,
 } from "../../domains/schema/migrate/data-loss-consent";
+import { countEntityRows } from "../../domains/schema/migrate/entity-shared-rows";
 import {
   orderedMigrations,
   type PluginMigration,
@@ -472,6 +479,29 @@ export async function countWhereReadable(
       counted.push(one?.[0] ?? deletion);
     }
   }
+  // An entity's rows in shared tables, counted as `nextly migrate` counts them (`countEntityRows`),
+  // within what is left of the budget; past it, they are listed without a count.
+  let listed: Deletion[] = counted;
+  const left = deadline - Date.now();
+  const entityRowsToCount = counted.some(
+    d => d.kind === "rows" && d.of !== undefined && d.count === undefined
+  );
+  if (entityRowsToCount && (stopped || left <= 0)) {
+    stopped = true;
+  } else if (entityRowsToCount) {
+    const entityRows = countEntityRows(counted, {
+      db,
+      dialect,
+      adapter: opened,
+    });
+    const done = await within(entityRows, left);
+    if (done === "timed-out") {
+      stopped = true;
+      unfinished = entityRows;
+    } else if (done !== undefined) {
+      listed = done;
+    }
+  }
   if (stopped) {
     logger.info(
       "Counts stopped at their time limit; the rest are listed without one."
@@ -481,7 +511,7 @@ export async function countWhereReadable(
   const close = () => opened.disconnect().catch(() => undefined);
   if (unfinished === undefined) await close();
   else void unfinished.then(close, close);
-  return counted;
+  return listed;
 }
 
 /** `work`'s result, or `timed-out` once `ms` have passed first; undefined where it failed. */
@@ -661,6 +691,9 @@ export async function runMigrateCreate(
   });
   held.enter();
   try {
+    // Branches written without each other that change the same thing cannot
+    // be recorded as merged; ones that change different things are, below.
+    await refuseUnrecordableMerge(migrationsDir);
     // --blank: write a stub file and exit. No diff, no prompts.
     if (options.blank) {
       await runBlankPath(
@@ -840,6 +873,10 @@ export async function runMigrateCreate(
       logger.info(
         "No changes detected. Your config matches the latest snapshot."
       );
+      // Run to record a merge of migrations written without each other, it
+      // found none to record: they make the same change, and one of them goes.
+      const sameChange = await nothingToRecordNotice(migrationsDir);
+      if (sameChange !== undefined) logger.warn(sameChange);
       // Nothing to do is not a failure: 0, as every command ends a run with
       // nothing to do.
       endNothingToDo(logger, options.dryRun);
@@ -934,6 +971,9 @@ async function runBlankPath(
   // "-- Migration: 20260429_154500_123_custom_seed").
   const content = formatBlankFile(slugify(name), dialect, now, {
     transaction,
+    // The migration it is written after and the other branch ends in the
+    // folder, which no snapshot records for a blank file.
+    line: blankLineHeader(await blankLineIn(migrationsDir)),
   });
   // A dry run prints the file and its path, and writes neither the file nor its folder.
   if (dryRun) {

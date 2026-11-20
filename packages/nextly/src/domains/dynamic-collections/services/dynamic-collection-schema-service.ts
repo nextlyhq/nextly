@@ -56,6 +56,7 @@ import {
 } from "../../schema/pipeline/sql-templates/index";
 import {
   fieldProducesColumn,
+  junctionLinkColumnsOf,
   junctionTableNameBetween,
   junctionTableNameFor,
   junctionTablesOf,
@@ -80,8 +81,9 @@ import {
 } from "../../schema/services/index-name";
 import {
   relationshipKeyTarget,
-  relationshipTargetSlug,
+  sameRelationTarget,
 } from "../../schema/services/relationship-key-target";
+import type { SqliteTypeChange } from "../../schema/services/sqlite-nullability-rebuild";
 import {
   backfillDefaultForType,
   backfillValueForType,
@@ -1621,8 +1623,8 @@ ${allColumnDefs.join(",\n")}
    * - ALTER COLUMN (change type, nullability) is NOT supported
    *
    * For complex schema changes in SQLite, a table rebuild is required. A
-   * nullability change is handed to the caller (`onSqliteNullability`), which
-   * rebuilds the table; a type change is not made there.
+   * nullability change is handed to the caller (`onSqliteNullability`), and so is
+   * a type change (`onSqliteTypeChange`); the caller rebuilds the table.
    */
   generateAlterTableMigration(
     tableName: string,
@@ -1752,6 +1754,13 @@ ${allColumnDefs.join(",\n")}
        * caller that can rebuild the table once these statements have run applies it there.
        */
       onSqliteNullability?: (column: string, required: boolean) => void;
+      /**
+       * Told, on SQLite, of each kept column whose type this change moves, with the type it
+       * becomes. SQLite can't alter a column, so this renders no statement for it; a caller that
+       * can rebuild the table once these statements have run applies it there. The values are
+       * judged before (a change that loses one is refused), so the rebuild's copy keeps them.
+       */
+      onSqliteTypeChange?: (column: string, change: SqliteTypeChange) => void;
       /**
        * The registry's table for each collection, which a relationship's key references: a
        * renamed target keeps the table it was created under. Undefined spells each target's table
@@ -2093,9 +2102,13 @@ ${allColumnDefs.join(",\n")}
       // it. Reading the toggle for one of those emits a second CREATE INDEX for the same
       // column under the same name.
       if (!oldField || this.storageClassChanged(oldField, field)) continue;
-      if (oldField.index !== field.index) {
+      // Whether the column is indexed by the field's rules, not its `.index` alone: a relationship's
+      // is indexed whatever it says, so a type crossing that line adds or drops the index.
+      const wasIndexed = this.columnIsIndexed(oldField);
+      const isIndexed = this.columnIsIndexed(field);
+      if (wasIndexed !== isIndexed) {
         const idxCol = toSnakeCase(field.name);
-        if (field.index) {
+        if (isIndexed) {
           // Judged by the column as it stands in the database, which the caller reads: a repeater
           // or group is JSON on a table created now and text on one created before, and MySQL can
           // index only the second. Without the live types the legacy rendering stands, as before.
@@ -2285,13 +2298,43 @@ ${allColumnDefs.join(",\n")}
     }
     statements.push(...fkActionsBeforeColumns);
 
-    // SQLite can't alter a column. A nullability change goes to the caller, which rebuilds the
-    // table once these statements have run (`onSqliteNullability`); a type change is skipped there.
+    // SQLite can't alter a column. A nullability change and a type change go to the caller, which
+    // rebuilds the table once these statements have run (`onSqliteNullability`,
+    // `onSqliteTypeChange`), as a migration file's rebuild makes them.
     if (this.dialect === "sqlite") {
       for (const { field, oldField } of this.alterableFields(
         newFields,
         previousDefinitionOf
       )) {
+        // A column whose type moves, judged as the other dialects judge it (`columnChangeOf`): a
+        // change of kind or name on the same type leaves the column as it is.
+        const { before, described, columnChanged } = this.columnChangeOf(
+          oldField,
+          field
+        );
+        if (
+          columnChanged &&
+          before !== null &&
+          described !== null &&
+          before.dialectType !== described.dialectType
+        ) {
+          // With what the fields were: the key Nextly made for the field before, as it makes it
+          // (`relationshipForeignKey`), and whether each field is unique (`columnIsUnique`). The
+          // rebuild drops only that key, known by its whole identity, and an older one-to-one's
+          // inline UNIQUE only where the field after is not unique.
+          const formerKey = this.relationshipForeignKey(
+            tableName,
+            oldField,
+            false,
+            options?.targetTables
+          );
+          options?.onSqliteTypeChange?.(toSnakeCase(field.name), {
+            type: described.dialectType,
+            ...(formerKey === null ? {} : { formerKey }),
+            formerUnique: this.columnIsUnique(oldField),
+            unique: this.columnIsUnique(field),
+          });
+        }
         if (this.nullabilityChanged(oldField, field)) {
           options?.onSqliteNullability?.(
             toSnakeCase(field.name),
@@ -2310,49 +2353,10 @@ ${allColumnDefs.join(",\n")}
         // restates nullability and nothing else.
         if (this.isFieldModified(oldField, field)) {
           const alterCol = toSnakeCase(field.name);
-          // The descriptor decides the target column, the same answer the comparison above used to
-          // decide there was a change at all. Asking a different renderer here is what let a field
-          // be judged modified by one definition and then rewritten by another: this call used to
-          // drop `options` and `validation`, so a number switched to `format: "float"` was detected
-          // and then re-emitted as `integer`.
-          const before = getColumnDescriptor(
+          const { before, type, columnChanged } = this.columnChangeOf(
             oldField,
-            this.dialect,
-            "collection"
+            field
           );
-          const described = getColumnDescriptor(
-            field,
-            this.dialect,
-            "collection"
-          );
-          const type =
-            described?.dialectType ??
-            this.mapFieldTypeToSQL(
-              field.type,
-              field.length,
-              field.options,
-              field.validation,
-              field
-            );
-
-          // 🔴 Whether the COLUMN changed, which is not the same question as whether the FIELD did.
-          //
-          // `isFieldModified` also answers true for an index or a unique constraint, and neither is
-          // a property of the column's shape. Rewriting the type for one of those is not a harmless
-          // no-op: the type written here is the DESCRIPTOR's, and the descriptor does not yet agree
-          // with the generator that created the column. Enabling an index on a Builder `select`
-          // would move it from the unbounded `text` it was created as to `varchar(255)`, truncating
-          // every stored value past 255 characters — for an edit that never touched its storage.
-          // Nullability is deliberately NOT part of this. The descriptor derives `nullable` from
-          // `required`, so including it would make a requiredness toggle claim the column's TYPE
-          // changed and rewrite it — the same truncation the index case caused, reached through a
-          // different edit. It is tracked on its own below, where it belongs.
-          const columnChanged =
-            !before || !described
-              ? before !== described
-              : before.dialectType !== described.dialectType ||
-                before.kind !== described.kind ||
-                before.name !== described.name;
           const nullabilityChanged = this.nullabilityChanged(oldField, field);
 
           if (this.dialect === "mysql") {
@@ -2500,6 +2504,57 @@ ${allColumnDefs.join(",\n")}
    * `unique` and `index` are compared separately because they are not properties of the column's
    * shape. Two columns can be identical and differ in whether an index covers them.
    */
+  /**
+   * What a kept field's column becomes: the descriptor before and after, the type to write, and
+   * whether the COLUMN changed, which is not the same question as whether the field did.
+   */
+  private columnChangeOf(
+    oldField: FieldDefinition,
+    field: FieldDefinition
+  ): {
+    before: ReturnType<typeof getColumnDescriptor>;
+    described: ReturnType<typeof getColumnDescriptor>;
+    type: string;
+    columnChanged: boolean;
+  } {
+    // The descriptor decides the target column, the same answer the comparison above used to
+    // decide there was a change at all. Asking a different renderer here is what let a field
+    // be judged modified by one definition and then rewritten by another: this call used to
+    // drop `options` and `validation`, so a number switched to `format: "float"` was detected
+    // and then re-emitted as `integer`.
+    const before = getColumnDescriptor(oldField, this.dialect, "collection");
+    const described = getColumnDescriptor(field, this.dialect, "collection");
+    const type =
+      described?.dialectType ??
+      this.mapFieldTypeToSQL(
+        field.type,
+        field.length,
+        field.options,
+        field.validation,
+        field
+      );
+
+    // 🔴 Whether the COLUMN changed, which is not the same question as whether the FIELD did.
+    //
+    // `isFieldModified` also answers true for an index or a unique constraint, and neither is
+    // a property of the column's shape. Rewriting the type for one of those is not a harmless
+    // no-op: the type written here is the DESCRIPTOR's, and the descriptor does not yet agree
+    // with the generator that created the column. Enabling an index on a Builder `select`
+    // would move it from the unbounded `text` it was created as to `varchar(255)`, truncating
+    // every stored value past 255 characters — for an edit that never touched its storage.
+    // Nullability is deliberately NOT part of this. The descriptor derives `nullable` from
+    // `required`, so including it would make a requiredness toggle claim the column's TYPE
+    // changed and rewrite it — the same truncation the index case caused, reached through a
+    // different edit. It is tracked on its own below, where it belongs.
+    const columnChanged =
+      !before || !described
+        ? before !== described
+        : before.dialectType !== described.dialectType ||
+          before.kind !== described.kind ||
+          before.name !== described.name;
+    return { before, described, type, columnChanged };
+  }
+
   /**
    * Whether the column moves between NOT NULL and nullable: the descriptor's answer, the one the
    * CREATE and a migration plan from. A relationship's column follows `required` like any other,
@@ -2994,16 +3049,8 @@ ${allColumnDefs.join(",\n")}
    * same relation kind — the only relations a rename preserves.
    */
   private sameRelationTarget(a: FieldDefinition, b: FieldDefinition): boolean {
-    // The target as reads take it (`relationTo` before `options.target`), so two relationships
-    // naming different collections only by `relationTo` are not mistaken for one; a `relationTo`
-    // list is compared whole.
-    const listOf = (f: FieldDefinition) =>
-      Array.isArray(f.relationTo) ? JSON.stringify(f.relationTo) : null;
-    return (
-      relationshipTargetSlug(a) === relationshipTargetSlug(b) &&
-      listOf(a) === listOf(b) &&
-      a.options?.relationType === b.options?.relationType
-    );
+    // The one rule, which the save's preview asks too (`legacy-preview/translate`).
+    return sameRelationTarget(a, b);
   }
 
   /**
@@ -3266,6 +3313,12 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     const targetCollection = field.options?.target ?? "";
     // Extract collection name from table name (remove dc_ prefix)
     const sourceCollection = sourceTableName.replace("dc_", "");
+    // The link columns every read and write of the junction's rows asks for,
+    // from the one place that names them.
+    const { sourceColumn, targetColumn } = junctionLinkColumnsOf(
+      sourceTableName,
+      targetCollection
+    );
     return {
       table,
       sourceCollection,
@@ -3274,8 +3327,8 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
       // The table the target is stored in, which a renamed target kept (see `targetTableOf`). The
       // junction's own name and columns stay spelled from the slug, as its reads and writes spell them.
       targetTable: this.targetTableOf(targetCollection, targetTables),
-      sourceColumn: `${sourceCollection}_id`,
-      targetColumn: `${targetCollection}_id`,
+      sourceColumn,
+      targetColumn,
       fkSource: `fk_${table}_${sourceCollection}`,
       fkTarget: `fk_${table}_${targetCollection}`,
       uqPair: `uq_${table}_pair`,

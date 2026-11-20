@@ -92,6 +92,33 @@ describe("reading the picture a node draws", () => {
   });
 });
 
+describe("reading the text sizes a node is drawn at", () => {
+  function Sizes({ root }: { root: HTMLElement | null }) {
+    const { lengths } = useCanvasReading(root, "n1", { document: DOCUMENT });
+    return (
+      <span data-testid="sizes">
+        {`${lengths?.["font-size"] ?? "none"}/${lengths?.["line-height"] ?? "none"}`}
+      </span>
+    );
+  }
+
+  it("reads the computed font size and line height, and none without the node", () => {
+    // What a size reaching a field as a variable comes to on the canvas.
+    const canvas = document.createElement("div");
+    canvas.innerHTML =
+      '<h2 data-nx-node="n1" style="font-size: 36px; line-height: 40px">A</h2>';
+    document.body.append(canvas);
+    const view = render(<Sizes root={canvas} />);
+    expect(screen.getByTestId("sizes").textContent).toBe("36px/40px");
+
+    const other = document.createElement("div");
+    other.innerHTML = '<h2 data-nx-node="n9">B</h2>';
+    view.rerender(<Sizes root={other} />);
+    expect(screen.getByTestId("sizes").textContent).toBe("none/none");
+    canvas.remove();
+  });
+});
+
 describe("which pictures are a block's own to style", () => {
   it("counts only a root that hands its media styles to the picture", () => {
     // A rich-text passage with an inline picture is not an image block: its

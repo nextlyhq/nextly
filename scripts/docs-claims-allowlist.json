@@ -1,5 +1,11 @@
 {
-  "forbidden-status-phrase": {},
+  "forbidden-status-phrase": {
+    "docs/page-builder/starter-pages.mdx": {
+      "count": 1,
+      "digests": ["715c19d92e841218"],
+      "reason": "Accurate: \"Coming soon\" is the name of a starter page that ships today (plugin-page-builder starter-pages/first-party/coming-soon.ts), a pre-launch page with one message and an email field. The line lists it by its name in the starter page picker, not as a promise of a future feature. Remove this entry if that starter page is renamed or removed."
+    }
+  },
   "plugin-route-mount": {
     "docs/plugins/seo.mdx": {
       "count": 1,

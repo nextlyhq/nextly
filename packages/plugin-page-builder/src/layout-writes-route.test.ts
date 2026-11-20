@@ -8,6 +8,7 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createLayout,
   duplicateLayout,
   layoutWriteRoutes,
   renameLayout,
@@ -55,6 +56,23 @@ function writes(rows: Record<string, Record<string, unknown>>) {
       const copy = { ...rows[id], ...overrides, id: `${id}-copy` };
       rows[copy.id as string] = copy;
       return copy;
+    }),
+    create: vi.fn(async (collection, data) => {
+      calls.push({ op: "create", args: [collection, data] });
+      const made = { ...data, id: "made" };
+      rows.made = made;
+      return made;
+    }),
+    defaultLayout: vi.fn(async () => (rows.main === undefined ? null : "main")),
+    removeCreated: vi.fn(async (ids: readonly string[]) => {
+      calls.push({ op: "removeCreated", args: [ids] });
+    }),
+    starterAreas: vi.fn(async () => {
+      calls.push({ op: "starterAreas", args: [] });
+      return [
+        { area: "header", component: "starter-h-2" },
+        { area: "footer", component: "starter-f-2" },
+      ];
     }),
   };
   return { fake, calls };
@@ -143,5 +161,74 @@ describe("the routes", () => {
     await expect(send("x".repeat(201))).rejects.toSatisfy(error =>
       NextlyError.isValidation(error)
     );
+  });
+});
+
+describe("making a new set", () => {
+  const MAIN_WITH_AREAS = {
+    ...MAIN,
+    areas: [{ area: "header", component: "ridgeline" }],
+  };
+
+  it("copies the site default as a draft under the name given, with a slug of its own", async () => {
+    const { fake, calls } = writes({ main: { ...MAIN_WITH_AREAS } });
+    const made = await createLayout(
+      "layouts",
+      { title: "Landing", start: "copy-default" },
+      fake
+    );
+    expect(made).toEqual({ id: "main-copy", title: "Landing" });
+    expect(calls.find(call => call.op === "duplicate")?.args).toEqual([
+      "layouts",
+      "main",
+      { title: "Landing", slug: "landing", status: "draft" },
+    ]);
+  });
+
+  it("is refused a copy where the site has no default", async () => {
+    const { fake } = writes({});
+    await expect(
+      createLayout("layouts", { title: "Landing", start: "copy-default" }, fake)
+    ).rejects.toThrow("This site has no default header & footer set to copy.");
+  });
+
+  it("makes an empty one with no areas", async () => {
+    const { fake, calls } = writes({ main: { ...MAIN } });
+    await createLayout("layouts", { title: "Landing", start: "empty" }, fake);
+    expect(calls.find(call => call.op === "create")?.args).toEqual([
+      "layouts",
+      { title: "Landing", slug: "landing", areas: [], status: "draft" },
+    ]);
+    expect(calls.some(call => call.op === "starterAreas")).toBe(false);
+  });
+
+  it("makes one with a new starter header and footer of its own", async () => {
+    const { fake, calls } = writes({ main: { ...MAIN } });
+    await createLayout("layouts", { title: "Landing", start: "starter" }, fake);
+    expect(calls.find(call => call.op === "create")?.args).toEqual([
+      "layouts",
+      {
+        title: "Landing",
+        slug: "landing",
+        areas: [
+          { area: "header", component: "starter-h-2" },
+          { area: "footer", component: "starter-f-2" },
+        ],
+        status: "draft",
+      },
+    ]);
+  });
+
+  it("removes the starter components it made when the set is refused", async () => {
+    const { fake, calls } = writes({ main: { ...MAIN } });
+    vi.mocked(fake.create).mockRejectedValueOnce(
+      NextlyError.forbidden({ logContext: {} })
+    );
+    await expect(
+      createLayout("layouts", { title: "Landing", start: "starter" }, fake)
+    ).rejects.toThrow();
+    expect(calls.find(call => call.op === "removeCreated")?.args).toEqual([
+      ["starter-h-2", "starter-f-2"],
+    ]);
   });
 });

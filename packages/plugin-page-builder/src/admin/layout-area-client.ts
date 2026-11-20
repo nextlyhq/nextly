@@ -18,10 +18,12 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 
 import {
+  areaComponentPath,
   areaComponentsPath,
   defaultAreaPath,
   layoutAreaPath,
   type AreaComponentsResponse,
+  type CreatedAreaComponent,
   type PutInAreaBody,
   type WrittenArea,
 } from "../layout-area-contract";
@@ -102,4 +104,23 @@ export async function createInDefaultArea(
     throw new Error("The default area route answered without what it wrote.");
   }
   return { message: answer.message ?? "", item: answer.item };
+}
+
+/**
+ * Make a new header (or footer) component for a set's picker: the starter's
+ * design, marked for `area` and published, written as the caller. No set is
+ * written; the picker puts it in the set's form.
+ */
+export async function createAreaComponent(
+  area: RegionArea
+): Promise<CreatedAreaComponent> {
+  const answer = await writePluginRoute<{ item?: CreatedAreaComponent }>({
+    plugin: PAGE_BUILDER_PLUGIN_NAME,
+    path: areaComponentPath(area),
+    method: "POST",
+  });
+  if (answer?.item === undefined) {
+    throw new Error("The component route answered without what it made.");
+  }
+  return answer.item;
 }

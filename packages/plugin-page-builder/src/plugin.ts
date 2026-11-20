@@ -402,6 +402,9 @@ export const pageBuilder = (
           def.state.writeReach.mayHoldBlocks(collection),
         options: opts.siteCode,
         siteOrigin: () => appOrigin(process.env.NEXT_PUBLIC_APP_URL),
+        // The bounds pages are drawn under, so CSS on every block a page
+        // draws is recorded.
+        ...(opts.limits === undefined ? {} : { limits: opts.limits }),
       });
       installBreakpointRemoval(
         ctx,
@@ -592,6 +595,8 @@ export const pageBuilder = (
         layouts.fillNotices,
         ...layouts.layoutWrites,
         ...layouts.layoutArea,
+        layouts.setAreaChoices,
+        layouts.areaComponent,
         layouts.createInArea,
         pages.pageCollection,
         breakpoints.siteSettings,

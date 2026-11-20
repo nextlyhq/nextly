@@ -51,6 +51,13 @@ export interface PlanCompanionArgs {
    * transition.
    */
   previouslyLocalized?: boolean;
+  /**
+   * A DISABLE's statements to run once the values are back on the main table
+   * (`LocalizationDownOptions.afterRestore`): the Required and unique settings the main table's
+   * snapshot records of the restored columns (`up`); and what its DOWN undoes first (`down`), the
+   * unique indexes, since SQLite drops no column an index covers.
+   */
+  afterRestore?: { up: readonly string[]; down: readonly string[] };
 }
 
 /**
@@ -75,8 +82,15 @@ export function planCompanionMigration(
       // UP restores the default locale onto main, archives non-default translations into
       // `nextly_i18n_archive`, then drops the companion. DOWN is the inverse (re-enable).
       kind: "disable",
-      upSql: buildLocalizationDownSql(spec),
-      downSql: buildLocalizationUpSql(spec),
+      upSql: buildLocalizationDownSql(spec, {
+        ...(args.afterRestore === undefined
+          ? {}
+          : { afterRestore: args.afterRestore.up }),
+      }),
+      downSql: [
+        ...(args.afterRestore?.down ?? []).map(s => `${s};`),
+        buildLocalizationUpSql(spec),
+      ].join("\n\n"),
       spec,
     };
   }

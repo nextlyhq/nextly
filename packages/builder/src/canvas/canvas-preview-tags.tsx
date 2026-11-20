@@ -15,7 +15,7 @@
  */
 import * as React from "react";
 
-import { VariantPreviewTag } from "../variant-preview";
+import { VariantPreviewTag } from "./variant-preview";
 
 /** @experimental Settles with the canvas's mode preview. */
 export interface CanvasPreviewTagsProps {

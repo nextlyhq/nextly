@@ -107,3 +107,23 @@ export interface WrittenArea {
   readonly area: LayoutArea;
   readonly component: { readonly id: string; readonly title: string };
 }
+
+/**
+ * Where a new header (or footer) component is made for a set's picker: the
+ * starter's design, marked for the area and published, and nothing else
+ * written. The picker puts it in the set's form, which the set's own Save and
+ * Publish store.
+ */
+export const AREA_COMPONENT_ROUTE_PATH = "/layouts/areas/:area/component";
+
+/** The path a new component for `area` is made at. */
+export function areaComponentPath(area: LayoutArea): string {
+  return AREA_COMPONENT_ROUTE_PATH.replace(":area", area);
+}
+
+/** The component the route made. */
+export interface CreatedAreaComponent {
+  readonly id: string;
+  readonly title: string;
+  readonly area: LayoutArea;
+}

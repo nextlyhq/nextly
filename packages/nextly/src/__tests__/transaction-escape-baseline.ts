@@ -113,7 +113,7 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     dialect: "mysql",
     key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select single_*_locales",
     witness:
-      "packages/nextly/src/domains/i18n/__tests__/enable-translation-dialogs.integration.test.ts",
+      "packages/nextly/src/domains/i18n/__tests__/field-leaves-constrained.integration.test.ts",
     reason: PIPELINE,
   },
   {

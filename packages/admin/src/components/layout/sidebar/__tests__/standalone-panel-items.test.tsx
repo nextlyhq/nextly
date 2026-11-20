@@ -16,6 +16,10 @@ import {
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  drawnText,
+  nameHoldsDrawnText,
+} from "@admin/__tests__/helpers/label-in-name";
 import type { AdminBranding, PluginMetadata } from "@admin/types/branding";
 
 let branding: AdminBranding = { plugins: [] } as AdminBranding;
@@ -203,6 +207,52 @@ describe("a standalone plugin's panel", () => {
     expect(vi.mocked(protectedApi.get).mock.calls[0][0]).toBe(
       "/admin-meta/plugin-panel-numbers?plugin=%40acme%2Flibrary"
     );
+  });
+
+  it("names each numbered item with the words it draws, as Label in Name reads them", async () => {
+    // A badge, a quiet count and a branch's count: each draws its label
+    // and its number, and a person using speech input says what they see.
+    answer([
+      [0, 3],
+      [1, 12],
+      [2, 9],
+    ]);
+    branding = {
+      plugins: [
+        library([
+          {
+            label: "Problems",
+            to: "/admin/problems",
+            badge: { attention: "acme/problems" },
+          },
+          {
+            label: "Patterns",
+            to: "/admin/p",
+            count: { collection: "patterns" },
+          },
+          {
+            label: "Archive",
+            to: "/admin/a",
+            count: { collection: "archive" },
+            children: [{ label: "Old", to: "/admin/old" }],
+          },
+        ]),
+      ],
+    } as AdminBranding;
+    renderPanel();
+
+    const problems = await screen.findByRole("link", { name: "Problems: 3" });
+    const patterns = screen.getByRole("link", { name: "Patterns, 12" });
+    const archive = screen.getByRole("button", { name: "Archive, 9" });
+    for (const control of [problems, patterns, archive]) {
+      const name = control.getAttribute("aria-label") ?? "";
+      // The label and its number are two words apart, not one run together
+      // ("Problems3"), which no name built from them can hold.
+      expect(
+        nameHoldsDrawnText(name, drawnText(control)),
+        `${name} against "${drawnText(control)}"`
+      ).toBe(true);
+    }
   });
 
   it("draws each item's own number, whatever page it links to", async () => {

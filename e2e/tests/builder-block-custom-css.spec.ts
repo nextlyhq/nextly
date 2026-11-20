@@ -98,7 +98,10 @@ test("an editor is told the block has custom CSS, and never shown it", async () 
       "This block also has custom CSS, set by someone who can change site code."
     )
   ).toBeVisible();
-  await expect(style.getByRole("button", { name: "Edit" })).toHaveCount(0);
+  // Exact: a name holding "Edit" is the tab's own "Editing: This block".
+  await expect(
+    style.getByRole("button", { name: "Edit", exact: true })
+  ).toHaveCount(0);
 
   await page.getByRole("tab", { name: "Advanced" }).click();
   const advanced = page.getByRole("tabpanel", { name: "Advanced" });

@@ -28,7 +28,9 @@
   font-weight: 600;
 }
 
-.nx-fonts__styles {
+/* A family's styles, and where it is used, one to a line. */
+.nx-fonts__styles,
+.nx-fonts__uses {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -589,15 +591,77 @@ button.nx-font-roles__row:focus-visible {
 }
 
 /*
- * The screen on the admin's Fonts page: a panel-wide column on the panel's
- * surface, so it reads as the screen the builder opens, beside the page.
+ * The screen on the admin's Fonts page, and "Use <font> for" where a font
+ * finished adding: a bordered column on the panel's surface.
  */
-.nx-fonts-page {
+.nx-fonts-page,
+.nx-fonts-use {
   display: flex;
   flex-direction: column;
-  max-width: 28rem;
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-md);
   background: var(--nx-builder-panel);
   color: var(--nx-foreground);
+}
+
+/* The admin's page: a panel-wide column, as the builder opens the screen. */
+.nx-fonts-page {
+  max-width: 28rem;
+}
+
+/*
+ * Where a font is used, in its details: "Body font", "Headings font" and
+ * "Used in N places", one to a line, each a link where it opens something.
+ * A link is at least 24px tall, as WCAG 2.2 asks of a target.
+ */
+.nx-fonts__uses {
+  font-size: var(--text-xs);
+}
+
+.nx-fonts__uses .nx-vars__link,
+.nx-fonts-use .nx-vars__link {
+  min-height: 24px;
+}
+
+/* The variables a removal leaves without the font, and what each falls to. */
+.nx-fonts__fallbacks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding-left: 1rem;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * "Use <font> for: Body / Headings / Both / Not now", where a font finished
+ * adding: at the top of the screen, or of the upload editor while it is open.
+ */
+.nx-fonts-use {
+  gap: 0.25rem;
+  margin: 0 0 0.5rem;
+  padding: 0.5rem 0.625rem;
+}
+
+.nx-fonts-use__ask {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.nx-fonts-use__answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+/* The rows following a text style, which a role's font leaves as they are. */
+.nx-fonts-use__kept {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  overflow-wrap: anywhere;
 }

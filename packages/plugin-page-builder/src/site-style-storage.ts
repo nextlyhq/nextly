@@ -23,6 +23,7 @@ import {
   resolveSiteTokens,
   tokenDisplayLabel,
   tokenIdentity,
+  type NamedClass,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { defineSingle, json, type SingleConfig } from "nextly/config";
@@ -45,11 +46,13 @@ import {
   siteCssPrefix,
   type SiteStyleData,
 } from "./site-style";
+import { fluidClassesFollowRange } from "./site-style-fluid-classes";
 import {
   checkStoredBreakpoints,
   checkStoredClasses,
   checkStoredFonts,
   checkStoredTokens,
+  configuredClassesOver,
   readSiteStyleRecord,
   type SectionCheck,
   type SectionPolicy,
@@ -721,7 +724,7 @@ export function droppedSharedStyles(
  */
 function sharedStyleGuard(
   openRemoval: OpenRemovalReader | undefined,
-  supplied: SiteStyleData["classes"]
+  defaults: SiteStyleData | undefined
 ): (
   hook: Parameters<typeof refuseSharedStyleChangesOutsideTheirRoutes>[0]
 ) => Promise<void> {
@@ -735,15 +738,35 @@ function sharedStyleGuard(
       settingsWrite && touchesClasses
         ? await openRemovalFor(openRemoval, { inTransaction: false })
         : null;
+    const supplied = suppliedForWrite(defaults, hook);
     refuseSharedStyleChangesOutsideTheirRoutes(
       hook,
       work?.kind === "strip" ? work.removal.ids : undefined,
-      new Map((supplied ?? []).map(entry => [entry.id, entry])),
+      new Map(supplied.map(entry => [entry.id, entry])),
       work?.kind === "restore" && work.classes !== undefined
         ? restoredTier(hook.originalData?.classes, supplied, work.classes)
         : undefined
     );
   };
+}
+
+/**
+ * The code's classes as a removal's strip and its undo met them: across the
+ * range the write leaves stored (its own tokens, else those stored), so the
+ * override either stored of a text style made with "Fluid…" matches.
+ */
+function suppliedForWrite(
+  defaults: SiteStyleData | undefined,
+  hook: {
+    readonly data?: Record<string, unknown>;
+    readonly originalData?: Record<string, unknown>;
+  }
+): readonly NamedClass[] {
+  const tokens =
+    hook.data !== undefined && Object.hasOwn(hook.data, "tokens")
+      ? hook.data.tokens
+      : hook.originalData?.tokens;
+  return configuredClassesOver(defaults, tokens);
 }
 
 /** What an open undo kept of the shared styles, with every id it took out. */
@@ -758,14 +781,14 @@ type RestoredClasses = NonNullable<
  */
 function restoredTier(
   stored: unknown,
-  supplied: SiteStyleData["classes"],
+  supplied: readonly NamedClass[],
   classes: RestoredClasses
 ): ReadonlyMap<string, unknown> {
   const tier = readStoredJson(stored);
   return classEntriesById(
     restoreClasses(
       Array.isArray(tier) ? tier : [],
-      supplied ?? [],
+      supplied,
       classes.fragment,
       classes.ids
     ).value
@@ -806,10 +829,13 @@ export function siteStyleSingle(
     // change is made rather than what is wrong with a value it may not set.
     hooks: {
       beforeValidate: [
+        // First, so every guard below judges the classes it remakes: a text
+        // style's fluid size follows a change of the range in this same write.
+        fluidClassesFollowRange(policy.defaults, sharedStyleName),
         refuseBreakpointsOutsideSettings,
         // The prefix's one door, judged like the breakpoints' above.
         prefixOutsideSettingsGuard(policy.defaults),
-        sharedStyleGuard(openRemoval, policy.defaults?.classes),
+        sharedStyleGuard(openRemoval, policy.defaults),
         variableRemovalGuard(variablesInUse, policy.defaults),
         sharedStyleVariableGuard(policy.defaults),
       ],

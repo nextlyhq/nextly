@@ -52,6 +52,7 @@ import {
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
 import { useBuilderRoute } from "./builder-route-read";
+import { useHeaderFooterInCode } from "./header-footer-in-code";
 import { HeaderFooterMenu, type MenuSearch } from "./header-footer-menu";
 import { useSetPictures } from "./header-footer-pictures";
 import {
@@ -296,7 +297,10 @@ export function PageLayoutPicker<T extends FieldValues>({
   disabled?: boolean;
 }): JSX.Element | null {
   const stored = useStoredLayout(control);
-  if (stored === undefined) return null;
+  // A site that draws its header and footer in code: the menu would change
+  // nothing it shows, so there is none. The page's stored choice is kept.
+  const inCode = useHeaderFooterInCode();
+  if (stored === undefined || inCode) return null;
   return <Picker control={control} stored={stored} disabled={disabled} />;
 }
 
@@ -310,8 +314,10 @@ export function NewPageLayoutPicker<T extends FieldValues>({
   control,
 }: {
   control: Control<T>;
-}): JSX.Element {
+}): JSX.Element | null {
   const stored = useWatchedLayout(control);
+  // None where the site draws its header and footer in code, as on a page.
+  if (useHeaderFooterInCode()) return null;
   return (
     <Picker control={control} stored={stored} disabled={false} manage={false} />
   );
@@ -680,7 +686,10 @@ export function usePageLayoutRegions<T extends FieldValues>(
   useEffect(() => {
     if (fresh !== undefined) setShown(fresh);
   }, [fresh]);
-  const drawn = fresh ?? shown;
+  // A site that draws its header and footer in code draws them itself: the
+  // canvas shows no regions of a set, whatever the page's stored choice.
+  const inCode = useHeaderFooterInCode();
+  const drawn = inCode ? NOTHING_DRAWN : (fresh ?? shown);
   return useMemo(
     () => ({ ...drawn, reread: () => void retry() }),
     [drawn, retry]
@@ -803,19 +812,35 @@ function regionWords(
   region: EffectiveLayout["regions"][number],
   meta: LayoutChoicesResponse["meta"]
 ): Pick<CanvasRegion, "label" | "badge" | "name"> {
-  const from = `from the ${effective.title} header & footer`;
-  const starter = starterOf(region, meta);
-  if (starter === region.area) {
+  return regionNaming(
+    effective.title,
+    region.area,
+    starterOf(region, meta) === region.area
+  );
+}
+
+/**
+ * What a region of set `setTitle` is called on the canvas and in Layers:
+ * where it comes from, or, while it shows the site's starter as seeded, that
+ * it is the starter, so an author knows it is theirs to edit or replace.
+ */
+export function regionNaming(
+  setTitle: string,
+  area: RegionArea,
+  starter: boolean
+): Pick<CanvasRegion, "label" | "badge" | "name"> {
+  const from = `from the ${setTitle} header & footer`;
+  if (starter) {
     return {
-      label: `${STARTER_NAMES[starter]}, ${from}`,
-      badge: STARTER_BADGES[starter],
-      name: STARTER_NAMES[starter],
+      label: `${STARTER_NAMES[area]}, ${from}`,
+      badge: STARTER_BADGES[area],
+      name: STARTER_NAMES[area],
     };
   }
-  const name = siteRegionName(region.area);
+  const name = siteRegionName(area);
   return {
     label: `${name}, ${from}`,
-    badge: `${name} · ${effective.title}`,
+    badge: `${name} · ${setTitle}`,
     name,
   };
 }

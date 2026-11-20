@@ -30,6 +30,7 @@ import { isPlainRecord } from "./plain-record";
 import { choicesFitProp, exposureTypeForProp } from "./prop-exposure";
 import { defineEntry, ownEntry, ownKeys } from "./safe-record";
 import type { SlotDefaultSource } from "./tree-slot-defaults";
+import { findNode } from "./tree-walk";
 import type { ValidationIssue } from "./validation-contract";
 
 /**
@@ -68,6 +69,18 @@ function followedSettingId(binding: unknown): string | undefined {
   if (ownEntry(binding, "source") !== SETTING_BINDING_SOURCE) return undefined;
   const id = ownEntry(binding, "$bind");
   return typeof id === "string" && id !== "" ? id : undefined;
+}
+
+/**
+ * Whether a binding follows a component's setting. Composing fills such a
+ * binding from the setting and then drops it (`withoutSettingBindings`), so
+ * nothing else it carries, a fallback or a format, is ever read: the editor
+ * offers neither for it.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function followsSetting(binding: unknown): boolean {
+  return followedSettingId(binding) !== undefined;
 }
 
 /**
@@ -293,6 +306,37 @@ function namedSettings(exposed: unknown): ReadonlySet<string> {
     if (isPlainRecord(entry) && typeof entry.id === "string") ids.add(entry.id);
   }
   return ids;
+}
+
+/**
+ * The settings of a component that `prop` of block `nodeId` may follow, in
+ * the order the component declares them: each the save takes a follower of
+ * there, judged by `schema`, the prop's own (the type it holds, and a
+ * select's choices). None outside a component, for a block it doesn't hold,
+ * and for a prop no setting edits. What the editor's data picker offers, so
+ * a pick it lists is one the save takes.
+ *
+ * @experimental Settles with the editor's binding controls.
+ */
+export function followableSettingsOf(
+  doc: BlockDocument,
+  nodeId: string,
+  prop: string,
+  schema: PropSchema | undefined
+): ExposedProperty[] {
+  if (!isPlainRecord(doc) || doc.kind !== "component") return [];
+  if (exposureTypeForProp(schema) === undefined) return [];
+  const node = findNode(doc.nodes, nodeId);
+  if (node === undefined) return [];
+  const exposed = ownEntry(doc, "exposed");
+  const component = {
+    settings: followableSettings(exposed),
+    named: namedSettings(exposed),
+    propSchemaOf: () => schema,
+  };
+  return [...component.settings.values()].filter(
+    setting => followerRefusal(node, prop, setting.id, component) === undefined
+  );
 }
 
 /**

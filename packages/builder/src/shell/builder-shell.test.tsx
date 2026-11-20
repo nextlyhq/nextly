@@ -1499,6 +1499,36 @@ describe("F6 region cycling", () => {
   });
 });
 
+describe("Shift+F6", () => {
+  it("walks the regions back, from the top bar round to the inspector", () => {
+    // The platform convention: Shift+F6 undoes F6. A shell answering only F6
+    // leaves Shift+F6 where it was, on the top bar.
+    renderShell({
+      inspector: <p>inspector body</p>,
+      renderPanel: panel => <p>{panel} panel</p>,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Layers" }));
+    const header = document.querySelector(
+      'header[aria-label="Editor actions"]'
+    );
+    if (!(header instanceof HTMLElement)) throw new Error("no top bar");
+    header.focus();
+
+    const back: string[] = [];
+    for (let step = 0; step < 5; step++) {
+      fireEvent.keyDown(document, { key: "F6", shiftKey: true });
+      back.push(document.activeElement?.getAttribute("aria-label") ?? "");
+    }
+    expect(back).toEqual([
+      "Inspector",
+      "Canvas",
+      "Layers",
+      "Editor panels",
+      "Editor actions",
+    ]);
+  });
+});
+
 describe("F6 and the top bar", () => {
   it("reaches the top bar, as the first area after the inspector", () => {
     // The top bar holds the editor's own controls (exit, undo, devices,

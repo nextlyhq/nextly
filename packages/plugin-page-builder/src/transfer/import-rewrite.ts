@@ -13,6 +13,12 @@
  * file does not define, since the source drew nothing under it either; what is
  * kept is only ever written under a breakpoint the destination defines.
  *
+ * A variable is named two ways, and both follow it: a `$token` by its
+ * identity, and a `var()` of its custom property in any CSS text (a style
+ * value, a shared style's, a page's or a block's custom CSS), which the source
+ * site wrote under its own prefix. One remap per import, the engine's, points
+ * both at the identity the variable takes here, under this site's prefix.
+ *
  * Nothing else changes: node ids, exposure ids and variant keys are the
  * document's own, so a variant keeps its stable id and a placement's values
  * keep addressing the exposures they were set for.
@@ -24,13 +30,14 @@ import {
   contentWidthTokenOf,
   BASE_BREAKPOINT,
   isComponentInstance,
-  isTokenRef,
   mapForest,
+  remapTokenReferences,
   type BlockDocument,
   type BlockNode,
   type ComponentDocument,
   type NamedClass,
   type NodeStyles,
+  type TokenRemap,
 } from "@nextlyhq/blocks-engine";
 
 import {
@@ -45,7 +52,11 @@ import {
 export interface ReferenceMaps {
   readonly components: ReadonlyMap<string, string>;
   readonly classes: ReadonlyMap<string, string>;
-  readonly tokens: ReadonlyMap<string, string>;
+  /**
+   * The variables: each one's identity here, and the prefixes their custom
+   * properties are written under there and here.
+   */
+  readonly tokens: TokenRemap;
   /** Kept breakpoints only; a breakpoint absent here is dropped. */
   readonly breakpoints: ReadonlyMap<string, string>;
   readonly media: ReadonlyMap<string, string>;
@@ -73,6 +84,9 @@ export function rewriteDocument<T extends BlockDocument>(
     const styles = rewriteStyles(document.settings.styles, maps);
     const settings = { ...document.settings };
     delete settings.styles;
+    if (settings.customCss !== undefined) {
+      settings.customCss = rewriteTokens(settings.customCss, maps);
+    }
     rewritten.settings =
       styles === undefined ? settings : { ...settings, styles };
   }
@@ -190,6 +204,9 @@ function rewriteFallbacks(
 /** A node with its styles, classes and hide settings mapped. */
 function rewriteLook(node: BlockNode, maps: ReferenceMaps): BlockNode {
   const next: BlockNode = { ...node };
+  if (node.customCss !== undefined) {
+    next.customCss = rewriteTokens(node.customCss, maps);
+  }
   if (node.styles !== undefined) {
     const styles = rewriteStyles(node.styles, maps);
     if (styles === undefined) delete next.styles;
@@ -291,15 +308,9 @@ function breakpointTo(
   return maps.breakpoints.get(breakpoint);
 }
 
-function rewriteTokens(value: unknown, maps: ReferenceMaps): unknown {
-  if (isTokenRef(value))
-    return { ...value, $token: mapped(maps.tokens, value.$token) };
-  if (!isRecord(value)) return value;
-  const next: Record<string, unknown> = {};
-  for (const [key, inner] of Object.entries(value)) {
-    next[key] = rewriteTokens(inner, maps);
-  }
-  return next;
+/** A value or CSS text with every variable it names pointed here. */
+function rewriteTokens<T>(value: T, maps: ReferenceMaps): T {
+  return remapTokenReferences(value, maps.tokens);
 }
 
 /** A reference through its map; one the map does not name is kept as stored. */

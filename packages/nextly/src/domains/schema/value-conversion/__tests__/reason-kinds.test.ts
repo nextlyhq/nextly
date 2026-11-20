@@ -72,6 +72,10 @@ const TYPE_CHANGE: Record<
     "blocked",
     "no value of the old type could ever be held by the new one",
   ],
+  "link-not-carried": [
+    "blocked",
+    "links the new relationship would not read as the entries they point at, which no save converts",
+  ],
   repeated: [
     "blocked",
     "values that become one value of the new type, which a unique field holds once",

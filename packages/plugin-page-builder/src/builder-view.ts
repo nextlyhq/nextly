@@ -20,6 +20,20 @@ export const BUILDER_VIEW_COMPONENT =
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView";
 
 /**
+ * A header & footer set's address segment in the builder, after the set's
+ * own address. Not `builder`: that segment is the blocks field's view, which
+ * the boot holds unique across every document, and a set has no blocks field.
+ */
+export const SET_BUILDER_VIEW_PATH = "in-builder";
+
+/**
+ * What the admin draws there: the set's header and footer around a
+ * placeholder for the page, with the set's settings beside them.
+ */
+export const SET_BUILDER_VIEW_COMPONENT =
+  "@nextlyhq/plugin-page-builder/admin#SetBuilderView";
+
+/**
  * The New page dialog's body, which the admin opens from "+ New" on a list
  * whose entries open in the builder. Declared here, beside the view, for the
  * reason the action below gives.

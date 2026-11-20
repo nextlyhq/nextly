@@ -321,20 +321,25 @@ export async function addInsertUndo(page, watcher, count) {
   return out;
 }
 
-/** The lead's text field in the sidebar's Content tab. */
-function leadField(page) {
+/**
+ * The heading's text field in the sidebar's Content tab: a plain text input,
+ * the kind of field that writes as it is typed. The lead is a Text, whose
+ * words are edited in a rich field (bold, italic, links), so typing is timed
+ * on the heading.
+ */
+function headingField(page) {
   return page
     .getByTestId("inspector")
-    .locator('[data-content-control="textarea"] textarea')
+    .locator('[data-content-control="text"] input')
     .first();
 }
 
 /**
- * Focuses the lead's text field with the caret after its last character. Set
+ * Focuses the heading's text field with the caret after its last character. Set
  * directly: End moves only to the end of the wrapped line the caret is on.
  */
 export async function caretAtEnd(page) {
-  const field = leadField(page);
+  const field = headingField(page);
   await field.click();
   const focused = await field.evaluate(element => {
     element.setSelectionRange(element.value.length, element.value.length);
@@ -343,18 +348,18 @@ export async function caretAtEnd(page) {
   // A key pressed anywhere else could edit the page itself (Backspace on a
   // selected block deletes it), and every later measure would run on a
   // different page.
-  if (!focused) throw new Error("the lead's text field did not take focus");
+  if (!focused) throw new Error("the heading's text field did not take focus");
 }
 
 /**
- * Types one character into the lead's text field, or deletes the one the
+ * Types one character into the heading's text field, or deletes the one the
  * last sample typed, and times how long until the canvas shows it; then
  * leaves the field with Tab and times the canvas again. Alternating keeps the
  * page the same size from sample to sample.
  */
 export async function typing(page, watcher, count) {
-  const base = await textOf(page, LEAD);
-  await selectAndWait(page, LEAD, base);
+  const base = await textOf(page, HEADING);
+  await selectAndWait(page, HEADING, base);
   const out = { keystroke: [], leave: [], unshown: 0 };
   for (let i = 0; i < count; i++) {
     await watcher.quiet();
@@ -366,7 +371,7 @@ export async function typing(page, watcher, count) {
       {
         on: ["keydown"],
         check: "canvasText",
-        args: { id: LEAD, text: expected },
+        args: { id: HEADING, text: expected },
         limit: KEYSTROKE_LIMIT_MS,
       },
       async () => {
@@ -386,7 +391,7 @@ export async function typing(page, watcher, count) {
       {
         on: ["keydown"],
         check: "canvasText",
-        args: { id: LEAD, text: expected },
+        args: { id: HEADING, text: expected },
       },
       async () => {
         await page.keyboard.press("Tab");

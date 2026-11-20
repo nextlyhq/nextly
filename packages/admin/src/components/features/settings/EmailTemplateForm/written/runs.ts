@@ -1,0 +1,419 @@
+/**
+ * A written block's text as the editor holds it, and back: the stored runs
+ * (text with bold, italic and a link; chips for variables; line breaks inside
+ * the text) become Lexical nodes, and the nodes become the same runs again,
+ * so what is stored is exactly what the person sees.
+ *
+ * Chips and links are nodes of their own rather than Lexical's link node: a
+ * link here may be a variable, which a URL can't hold, and a chip is one
+ * piece that can't be typed into.
+ *
+ * @module components/features/settings/EmailTemplateForm/written/runs
+ */
+import {
+  $createLineBreakNode,
+  $createParagraphNode,
+  $createTextNode,
+  $getNodeByKey,
+  $getRoot,
+  $getSelection,
+  $isElementNode,
+  $isLineBreakNode,
+  $isRangeSelection,
+  $isTextNode,
+  DecoratorNode,
+  ElementNode,
+  type Klass,
+  type LexicalEditor,
+  type LexicalNode,
+  type NodeKey,
+  type SerializedElementNode,
+  type SerializedLexicalNode,
+  type Spread,
+} from "lexical";
+import { createElement, type ReactNode } from "react";
+
+import type { WrittenBlock } from "@admin/services/emailTemplateApi";
+
+import { ChipLabel } from "./ChipLabel";
+
+/** One run of a text block: text with its marks, or a chip. */
+export type Inline = Extract<WrittenBlock, { type: "text" }>["text"][number];
+
+/** A link as stored: a fixed address, or a variable holding one. */
+export type WrittenLink = NonNullable<Inline["link"]>;
+
+/** A chip as stored: the variable and its fallback. */
+type Chip = Extract<Inline, { type: "chip" }>;
+
+/** The marks a run may carry besides its link. */
+interface Marks {
+  bold?: boolean;
+  italic?: boolean;
+}
+
+type SerializedChipNode = Spread<
+  { variable: string; fallback?: string; marks: Marks },
+  SerializedLexicalNode
+>;
+
+/** A variable in the text: one piece, shown by name, that can't be typed into. */
+export class ChipNode extends DecoratorNode<ReactNode> {
+  __variable: string;
+  __fallback: string | undefined;
+  __marks: Marks;
+
+  static getType(): string {
+    return "written-chip";
+  }
+
+  static clone(node: ChipNode): ChipNode {
+    return new ChipNode(
+      node.__variable,
+      node.__fallback,
+      node.__marks,
+      node.__key
+    );
+  }
+
+  static importJSON(json: SerializedChipNode): ChipNode {
+    return new ChipNode(json.variable, json.fallback, json.marks);
+  }
+
+  constructor(
+    variable: string,
+    fallback?: string,
+    marks: Marks = {},
+    key?: NodeKey
+  ) {
+    super(key);
+    this.__variable = variable;
+    this.__fallback = fallback;
+    this.__marks = marks;
+  }
+
+  exportJSON(): SerializedChipNode {
+    return {
+      type: ChipNode.getType(),
+      version: 1,
+      variable: this.__variable,
+      ...(this.__fallback !== undefined ? { fallback: this.__fallback } : {}),
+      marks: this.__marks,
+    };
+  }
+
+  createDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.dataset.variable = this.__variable;
+    // A pill, so a variable never reads as typed text, with its marks as the
+    // sent email draws them: a chip is not a text node, so the editor's text
+    // theme never reaches it.
+    span.className = [
+      "mx-0.5 rounded-md border border-border bg-muted px-1.5 py-0.5 text-xs",
+      this.__marks.bold ? "font-semibold" : "",
+      this.__marks.italic ? "italic" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return span;
+  }
+
+  updateDOM(): false {
+    return false;
+  }
+
+  isInline(): true {
+    return true;
+  }
+
+  /** Its friendly name and mark, and its fallback dialog. */
+  decorate(editor: LexicalEditor): ReactNode {
+    // By key, not by this node: the editor clones nodes as it edits, and the
+    // live one is the one the dialog's change must reach.
+    const key = this.__key;
+    return createElement(ChipLabel, {
+      variable: this.__variable,
+      fallback: this.__fallback,
+      onFallback: fallback =>
+        editor.update(() => {
+          const node = $getNodeByKey(key);
+          // The text it shows when its variable has no value, or none.
+          if (node instanceof ChipNode)
+            node.getWritable().__fallback = fallback;
+        }),
+    });
+  }
+}
+
+type SerializedWrittenLinkNode = Spread<
+  { link: WrittenLink },
+  SerializedElementNode
+>;
+
+/** A link around some text: a fixed address, or a variable holding one. */
+class WrittenLinkNode extends ElementNode {
+  __link: WrittenLink;
+
+  static getType(): string {
+    return "written-link";
+  }
+
+  static clone(node: WrittenLinkNode): WrittenLinkNode {
+    return new WrittenLinkNode(node.__link, node.__key);
+  }
+
+  static importJSON(json: SerializedWrittenLinkNode): WrittenLinkNode {
+    return new WrittenLinkNode(json.link);
+  }
+
+  constructor(link: WrittenLink, key?: NodeKey) {
+    super(key);
+    this.__link = link;
+  }
+
+  exportJSON(): SerializedWrittenLinkNode {
+    return {
+      ...super.exportJSON(),
+      type: WrittenLinkNode.getType(),
+      link: this.__link,
+    };
+  }
+
+  createDOM(): HTMLElement {
+    const a = document.createElement("a");
+    a.className = "underline";
+    return a;
+  }
+
+  updateDOM(): false {
+    return false;
+  }
+
+  isInline(): true {
+    return true;
+  }
+
+  canBeEmpty(): false {
+    return false;
+  }
+}
+
+/** The nodes an editor of written text registers. */
+export const RUN_NODES: ReadonlyArray<Klass<LexicalNode>> = [
+  ChipNode,
+  WrittenLinkNode,
+];
+
+/** Whether two links are the same address or the same variable. */
+function sameLink(
+  a: WrittenLink | undefined,
+  b: WrittenLink | undefined
+): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/** A run's marks and link, as stored: only the ones it has. */
+function decoration(
+  marks: Marks,
+  link: WrittenLink | undefined
+): { bold?: true; italic?: true; link?: WrittenLink } {
+  return {
+    ...(marks.bold ? { bold: true } : {}),
+    ...(marks.italic ? { italic: true } : {}),
+    ...(link ? { link } : {}),
+  };
+}
+
+/** The text nodes and line breaks for a run's text, with its marks. */
+function textNodes(text: string, marks: Marks): LexicalNode[] {
+  const nodes: LexicalNode[] = [];
+  text.split("\n").forEach((line, i) => {
+    if (i > 0) nodes.push($createLineBreakNode());
+    if (line.length === 0) return;
+    const node = $createTextNode(line);
+    if (marks.bold) node.toggleFormat("bold");
+    if (marks.italic) node.toggleFormat("italic");
+    nodes.push(node);
+  });
+  return nodes;
+}
+
+/** A piece of the text: a run's text, a chip, or a line break. */
+function isLeaf(node: LexicalNode): boolean {
+  return (
+    $isTextNode(node) || node instanceof ChipNode || $isLineBreakNode(node)
+  );
+}
+
+/** The link the selection starts in, if any. Call inside a read or an update. */
+export function $selectedLink(): WrittenLink | undefined {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection)) return undefined;
+  for (const node of selection.getNodes()) {
+    const holder = node instanceof WrittenLinkNode ? node : node.getParent();
+    if (holder instanceof WrittenLinkNode) return holder.__link;
+  }
+  return undefined;
+}
+
+/**
+ * Link the selected text to `link`, or unlink it with undefined. Only the
+ * selection changes: a link it cuts through keeps its address on the rest.
+ * Call inside an update.
+ */
+export function $setSelectionLink(link: WrittenLink | undefined): void {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection) || selection.isCollapsed()) return;
+  // Split at the selection's ends, so it covers whole pieces.
+  const picked = new Set(
+    selection
+      .extract()
+      .filter(isLeaf)
+      .map(node => node.getKey())
+  );
+  for (const paragraph of $getRoot().getChildren()) {
+    if (!$isElementNode(paragraph)) continue;
+    const pieces = piecesOf(paragraph);
+    if (!pieces.some(({ leaf }) => picked.has(leaf.getKey()))) continue;
+    $layOut(
+      paragraph,
+      pieces.map(piece => ({
+        leaf: piece.leaf,
+        link: picked.has(piece.leaf.getKey()) ? link : piece.link,
+      }))
+    );
+  }
+}
+
+/** A piece of a paragraph and the link it has, or is to have. */
+interface Piece {
+  leaf: LexicalNode;
+  link: WrittenLink | undefined;
+}
+
+/** Every piece of `paragraph`, in order, with the link it has now. */
+function piecesOf(paragraph: ElementNode): Piece[] {
+  return paragraph
+    .getChildren()
+    .flatMap<Piece>(child =>
+      isLinkNode(child)
+        ? child.getChildren().map(leaf => ({ leaf, link: child.__link }))
+        : [{ leaf: child, link: undefined }]
+    );
+}
+
+/**
+ * Lay `pieces` out in `paragraph` again, in order, each under its link:
+ * neighbours sharing a link share one holder. The old holders, emptied as
+ * their pieces move, are removed.
+ */
+function $layOut(paragraph: ElementNode, pieces: readonly Piece[]): void {
+  const old = paragraph.getChildren().filter(isLinkNode);
+  let holder: WrittenLinkNode | undefined;
+  for (const { leaf, link } of pieces) {
+    if (!link) {
+      paragraph.append(leaf);
+      holder = undefined;
+      continue;
+    }
+    if (!holder || !sameLink(holder.__link, link)) {
+      holder = new WrittenLinkNode(link);
+      paragraph.append(holder);
+    }
+    holder.append(leaf);
+  }
+  for (const emptied of old) if (emptied.isAttached()) emptied.remove();
+}
+
+function isLinkNode(node: LexicalNode): node is WrittenLinkNode {
+  return node instanceof WrittenLinkNode;
+}
+
+/** Replace the editor's content with `runs`. Call inside an update. */
+export function $setRuns(runs: readonly Inline[]): void {
+  const root = $getRoot();
+  root.clear();
+  const paragraph = $createParagraphNode();
+  let i = 0;
+  while (i < runs.length) {
+    const link = runs[i].link;
+    // Neighbours with the same link sit inside one link node.
+    let j = i;
+    while (j < runs.length && sameLink(runs[j].link, link)) j++;
+    const nodes = runs.slice(i, j).flatMap(run => {
+      const marks = { bold: run.bold, italic: run.italic };
+      return run.type === "chip"
+        ? [new ChipNode(run.variable, run.fallback, marks)]
+        : textNodes(run.text, marks);
+    });
+    if (link) {
+      const holder = new WrittenLinkNode(link);
+      holder.append(...nodes);
+      paragraph.append(holder);
+    } else {
+      paragraph.append(...nodes);
+    }
+    i = j;
+  }
+  root.append(paragraph);
+}
+
+/** Append `run`, joining it to the last run when their marks and link match. */
+function push(out: Inline[], run: Inline): void {
+  const last = out[out.length - 1];
+  if (
+    run.type === "text" &&
+    last?.type === "text" &&
+    !!last.bold === !!run.bold &&
+    !!last.italic === !!run.italic &&
+    sameLink(last.link, run.link)
+  ) {
+    out[out.length - 1] = { ...last, text: last.text + run.text };
+    return;
+  }
+  out.push(run);
+}
+
+/** The runs of `node`, inside a link when `link` is set. */
+function collect(
+  node: LexicalNode,
+  link: WrittenLink | undefined,
+  out: Inline[]
+): void {
+  if (node instanceof WrittenLinkNode) {
+    for (const child of node.getChildren()) collect(child, node.__link, out);
+  } else if (node instanceof ChipNode) {
+    const chip: Chip = {
+      type: "chip",
+      variable: node.__variable,
+      ...(node.__fallback !== undefined ? { fallback: node.__fallback } : {}),
+      ...decoration(node.__marks, link),
+    };
+    out.push(chip);
+  } else if ($isLineBreakNode(node)) {
+    push(out, { type: "text", text: "\n", ...decoration({}, link) });
+  } else if ($isTextNode(node)) {
+    const text = node.getTextContent();
+    if (text.length === 0) return;
+    const marks = {
+      bold: node.hasFormat("bold"),
+      italic: node.hasFormat("italic"),
+    };
+    push(out, { type: "text", text, ...decoration(marks, link) });
+  } else if ($isElementNode(node)) {
+    for (const child of node.getChildren()) collect(child, link, out);
+  }
+}
+
+/** The editor's content as runs. Call inside a read or an update. */
+export function $readRuns(): Inline[] {
+  const out: Inline[] = [];
+  $getRoot()
+    .getChildren()
+    .forEach((paragraph, i) => {
+      // A new paragraph (Enter) is a line break in the stored text.
+      if (i > 0) push(out, { type: "text", text: "\n" });
+      collect(paragraph, undefined, out);
+    });
+  return out;
+}

@@ -3,6 +3,8 @@
   "pages": [
     "index",
     "editor",
+    "design-panel",
+    "how-text-works",
     "placement",
     "locked-areas",
     "layouts",

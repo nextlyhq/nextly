@@ -97,6 +97,11 @@ export interface PageBuilderContentProvider {
    */
   readonly around: (args: {
     readonly document: unknown;
+    /**
+     * The entry the page was read as, where the route gives it: page code is
+     * drawn for a published read only (`isDraftRead`).
+     */
+    readonly entry?: unknown;
   }) => Promise<{ readonly before?: ReactNode; readonly after?: ReactNode }>;
   readonly resolveAddress: (
     locale: string | undefined,
@@ -161,6 +166,17 @@ function drawnWith(row: Record<string, unknown>): PageBuilderContentTemplate {
 }
 
 /**
+ * Whether `entry` was read as a draft rather than as published: a working
+ * draft laid over a published page (the read's `_isWorkingDraft`), or a page
+ * never published (`status: "draft"`).
+ */
+function isDraftRead(entry: unknown): boolean {
+  if (typeof entry !== "object" || entry === null) return false;
+  const read = entry as { _isWorkingDraft?: unknown; status?: unknown };
+  return read._isWorkingDraft === true || read.status === "draft";
+}
+
+/**
  * Serve the site's pages and collections' entries from the address store.
  *
  * ```ts
@@ -197,7 +213,12 @@ export function pageBuilderContent(
   const service = async (): Promise<ContentAddressService> =>
     addressServiceOf(await nextly());
   return {
-    around: async ({ document }) => {
+    around: async ({ document, entry }) => {
+      // Never on a draft read: a signed-in preview route can serve a working
+      // draft, or a page never published, through its draft gate without
+      // Next's draft-mode cookie, so `<PageCode>`'s own draft-mode check
+      // would let unpublished code run there.
+      if (isDraftRead(entry)) return {};
       // Imported at call time: this module is reached from the package
       // root, which a browser bundle imports, and `<PageCode>` reads the
       // request's draft mode.

@@ -21,11 +21,14 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { deletionKey, type Deletion } from "../migrate/data-loss-consent";
+import { entityOwners, type CoveredEntity } from "../migrate/entity-coverage";
+import { coverRunDeletions } from "../migrate/entity-shared-rows";
 import { functionsDefinedBy, runDeletions } from "../migrate/file-deletions";
 import { offlineDeletionFacts } from "../migrate/offline-deletion-facts";
 import { splitSqlStatements } from "../migrate/split-sql";
 import type { NextlySchemaSnapshot, Operation } from "../pipeline/diff/types";
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
+import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
 /** A rename the person (or a run that cannot ask) declined: its pair stays a drop and an add. */
 export interface DeclinedRename {
@@ -47,6 +50,13 @@ export interface DeletionPlan {
   declinedRenames?: readonly DeclinedRename[];
   resolutions?: readonly ColumnResolution[];
   removedEntities?: readonly RemovedEntity[];
+  /**
+   * The collections and Singles the plan knows, each with every table it owns, as the latest
+   * snapshot and the config declare them: a deletion in a table one owns belongs to its main
+   * table, and a file dropping a main table removes the entity's rows in shared tables too, which
+   * a consent naming the main table covers (`coverRunDeletions`).
+   */
+  entities?: readonly CoveredEntity[];
   /**
    * What the translation files move before they drop: a table or column whose values are copied
    * or archived first, with the words that say so. The judge reads such a drop as a deletion, as
@@ -83,7 +93,7 @@ export function judgedDeletions(args: {
       functionsDefinedBy(statements, args.dialect)
     )
   );
-  const perFile = runDeletions(args.files, args.dialect, {
+  const read = runDeletions(args.files, args.dialect, {
     ...offlineDeletionFacts(args.previous, functions),
     // The tables a removal of rows reaches through foreign keys (cascaded or set null) are not
     // known offline: a collection's keys are not in the snapshot. Unknown rather than none, so
@@ -91,7 +101,27 @@ export function judgedDeletions(args: {
     // consent without targets covers, and never named narrower than applying it will be.
     cascadeFrom: () => undefined,
     nulledBy: () => undefined,
-  }).map(deletions => deletions.map(d => withReason(d, args.plan)));
+  });
+  // An entity's rows in shared tables go only with an entity the config no longer declares: a
+  // main table dropped while its entity stays, under a table of another name, takes none.
+  const removed = args.plan.removedEntities ?? [];
+  const perFile = coverRunDeletions(
+    read,
+    // Read from no server: the dialect's own rule, and exact names on MySQL, whose rule is the
+    // server's setting. Exact names can only ask for more consent, never less.
+    entityOwners(args.plan.entities ?? [], {
+      identifierCase:
+        args.dialect === "mysql"
+          ? "preserve"
+          : identifierCaseRules({ dialect: args.dialect }).tables,
+    }),
+    entity =>
+      removed.some(
+        r =>
+          r.slug === entity.slug &&
+          (r.kind === "Single" ? "single" : r.kind) === entity.kind
+      )
+  ).map(deletions => deletions.map(d => withReason(d, args.plan)));
   const seen = new Set<string>();
   const all = perFile.flat().filter(deletion => {
     const key = deletionKey(deletion);
@@ -99,7 +129,12 @@ export function judgedDeletions(args: {
     seen.add(key);
     return true;
   });
-  return { main: perFile[args.main] ?? [], all };
+  // The main file's header names what the file itself deletes: an entity's rows in shared tables
+  // go in the run that applies it, not in a statement of the file.
+  const main = (perFile[args.main] ?? []).filter(
+    deletion => deletion.kind !== "rows" || deletion.of === undefined
+  );
+  return { main, all };
 }
 
 /** The main file's UP as `nextly migrate` splits it: the statements as the file writes them. */

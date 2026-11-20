@@ -58,8 +58,6 @@ import {
   useRef,
 } from "react";
 
-import { isElement } from "../dom-kind";
-import { usePreviewedCollection } from "../previewed-entry";
 import { CANVAS_ROOT_CLASS } from "../shell-state";
 
 import { conditionMarksOf, entryContentMarksOf } from "./canvas-block-marks";
@@ -82,10 +80,12 @@ import {
 } from "./canvas-pointer";
 import type { CanvasProps } from "./canvas-props";
 import { siteSurface, useSiteSurfaceMarks } from "./canvas-site-surface";
+import { isElement } from "./dom-kind";
 import {
   useAppliedDrawing,
   useEntryContentDrawing,
 } from "./entry-content-canvas";
+import { usePreviewedCollection } from "./previewed-entry";
 import { useCanvasMarkers } from "./use-canvas-markers";
 
 /**
@@ -282,7 +282,7 @@ export function Canvas({
   conditionsApplied,
   composed,
   // The selected region, the ways to select and edit one, and the one edited
-  // in place, for the regions alone.
+  // in place, for the regions alone; and the placeholder for the page.
   ...regionUse
 }: CanvasProps): JSX.Element {
   const root = useRef<HTMLDivElement | null>(null);
@@ -341,6 +341,7 @@ export function Canvas({
     environment,
     applied: conditionsApplied,
     addressed: regionUse.editingRegion === undefined,
+    placeholder: regionUse.placeholder,
   });
 
   /*

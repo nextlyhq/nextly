@@ -11,13 +11,18 @@
  * @module domains/versions/versions-repository
  */
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, isNotNull, max } from "drizzle-orm";
+
 import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
+import { versionsTables } from "../../schemas/versions";
 import type {
   VersionScopeKind,
   VersionStatus,
 } from "../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../schemas/versions/types";
+import type { SupportedDialect } from "../../types/database";
 
 import type { ChangedParts } from "./changed-parts";
 import type {
@@ -389,6 +394,59 @@ export type VersionMeta = Omit<VersionRow, "snapshot">;
 export interface AutosaveWriteResult {
   updatedAt: Date;
   locale: string | null;
+}
+
+/**
+ * A Drizzle database or transaction handle, as `getDrizzle()` answers it: the part of its query
+ * builder a grouped read uses, the same on every dialect.
+ */
+interface GroupsRows {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        groupBy(column: unknown): PromiseLike<Record<string, unknown>[]>;
+      };
+    };
+  };
+}
+
+/**
+ * Each language's newest durable version number on a document, null keying the versions recorded
+ * without a language: one grouped statement however many languages the document has, so a reader
+ * of every part pays one round trip, not one per part. Read on `db` (a transaction's handle reads
+ * inside it) and without a lock: it decides nothing a write waits on.
+ */
+export async function newestVersionNoPerLocale(
+  db: Pick<TransactionContext, "getDrizzle">,
+  dialect: SupportedDialect,
+  ref: VersionRef
+): Promise<Map<string | null, number>> {
+  const versions = versionsTables(dialect).nextlyVersions;
+  const rows = await db
+    .getDrizzle<GroupsRows>()
+    .select({ locale: versions.locale, versionNo: max(versions.versionNo) })
+    .from(versions)
+    .where(
+      and(
+        eq(versions.scopeKind, ref.scopeKind),
+        eq(versions.scopeSlug, ref.scopeSlug),
+        eq(versions.entryId, ref.entryId),
+        // Durable versions only: an autosave and the working draft carry no number of the history.
+        eq(versions.isAutosave, false),
+        isNotNull(versions.versionNo)
+      )
+    )
+    .groupBy(versions.locale);
+  const newest = new Map<string | null, number>();
+  for (const row of rows) {
+    // A driver may answer an aggregate as a string; the number is the same.
+    if (row.versionNo === null || row.versionNo === undefined) continue;
+    newest.set(
+      typeof row.locale === "string" ? row.locale : null,
+      Number(row.versionNo)
+    );
+  }
+  return newest;
 }
 
 export class VersionsRepository {
@@ -955,7 +1013,13 @@ export class VersionsRepository {
    * snapshot included. What a save is compared with to tell whether it changed
    * anything.
    */
-  async findNewest(ref: VersionRef): Promise<VersionRow | undefined> {
+  async findNewest(
+    ref: VersionRef,
+    // `lock: false` for a check that writes nothing and is judged again under
+    // the lock of the write it leads to: the same row, read without waiting
+    // for or holding the document's lock.
+    options: { lock?: boolean } = {}
+  ): Promise<VersionRow | undefined> {
     const rows = await this.db.select<VersionRow>(TABLE, {
       where: {
         and: [
@@ -969,7 +1033,7 @@ export class VersionsRepository {
       // A locking read: on MySQL a plain one answers from the snapshot the
       // transaction's first read took, so a write that waited for this
       // document's lock would compare with a version older than the newest.
-      forUpdate: true,
+      ...(options.lock === false ? {} : { forUpdate: true }),
     });
     return rows[0];
   }

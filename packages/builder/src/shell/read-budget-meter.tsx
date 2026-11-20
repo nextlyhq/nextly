@@ -248,7 +248,8 @@ function MeterWords({
     return (
       <>
         {count}
-        <span className="nx-read-meter__more">
+        {/* Steps aside where the top bar is crowded (`top-bar-room`). */}
+        <span className="nx-read-meter__more" data-topbar-word="">
           {" · "}
           <span className="nx-read-meter__link">what&apos;s this?</span>
         </span>

@@ -85,7 +85,6 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
-import { isHTMLElement } from "../dom-kind";
 import type { EditorState } from "../editor-state";
 import type { Rect } from "../geometry";
 import {
@@ -93,18 +92,16 @@ import {
   lockOp,
   lockStatusOf,
   lockViewOf,
-} from "../inspector";
-import {
-  useBlockActionsContext,
-  useToolbarFocusSlot,
-} from "../keyboard-actions";
+} from "../inspector/inspector";
 import { lockRefusalWording } from "../lock-refusal";
 import { lockBlockingEdit } from "../locking";
 import { refusalAnnouncement } from "../move-refusal";
 import { layerLabel, pathTo } from "../panels/layers/layers";
-import { useSelectionActions } from "../selection-actions";
 import { blockActionRunners } from "../shell/builder-commands";
-import { isTurnIntoAction } from "../turn-into-verb";
+import {
+  useBlockActionsContext,
+  useToolbarFocusSlot,
+} from "../shell/keyboard-actions";
 
 import {
   CANVAS_ROOT_CLASS,
@@ -116,6 +113,7 @@ import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { useCanvasFrame, type CanvasFrame } from "./canvas-frame-context";
 import { watchScreenBand } from "./canvas-geometry-watch";
 import { useTabPost } from "./canvas-tab-places";
+import { isHTMLElement } from "./dom-kind";
 import { FormatBar } from "./format-bar";
 import {
   canvasContentRect,
@@ -126,6 +124,7 @@ import {
 } from "./geometry-dom";
 import { useHoveredBlock } from "./hovered-block";
 import { clearanceWith } from "./scroll-clearance";
+import { useSelectionActions } from "./selection-actions";
 import {
   TOOLBAR_GAP_PX,
   type ToolbarAction,
@@ -135,6 +134,7 @@ import {
   type ToolbarScreen,
   unionRect,
 } from "./toolbar-actions";
+import { isTurnIntoAction } from "./turn-into-verb";
 import { EDITING_ATTRIBUTE } from "./use-inline-text";
 
 /** A rectangle on screen as the top and bottom a toolbar keeps to. */

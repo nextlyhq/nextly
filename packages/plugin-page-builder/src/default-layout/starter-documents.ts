@@ -26,6 +26,8 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
+import { sides, styled, token } from "../starter-style";
+
 import type { StarterArea } from "./seed-names";
 
 type Node = Record<string, unknown>;
@@ -47,18 +49,6 @@ const FOOTER_PAGE_LINKS = 4;
 
 /** Oldest first, so a site's first pages lead. */
 const OLDEST_FIRST = "createdAt";
-
-const token = (name: string) => ({ $token: name });
-
-const sides = (block: unknown, inline: unknown = block) => ({
-  blockStart: block,
-  blockEnd: block,
-  inlineStart: inline,
-  inlineEnd: inline,
-});
-
-/** Styles at every width and state. */
-const styled = (base: Record<string, unknown>) => ({ base: { base } });
 
 /** A flex row that wraps onto more lines on a narrow screen. */
 const row = (gap: string) => ({

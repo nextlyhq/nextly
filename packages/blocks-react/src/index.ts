@@ -549,6 +549,8 @@ export type {
   IssueSeverity,
   MayFetchUrl,
   MigrateFn,
+  // A migration step's drops, reachable from `BlockDefinition`.
+  MigrationDrops,
   MigrationMap,
   // A migration step's renames, reachable from `BlockDefinition`.
   MigrationRenames,

@@ -45,6 +45,11 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
+import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
+import {
+  FirstQuestionWatch,
+  landingPush,
+} from "../../domains/schema/builder-save/landing-push";
 import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
@@ -65,7 +70,6 @@ import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-c
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
-import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 // From the types module, not the barrel, which loads every dialect's tables.
@@ -77,13 +81,15 @@ import type { FieldGroupRegistryService } from "../../services/field-groups/fiel
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 import { assertAddressAllowed } from "../../shared/address-rule";
 import type { Logger } from "../../shared/types";
-import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
+import {
+  registryInFileTransaction,
+  writeAppliedFieldsRow,
+} from "../helpers/applied-fields-row";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
   reviewBuilderSchemaChange,
-  landingPush,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -425,9 +431,8 @@ export const COMPONENTS_METHODS: Record<
         assertLocalizationConfigured("component", b.slug);
       }
       const schemaHash = calculateSchemaHash(b.fields);
-      // Canonical name derivation, shared with the registry sync and
-      // migrate:create paths, so the created table and the registry row agree.
-      const tableName = resolveComponentTableName(b.slug);
+      // The table is named by the service, under the naming the site's storage is on, so the
+      // created table and the registry row agree.
 
       // The table-name conflict is refused inside the service, alongside the DDL it guards, so all
       // three create transports get it rather than this one alone.
@@ -448,7 +453,6 @@ export const COMPONENTS_METHODS: Record<
         await metadata.createFieldGroup({
           slug: b.slug,
           label: b.label || b.slug,
-          tableName,
           fields: b.fields,
           admin: b.admin,
           description: b.description,
@@ -896,6 +900,9 @@ export const COMPONENTS_METHODS: Record<
             recordedFields: recordedFieldsOf(component),
           };
 
+          // A failed push changed nothing where it stopped at its first question, asked before
+          // any statement; any other failure on MySQL or SQLite may have changed it.
+          const firstQuestion = new FirstQuestionWatch();
           const landing = landingPush(
             builderSchemaPush({
               dialect,
@@ -908,8 +915,10 @@ export const COMPONENTS_METHODS: Record<
                 eventResolutions ?? [],
                 legacyBundle,
               ],
+              firstQuestion,
             }),
-            dialect
+            dialect,
+            firstQuestion
           );
           // Notes once the push may have changed the database, so a failure after it keeps the
           // files that record it.
@@ -956,7 +965,35 @@ export const COMPONENTS_METHODS: Record<
                 })
               : undefined,
           };
-          await writeBuilderSchemaChange(
+          const newSchemaVersion = currentVersion + 1;
+          // The registry's row of the save, in the registry this database holds: the fields it
+          // applied, whether it is translated, and the advanced schema version, written with the
+          // stored version in one transaction and the cached rows cleared after it.
+          const registryTable = await resolveFieldGroupRegistryName(adapter);
+          // Handed the fields that applied where the save's file stopped part way and was settled.
+          const writeRow = (
+            stored: readonly unknown[] = fields
+          ): Promise<void> =>
+            writeAppliedFieldsRow(adapter, {
+              table: registryTable,
+              slug,
+              fields: stored as FieldConfig[],
+              localized: isLocalized,
+              schemaVersion: newSchemaVersion,
+            });
+          // The runtime table this process reads and writes the field group through, built from the
+          // fields its row records: the save's, or those a stopped save settled to.
+          const refreshRuntime = (stored: readonly unknown[]): void => {
+            registerComponentRuntimeSchema(
+              adapter,
+              dialect,
+              tableName,
+              stored as FieldConfig[],
+              componentTypeColumn,
+              isStored
+            );
+          };
+          const { registryWritten } = await writeBuilderSchemaChange(
             builderSave,
             () =>
               pushAndReconcileCompanion(push, desired, "component", companion),
@@ -1013,10 +1050,37 @@ export const COMPONENTS_METHODS: Record<
                 }),
               afterFile: () =>
                 reconcileBuilderCompanion("component", companion),
+              // The push's questions, asked of the file before anything is written: a rename the
+              // request does not answer, or a drop it does not confirm, refuses the save as the
+              // push refuses it.
+              questions: () =>
+                refuseUnansweredDialogQuestions({
+                  desired,
+                  db,
+                  dialect,
+                  tableName,
+                  // The builder that made the table, which the offered rename is judged by.
+                  builtBy: "fieldGroup",
+                  oldFields: (component.fields ??
+                    []) as unknown as FieldDefinition[],
+                  newFields: fields as unknown as FieldDefinition[],
+                  wasLocalized,
+                  isLocalized,
+                  renameResolutions: renameResolutions ?? [],
+                  eventResolutions: eventResolutions ?? [],
+                  ...(legacyBundle === undefined
+                    ? {}
+                    : { legacy: legacyBundle }),
+                }),
+              // On the file road the row is written in the file's own transaction, so a failed
+              // write leaves the save as it was and is answered as the failure it is. Not where the
+              // translations table is reconciled after the file: the row would then record the
+              // change before that step holds it, so it is written after it, as before.
+              ...(registryInFileTransaction({ wasStored, isStored })
+                ? { registry: writeRow, settled: refreshRuntime }
+                : {}),
             }
           );
-
-          const newSchemaVersion = currentVersion + 1;
 
           // Post-apply: update dynamic_components fields JSON + schema_hash directly
           // (not via the registry helper, whose auto-bump would also reset
@@ -1032,16 +1096,8 @@ export const COMPONENTS_METHODS: Record<
             // in the worst way: the DDL has already committed, this write is
             // treated as non-fatal, and the stale row rebuilds the pre-change
             // runtime schema on the next restart.
-            const registryTable = await resolveFieldGroupRegistryName(adapter);
-            // The row and the stored schema version in one transaction, and the
-            // cached rows cleared after it (`writeAppliedFieldsRow`).
-            await writeAppliedFieldsRow(adapter, {
-              table: registryTable,
-              slug,
-              fields: fields as FieldConfig[],
-              localized: isLocalized,
-              schemaVersion: newSchemaVersion,
-            });
+            // Written already, in the file's transaction, where the save ran its file.
+            if (!registryWritten) await writeRow();
           } catch (err) {
             // 🔴 The DDL has ALREADY COMMITTED. Reporting success here is worse than the failure
             // itself: the tables hold the new shape, the row still describes the old one, and the
@@ -1094,14 +1150,7 @@ export const COMPONENTS_METHODS: Record<
           // so the registered table includes component system columns
           // (_parent_id, _parent_table, _parent_field, _order, _component_type)
           // instead of collection columns (title, slug).
-          registerComponentRuntimeSchema(
-            adapter,
-            dialect,
-            tableName,
-            fields as FieldConfig[],
-            componentTypeColumn,
-            isStored
-          );
+          refreshRuntime(fields);
 
           // Reached only when the registry write landed, or when it raised and the row was found
           // to carry this edit anyway. Either way the version reported is the one now stored, so

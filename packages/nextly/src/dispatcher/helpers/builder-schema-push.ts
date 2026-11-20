@@ -21,7 +21,9 @@ import {
   type LeavingFieldLike,
   leavingFieldConstraints,
 } from "../../domains/i18n/migration/field-leaves-translation-rules";
+import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
+import type { FirstQuestionWatch } from "../../domains/schema/builder-save/landing-push";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
@@ -58,13 +60,16 @@ export function builderSchemaPush(args: {
   /** Recorded on the journal row, so the entity's history finds it under its own kind. */
   kind: "single" | "component";
   resolutions: ConstructorParameters<typeof BrowserPromptDispatcher>;
+  /** Notes a push refused at its first question, which ran no statement (`landingPush`). */
+  firstQuestion?: FirstQuestionWatch;
 }): (desired: DesiredSchema) => Promise<PipelineResult> {
   const { dialect, db } = args;
+  const answering = new BrowserPromptDispatcher(...args.resolutions);
   const pipeline = new PushSchemaPipeline({
     executor: new DrizzleStatementExecutor(dialect, db),
     renameDetector: new RegexRenameDetector(),
     classifier: new RealClassifier(),
-    promptDispatcher: new BrowserPromptDispatcher(...args.resolutions),
+    promptDispatcher: args.firstQuestion?.watching(answering) ?? answering,
     preRenameExecutor: noopPreRenameExecutor,
     preCleanupExecutor: new RealPreCleanupExecutor(),
     migrationJournal: getMigrationJournalFromDI() ?? noopMigrationJournal,
@@ -213,6 +218,9 @@ export function companionReconcileFailure(
   context: { op: string; slug: string; note?: string }
 ): unknown {
   if (isLeavingSettingsRefusal(error)) return error;
+  // A renamed field's provenance move that failed once its change landed says so itself, with the
+  // statements that finish it for the server log (`provenanceNotMoved`).
+  if (isProvenanceNotMoved(error)) return error;
   if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) {
     // The busy-table stop as it is, its code, status and report, with what it leaves said beside
     // its first line: the entity's main table has its change, and only the translations table's

@@ -23,7 +23,7 @@ import {
 
 import { EditorCommandPalette } from "./editor-command-palette";
 import type { EditorState } from "../editor-state";
-import { BlockKeyboardActions } from "../keyboard-actions";
+import { BlockKeyboardActions } from "./keyboard-actions";
 import { ShellActiveContext } from "./shell-active";
 
 // The command primitives observe their list to size it and scroll the active
@@ -284,10 +284,13 @@ describe("the editor's search", () => {
     expect(headings.indexOf("Pages")).toBeGreaterThan(
       headings.indexOf("On this page")
     );
+    // Drawn in the group's place, and said by the palette's status line,
+    // outside the list, where a listbox lets a status be.
     const pages = screen.getByRole("group", { name: "Pages" });
-    expect(within(pages).getByRole("status").textContent).toBe(
-      "Searching pages…"
-    );
+    expect(pages.textContent).toContain("Searching pages…");
+    expect(
+      within(screen.getByRole("dialog")).getByRole("status").textContent
+    ).toBe("Searching pages…");
   });
 });
 

@@ -76,16 +76,22 @@ export function PluginItemNumber({
     ) : null;
   }
   return (
-    <span
-      aria-hidden="true"
-      data-testid={`plugin-item-${shown.kind}`}
-      className={
-        shown.kind === "badge"
-          ? "ml-auto inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full border border-border px-1.5 text-[11px] font-semibold tabular-nums"
-          : `${COUNT_SLOT} tabular-nums text-muted-foreground`
-      }
-    >
-      {itemNumberText(number)}
-    </span>
+    <>
+      {/* A real space between the label and its number, which the flex row
+          does not draw: without it the two read as one word, "Problems3",
+          which the item's name ("Problems: 3") never says, so Label in Name
+          fails for a person who says what they see. */}{" "}
+      <span
+        aria-hidden="true"
+        data-testid={`plugin-item-${shown.kind}`}
+        className={
+          shown.kind === "badge"
+            ? "ml-auto inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full border border-border px-1.5 text-[11px] font-semibold tabular-nums"
+            : `${COUNT_SLOT} tabular-nums text-muted-foreground`
+        }
+      >
+        {itemNumberText(number)}
+      </span>
+    </>
   );
 }

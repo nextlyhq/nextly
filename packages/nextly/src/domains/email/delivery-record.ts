@@ -502,6 +502,11 @@ export interface EmailDeliveryInput {
   /** The queued email this was an attempt of, when it was one. */
   queuedId?: string | null;
   /**
+   * Where the provider came from: `stored` for a provider row, `code` for
+   * the site's configured one. Left out, it reads as not recorded.
+   */
+  providerOrigin?: ProviderSource;
+  /**
    * Which version of its template was sent, or `none` for a send without
    * one. Left out, the record says the version was not recorded.
    */
@@ -540,6 +545,9 @@ export interface DeliveryFailure {
 }
 
 export type DeliveryFailureKind = "retryable" | "refused" | "unknown";
+
+/** Where a send's provider came from, as a delivery records it. */
+export type ProviderSource = "stored" | "code";
 
 /** The delivery log's form of a send's `failure`. */
 export function deliveryFailureOf(failure: {

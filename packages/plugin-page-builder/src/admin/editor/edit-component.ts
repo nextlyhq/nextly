@@ -66,7 +66,28 @@ export function componentEditorAddress(
   /** The name of the document left, which Back says it returns to. */
   from?: string
 ): string {
-  const base = documentBuilderPath(collection, componentId);
+  return addressWithReturn(documentBuilderPath(collection, componentId), {
+    ...(field === undefined ? {} : { field }),
+    returnTo,
+    from,
+  });
+}
+
+/**
+ * `base` with the way back to where the author left: the address Back
+ * returns to and the name of the document it says, and the blocks field the
+ * view opens, where one is named. What any view opened from the builder,
+ * and left again by its Back, is opened with.
+ */
+export function addressWithReturn(
+  base: string,
+  back: {
+    readonly field?: string;
+    readonly returnTo: string | undefined;
+    readonly from?: string | undefined;
+  }
+): string {
+  const { field, returnTo, from } = back;
   const query = new URLSearchParams();
   if (field !== undefined) query.set(FIELD_PARAM, field);
   if (returnTo !== undefined) query.set(RETURN_PARAM, returnTo);

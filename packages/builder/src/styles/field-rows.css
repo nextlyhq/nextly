@@ -74,8 +74,8 @@ fieldset.nx-inspector__fields {
 }
 
 /*
- * The reason a row will not reach the page. Coloured with the theme's own
- * destructive token so it reads as a refusal in both light and dark, and given
+ * The reason a row will not reach the page. In the editor's destructive text
+ * red so it reads as a refusal, at 4.5:1, in both light and dark, and given
  * the row's full width so a sentence is not squeezed beside three controls.
  */
 .nx-attributes__problem {
@@ -83,7 +83,7 @@ fieldset.nx-inspector__fields {
   margin: 0.25rem 0 0;
   font-size: var(--text-xs);
   line-height: 1.4;
-  color: var(--nx-destructive);
+  color: var(--nx-builder-destructive-text);
 }
 
 /* The class names a block's CSS classes field did not add, one per line. */

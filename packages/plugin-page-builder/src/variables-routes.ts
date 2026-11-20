@@ -73,12 +73,15 @@ import {
   VARIABLE_ID_PARAM,
   VARIABLE_PAGE_PARAM,
   VARIABLE_REMOVE_ROUTE_PATH,
+  VARIABLE_TOGETHER_PARAM,
+  VARIABLE_USAGE_GROUPS_MAX,
   VARIABLE_USAGE_IDS_MAX,
   VARIABLE_USAGE_ROUTE_PATH,
   VARIABLE_WHERE_USED_ROUTE_PATH,
   SHARED_STYLE_WHERE_USED_MAX,
   SHARED_STYLE_WHERE_USED_PAGES_MAX,
   type VariableRemoveRequest,
+  type VariablesTogetherUsage,
   type VariablesUsageResponse,
   type VariableUsage,
   type VariableUseItem,
@@ -92,6 +95,7 @@ import {
   type StoredDocuments,
   type StoredUse,
 } from "./shared-style-rescan";
+import type { SharedStyleUsageKind } from "./shared-style-usage-contract";
 import { usageOf } from "./shared-style-usage-here";
 import {
   invalidRequest,
@@ -499,6 +503,57 @@ function usageIds(url: string): string[] {
 }
 
 /**
+ * One group a usage read counts together, as written: the positions of its
+ * variables among the read's `id` parameters, a page of them at most.
+ */
+const TOGETHER = z.string().regex(/^\d{1,3}(?:,\d{1,3}){0,49}$/);
+
+/**
+ * The groups a usage read counts together, each as its variables'
+ * identities, once each; none where none are asked. Refused where one names
+ * a position no `id` holds, or there are more than a page of groups.
+ */
+function togetherIds(url: string): string[][] | undefined {
+  const params = new URL(url).searchParams;
+  const asked = params.getAll(VARIABLE_TOGETHER_PARAM);
+  if (asked.length === 0) return undefined;
+  const ids = params.getAll(VARIABLE_ID_PARAM);
+  const parsed = z
+    .array(TOGETHER)
+    .max(VARIABLE_USAGE_GROUPS_MAX)
+    .safeParse(asked);
+  const groups = (parsed.success ? parsed.data : []).map(group =>
+    group.split(",").flatMap(at => ids[Number(at)] ?? [])
+  );
+  const whole = groups.every(
+    (group, at) => group.length === asked[at]?.split(",").length
+  );
+  if (!parsed.success || !whole) {
+    throw invalidRequest(
+      `Name up to ${VARIABLE_USAGE_GROUPS_MAX} groups with ?together=, each the positions of its variables among the ids, from 0.`
+    );
+  }
+  return groups.map(group => [...new Set(group)]);
+}
+
+/**
+ * How many documents a group's variables are used in together, each once:
+ * their listings merged as one variable's keys are, then counted as each
+ * variable's are. Numbers alone.
+ */
+function togetherUsage(
+  group: readonly string[],
+  found: ReadonlyMap<string, DocumentsUsing>,
+  kindOf: (collection: string) => SharedStyleUsageKind
+): VariablesTogetherUsage {
+  const merged = group
+    .map(id => found.get(id) ?? NOTHING_FOUND)
+    .reduce(mergedListing);
+  const { documents, byKind, complete } = usageOf(merged, kindOf);
+  return { documents, byKind, complete };
+}
+
+/**
  * The site style as the compiler merges it, read for a request: its shared
  * styles, and its variables with the prefix they are written under.
  */
@@ -519,6 +574,7 @@ export async function readVariableUsage(
   blocks: RegisteredBlocks
 ): Promise<VariablesUsageResponse> {
   const ids = usageIds(req.url);
+  const together = togetherIds(req.url);
   const health = await usage.health();
   // One site-style read, and one index read for the whole page of variables,
   // each asked as the site writes them.
@@ -556,6 +612,14 @@ export async function readVariableUsage(
     counting: indexStillCounting(health),
     mayCount: await mayCountSharedStyleUsage(ctx),
     variables,
+    // Only where asked, so an older reader's answer is as it was.
+    ...(together === undefined
+      ? {}
+      : {
+          together: together.map(group =>
+            togetherUsage(group, found, collection => usage.kindOf(collection))
+          ),
+        }),
   };
 }
 

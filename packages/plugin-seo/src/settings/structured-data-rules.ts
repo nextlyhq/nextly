@@ -105,14 +105,25 @@ export function structuredDataRulesOf(
   };
 }
 
-/** Structured data's reader: the SEO settings, then the plugin's options. */
+/** How the SEO settings' structured data facts are read in a language. */
+export type ReadStructuredDataSettings = (
+  ctx: PluginContext,
+  locale: string | undefined
+) => Promise<StructuredDataSettings>;
+
+/**
+ * Structured data's reader: the SEO settings, then the plugin's options.
+ * The settings are read by `readSettings`, where a caller reading many
+ * pages reads them once.
+ */
 export function structuredDataFromSettings(
-  fromOptions: ReadStructuredDataRules
+  fromOptions: ReadStructuredDataRules,
+  readSettings: ReadStructuredDataSettings = readStructuredDataSettings
 ): ReadStructuredDataRules {
   return async (ctx: PluginContext, locale: string | undefined) => {
     const [base, settings] = await Promise.all([
       fromOptions(ctx, locale),
-      readStructuredDataSettings(ctx, locale),
+      readSettings(ctx, locale),
     ]);
     return structuredDataRulesOf(base, settings);
   };

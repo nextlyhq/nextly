@@ -26,6 +26,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 import { sql, type SQL } from "drizzle-orm";
 
+import { isUnreachedDatabaseCode, safeCode } from "../../../database/errors";
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
 import {
@@ -167,7 +168,10 @@ import {
 } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
-import { executePreResolutionOps } from "./pre-resolution/executor";
+import {
+  executePreResolutionOps,
+  type RanStatements,
+} from "./pre-resolution/executor";
 import {
   PromptCancelledError,
   TTYRequiredError,
@@ -186,6 +190,7 @@ import type {
   PromptDispatcher,
   RenameCandidate,
   RenameDetector,
+  StatementRecord,
 } from "./pushschema-pipeline-interfaces";
 import { withRecordedShapes } from "./recorded-shapes";
 import { builtByFor } from "./registered-collections";
@@ -305,6 +310,15 @@ export interface PipelineResult {
   renamesApplied: number;
   error?: { code: string; message: string; details?: unknown };
   partiallyApplied?: boolean;
+  /**
+   * On a failure, how many of the statements the apply ran stay applied: on MySQL and SQLite, which
+   * hand their statements over one at a time, read from the record of finished statements
+   * (`committedOf`), pre-cleanup's each as it runs; 0 for a failure before anything ran, on every
+   * dialect. Otherwise absent on PostgreSQL, whose failure rolls back whole, so a reader keeps its
+   * own rule there; and absent where a statement failed without the database refusing it (a lost
+   * connection, a timeout), whose outcome is unknown (`refusedByDatabase`).
+   */
+  statementsKept?: number;
   /**
    * The main-table columns whose values this apply moved to a companion before dropping them
    * (`planJoiningMovesForApply`), by table, column and field. Absent when nothing moved.
@@ -504,7 +518,7 @@ export interface PushSchemaPipelineTestHooks {
     ops: Operation[],
     dialect: SupportedDialect,
     leadingStatements?: readonly string[],
-    onFinished?: () => void
+    record?: RanStatements
   ) => Promise<number>;
   // Test seam: inject a pre-built resolvedOps array to bypass the diff +
   // resolution pipeline. Lets unit tests exercise the scope-reduction and
@@ -872,6 +886,8 @@ export class PushSchemaPipeline {
         success: false,
         statementsExecuted: 0,
         renamesApplied: 0,
+        // Refused before anything is recorded or run.
+        statementsKept: 0,
         error: { code: err.code, message: err.message },
       };
     }
@@ -892,6 +908,13 @@ export class PushSchemaPipeline {
     // cleared under consent): a statement the database refuses over a value written after they
     // were judged is reported naming them, not as its own error (`lateValueFailure`).
     let converting: ConvertingColumn[] = [];
+    // How many of the statements this apply ran stay applied, for a failure to report
+    // (`PipelineResult.statementsKept`): read from the record of finished statements once they run
+    // one at a time, and undefined while nothing records them. Undefined too, outcome unknown, where
+    // the failure came while a statement ran and the database did not answer that it refused it (a
+    // lost connection, a timeout): the statement may have run, and on MySQL a schema statement
+    // committed, so a reader keeps its own rule (`refusedByDatabase`).
+    let keptSoFar: (failure: unknown) => number | undefined = () => undefined;
     try {
       // Each question Phase B asks is asked once for the whole apply: a try that re-plans after one
       // that waited out its bound reads the answers given to the first.
@@ -901,15 +924,42 @@ export class PushSchemaPipeline {
       // phase reports them. On SQLite each has committed as it ran; on MySQL a schema statement
       // commits what ran before it, and itself, while a row change after the last one rolls back
       // with the try's transaction (`committedOf`). MySQL's and SQLite's are handed over one at a
-      // time while the tries are on, SQLite's split as its executor splits them, since a batch that
-      // waits part-way would not say how many before it did; on PostgreSQL a batch is handed over
-      // whole, as always, its try's transaction rolling back whole.
+      // time, SQLite's split as its executor splits them, since a batch that waits or fails
+      // part-way would not say how many before it did: a busy table's stop names what stayed, and
+      // so does a failed apply (`statementsKept`). Each executor runs a batch one statement at a
+      // time anyway. On PostgreSQL a batch is handed over whole, as always, its transaction
+      // rolling back whole.
       let finishedThisTry: boolean[] = [];
       // Whether the statement the try is about to send, or is waiting in, is a schema statement:
       // on MySQL one that waits has already committed everything before it.
       let nextIsSchema = false;
+      // Whether a statement has started and not finished: one that fails then may have run, on
+      // MySQL a schema statement committed, unless the database answered that it refused it.
+      let inFlight = false;
       let finishedEarlier = 0;
-      const oneByOne = busyTable !== undefined && dialect !== "postgresql";
+      const oneByOne = dialect !== "postgresql";
+      // What runs its statements itself (pre-cleanup, a consented clearing) tells the record the
+      // same way, as each starts and once it has run (`StatementRecord`).
+      const ranHere: StatementRecord = {
+        starting: schema => {
+          nextIsSchema = schema;
+          inFlight = true;
+        },
+        finished: schema => {
+          finishedThisTry.push(schema);
+          nextIsSchema = false;
+          inFlight = false;
+        },
+      };
+      // On MySQL and SQLite with every statement handed over one at a time, the record says what
+      // stays: the tries that ended waiting, and what this try finished that has committed.
+      if (oneByOne) {
+        keptSoFar = failure =>
+          inFlight && !refusedByDatabase(failure)
+            ? undefined
+            : finishedEarlier +
+              committedOf(finishedThisTry, dialect, nextIsSchema);
+      }
       // What each MySQL or SQLite try planned, and what the tries that ended waiting planned in
       // all: a later try plans from the live database, where what an earlier one committed is no
       // longer a change, so the apply reports that from the earlier plans (`withEarlierTries`).
@@ -929,7 +979,9 @@ export class PushSchemaPipeline {
           }
           for (const statement of statementsOneByOne(statements, dialect)) {
             nextIsSchema = isSchemaStatement(statement);
+            inFlight = true;
             await this.deps.executor.executeStatements(tx, [statement]);
+            inFlight = false;
             finishedThisTry.push(nextIsSchema);
             // What runs next is not known here; a wait outside these statements is judged by
             // the last schema statement that ran.
@@ -955,6 +1007,7 @@ export class PushSchemaPipeline {
       ): Promise<PlannedApply> => {
         finishedThisTry = [];
         nextIsSchema = false;
+        inFlight = false;
         // Resolved once per plan, before anything reads it. A desired schema is consumed by TWO
         // builders — the snapshot the diff compares and the Drizzle tables drizzle-kit turns into
         // DDL — and resolving inside either leaves the other on the raw fields, so a table would
@@ -1157,20 +1210,12 @@ export class PushSchemaPipeline {
           }),
         });
 
-        // Drops that have a rename candidate are resolved by the
-        // dispatcher's shrinking-pool prompt — its "drop_and_add" option
-        // already implies user consent to data loss. Filter their
-        // destructive_drop events here so the user isn't asked the same
-        // question twice (once for the rename pair, once for the drop).
-        const dropsCoveredByCandidates = new Set<string>();
-        for (const c of candidates) {
-          dropsCoveredByCandidates.add(`${c.tableName}::${c.fromColumn}`);
-        }
-        const dispatchEvents = classificationResult.events.filter(
-          e =>
-            e.kind !== "destructive_drop" ||
-            !dropsCoveredByCandidates.has(`${e.tableName}::${e.columnName}`)
-        );
+        // The questions this change asks: its rename candidates, and the classifier's events less
+        // each drop a candidate covers (`pushQuestionSet`).
+        const { events: dispatchEvents } = pushQuestionSet({
+          candidates,
+          events: classificationResult.events,
+        });
 
         const needsPrompt = candidates.length > 0 || dispatchEvents.length > 0;
         const dispatchResult = needsPrompt
@@ -1290,6 +1335,7 @@ export class PushSchemaPipeline {
           db: args.db,
           dialect: args.dialect,
           desired: args.desired,
+          live: { tables: [...liveSnapshot.tables, ...switches.tables] },
           operations: resolvedOps,
         });
         await refuseSeveralReferencesForOne({
@@ -1578,15 +1624,17 @@ export class PushSchemaPipeline {
           liftedKeysOwed = constraints.liftRestores;
           try {
             const leading = [...constraints.before, ...moves.statements];
-            // Counted as each statement finishes: on MySQL and SQLite each commits as it runs, so a
-            // try that ends waiting part-way names the ones that stay applied.
+            // Counted as each statement finishes, every statement the phase runs (an op may run
+            // several, as a MySQL reference-list conversion does): on MySQL and SQLite each commits
+            // as it runs, so a try that ends waiting, or an apply that fails, part-way names exactly
+            // the ones that stay applied.
             let told = 0;
-            // The leading statements run first, then each rename or drop, a schema statement.
+            // For an executor that tells nothing (a stand-in): the leading statements, then each
+            // rename or drop, a schema statement.
             const schemaAt = (index: number): boolean =>
               index < leading.length
                 ? isSchemaStatement(leading[index] ?? "")
                 : true;
-            nextIsSchema = schemaAt(0);
             const preResolved = await preResExecutor(
               tx,
               withoutSqliteDropsLeftToRebuild(
@@ -1597,20 +1645,29 @@ export class PushSchemaPipeline {
               ),
               dialect,
               leading,
-              () => {
-                finishedThisTry.push(schemaAt(told));
-                told += 1;
-                nextIsSchema = schemaAt(told);
+              {
+                starting: statement => {
+                  nextIsSchema = isSchemaStatement(statement);
+                  inFlight = true;
+                },
+                finished: statement => {
+                  finishedThisTry.push(isSchemaStatement(statement));
+                  told += 1;
+                  nextIsSchema = false;
+                  inFlight = false;
+                },
               }
             );
-            // An executor that does not tell each one (a stand-in) is counted once it returns, as
-            // it reports itself: each rename or drop once.
-            for (
-              let index = told;
-              index < leading.length + preResolved;
-              index += 1
-            ) {
-              finishedThisTry.push(schemaAt(index));
+            // An executor that tells nothing (a stand-in) is counted once it returns, as it reports
+            // itself: each leading statement, and each rename or drop once.
+            if (told === 0) {
+              for (
+                let index = 0;
+                index < leading.length + preResolved;
+                index += 1
+              ) {
+                finishedThisTry.push(schemaAt(index));
+              }
             }
           } catch (err) {
             // A refusal is not a failed statement. The pre-resolution phase can decline to start —
@@ -1637,6 +1694,9 @@ export class PushSchemaPipeline {
               fields: aggregatedFields,
               dialect,
               clearing: dispatchResult.clearing,
+              // Each of its statements recorded as it runs, as the executor's are: a failure counts
+              // only the ones that ran (`statementsKept`).
+              statements: ranHere,
             });
           } catch (err) {
             // PromptCancelledError from abort is not a DDL failure — let it
@@ -2086,6 +2146,7 @@ export class PushSchemaPipeline {
               dialect,
               events: classificationResult.events,
               clearing: dispatchResult.clearing,
+              statements: ranHere,
             });
           }
           if (dialect === "postgresql") await assertSchemaLockHeld();
@@ -2225,6 +2286,10 @@ export class PushSchemaPipeline {
                         (_, index) => finishedEarlier + index + 1
                       );
                       finishedEarlier += kept;
+                      // Counted once: a failure after this try reads only what a later one ran.
+                      finishedThisTry = [];
+                      nextIsSchema = false;
+                      inFlight = false;
                       plannedEarlier.push(plannedThisTry);
                       return { table: waitedTable, undone: false, committed };
                     }
@@ -2309,10 +2374,12 @@ export class PushSchemaPipeline {
           error: { code, message },
         })
       );
+      const statementsKept = keptSoFar(caught);
       return {
         success: false,
         statementsExecuted: 0,
         renamesApplied: 0,
+        ...(statementsKept === undefined ? {} : { statementsKept }),
         error: {
           code,
           message,
@@ -2613,6 +2680,29 @@ export class PushSchemaPipeline {
     if (err instanceof PromptCancelledError) return "CONFIRMATION_DECLINED";
     return "INTERNAL_ERROR";
   }
+}
+
+/**
+ * The questions the push asks of a change: its rename candidates, and the classifier's events less
+ * each column drop a candidate covers. A covered drop is asked as that pair, where answering
+ * `drop_and_add` is the consent to lose its values, so nobody is asked the same question twice. The
+ * schema dialog's own questions are drawn from this same set (`refuseUnansweredDialogQuestions`).
+ */
+export function pushQuestionSet(args: {
+  candidates: readonly RenameCandidate[];
+  events: readonly ClassifierEvent[];
+}): { candidates: RenameCandidate[]; events: ClassifierEvent[] } {
+  const covered = new Set(
+    args.candidates.map(c => `${c.tableName}::${c.fromColumn}`)
+  );
+  return {
+    candidates: [...args.candidates],
+    events: args.events.filter(
+      e =>
+        e.kind !== "destructive_drop" ||
+        !covered.has(`${e.tableName}::${e.columnName}`)
+    ),
+  };
 }
 
 // Convert RenameCandidate[] from PromptDispatcher into RenameResolution[]
@@ -3007,6 +3097,34 @@ export function committedOf(
 ): number {
   if (dialect !== "mysql" || waitingIsSchema) return finished.length;
   return finished.lastIndexOf(true) + 1;
+}
+
+/**
+ * Whether a failure is the database's answer that it refused a statement: a database code on the
+ * error or one it wraps (`cause`), other than one for a database not reached or not answering in
+ * time (`isUnreachedDatabaseCode`), or a socket's own code. A refused statement did not run; one
+ * that failed any other way (a lost connection, a timeout, no code at all) may have, so its outcome
+ * is unknown. Exported for its tests.
+ */
+export function refusedByDatabase(failure: unknown): boolean {
+  let error: unknown = failure;
+  // The wrappers between the driver and the apply keep what they wrap (`cause`); a few levels
+  // reach the driver's error under any of them.
+  for (let depth = 0; depth < 5 && error instanceof Object; depth += 1) {
+    // Our own errors carry our codes, not the database's: what they wrap is read instead.
+    const code = error instanceof NextlyError ? undefined : safeCode(error);
+    if (code !== undefined) {
+      return (
+        !isUnreachedDatabaseCode(code) &&
+        // A socket's code (EPIPE, EHOSTUNREACH) or the MySQL driver's protocol codes name the
+        // connection, not an answer from the database.
+        !/^E[A-Z]+$/.test(code) &&
+        !code.toUpperCase().startsWith("PROTOCOL_")
+      );
+    }
+    error = (error as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 /**

@@ -167,7 +167,9 @@ function FixBar({
           href={step.finding.opens.href}
           target="_blank"
           rel="noopener noreferrer"
-          aria-label={`${step.finding.what}. ${step.finding.opens.name}`}
+          // The words it draws first, as said; what is wrong after them, and
+          // where it goes last, in parentheses: said, and not drawn.
+          aria-label={`${step.finding.opens.text}: ${step.finding.what} (${step.finding.opens.name})`}
         >
           {step.finding.opens.text}
           <ExternalLink aria-hidden="true" />
@@ -242,7 +244,11 @@ export function PageChecksChip({
   onOpenSettingsTab,
   facts,
 }: PageChecksChipProps): React.JSX.Element {
-  const { document } = editor;
+  // Checked a moment after each edit rather than inside it. The count only
+  // informs, and Save and Publish read nothing of it, while running every
+  // check over a large page delayed each keystroke reaching the canvas.
+  // Every edit is still checked; keys typed in quick succession together.
+  const document = React.useDeferredValue(editor.document);
   const report = React.useMemo(
     () =>
       runPageChecks(
