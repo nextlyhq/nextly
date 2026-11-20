@@ -54,35 +54,51 @@ const { isCliEntry } = await import(
 // Scoping lives in @nextlyhq/admin-css so this build and the plugin-facing
 // CLI share one implementation and cannot drift. The release build
 // (build-css.mjs) resolves it the same way.
-import { findUnscopedRules, scopeCss } from "@nextlyhq/admin-css";
+import {
+  confineVariantClasses,
+  findUnconfinedVariants,
+  findUnscopedRules,
+  scopeCss,
+} from "@nextlyhq/admin-css";
+
+import { cssPaths } from "./css-paths.mjs";
 
 const rootDir = path.resolve(__dirname, "..");
-
-const inputFile = path.join(rootDir, "src/styles/globals.css");
-const outputDir = path.join(rootDir, "dist/styles");
-const outputFile = path.join(outputDir, "globals.css");
+const { inputFile, outputDir, outputFile } = cssPaths(rootDir);
 
 // Reuse the processor across calls — Tailwind v4's content-scan caches
 // live inside the plugin instance and amortise across rebuilds.
 const processor = postcss([tailwindcss()]);
 
-export async function buildCssFast() {
+/**
+ * Build the admin sheet in-process.
+ *
+ * `inputCss`/`outputFile` override the real entry points, for tests of this
+ * pipeline's report: the report has to be exercised over a sheet chosen to
+ * contain what it should catch, not the real one, which contains none.
+ */
+export async function buildCssFast(
+  { inputCss, outputFile: out = outputFile } = {}
+) {
   const start = performance.now();
-  const inputCss = await fs.readFile(inputFile, "utf-8");
-  const result = await processor.process(inputCss, {
+  const source = inputCss ?? (await fs.readFile(inputFile, "utf-8"));
+  const result = await processor.process(source, {
     from: inputFile,
-    to: outputFile,
+    to: out,
   });
-  const scoped = scopeCss(result.css);
-  await fs.mkdir(outputDir, { recursive: true });
-  await fs.writeFile(outputFile, scoped);
+  // Same order as the release build: scope every rule, then confine the
+  // variant ancestor references (`.dark`, `.group`, `.peer`) to the wrapper.
+  const scoped = confineVariantClasses(scopeCss(result.css));
+  await fs.mkdir(path.dirname(out), { recursive: true });
+  await fs.writeFile(out, scoped);
   const ms = Math.round(performance.now() - start);
   const sizeKB = (Buffer.byteLength(scoped) / 1024).toFixed(1);
   // Reported, not thrown: the production build fails on a leak, but killing a
   // watcher mid-session would cost more than the warning is worth. Surfacing
   // it here means a leak is seen when it is introduced rather than at release.
   const unscoped = findUnscopedRules(scoped);
-  return { ms, sizeKB, outputFile, unscoped };
+  const unconfinedVariants = findUnconfinedVariants(scoped);
+  return { ms, sizeKB, outputFile: out, unscoped, unconfinedVariants };
 }
 
 // Direct CLI invocation: `node scripts/build-css-fast.mjs`

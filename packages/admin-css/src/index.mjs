@@ -11,6 +11,7 @@ export {
   scopeCss,
   confineVariantClasses,
   findUnscopedRules,
+  findUnconfinedVariants,
   isScoped,
   namespaceInternalProperties,
   prefixKeyframes,
