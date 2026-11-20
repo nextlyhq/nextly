@@ -173,6 +173,11 @@ import {
 } from "./format-file";
 import { withIndexesLiftedForTextWidenings } from "./indexed-text-widening";
 import {
+  leftoverUniqueDrops,
+  leftoverUniqueNotice,
+  type LiveUniqueIndexes,
+} from "./leftover-unique-indexes";
+import {
   fileStatements,
   judgedDeletions,
   mainFileStatements,
@@ -466,6 +471,13 @@ export interface GenerateArgs {
   liveCompanionColumns?:
     | ((tableName: string) => Promise<readonly string[]>)
     | undefined;
+  /**
+   * The unique indexes the database the file is written against holds, by column. Read only for a
+   * column whose field stops being unique, so the file also drops an older unique index still
+   * holding it under a name Nextly did not make (`leftoverUniqueDrops`), and the run names it
+   * through `onWarning`. Absent, the file drops only Nextly's own index.
+   */
+  liveUniqueIndexes?: LiveUniqueIndexes;
   /**
    * Override the timestamp for tests. Production callers omit and get
    * `new Date()`.
@@ -1188,6 +1200,22 @@ export async function generateMigration(
       tablesWithSettingsHeldBack(desiredSnapshot.tables, heldSettings)
     ),
   ];
+  // 7'. A field that stops being unique on an older table that also holds its column unique under
+  //     a name Nextly did not make: that index is dropped too, by name and only where it stands, so
+  //     every database the file runs on ends with the column no longer unique. Named to the run,
+  //     since it may be one the user made. Nothing goes back on the way down: Nextly's own index
+  //     makes the column unique again.
+  const leftovers = await leftoverUniqueDrops({
+    operations,
+    desired: desiredSnapshot.tables,
+    dialect: args.dialect,
+    read: args.liveUniqueIndexes,
+    warn: args.onWarning ?? (() => {}),
+  });
+  sqlStatements.push(...leftovers.statements);
+  for (const dropped of leftovers.dropped) {
+    args.onWarning?.(leftoverUniqueNotice(dropped));
+  }
 
   // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
   // Inverting the resolved ops — not re-diffing — keeps a forward rename as a

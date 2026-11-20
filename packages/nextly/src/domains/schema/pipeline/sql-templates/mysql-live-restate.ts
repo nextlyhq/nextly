@@ -257,7 +257,26 @@ function renameKeepingChecks(
   );
 }
 
+/**
+ * `DROP INDEX`, run only where the table holds an index of that name when the file runs: MySQL has
+ * no `DROP INDEX IF EXISTS`. For an index the snapshot does not record, which one database may hold
+ * and another not, such as an older table's unique index under a name Nextly did not make.
+ * Elsewhere the variable holds a statement that does nothing.
+ */
+export function guardedIndexDrop(
+  tableName: string,
+  indexName: string
+): string[] {
+  return runBuilt(
+    `(SELECT IF(COUNT(*) > 0, ${literal(`DROP INDEX ${q(indexName)} ON ${q(tableName)}`)}, 'DO 0') ` +
+      `FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() ` +
+      `AND TABLE_NAME = ${literal(tableName)} AND INDEX_NAME = ${literal(indexName)})`
+  );
+}
+
 /** What the first statement of a run says it changes, read back from its text. */
+const DROP_INDEX_RUN =
+  /^SET @nextly_ddl = \(SELECT IF\(COUNT\(\*\) > 0, 'DROP INDEX `([^`]+)` ON `([^`]+)`'/s;
 const RENAME_RUN =
   /^SET @nextly_ddl = .*'ALTER TABLE `([^`]+)` '.*'RENAME COLUMN `([^`]+)` TO `([^`]+)`'/s;
 const NULLABILITY_RUN =
@@ -276,6 +295,11 @@ export type MysqlLiveRun =
       tableName: string;
       columnName: string;
       toNullable: boolean;
+    }
+  | {
+      kind: "drop-index";
+      tableName: string;
+      indexName: string;
     };
 
 /** How many statements each run is (`runBuilt`). */
@@ -287,7 +311,8 @@ export const MYSQL_LIVE_RUN_LENGTH = 4;
  * four of its statements are exactly what this module renders for the table and columns its first
  * one names, so a hand-written PREPARE stays unreadable. A rename run amounts to the plain rename
  * (the checks it drops it adds back under the same names); a nullability run to a change of that
- * column's nullability alone, its type, character set, collation, default and comment kept.
+ * column's nullability alone, its type, character set, collation, default and comment kept; a
+ * guarded drop to the plain drop of that index.
  */
 export function mysqlLiveRunAt(
   statements: readonly string[],
@@ -297,6 +322,13 @@ export function mysqlLiveRunAt(
     .slice(at, at + MYSQL_LIVE_RUN_LENGTH)
     .map(statement => statement.trim());
   const first = run[0] ?? "";
+  const dropIndex = DROP_INDEX_RUN.exec(first);
+  if (dropIndex !== null) {
+    const [indexName, tableName] = dropIndex.slice(1).map(unliteral);
+    return sameRun(run, guardedIndexDrop(tableName, indexName))
+      ? { kind: "drop-index", tableName, indexName }
+      : undefined;
+  }
   const rename = RENAME_RUN.exec(first);
   if (rename !== null) {
     const [tableName, fromColumn, toColumn] = rename.slice(1).map(unliteral);
@@ -333,6 +365,10 @@ export function mysqlLiveRunAt(
  * reads the run itself (`mysqlLiveRunAt`).
  */
 export function plainMysqlStatement(run: MysqlLiveRun): string {
+  // A guarded drop amounts to the drop: where the index is absent it does nothing at all.
+  if (run.kind === "drop-index") {
+    return `DROP INDEX ${q(run.indexName)} ON ${q(run.tableName)}`;
+  }
   return run.kind === "rename"
     ? `ALTER TABLE ${q(run.tableName)} RENAME COLUMN ${q(run.fromColumn)} TO ${q(run.toColumn)}`
     : `ALTER TABLE ${q(run.tableName)} MODIFY COLUMN ${q(run.columnName)} text ${run.toNullable ? "NULL" : "NOT NULL"}`;
