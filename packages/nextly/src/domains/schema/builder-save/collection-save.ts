@@ -174,6 +174,7 @@ import { mutateManifest, type ManifestKind } from "../ui-schema/mutate";
 import {
   entityLabel,
   fieldTypeChangesOf,
+  perLanguageAfter,
   perLanguageBefore,
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
@@ -1346,6 +1347,7 @@ async function refuseSaveTypeChanges(
     label: entityLabel(kind.kind, save.slug),
     table,
     ...perLanguageBefore(save.previous, table, previous),
+    ...perLanguageAfter(save.entity, next),
     previous,
     next,
     renamed,

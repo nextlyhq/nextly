@@ -15,6 +15,8 @@ import {
   isFieldLocalized,
   resolveLocalizedFieldNames,
 } from "../../../i18n/classify-fields";
+import { ddlType } from "../../../i18n/migration/ddl-types";
+import { fieldToLocalizedColumnSpec } from "../../../i18n/migration/field-to-column-spec";
 import { storesPerLanguage } from "../../../i18n/per-language-storage";
 import { querySqlRows } from "../../pipeline/classifier/count-helpers";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
@@ -131,12 +133,21 @@ export interface JudgedFieldTypeChange extends FieldTypeChange {
   column: string;
   result: StoredTypeChangeJudgement;
   /**
-   * The field is kept per language before the save and after it: its values are judged in the
-   * entity's translations table, whose column a type change leaves in the old type, values or
-   * none (`typeChangeRefusals`). A field the save stops translating is not: its values leave that
-   * table, and the save's own check of a field leaving translation answers for them.
+   * The field is kept per language before the save and after it (`translatedAfter`), and its
+   * column in the entity's translations table takes another type: a column a type change leaves in
+   * the old type, values or none (`typeChangeRefusals`). A field the save stops translating, or
+   * whose entity it stops translating, is not: its values leave that table, and the save's own
+   * check of a field leaving translation answers for them. Nor is one whose translations column
+   * keeps its type (a long text becoming code), which that column holds as it is.
    */
-  staysPerLanguage?: true;
+  changesTranslationsColumn?: true;
+  /**
+   * The field's entity stops being translated in the same save, while the field itself still asks
+   * to be: its values leave the translations table, each language's as it is stored, before the
+   * entity's own table takes the new type, which PostgreSQL refuses part-way (`typeChangeRefusals`).
+   * A field that alone stops being translated is the save's check of a field leaving translation.
+   */
+  leavesWithEntity?: true;
 }
 
 /**
@@ -158,6 +169,8 @@ export async function judgeFieldTypeChanges(args: {
   table: string;
   translationsTable?: string;
   translated?: ReadonlySet<string>;
+  /** The names of the fields kept per language after the save: none where absent. */
+  translatedAfter?: ReadonlySet<string>;
   changes: readonly FieldTypeChange[];
 }): Promise<JudgedFieldTypeChange[]> {
   const judged: JudgedFieldTypeChange[] = [];
@@ -205,12 +218,48 @@ export async function judgeFieldTypeChanges(args: {
       table,
       column,
       result,
-      ...(perLanguage && isFieldLocalized(change.to, true)
-        ? { staysPerLanguage: true as const }
-        : {}),
+      ...(perLanguage ? translationsTableFlags(change, args) : {}),
     });
   }
   return judged;
+}
+
+/**
+ * What a change judged in the entity's translations table means for that table: its column takes
+ * another type while the field stays translated (`changesTranslationsColumn`), or the entity stops
+ * being translated while the field still asks to be (`leavesWithEntity`).
+ */
+function translationsTableFlags(
+  change: FieldTypeChange,
+  args: {
+    dialect: SupportedDialect;
+    builtBy: ColumnOrigin;
+    translatedAfter?: ReadonlySet<string>;
+  }
+): Pick<
+  JudgedFieldTypeChange,
+  "changesTranslationsColumn" | "leavesWithEntity"
+> {
+  if (args.translatedAfter === undefined) return {};
+  if (args.translatedAfter.has(change.to.name)) {
+    return translationsColumnType(change.from, args) !==
+      translationsColumnType(change.to, args)
+      ? { changesTranslationsColumn: true }
+      : {};
+  }
+  return isFieldLocalized(change.to, true) ? { leavesWithEntity: true } : {};
+}
+
+/**
+ * A translated field's column type in the entity's translations table, as that table's creator
+ * types it (`fieldToLocalizedColumnSpec`); null for a field it gives no column.
+ */
+function translationsColumnType(
+  field: FieldDefinition,
+  args: { dialect: SupportedDialect; builtBy: ColumnOrigin }
+): string | null {
+  const spec = fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy);
+  return spec === null ? null : ddlType(spec, args.dialect);
 }
 
 /**
@@ -424,9 +473,13 @@ const DEPLOYED_BY_CAST =
 /**
  * The refusals a save's judged type changes give: each blocked one, each lossy one whose field the
  * owner has not consented to clearing values of (`acknowledged`, by field path), and each change
- * of a field kept per language (`staysPerLanguage`): its column in the translations table keeps
- * the old type, so each language's value, and each written after, would stay of the old type,
- * held or not. Each names the field and both types, and every reason with its rows, by key and
+ * of a field kept per language whose translations column takes another type
+ * (`changesTranslationsColumn`): that column keeps the old type, so each language's value, and each
+ * written after, would stay of the old type, held or not; and each change of a field whose entity
+ * stops being translated in the same save (`leavesWithEntity`), whose values leave that table as
+ * they are stored. A translated change is blocked whatever
+ * its values, so its refusal names that reason beside theirs, and the person is not sent to fix
+ * values first. Each names the field and both types, and every reason with its rows, by key and
  * never by value; says why a value the cast does not reach cannot be deployed yet; and says that
  * a new field of the new type keeps the old values beside the new ones.
  */
@@ -453,29 +506,61 @@ function refusalOf(
   const blocked = judgement.class === "blocked";
   const lossy =
     judgement.class === "lossy" && !acknowledged.has(change.to.name);
-  const translated = change.staysPerLanguage === true;
-  if (!blocked && !lossy && !translated) return null;
-  const changing = `${entity}: field '${change.to.name}' cannot change from ${change.from.type} to ${change.to.type}`;
-  const keepBeside =
-    "A new field of the new type keeps the old values beside the new ones.";
-  if (!blocked && !lossy) {
-    return {
-      path: change.to.name,
-      code: "TYPE_CHANGE_BLOCKED",
-      message: `${changing} yet: it is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet. ${keepBeside}`,
-    };
-  }
-  const rewritten = judgement.reasons.some(r => r.kind === "needs-rewrite");
-  const why = lossy
-    ? ` Clearing the values that cannot convert can't be deployed yet: ${DEPLOYED_BY_CAST}.`
-    : rewritten
-      ? ` Rewriting values into the new type's form can't be deployed yet: ${DEPLOYED_BY_CAST}.`
-      : "";
+  const translated = change.changesTranslationsColumn === true;
+  const leaving = change.leavesWithEntity === true;
+  if (!blocked && !lossy && !translated && !leaving) return null;
+  const why = refusalReasons({
+    translated,
+    leaving,
+    lossy,
+    rewritten: judgement.reasons.some(r => r.kind === "needs-rewrite"),
+  });
+  const values = blocked || lossy ? ` (${describeClassed(judgement)})` : "";
   return {
     path: change.to.name,
-    code: blocked ? "TYPE_CHANGE_BLOCKED" : "TYPE_CHANGE_LOSES_VALUES",
-    message: `${changing} (${describeClassed(judgement)}).${why} ${keepBeside}`,
+    code:
+      blocked || translated || leaving
+        ? "TYPE_CHANGE_BLOCKED"
+        : "TYPE_CHANGE_LOSES_VALUES",
+    message: [
+      `${entity}: field '${change.to.name}' cannot change from ${change.from.type} to ${change.to.type}${values}.`,
+      ...why,
+      "A new field of the new type keeps the old values beside the new ones.",
+    ].join(" "),
   };
+}
+
+/**
+ * Why a refused change can't go ahead as it stands, beyond its values' own reasons: its translations
+ * column, its entity leaving translation, and a value the deploying cast would not clear or rewrite.
+ */
+function refusalReasons(of: {
+  translated: boolean;
+  leaving: boolean;
+  lossy: boolean;
+  rewritten: boolean;
+}): string[] {
+  const why: string[] = [];
+  if (of.translated) {
+    why.push(
+      "It is kept per language, in a translations table whose column a type change does not convert, so the change can't be deployed yet."
+    );
+  }
+  if (of.leaving) {
+    why.push(
+      "Its entity stops being translated in the same save, which moves each language's value out of the translations table as it is stored: turn off translation and save first, then change the field's type."
+    );
+  }
+  if (of.lossy) {
+    why.push(
+      `Clearing the values that cannot convert can't be deployed yet: ${DEPLOYED_BY_CAST}.`
+    );
+  } else if (of.rewritten) {
+    why.push(
+      `Rewriting values into the new type's form can't be deployed yet: ${DEPLOYED_BY_CAST}.`
+    );
+  }
+  return why;
 }
 
 /** The registry statuses whose recorded fields the database already has. */
@@ -535,6 +620,24 @@ export function perLanguageBefore(
   };
 }
 
+/**
+ * The fields an entity keeps per language after a save: those its new definition translates, for
+ * an entity stored per language after it (`storesPerLanguage`); none for one the save leaves, or
+ * makes, untranslated, whatever its fields say.
+ */
+export function perLanguageAfter(
+  entity: { localized?: unknown },
+  next: readonly FieldDefinition[]
+): Pick<EntityTypeChangeInput, "translatedAfter"> {
+  return {
+    translatedAfter: new Set(
+      storesPerLanguage(entity)
+        ? resolveLocalizedFieldNames(fieldsStoredOnRow(next), true)
+        : []
+    ),
+  };
+}
+
 /** One entity a save changes, as the precondition reads it. */
 export interface EntityTypeChangeInput {
   /** How a refusal names the entity: "Collection 'products'", "Single 'home'". */
@@ -544,6 +647,8 @@ export interface EntityTypeChangeInput {
   translationsTable?: string;
   /** The fields translated before the save. */
   translatedBefore?: ReadonlySet<string>;
+  /** The fields translated after the save (`perLanguageAfter`). */
+  translatedAfter?: ReadonlySet<string>;
   /** The fields as the database holds them before the save: the registry row's. */
   previous: readonly FieldDefinition[];
   /** The fields as the save leaves them. */
@@ -595,6 +700,9 @@ export async function fieldTypeChangeRefusals(
         : {}),
       ...(entity.translatedBefore !== undefined
         ? { translated: entity.translatedBefore }
+        : {}),
+      ...(entity.translatedAfter !== undefined
+        ? { translatedAfter: entity.translatedAfter }
         : {}),
       changes,
     }),

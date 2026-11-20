@@ -269,6 +269,100 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v", "en")).toEqual({ a: null, b: null, c: "7" });
     });
 
+    // Where the translations column keeps its type, nothing in that table changes: a long text
+    // becoming code is held there as it is, in every language.
+    it("changes a translated long text into code, keeping every language's value", async () => {
+      const t = await boot([{ name: "v", type: "textarea", localized: true }], {
+        localized: true,
+      });
+      const id = await write(t, "a", { v: "hello" }, "en");
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        data: { v: "hola", _overwrite: true },
+        locale: "es",
+      } as never);
+
+      expect(
+        await save(t, [{ name: "v", type: "code", localized: true }], {
+          localized: true,
+        })
+      ).toBeUndefined();
+
+      expect(await read(t, "v", "en")).toEqual({ a: "hello" });
+      expect(await read(t, "v", "es")).toEqual({ a: "hola" });
+    });
+
+    // A save that stops translating the whole collection moves each language's value out of the
+    // translations table as it is stored, before the entity's own table takes the new type, which
+    // PostgreSQL refuses part-way: refused with the two saves that make it, not as kept per language.
+    it("refuses a type change as the collection stops being translated, naming the two saves, and changes nothing", async () => {
+      const t = await boot([{ name: "v", type: "text", localized: true }], {
+        localized: true,
+      });
+      await write(t, "a", { v: "12" }, "en");
+
+      const refused = await save(
+        t,
+        [{ name: "v", type: "number", localized: true }],
+        { localized: false }
+      );
+
+      expect(refused).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.v",
+              code: "TYPE_CHANGE_BLOCKED",
+              message: expect.stringContaining(
+                "turn off translation and save first, then change the field's type"
+              ),
+            }),
+          ],
+        },
+      });
+      // One refusal for the field, naming the two saves, never the translated column's.
+      expect(
+        (refused as { publicData: { errors: { message: string }[] } })
+          .publicData.errors
+      ).toEqual([
+        expect.objectContaining({
+          message: expect.not.stringMatching(/kept per language/),
+        }),
+      ]);
+      expect(await read(t, "v", "en")).toEqual({ a: "12" });
+    });
+
+    // A translated change is blocked whatever its values, so a value that cannot convert is named
+    // beside that reason, rather than sending the person to clear it first.
+    it("refuses a translated change with a value that cannot convert, naming both reasons, as blocked", async () => {
+      const t = await boot([{ name: "v", type: "text", localized: true }], {
+        localized: true,
+      });
+      const id = await write(t, "a", { v: "12" }, "en");
+      await t.nextly.update({
+        collection: SLUG,
+        id,
+        data: { v: "abc", _overwrite: true },
+        locale: "es",
+      } as never);
+
+      const refused = await save(
+        t,
+        [{ name: "v", type: "number", localized: true }],
+        { localized: true }
+      );
+
+      expect(refused).toMatchObject(
+        refusedAs("TYPE_CHANGE_BLOCKED", "kept per language")
+      );
+      expect(refused).toMatchObject(
+        refusedAs("TYPE_CHANGE_BLOCKED", "Clearing the values")
+      );
+      expect(await read(t, "v", "es")).toEqual({ a: "abc" });
+    });
+
     // A family no rule reaches yet keeps today's answer exactly: a date read as text is a form the
     // database's cast does not write, so the change is refused and nothing changes.
     it("still refuses a date becoming a text, and changes nothing", async () => {
