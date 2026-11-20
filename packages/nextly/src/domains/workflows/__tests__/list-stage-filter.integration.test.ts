@@ -202,7 +202,20 @@ describe.each(getConfiguredTestDialects())(
       expect(await kept("approved")).toEqual({ ids: [], total: 0 });
       // A stage the workflow does not have keeps nothing, and is not refused.
       expect(await kept("gone")).toEqual({ ids: [], total: 0 });
-      expect(live).toBeTruthy();
+
+      // The filter and the document's review read place every part alike: for each stage, a
+      // document is kept exactly when its review read names a part in that stage.
+      const documents = [fresh, live, pending, recorded, stranded, inLegal];
+      for (const stage of desk.stages.map(each => each.name)) {
+        const named: string[] = [];
+        for (const id of documents) {
+          const review = (await app().nextly.workflows.reviewState({
+            document: { collection: "posts", id },
+          })) as unknown as { parts: { stage: string | null }[] };
+          if (review.parts.some(part => part.stage === stage)) named.push(id);
+        }
+        expect((await kept(stage)).ids, stage).toEqual(named.sort());
+      }
     });
 
     it("considers only the parts a read in a language may see", async () => {

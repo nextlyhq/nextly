@@ -83,12 +83,12 @@ describe.each(getConfiguredTestDialects())(
       for (const mainStatus of MAIN) {
         for (const release of RELEASES) {
           for (const own of OWN) {
-            const created = (await app.nextly.create({
+            const created = await app.nextly.create({
               collection: "notes",
               data: { title: "Hello" },
               overrideAccess: true,
-            } as never)) as { item: { id: string } };
-            const id = String(created.item.id);
+            });
+            const id = String((created.item as { id: string }).id);
             // A translation row in each language, so its status can be set or the row removed.
             for (const locale of ["en", "es"]) {
               await app.nextly.update({
