@@ -29,10 +29,10 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-On SQLite, `nextly db:sync` judges a column's type change more closely in three cases.
+`nextly db:sync` judges a column's type change more closely in three cases.
 
-- A field's own `validate` function is no longer asked of stored values. It is written for a whole entry and its request, and judging a value alone it could refuse one the field accepts, which a consent would then clear. The field's built-in rules (length, pattern, range, options, a plugin type's own validation) still judge every value, and the function judges at the entry's next write.
-- A column in a unique index of several columns is checked before anything runs: two rows whose values the new type reads as one (the texts "1" and " 1" becoming a number) under the same values in the index's other columns block the change, naming the rows. Before, SQLite's rebuild converted the column and the index then failed.
-- Where one run clears consented values in several columns and finds values written since the check, every column's consented values are cleared first, then one error names each column's rows. Before, the run stopped at the first column.
+- On every database, a field's own `validate` function is no longer asked of stored values. It is written for a whole entry and its request, and judging a value alone it could refuse one the field accepts, which a consent would then clear. The field's built-in rules (length, pattern, range, options, a plugin type's own validation) still judge every value, and the function judges at the entry's next write.
+- On SQLite, a column in a unique index of several columns is checked before anything runs: two rows whose values the new type reads as one (the texts "1" and " 1" becoming a number) under the same values in the index's other columns block the change, naming the rows. Before, SQLite's rebuild converted the column and the index then failed.
+- On SQLite, where one run clears consented values in several columns and finds values written since the check, every column's consented values are cleared first, then one error names each column's rows. Before, the run stopped at the first column.
 
-PostgreSQL and MySQL are unchanged: there the database refuses a change a unique index cannot hold, and the change is not made.
+On PostgreSQL and MySQL the database refuses a change a unique index cannot hold, and the change is not made.
