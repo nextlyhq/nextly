@@ -326,7 +326,11 @@ describeEachDialect(
       }
     });
 
-    it("finishes, on the next save, an enable a dialog left half-applied", async () => {
+    // The dialog runs its migration file, planned from the history, which records neither the
+    // companion nor the dropped column: refused as drift, naming the ways to recover, and nothing
+    // changes. The collection's settings save, which its push applies against the live tables,
+    // finishes it.
+    it("refuses, through the schema dialog, an enable left half-applied as drift with the ways to recover; the settings save finishes it", async () => {
       // The state a dialog enable left before this was fixed: the schema apply moved the values to
       // the companion and dropped the main column, and the companion step then failed, so the
       // registry still says the collection is not translated. A schema apply that turns
@@ -384,7 +388,23 @@ describeEachDialect(
       expect(await localizedIn("dynamic_collections", "posts")).toBe(false);
       expect(await columnsOf("dc_posts")).not.toContain("heading");
 
-      await collection.enable();
+      const refusal = await collection.enable().then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(refusal).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
+      const said = (refusal as { publicMessage?: string }).publicMessage ?? "";
+      // A Builder save's drift refusal: the one way on that works for a save, the table put back by hand.
+      expect(said).toContain("The save was refused: schema drift detected");
+      expect(said).toContain("put the table back as the history records it");
+      expect(await localizedIn("dynamic_collections", "posts")).toBe(false);
+
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "posts" },
+        { fields: FIELDS, localized: true }
+      );
 
       const [en] = await query<{ heading: string | null }>(
         `SELECT ${q("heading")} AS heading FROM ${q("dc_posts_locales")} ` +

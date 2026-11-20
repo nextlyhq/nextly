@@ -14,27 +14,34 @@ import {
   $createLineBreakNode,
   $createParagraphNode,
   $createTextNode,
+  $getNodeByKey,
   $getRoot,
+  $getSelection,
   $isElementNode,
   $isLineBreakNode,
+  $isRangeSelection,
   $isTextNode,
   DecoratorNode,
   ElementNode,
   type Klass,
+  type LexicalEditor,
   type LexicalNode,
   type NodeKey,
   type SerializedElementNode,
   type SerializedLexicalNode,
   type Spread,
 } from "lexical";
+import { createElement, type ReactNode } from "react";
 
 import type { WrittenBlock } from "@admin/services/emailTemplateApi";
+
+import { ChipLabel } from "./ChipLabel";
 
 /** One run of a text block: text with its marks, or a chip. */
 export type Inline = Extract<WrittenBlock, { type: "text" }>["text"][number];
 
 /** A link as stored: a fixed address, or a variable holding one. */
-type WrittenLink = NonNullable<Inline["link"]>;
+export type WrittenLink = NonNullable<Inline["link"]>;
 
 /** A chip as stored: the variable and its fallback. */
 type Chip = Extract<Inline, { type: "chip" }>;
@@ -51,7 +58,7 @@ type SerializedChipNode = Spread<
 >;
 
 /** A variable in the text: one piece, shown by name, that can't be typed into. */
-export class ChipNode extends DecoratorNode<string> {
+export class ChipNode extends DecoratorNode<ReactNode> {
   __variable: string;
   __fallback: string | undefined;
   __marks: Marks;
@@ -98,9 +105,9 @@ export class ChipNode extends DecoratorNode<string> {
   createDOM(): HTMLElement {
     const span = document.createElement("span");
     span.dataset.variable = this.__variable;
-    // Its marks, as the sent email draws them: a chip is not a text node, so
-    // the editor's text theme never reaches it.
-    // A pill, so a variable never reads as typed text.
+    // A pill, so a variable never reads as typed text, with its marks as the
+    // sent email draws them: a chip is not a text node, so the editor's text
+    // theme never reaches it.
     span.className = [
       "mx-0.5 rounded-md border border-border bg-muted px-1.5 py-0.5 text-xs",
       this.__marks.bold ? "font-semibold" : "",
@@ -119,9 +126,22 @@ export class ChipNode extends DecoratorNode<string> {
     return true;
   }
 
-  /** The variable it stands for, as the editor shows it until names are known. */
-  decorate(): string {
-    return this.__variable;
+  /** Its friendly name and mark, and its fallback dialog. */
+  decorate(editor: LexicalEditor): ReactNode {
+    // By key, not by this node: the editor clones nodes as it edits, and the
+    // live one is the one the dialog's change must reach.
+    const key = this.__key;
+    return createElement(ChipLabel, {
+      variable: this.__variable,
+      fallback: this.__fallback,
+      onFallback: fallback =>
+        editor.update(() => {
+          const node = $getNodeByKey(key);
+          // The text it shows when its variable has no value, or none.
+          if (node instanceof ChipNode)
+            node.getWritable().__fallback = fallback;
+        }),
+    });
   }
 }
 
@@ -216,6 +236,97 @@ function textNodes(text: string, marks: Marks): LexicalNode[] {
     nodes.push(node);
   });
   return nodes;
+}
+
+/** A piece of the text: a run's text, a chip, or a line break. */
+function isLeaf(node: LexicalNode): boolean {
+  return (
+    $isTextNode(node) || node instanceof ChipNode || $isLineBreakNode(node)
+  );
+}
+
+/** The link the selection starts in, if any. Call inside a read or an update. */
+export function $selectedLink(): WrittenLink | undefined {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection)) return undefined;
+  for (const node of selection.getNodes()) {
+    const holder = node instanceof WrittenLinkNode ? node : node.getParent();
+    if (holder instanceof WrittenLinkNode) return holder.__link;
+  }
+  return undefined;
+}
+
+/**
+ * Link the selected text to `link`, or unlink it with undefined. Only the
+ * selection changes: a link it cuts through keeps its address on the rest.
+ * Call inside an update.
+ */
+export function $setSelectionLink(link: WrittenLink | undefined): void {
+  const selection = $getSelection();
+  if (!$isRangeSelection(selection) || selection.isCollapsed()) return;
+  // Split at the selection's ends, so it covers whole pieces.
+  const picked = new Set(
+    selection
+      .extract()
+      .filter(isLeaf)
+      .map(node => node.getKey())
+  );
+  for (const paragraph of $getRoot().getChildren()) {
+    if (!$isElementNode(paragraph)) continue;
+    const pieces = piecesOf(paragraph);
+    if (!pieces.some(({ leaf }) => picked.has(leaf.getKey()))) continue;
+    $layOut(
+      paragraph,
+      pieces.map(piece => ({
+        leaf: piece.leaf,
+        link: picked.has(piece.leaf.getKey()) ? link : piece.link,
+      }))
+    );
+  }
+}
+
+/** A piece of a paragraph and the link it has, or is to have. */
+interface Piece {
+  leaf: LexicalNode;
+  link: WrittenLink | undefined;
+}
+
+/** Every piece of `paragraph`, in order, with the link it has now. */
+function piecesOf(paragraph: ElementNode): Piece[] {
+  return paragraph
+    .getChildren()
+    .flatMap<Piece>(child =>
+      isLinkNode(child)
+        ? child.getChildren().map(leaf => ({ leaf, link: child.__link }))
+        : [{ leaf: child, link: undefined }]
+    );
+}
+
+/**
+ * Lay `pieces` out in `paragraph` again, in order, each under its link:
+ * neighbours sharing a link share one holder. The old holders, emptied as
+ * their pieces move, are removed.
+ */
+function $layOut(paragraph: ElementNode, pieces: readonly Piece[]): void {
+  const old = paragraph.getChildren().filter(isLinkNode);
+  let holder: WrittenLinkNode | undefined;
+  for (const { leaf, link } of pieces) {
+    if (!link) {
+      paragraph.append(leaf);
+      holder = undefined;
+      continue;
+    }
+    if (!holder || !sameLink(holder.__link, link)) {
+      holder = new WrittenLinkNode(link);
+      paragraph.append(holder);
+    }
+    holder.append(leaf);
+  }
+  for (const emptied of old) if (emptied.isAttached()) emptied.remove();
+}
+
+function isLinkNode(node: LexicalNode): node is WrittenLinkNode {
+  return node instanceof WrittenLinkNode;
 }
 
 /** Replace the editor's content with `runs`. Call inside an update. */

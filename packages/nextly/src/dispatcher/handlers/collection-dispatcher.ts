@@ -56,7 +56,9 @@ import {
   type ConfirmedDeletion,
   deletionHoldOf,
 } from "../../domains/schema/builder-save/deletion-counts";
+import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
+import { pushCarriesValues } from "../../domains/schema/builder-save/push-carries-values";
 import {
   renamedFieldsOf,
   saveOfSchemaChange,
@@ -68,15 +70,25 @@ import {
   type PushReason,
 } from "../../domains/schema/field-moves/moves-road";
 import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
-import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
+import { getColumnDescriptor } from "../../domains/schema/services/field-column-descriptor";
+import type {
+  BrowserRenameResolution,
+  LegacyResolutionsBundle,
+} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import type { DesiredCollection } from "../../domains/schema/pipeline/types";
+import type {
+  DesiredCollection,
+  DesiredSchema,
+} from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
+  archiveCollectionFieldsLeavingTranslation,
+  checkCollectionTranslationChange,
+  collectionChangeCarriesValues,
   fieldsAsStored,
+  reconcileCollectionCompanionAfterFile,
   recordedFieldsOf,
   refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
@@ -91,14 +103,20 @@ import {
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
 import { bumpSchemaVersion } from "../../route-handler/schema-version";
-import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import type {
+  DynamicCollectionRecord,
+  FieldDefinition,
+} from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
-import { afterEnclosingCommit } from "../helpers/applied-fields-row";
+import {
+  afterEnclosingCommit,
+  registryInFileTransaction,
+} from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -366,6 +384,32 @@ function readConfirmedDeletions(
     if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
     throw error;
   }
+}
+
+/**
+ * The dialog's confirmations by field name, as its questions read them
+ * (`refuseUnansweredDialogQuestions`): each field's own resolution, and each removed field whose
+ * count of values the person confirmed deleting (`confirmedDeletions`), a count being its drop
+ * confirmed. Nothing where the body sends neither.
+ */
+function dialogConfirmations(
+  tableName: string,
+  resolutions: Record<string, FieldResolution> | undefined,
+  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
+): { legacy?: LegacyResolutionsBundle } {
+  const confirmDrop: LegacyResolutionsBundle["byFieldName"][string] = {
+    action: "confirm_drop",
+  };
+  const counted = (confirmedDeletions ?? []).map(
+    deletion => [deletion.field, confirmDrop] as const
+  );
+  if (resolutions === undefined && counted.length === 0) return {};
+  return {
+    legacy: {
+      tableName,
+      byFieldName: { ...Object.fromEntries(counted), ...resolutions },
+    },
+  };
 }
 
 /** The save's answer of the counts confirmed, where the body sent them; nothing otherwise. */
@@ -919,39 +963,12 @@ const COLLECTIONS_METHODS: Record<
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
 
-      // Build a full DesiredSchema so drizzle-kit sees all managed tables.
-      // Without this, singles/components in the live DB are absent from the
-      // desired snapshot and drizzle-kit offers them as rename candidates.
-      const desired = await buildFullDesiredSchema();
-      desired.collections[p.collectionName] = {
+      const desired = await dialogDesiredSchema({
         slug: p.collectionName,
-        tableName,
-        // As the apply's first push creates them (`fieldsAsFirstPushed`).
-        fields: fieldsAsFirstPushed({
-          oldFields: currentFields,
-          newFields: fields as FieldDefinition[],
-          entity: collection,
-          requestedLocalized: previewLocalized,
-        }) as DesiredCollection["fields"],
-        // Carry the Draft/Published flag so previewDesiredSchema injects
-        // the `status` column into the desired snapshot.
-        status: collection.status === true,
-        // i18n: carry the localized flag so the push diff OMITS translatable
-        // columns from the main table's desired snapshot (they live in the
-        // companion `_locales` table). buildFullDesiredSchema already sets this
-        // from the registry, but the splice above overwrites that entry, so we
-        // must re-supply it or the preview would show translatable columns being
-        // added to the main table. The REQUEST's flag wins when the Builder
-        // sent one: the apply prefers it too, and a preview that diffed against
-        // the persisted flag instead would collect resolutions for DDL the
-        // apply is not going to run.
-        localized:
-          previewLocalized ??
-          (collection as { localized?: boolean }).localized === true,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-        recordedFields: recordedFieldsOf(collection),
-      };
+        collection,
+        fields: fields as FieldDefinition[],
+        requestedLocalized: previewLocalized,
+      });
 
       const preview = await builderSchemaPreviewBody({
         desired,
@@ -982,6 +999,7 @@ const COLLECTIONS_METHODS: Record<
         requestedLocalized: previewLocalized,
         before: currentFields,
         after: fields as FieldDefinition[],
+        renames: answers.renameResolutions ?? [],
       });
       const review = await reviewLinesOf({
         slug: p.collectionName,
@@ -1261,6 +1279,17 @@ const COLLECTIONS_METHODS: Record<
               await applyCollectionSchemaChange({ ...change, onLanded })
             ).summary;
           });
+          // The checks the change makes over its translations, asked once, where the save runs in
+          // development: the push asks them again itself; the file road asks them here, before
+          // anything is written. The rename they answer carries the companion's values on either.
+          let translationChecked:
+            | ReturnType<typeof checkCollectionTranslationChange>
+            | undefined;
+          const companionRename = () =>
+            (translationChecked ??= checkCollectionTranslationChange(change));
+          // Asked before the writer plans anything, as the push asks them before it plans its
+          // change, so a refusal of a translated field's change is the one either road gives.
+          await companionRename();
           const newSchemaVersion = currentVersion + 1;
           // The registry's row of the save: the fields as stored, the advanced schema version and
           // the translation state this apply ran with, written with the stored version in one
@@ -1303,6 +1332,7 @@ const COLLECTIONS_METHODS: Record<
             isLocalized,
             before: (collection.fields ?? []) as unknown as FieldDefinition[],
             after: fields as unknown as FieldDefinition[],
+            renames: renameResolutions ?? [],
           });
           // A save that moves fields keeps their values only through its migration file: one the
           // push would apply instead is refused here, before anything is written or run.
@@ -1383,18 +1413,81 @@ const COLLECTIONS_METHODS: Record<
           };
           const written = await saveThroughWriter({
             // Where the save runs its file, the row is written in the file's own transaction, so a
-            // failed write leaves the save as it was and is answered as the failure it is.
-            registry: storedFields => writeRow(storedFields, false),
+            // failed write leaves the save as it was and is answered as the failure it is. Not where
+            // the translations table is brought in step after the file: the row would then record
+            // the change before that step holds it, so it is written after it, as a Single's is.
+            ...(registryInFileTransaction({
+              wasStored: storesPerLanguage({ localized: wasLocalized }),
+              isStored: isStoredPerLanguage,
+            })
+              ? {
+                  registry: (stored: FieldDefinition[]) =>
+                    writeRow(stored, false),
+                }
+              : {}),
             // A file stopped part way and settled to what applied: this process's tables and the
-            // admin's schema version follow the fields it recorded, as after an apply.
+            // admin's schema version follow the fields it recorded, as after an apply. Asked only
+            // where the registry write runs in the file's transaction.
             settled: storedFields => {
               refreshRuntime(storedFields);
               bumpSchemaVersion();
             },
             appliedBy: push.appliedBy,
+            // Where the file carries the change, the push's questions are asked of it first: a
+            // rename the request does not answer, or a drop it does not confirm, refuses the save
+            // before anything is written, as the push refuses it.
+            questions: async () =>
+              refuseUnansweredDialogQuestions({
+                desired: await dialogDesiredSchema({
+                  slug: p.collectionName,
+                  collection,
+                  fields: fields as unknown as FieldDefinition[],
+                  requestedLocalized: readRequestLocalized(body),
+                }),
+                db: adapter.getDrizzle(),
+                dialect,
+                tableName,
+                // The builder that made the table, which the offered rename is judged by.
+                builtBy: "collection",
+                oldFields: (collection.fields ??
+                  []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+                renameResolutions: renameResolutions ?? [],
+                eventResolutions: eventResolutions ?? [],
+                ...dialogConfirmations(
+                  tableName,
+                  resolutions,
+                  confirmedDeletions
+                ),
+              }),
             // Whether the push applies the change in development, the writer recording its
-            // migration once the push has run (`pushReasonOf`).
-            pushWhen: async () => (await pushReason()) !== null,
+            // migration once the push has run: where it carries values across the change, as a
+            // Single's and a field group's saves ask it (`pushCarriesValues`). Any other change,
+            // a translated collection's included, runs its own file.
+            pushWhen: async () =>
+              collectionChangeCarriesValues(change, await companionRename()),
+            // A field leaving translation archived before the file runs, and the translations
+            // table brought in step with the main table the file left.
+            fileRoad: {
+              judge: async () =>
+                archiveCollectionFieldsLeavingTranslation(
+                  change,
+                  await companionRename(),
+                  { judgeOnly: true }
+                ),
+              before: async () =>
+                archiveCollectionFieldsLeavingTranslation(
+                  change,
+                  await companionRename()
+                ),
+              after: async () =>
+                reconcileCollectionCompanionAfterFile(
+                  change,
+                  await companionRename()
+                ),
+            },
             slug: p.collectionName,
             collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
@@ -2200,12 +2293,12 @@ async function writerSaveOf(change: WriterChange): Promise<
 }
 
 /**
- * Why a collection's save goes to the push rather than its migration file (`PushReason`), asked
- * at most once: a translated collection, or one turning translation on or off, whose push carries
- * its values across the change; and a change reaching a relation's storage
- * (`reachesRelationStorage`), which the push plans from the live table, where the file alone,
- * written from the newest snapshot, does not. The one answer for the road a save takes and for the
- * saves whose moves are refused.
+ * Why a collection's save that moves fields would not keep their values through its migration
+ * file (`PushReason`), asked at most once: a translated collection, or one turning translation on
+ * or off, whose moves wait for the saves that move each language's row; or a change only the push
+ * applies, judged by the same rule as the road the save takes (`pushCarriesValues`, which
+ * `collectionChangeCarriesValues` asks of a collection with nothing stored per language). The one
+ * answer for the review and the apply, so a move one accepts the other never sends to the push.
  */
 function pushReasonOf(args: {
   adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>;
@@ -2214,23 +2307,30 @@ function pushReasonOf(args: {
   isLocalized: boolean;
   before: readonly FieldDefinition[];
   after: readonly FieldDefinition[];
+  /** The renames the save answers, which keep their columns rather than change them. */
+  renames: readonly BrowserRenameResolution[];
 }): () => Promise<PushReason> {
   let answer: Promise<PushReason> | undefined;
   const ask = async (): Promise<PushReason> => {
     if (args.wasLocalized || args.isLocalized) return "translated";
-    const reaches = await reachesRelationStorage({
-      before: args.before,
-      after: args.after,
+    const { adapter } = args;
+    const carries = await pushCarriesValues({
+      oldFields: args.before,
+      newFields: args.after,
+      wasStored: false,
+      isStored: false,
+      renamed: undefined,
       liveTable: async () =>
         (
-          await introspectLiveSnapshot(
-            args.adapter.getDrizzle(),
-            args.adapter.dialect,
-            [args.tableName]
-          )
+          await introspectLiveSnapshot(adapter.getDrizzle(), adapter.dialect, [
+            args.tableName,
+          ])
         ).tables[0],
+      columnOf: field =>
+        getColumnDescriptor(field, adapter.dialect, "collection"),
+      renames: renamedFieldsOf(args.renames),
     });
-    return reaches ? "carries-values" : null;
+    return carries ? "carries-values" : null;
   };
   return () => (answer ??= ask());
 }
@@ -2248,6 +2348,7 @@ async function reviewedMoves(args: {
   requestedLocalized: boolean | undefined;
   before: readonly FieldDefinition[];
   after: readonly FieldDefinition[];
+  renames: readonly BrowserRenameResolution[];
 }): Promise<readonly FieldMoveRequest[]> {
   const moves = readRequestedMoves(args.body);
   await refuseMovesOffTheFile({
@@ -2260,9 +2361,54 @@ async function reviewedMoves(args: {
       isLocalized: args.requestedLocalized ?? args.wasLocalized,
       before: args.before,
       after: args.after,
+      renames: args.renames,
     }),
   });
   return moves;
+}
+
+/**
+ * The full desired schema a collection's dialog change is planned against: this collection as the
+ * change leaves it, its fields as the apply's first push creates them (`fieldsAsFirstPushed`), and
+ * every other managed table as it is, so drizzle-kit sees them all rather than offering a Single's
+ * or a field group's table as a rename candidate. What the dialog's preview shows, and what a save
+ * that runs its own migration file asks the push's questions of (`refuseUnansweredDialogQuestions`).
+ */
+async function dialogDesiredSchema(args: {
+  slug: string;
+  collection: DynamicCollectionRecord;
+  fields: FieldDefinition[];
+  /** The request's localized flag, when the Builder sent one. */
+  requestedLocalized: boolean | undefined;
+}): Promise<DesiredSchema> {
+  const { slug, collection, fields } = args;
+  const currentFields = (collection.fields ??
+    []) as unknown as FieldDefinition[];
+  const desired = await buildFullDesiredSchema();
+  desired.collections[slug] = {
+    slug,
+    tableName: collection.tableName,
+    // As the apply's first push creates them (`fieldsAsFirstPushed`).
+    fields: fieldsAsFirstPushed({
+      oldFields: currentFields,
+      newFields: fields,
+      entity: collection,
+      requestedLocalized: args.requestedLocalized,
+    }) as DesiredCollection["fields"],
+    // Carry the Draft/Published flag so the desired snapshot has the `status` column.
+    status: collection.status === true,
+    // i18n: the push diff OMITS translatable columns from the main table's desired snapshot (they
+    // live in the companion `_locales` table). The request's flag wins when the Builder sent one,
+    // as the apply prefers it: planning against the persisted flag instead would ask about DDL the
+    // apply is not going to run.
+    localized:
+      args.requestedLocalized ??
+      (collection as { localized?: boolean }).localized === true,
+    // Authored in the Schema Builder: this is the Builder's own save path.
+    builderOwned: true,
+    recordedFields: recordedFieldsOf(collection),
+  };
+  return desired;
 }
 
 /**
@@ -2282,6 +2428,20 @@ async function saveThroughWriter(
      */
     pushWhen?: () => Promise<boolean>;
     /**
+     * What the save does around its own migration file where development runs it rather than the
+     * push: `judge`, the preconditions the push would ask, judged before anything else, the dialog's
+     * questions included; `before`, what is written ahead of the file (a field leaving
+     * translation's archive), once the questions are answered and the writer's own checks have
+     * passed (`beforeWrite`); `after`, what the file does not
+     * reach, brought in step once it ran (a translations table). A failure of `after` leaves the
+     * file recorded applied, as the database stands as it says.
+     */
+    fileRoad?: {
+      judge?: () => Promise<void>;
+      before: () => Promise<void>;
+      after: () => Promise<void>;
+    };
+    /**
      * The caller's registry write for the save, given the fields as stored. Where the writer runs
      * the save's file in development, it runs inside the last file's transaction, after its ledger
      * row, so a failed write leaves the save as it was (`inLastTransaction`); elsewhere the caller
@@ -2293,6 +2453,12 @@ async function saveThroughWriter(
      * caller does after an apply, given the fields the row recorded.
      */
     settled?: (fields: FieldDefinition[]) => void;
+    /**
+     * The questions the push asks before it changes anything, asked where the save's file rather
+     * than the push carries the change, before anything is written: a dialog's request that leaves
+     * one unanswered is refused as the push refuses it (`refuseUnansweredDialogQuestions`).
+     */
+    questions?: () => Promise<void>;
   }
 ): Promise<
   | {
@@ -2311,6 +2477,16 @@ async function saveThroughWriter(
     change.appliedBy !== undefined &&
     prepared.deps.applies &&
     (change.pushWhen === undefined || (await change.pushWhen()));
+  // In the push's order, before anything is written: the change's preconditions first, which say
+  // why a change cannot be made at all; then the push's questions; then the writer's own checks
+  // (its history, its plan, the translations table's drift); and only once all have passed, what
+  // the file road writes ahead of its file (a field leaving translation's archive), so a save
+  // refused by any of them leaves no archive rows behind (`beforeWrite`).
+  const runsFile = prepared.deps.applies && !viaPush;
+  if (runsFile) await change.fileRoad?.judge?.();
+  if (!viaPush) await change.questions?.();
+  const archiving = runsFile ? change.fileRoad?.before : undefined;
+  const beforeWrite = archiving === undefined ? {} : { beforeWrite: archiving };
   // Loaded here, where a save runs: the writer brings the migration generator
   // and runner, which a request that writes no field change never needs.
   const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([
@@ -2326,6 +2502,7 @@ async function saveThroughWriter(
       ? { appliedBy: change.appliedBy }
       : inFile
         ? {
+            ...beforeWrite,
             inLastTransaction: () => registry(prepared.fields),
             // A file that stops part way is settled to what of it applied: the row then records
             // the fields as far as the database holds them.
@@ -2339,8 +2516,9 @@ async function saveThroughWriter(
               change.settled?.(applied);
             },
           }
-        : {}
+        : beforeWrite
   );
+  if (runsFile) await change.fileRoad?.after();
   return {
     fields: prepared.fields,
     applied: result.applied,
