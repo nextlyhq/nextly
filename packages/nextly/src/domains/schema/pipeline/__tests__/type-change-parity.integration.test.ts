@@ -5,11 +5,13 @@
  * either rule fails here. The Builder's
  * comes from the per-value judge its save asks before anything runs (`judgeFieldTypeChanges`);
  * `db:sync`'s from the rule the real pipeline hands its classifier for a code-first apply
- * (`judgeConversion`), captured as the classifier receives it: the repair rule, and on SQLite that
- * same per-value judge beside it, asked with the fields the registry records for the entity.
+ * (`judgeConversion`), captured as the classifier receives it: the repair rule, and that same
+ * per-value judge beside it on every database, asked with the fields the registry records for the
+ * entity.
  *
  * Over the changes both rules judge: text to number, a long text to a short one, a number's width,
- * text to a checkbox and text to a date (`CASES`, which says why each difference is there).
+ * text to a checkbox and text to a date, a list or JSON to text, a number to text, and text to a
+ * unique email (`CASES`, which says why each difference is there).
  *
  * Against real databases: SQLite in memory, and PostgreSQL and MySQL where their URLs are set,
  * each in a table of this file's own prefix.
@@ -101,8 +103,15 @@ const agree = (verdict: Verdict): Pinned => ({
  *   and names no row; the Builder's judge reads each value, so a column whose every value converts
  *   goes ahead, and one holding a value that does not names its row.
  * - A value the Builder reads in a new form no save writes yet is blocked by it on every database
- *   (`needs-rewrite`): a stored "true" read as a checkbox, an ISO text read as a date. Only a text
- *   that is a number's canonical writing, or a value whose text is its reading, goes ahead.
+ *   (`needs-rewrite`): a stored "true" read as a checkbox, an ISO text read as a date, a list's or
+ *   JSON's writing read as a text. Only a text that is a number's canonical writing, or a value
+ *   whose text is its reading, goes ahead.
+ * - db:sync asks the Builder's judge on PostgreSQL and MySQL too, so where its column rule finds a
+ *   change safe and the Builder's judge does not, db:sync refuses it as well: two texts a unique
+ *   column's MySQL collation holds as one ("a@b.co" and "A@b.co").
+ * - A number becoming a text is safe for the Builder on every database, and blocked by db:sync:
+ *   on PostgreSQL and MySQL as no conversion Nextly runs, on SQLite naming each row. Pinned as it
+ *   stands today; the push converting such a pair is later work.
  */
 const CASES: ParityCase[] = [
   {
@@ -173,6 +182,52 @@ const CASES: ParityCase[] = [
       sqlite: agree(v("blocked", "r1", "r2")),
       postgresql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
       mysql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
+    },
+  },
+  {
+    name: "a list to text, one item and an empty list",
+    from: { type: "chips" },
+    to: { type: "text" },
+    values: { r1: '["a"]', r2: "[]" },
+    pinned: {
+      // Both are kept as text on SQLite, so db:sync plans no type change there.
+      sqlite: { builder: v("blocked", "r1", "r2"), sync: null },
+      postgresql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
+      mysql: { builder: v("blocked", "r1", "r2"), sync: v("blocked") },
+    },
+  },
+  {
+    name: "JSON to text, an object",
+    from: { type: "json" },
+    to: { type: "text" },
+    values: { r1: '{"a":1}' },
+    pinned: {
+      sqlite: { builder: v("safe"), sync: null },
+      postgresql: { builder: v("blocked", "r1"), sync: v("blocked") },
+      mysql: { builder: v("blocked", "r1"), sync: v("blocked") },
+    },
+  },
+  {
+    name: "a number to text",
+    from: { type: "number" },
+    to: { type: "text" },
+    values: { r1: "7", r2: "12" },
+    pinned: {
+      sqlite: { builder: v("safe"), sync: v("blocked", "r1", "r2") },
+      postgresql: { builder: v("safe"), sync: v("blocked") },
+      mysql: { builder: v("safe"), sync: v("blocked") },
+    },
+  },
+  {
+    name: "text to a unique email, two values equal but for case",
+    from: { type: "text" },
+    to: { type: "email", unique: true },
+    values: { r1: "a@b.co", r2: "A@b.co" },
+    pinned: {
+      // Only MySQL's collation holds the two as one value; elsewhere the column type is unchanged.
+      sqlite: { builder: v("safe"), sync: null },
+      postgresql: { builder: v("safe"), sync: null },
+      mysql: agree(v("blocked", "r1", "r2")),
     },
   },
 ];

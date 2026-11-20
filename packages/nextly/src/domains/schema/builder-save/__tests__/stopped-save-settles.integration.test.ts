@@ -19,9 +19,10 @@
  * `SQLITE_PUSH_KEEPS_PART_WAY` says which, and moves its cases between the two. A save that rolled
  * back whole never reaches the judgement of what applied at all.
  *
- * A collection's update through the push settles the same way: the collection metadata service
- * hands the writer its registry write for the settle, with the fields that applied, and brings
- * this process's running shape to them, so a write and a read through the API reach what landed.
+ * A collection's update settles the same way on either of its roads, its own file or the push (an
+ * update filling the entries already there keeps the push): the collection metadata service hands
+ * the writer its registry write for the settle, with the fields that applied, and brings this
+ * process's running shape to them, so a write and a read through the API reach what landed.
  *
  * Where what the settle writes fails, the save is left as it stopped, its record that it is in
  * progress kept, and the failure that stopped it is still the one reported, the settle's after it.
@@ -236,6 +237,51 @@ function keepsPartWay(dialect: TestDialect, path: SavePath): boolean {
   );
 }
 
+/**
+ * The admin's update of a collection that the development push applies: each field the save adds
+ * states a default, which fills the entries already there, and an update that fills keeps the push
+ * (`updateRunsFile`).
+ */
+function pushedUpdate(): SavePath {
+  // The fields the collection was made with, so the save tells the ones it adds.
+  let made = new Set<string>();
+  return {
+    name: "a collection's update (the push)",
+    kind: "collection",
+    slug: "sts_notes",
+    table: "dc_sts_notes",
+    registry: "dynamic_collections",
+    push: true,
+    create: async (_t, fields) => {
+      made = new Set(fields.map(field => String(field.name)));
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "sts_notes", label: "sts_notes", fields }
+      );
+    },
+    save: (_t, fields) =>
+      dispatchCollections(
+        {} as ServiceContainer,
+        "updateCollection",
+        { collectionName: "sts_notes" },
+        {
+          fields: fields.map(field =>
+            made.has(String(field.name)) ? field : { ...field, default: "x" }
+          ),
+        }
+      ),
+    store: async (t, values) => {
+      await t.nextly.create({ collection: "sts_notes", data: values } as never);
+    },
+    read: async t => {
+      const found = await t.nextly.find({ collection: "sts_notes" } as never);
+      return (found.items[0] ?? {}) as Record<string, unknown>;
+    },
+  };
+}
+
 const PATHS: readonly SavePath[] = [
   {
     name: "a collection's Builder apply",
@@ -362,36 +408,36 @@ const PATHS: readonly SavePath[] = [
       >,
   },
   {
-    // The admin's update of a collection, which the development push applies.
-    name: "a collection's update (the push)",
+    // The admin's update of an untranslated collection, adding fields: its own file.
+    name: "a collection's update (its migration file)",
     kind: "collection",
-    slug: "sts_notes",
-    table: "dc_sts_notes",
+    slug: "sts_items",
+    table: "dc_sts_items",
     registry: "dynamic_collections",
-    push: true,
     create: async (_t, fields) => {
       await dispatchCollections(
         {} as ServiceContainer,
         "createCollection",
         {},
-        { name: "sts_notes", label: "sts_notes", fields }
+        { name: "sts_items", label: "sts_items", fields }
       );
     },
     save: (_t, fields) =>
       dispatchCollections(
         {} as ServiceContainer,
         "updateCollection",
-        { collectionName: "sts_notes" },
+        { collectionName: "sts_items" },
         { fields }
       ),
     store: async (t, values) => {
-      await t.nextly.create({ collection: "sts_notes", data: values } as never);
+      await t.nextly.create({ collection: "sts_items", data: values } as never);
     },
     read: async t => {
-      const found = await t.nextly.find({ collection: "sts_notes" } as never);
+      const found = await t.nextly.find({ collection: "sts_items" } as never);
       return (found.items[0] ?? {}) as Record<string, unknown>;
     },
   },
+  pushedUpdate(),
 ];
 
 /**
@@ -933,7 +979,13 @@ describe.each(getConfiguredTestDialects())(
               "updateCollection",
               { collectionName: path.slug },
               {
-                fields: [text("heading"), text("alpha"), text("beta")],
+                // Each added field states a default, which fills the entries already there and
+                // keeps the update on the push, as `pushedUpdate`'s saves do.
+                fields: [
+                  text("heading"),
+                  { ...text("alpha"), default: "x" },
+                  { ...text("beta"), default: "x" },
+                ],
                 useAsTitle: "beta",
               }
             )

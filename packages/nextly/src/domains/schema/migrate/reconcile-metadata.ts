@@ -61,10 +61,7 @@ import type {
   EntitySettingsRecord,
   SettingsEntityKind,
 } from "../migrate-create/entity-settings";
-import {
-  assertSchemaLockHeld,
-  isSchemaLockLost,
-} from "../pipeline/schema-lock";
+import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 import {
   inRegistryStep,
   newestAppliedAppMigration,
@@ -87,6 +84,7 @@ import {
 } from "./pending-entities";
 import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
+import { endsTheRun, reachStopPoint } from "./stop-points";
 
 /**
  * The logging surface a CALLER supplies, structural so the CLI's own context
@@ -488,6 +486,8 @@ export async function reconcileMigrationMetadata(
       );
     }
   }
+  // The registry write has committed (`stop-points.ts`).
+  await reachStopPoint("registry written");
   const leftovers = await leftoversOfDroppedEntities(deps);
   return {
     ...swept.result,
@@ -587,9 +587,10 @@ async function leftoversOfDroppedEntities(
         : { dropTranslations: deps.dropLeftoverTranslations }),
     });
   } catch (error) {
-    // A run that lost the schema lock stops; anything else costs only this
-    // removal, which the next run tries again, and is owed to it.
-    if (isSchemaLockLost(error)) throw error;
+    // A run that lost the schema lock stops, as does a test's stop at a point
+    // (`stop-points.ts`); anything else costs only this removal, which the
+    // next run tries again, and is owed to it.
+    if (endsTheRun(error)) throw error;
     logger.warn(
       `Could not remove what deleted entities left: ${
         error instanceof Error ? error.message : String(error)
