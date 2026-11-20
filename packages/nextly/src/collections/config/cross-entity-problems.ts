@@ -130,7 +130,6 @@ export function crossEntityProblems(
     .filter(({ single }) => {
       const entity = single as { publicAddress?: unknown; fields?: unknown };
       return (
-        typeof (single as { slug?: unknown }).slug === "string" &&
         declaredPublicAddressProblem(
           entity.publicAddress,
           "single",
@@ -140,10 +139,19 @@ export function crossEntityProblems(
         ) === null
       );
     });
+  // Named by its slug, or by its place where its slug is not a string: that is its own problem,
+  // reported beside this one.
   for (const { clash, sentence } of singleAddressClashes(
-    addressed.map(
-      ({ single }) => single as { slug: string; publicAddress?: unknown }
-    )
+    addressed.map(({ single, index }) => {
+      const { slug, publicAddress } = single as {
+        slug?: unknown;
+        publicAddress?: unknown;
+      };
+      return {
+        slug: typeof slug === "string" ? slug : `singles[${index}]`,
+        publicAddress,
+      };
+    })
   )) {
     const second = addressed.filter(
       ({ single }) =>

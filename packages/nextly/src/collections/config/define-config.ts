@@ -6,9 +6,12 @@
  * singles, and configuring TypeScript/database output paths.
  *
  * Type definitions and the pure sanitization step live in
- * `src/shared/types/config.ts`. This file keeps the validation logic
- * (duplicate slugs, field groups placed in a cycle, user-field constraints)
- * and re-exports the types for backwards compatibility.
+ * `src/shared/types/config.ts`. This file keeps the validation that throws
+ * (user-field constraints, localization, workflows) and re-exports the types
+ * for backwards compatibility. The rules across entities (one slug each, one
+ * table per field group, one Single per address, no cycle among field groups)
+ * are judged where the configuration is loaded or the site starts
+ * (`crossEntityProblems`), with every other problem in it.
  *
  * @module collections/config/define-config
  * @since 1.0.0
@@ -77,9 +80,8 @@ export { sanitizeConfig } from "../../shared/types/config";
 /**
  * Validate a raw Nextly configuration.
  *
- * Runs slug uniqueness checks across collections/singles/components,
- * field groups placed in a cycle (at any depth), and user-field constraints.
- * Returns nothing — throws on validation failure.
+ * Judges user-field constraints, localization and workflows, and throws on a
+ * failure. The rules across entities are not judged here (see the module note).
  */
 function validateNextlyConfig(config: NextlyConfig): void {
   // The rules across entities (one slug each, one table per field group, one Single per address,
@@ -183,11 +185,13 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
  * and returns a fully normalized config object.
  *
  * **Validation:**
- * - Checks for duplicate collection slugs
- * - Checks for duplicate single slugs
- * - Checks for slug conflicts between collections and singles
- * - Refuses field groups placed in a cycle; nesting has no depth limit
- * - Validates user-field constraints
+ * - Validates user-field constraints, localization and workflows (throws)
+ * - Does NOT judge the rules across entities: duplicate slugs, a field
+ *   group's table collision, two Singles at one address and field groups
+ *   placed in a cycle are reported, with every other problem, where the
+ *   configuration is loaded (every command) or the site starts, which refuse
+ *   it. To judge a configuration without loading it, call
+ *   `configurationProblems`.
  *
  * **Defaults Applied (via sanitizeConfig):**
  * - `collections`: `[]`
@@ -203,7 +207,7 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
  *
  * @param config - The Nextly configuration object
  * @returns Normalized configuration with all defaults applied
- * @throws Error if configuration is invalid (e.g., duplicate slugs)
+ * @throws Error if a rule it judges fails (e.g., an invalid users block)
  */
 export function defineConfig<
   // `| []` asks for the list as a tuple, so a plugin typed `any` stays one element rather than

@@ -12,6 +12,7 @@
  * @module plugins/schema/validate-relations
  */
 
+import { typeHasNestedFields } from "../../collections/fields/guards";
 import type { NextlyServiceConfig } from "../../di/register";
 import type { PluginDefinition } from "../plugin-context";
 import {
@@ -27,27 +28,15 @@ interface RelationField {
   name?: string;
   type?: string;
   relationTo?: string | string[];
-  /** The fields a container field (`group`, `repeater`, a layout field) holds. */
+  /** The fields a container field holds (`typeHasNestedFields`). */
   fields?: RelationField[];
-  /** The tabs a `tabs` field holds, each with its fields. */
-  tabs?: Array<{ fields?: RelationField[] }>;
 }
 
 /**
- * The field types that hold other fields of the entity's own, under `fields` (and `tabs` under
- * `tabs`). A plugin's type may carry a `fields` option of its own, which is not a field list, so
- * only these are walked.
+ * Every relationship field among `fields`, those nested in a container field included. Only the
+ * types the field guards name as holding fields (`typeHasNestedFields`) are walked: a plugin's
+ * type may carry a `fields` option of its own, which is not a field list.
  */
-const CONTAINER_TYPES: ReadonlySet<string> = new Set([
-  "group",
-  "repeater",
-  "array",
-  "collapsible",
-  "row",
-  "tabs",
-]);
-
-/** Every relationship field among `fields`, those nested in a container field included. */
 function relationFieldsOf(
   fields: readonly RelationField[] | undefined
 ): RelationField[] {
@@ -55,11 +44,8 @@ function relationFieldsOf(
   for (const field of fields ?? []) {
     if (field.type === "relationship") {
       found.push(field);
-    } else if (field.type !== undefined && CONTAINER_TYPES.has(field.type)) {
+    } else if (field.type !== undefined && typeHasNestedFields(field.type)) {
       found.push(...relationFieldsOf(field.fields));
-      for (const tab of field.tabs ?? []) {
-        found.push(...relationFieldsOf(tab.fields));
-      }
     }
   }
   return found;
@@ -100,8 +86,8 @@ export function collectUnresolvedRelationTargets(
 
   const unresolved: UnresolvedRelation[] = [];
   for (const entity of entities) {
-    // Nested ones too: a relationship inside a group, a repeater or a layout field names its
-    // target as one at the top does.
+    // Nested ones too: a relationship inside a group or a repeater names its target as one at
+    // the top does.
     for (const fieldEntry of relationFieldsOf(entity.fields)) {
       if (fieldEntry.relationTo == null) {
         continue;
