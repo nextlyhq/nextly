@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { grantTo } from "../../../__tests__/fixtures/permission-holders";
+import { container } from "../../../di/container";
 import {
   getConfiguredTestDialects,
   type TestDialect,
@@ -173,9 +174,12 @@ function inValues(where: unknown, column: string): unknown[] {
   );
 }
 
-/** The cache revalidator this install flushes through, the one a release's flush reaches. */
-const revalidatorOf = (t: TestNextly): CacheRevalidator =>
-  t.getService("cacheRevalidator") as CacheRevalidator;
+/**
+ * The cache revalidator this install flushes through, the one a release's flush reaches: read
+ * from the container, as the product code reads it. `t` names the install it belongs to.
+ */
+const revalidatorOf = (_t: TestNextly): CacheRevalidator =>
+  container.get<CacheRevalidator>("cacheRevalidator");
 
 /**
  * What the cache revalidator is asked to flush from here on, as text: the flush itself, so a
