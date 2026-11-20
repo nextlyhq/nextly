@@ -149,11 +149,13 @@ import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
   draftSlotParts,
   draftsKeptByPart,
+  partKeysOf,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
 import {
   judgeSharedValues,
   type LanguageOutcome,
+  languageChangesAlone,
   languagesGoingLiveAsStored,
   languagesTold,
   type LiveSharedDocument,
@@ -162,6 +164,7 @@ import {
   type PendingChange,
   pendingChangesByLanguage,
   pendingChangesInSaveOrder,
+  type PendingStructure,
   type PublishableShape,
   promotionBlockers,
   promotionIssuesOf,
@@ -221,7 +224,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { liveSharedSingle } from "./live-shared-single";
+import { liveSharedSingle, withLiveStructures } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -3001,16 +3004,36 @@ export class SinglePublishAllService extends BaseService {
   ): Promise<PendingChange[]> {
     if (!plan.draftsEligible) return [];
     const { parts } = plan;
+    // A language's held text inside a repeater or group is laid on the Single's live structure in
+    // that language, read only where a change needs it.
+    const structure: PendingStructure = {
+      keys: await partKeysOf(plan.fieldConfigs),
+      liveIn: locale =>
+        withLiveStructures(
+          tx,
+          this.adapter,
+          plan.existingDoc,
+          plan.companion,
+          locale
+        ),
+    };
     if (parts === undefined) {
-      return pendingChangesInSaveOrder(tx, this.workingDraftRef(plan));
+      return pendingChangesInSaveOrder(
+        tx,
+        this.workingDraftRef(plan),
+        structure
+      );
     }
     // Languages moved without the shared part promote their own changes alone. Kept by part, a
     // language's change as stored holds its own values only, where the save-order read lays the
     // shared draft's under it, which would put the shared changes live without the shared part.
     if (!parts.shared && draftsKeptByPart()) {
       return (
-        await new VersionsRepository(tx).findAllWorkingDrafts(
-          this.workingDraftRef(plan)
+        await languageChangesAlone(
+          await new VersionsRepository(tx).findAllWorkingDrafts(
+            this.workingDraftRef(plan)
+          ),
+          structure
         )
       ).filter(
         change => change.locale !== null && parts.locales.has(change.locale)
@@ -3019,7 +3042,7 @@ export class SinglePublishAllService extends BaseService {
     // Each chosen language's change, and the shared part's own (kept under no language) only
     // where the shared part moves.
     return (
-      await pendingChangesInSaveOrder(tx, this.workingDraftRef(plan))
+      await pendingChangesInSaveOrder(tx, this.workingDraftRef(plan), structure)
     ).filter(change => movesPart(parts, change.locale));
   }
 

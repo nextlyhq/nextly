@@ -344,12 +344,14 @@ export async function saveRewrittenDraft(
   const patched = { ...slot.snapshot, [field]: shaped[field] };
   let snapshot = patched;
   let replaces = slot.snapshot;
+  const keys = await partKeysOf(draft.fields);
   if (draftsKeptByPart()) {
     // The whole document the drafts describe in this part's language, as its
     // next read assembles it, with and without the new value.
     const whole = combinedDraft(
       draft.liveAfter,
-      await findPartDrafts(new VersionsRepository(tx), ref, slot.locale)
+      await findPartDrafts(new VersionsRepository(tx), ref, slot.locale),
+      { keys, live: draft.liveAfter }
     );
     snapshot = { ...whole, [field]: shaped[field] };
     replaces = { ...whole, [field]: slot.snapshot[field] };
@@ -377,7 +379,8 @@ export async function saveRewrittenDraft(
     changedParts: partsWritten({
       locale: slot.locale,
       touched: new Set([field]),
-      keys: await partKeysOf(draft.fields),
+      keys,
+      values: { before: replaces, after: snapshot },
     }),
     maxPerDoc: draft.maxPerDoc,
     storeWorkingDraft: repo =>

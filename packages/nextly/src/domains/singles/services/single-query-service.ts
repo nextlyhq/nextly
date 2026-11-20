@@ -208,6 +208,7 @@ import {
   draftsKeptByPart,
   findPartDrafts,
   holdsPendingChange,
+  partKeysOf,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
@@ -961,9 +962,16 @@ export class SingleQueryService extends BaseService {
             _sharedChangesPending: parts.shared !== undefined,
           }
         : document;
+    // A structured field's held share is laid over the Single as this read
+    // assembled it, in the language it reads.
     const workingDraft = parts
       ? holdsPendingChange(parts)
-        ? { snapshot: combinedDraft({}, parts) }
+        ? {
+            snapshot: combinedDraft({}, parts, {
+              keys: await partKeysOf(singleMeta.fields),
+              live: doc,
+            }),
+          }
         : undefined
       : await draftRepo.findWorkingDraft(draftRef, view.draftLocale);
     if (!workingDraft) return { doc: withSharedSignal(doc) };

@@ -24,7 +24,13 @@ import { readComponentSubtrees } from "../../field-groups/read-component-subtree
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import { populateCompanionFields } from "../../i18n/companion-join";
 import { perLanguageFieldNames } from "../../i18n/per-language-fields";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
+import {
+  cachedCompanionReadiness,
+  type ReadinessScope,
+} from "../../i18n/runtime/companion-readiness";
 import {
   asIdSet,
   sharedFieldNames,
@@ -34,6 +40,41 @@ import {
   resolveComponentFieldMap,
   tagComponentTypes,
 } from "../../versions/tag-component-types";
+
+/**
+ * `row`, the Single's main row, with each repeater or group that keeps one
+ * structure across languages read in `locale` alone: its structure with that
+ * language's own text laid on it, no other language's filling in. What a held
+ * share of such a field is laid over, so a publish writes back the text the
+ * language holds and never another's in its place. Read on the caller's
+ * transaction; `scope` is what the companion's readiness was settled on.
+ */
+export async function withLiveStructures(
+  tx: Pick<TransactionContext, "getDrizzle">,
+  scope: ReadinessScope,
+  row: Record<string, unknown>,
+  companion: CompanionSchema | null,
+  locale: string
+): Promise<Record<string, unknown>> {
+  const structured =
+    companion?.localizedFields.filter(f => f.sharedStructure) ?? [];
+  if (!companion || structured.length === 0) return row;
+  const read: Record<string, unknown> = {
+    id: row.id,
+    ...Object.fromEntries(
+      structured.map(f => [f.name, row[f.column] ?? row[f.name]])
+    ),
+  };
+  await populateCompanionFields({
+    db: tx.getDrizzle<Parameters<typeof populateCompanionFields>[0]["db"]>(),
+    companionTable: companion.table,
+    localizedFields: structured,
+    rows: [read],
+    localeChain: [locale],
+    readiness: cachedCompanionReadiness(scope, companion.companionTableName),
+  });
+  return { ...row, ...read };
+}
 
 /**
  * Read the Single's live document under the row lock the caller holds.

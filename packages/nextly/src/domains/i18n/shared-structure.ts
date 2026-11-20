@@ -23,6 +23,8 @@
  * @module domains/i18n/shared-structure
  */
 
+import { isDeepStrictEqual } from "node:util";
+
 import { parsedValue } from "../../shared/lib/json-column-value";
 import { isPlainObject as isPlainRecord } from "../../shared/lib/plain-copy";
 
@@ -325,6 +327,59 @@ function pruneLevel(
     changed ||= nested.changed;
   }
   return { overlay: out, changed };
+}
+
+/**
+ * Whether `value`, held for one language, is the container's whole value rather than the text
+ * alone: a repeater's rows (its text is keyed by row id, never a list), or a group holding a value
+ * that is not text. A group holding text alone reads the same either way, and is the text.
+ */
+export function isWholeValue(
+  value: unknown,
+  shape: SharedStructureShape
+): boolean {
+  const parsed = valueOf(value);
+  if (shape.kind === "repeater") return Array.isArray(parsed);
+  if (!isPlainRecord(parsed)) return false;
+  const text = new Set([...shape.texts, ...Object.keys(shape.inner)]);
+  return Object.keys(parsed).some(key => !text.has(key));
+}
+
+/** Whether `value`, a container's value, holds any translatable text at any depth. */
+export function holdsText(
+  value: unknown,
+  shape: SharedStructureShape
+): boolean {
+  const { overlay } = splitSharedStructure(value, shape);
+  return overlay !== undefined && !sameShare(overlay, {});
+}
+
+/**
+ * Whether two shares of a container (two structures, or two overlays) hold the same: JSON text
+ * read (the stored value alone; the text values inside are values, never JSON), and a blank value
+ * read as an absent one at every depth, since both read as nothing there (or nothing translated).
+ * The one comparison a held share is judged changed by and an upgrade judges languages alike by.
+ */
+export function sameShare(a: unknown, b: unknown): boolean {
+  return isDeepStrictEqual(
+    withoutBlanks(valueOf(a)),
+    withoutBlanks(valueOf(b))
+  );
+}
+
+/**
+ * `value` with every blank value left out, at every depth, and an object left with nothing in it
+ * left out too: a row's text entry holding only blanks reads as no entry, as a split leaves none.
+ */
+function withoutBlanks(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutBlanks);
+  if (!isPlainRecord(value)) return isBlank(value) ? undefined : value;
+  const out: Record<string, unknown> = {};
+  for (const [key, inner] of Object.entries(value)) {
+    const kept = withoutBlanks(inner);
+    if (kept !== undefined) out[key] = kept;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** `value` in the representation `like` came in: JSON text where `like` was text. */

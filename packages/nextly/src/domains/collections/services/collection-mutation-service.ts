@@ -412,6 +412,7 @@ import {
   nameVerdict,
   type PendingChange,
   pendingChangesInSaveOrder,
+  type PendingStructure,
   promotionBlockers,
   promotionIssuesOf,
   type PublishAllBlocker,
@@ -10399,6 +10400,32 @@ export class CollectionMutationService extends BaseService {
    * longer configures under its own name rather than the default it would
    * resolve to, whose row would then be read as that language's.
    */
+  /**
+   * Where a publish's pending changes find the rest of a structured field a
+   * language holds text of (`PendingStructure`): the entry's part keys, and
+   * its live document in a language, read on the publish's transaction only
+   * for a change that needs it.
+   */
+  private async pendingStructureOf(
+    tx: TransactionContext,
+    args: {
+      row: Record<string, unknown>;
+      collectionName: string;
+      entryId: string;
+      tableName: string;
+      fields: FieldDefinition[];
+      manyToManyFields: FieldDefinition[];
+    }
+  ): Promise<PendingStructure> {
+    return {
+      keys: await partKeysOf(args.fields),
+      liveIn: async locale =>
+        (
+          await this.languageDocumentsOnTx(tx, { ...args, locales: [locale] })
+        ).get(locale) ?? {},
+    };
+  }
+
   private async languageDocumentsOnTx(
     tx: TransactionContext,
     args: {
@@ -11486,7 +11513,20 @@ export class CollectionMutationService extends BaseService {
         // A publish of chosen parts promotes only theirs: each chosen language's change, and the
         // shared part's own (kept under no language) only when the shared part moves.
         const pending = promotion
-          ? (await pendingChangesInSaveOrder(tx, draftRef)).filter(change =>
+          ? (
+              await pendingChangesInSaveOrder(
+                tx,
+                draftRef,
+                await this.pendingStructureOf(tx, {
+                  row: preImageRow,
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  tableName,
+                  fields,
+                  manyToManyFields,
+                })
+              )
+            ).filter(change =>
               change.locale === null
                 ? movesShared(params.parts)
                 : movesLanguage(params.parts, change.locale)
@@ -12970,8 +13010,9 @@ export class CollectionMutationService extends BaseService {
       collectionName: args.collectionName,
       entryId: args.entryId,
     });
+    // Only which languages are pending is read here, never their values.
     const pending = args.pendingFrom
-      ? await pendingChangesInSaveOrder(reader, args.pendingFrom)
+      ? await pendingChangesInSaveOrder(reader, args.pendingFrom, null)
       : [];
     return this.languagesPublishMoves({
       prior,
@@ -13626,7 +13667,20 @@ export class CollectionMutationService extends BaseService {
     });
     // Only the chosen parts' changes, as the publish promotes them.
     const pending = promotion
-      ? (await pendingChangesInSaveOrder(tx, draftRef)).filter(change =>
+      ? (
+          await pendingChangesInSaveOrder(
+            tx,
+            draftRef,
+            await this.pendingStructureOf(tx, {
+              row,
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              tableName,
+              fields,
+              manyToManyFields,
+            })
+          )
+        ).filter(change =>
           change.locale === null
             ? movesShared(params.parts)
             : movesLanguage(params.parts, change.locale)
@@ -16018,11 +16072,15 @@ export class CollectionMutationService extends BaseService {
     const parts = byPart
       ? await findPartDrafts(draftRepo, draftRef, draftLocale)
       : undefined;
+    // Which part each key belongs to, read once for the document the drafts
+    // describe and for how this save is split back into them.
+    const keys = await partKeysOf(fields);
     const existingDraft = parts
       ? holdsPendingChange(parts)
-        ? {
-            snapshot: combinedDraft(await this.liveDocumentOf(tx, ctx), parts),
-          }
+        ? await (async () => {
+            const live = await this.liveDocumentOf(tx, ctx);
+            return { snapshot: combinedDraft(live, parts, { keys, live }) };
+          })()
         : undefined
       : await draftRepo.findWorkingDraft(draftRef, draftLocale);
     // The fields this save actually touched, at the assembled read
@@ -16101,7 +16159,9 @@ export class CollectionMutationService extends BaseService {
     // the parts its version records and, kept by part, the store that splits
     // the document and the history that judges every language's review.
     const touched = keysSaveSets(ctx);
-    const keys = await partKeysOf(fields);
+    // The document before and after the save, which a structured field's
+    // shares are judged by: one key holds both its structure and its text.
+    const values = { before: replaces, after: draftDocument };
     const byParts =
       parts && draftLocale !== SHARED_DRAFT_SLOT
         ? {
@@ -16135,7 +16195,12 @@ export class CollectionMutationService extends BaseService {
       ...(params.restoredFrom ? { restoredFrom: params.restoredFrom } : {}),
       // The parts this save held values in: its language's, the shared
       // part's, or the one part of a document without languages.
-      changedParts: partsWritten({ locale: draftLocale, touched, keys }),
+      changedParts: partsWritten({
+        locale: draftLocale,
+        touched,
+        keys,
+        values,
+      }),
       maxPerDoc: versionsConfig?.maxPerDoc,
       ...(byParts
         ? {
@@ -16144,6 +16209,7 @@ export class CollectionMutationService extends BaseService {
                 ref: draftRef,
                 locale: byParts.locale,
                 document: draftDocument,
+                before: replaces,
                 touched: byParts.touched,
                 keys: byParts.keys,
                 existing: byParts.parts,
@@ -16178,7 +16244,7 @@ export class CollectionMutationService extends BaseService {
       // A change to the shared draft goes live with any language's publish,
       // so every language's review is judged on the shared values it holds.
       byParts
-        ? translatedWhenSharedChanged(byParts.touched, byParts.keys)
+        ? translatedWhenSharedChanged(byParts.touched, byParts.keys, values)
         : null
     );
 
@@ -18448,9 +18514,16 @@ export class CollectionMutationService extends BaseService {
                   promotesShared
                 )
               : undefined;
+          // A structured field's held share is laid over the live document
+          // read before this write, in the language it publishes.
           const workingDraft = promoteParts
             ? holdsPendingChange(promoteParts)
-              ? { snapshot: combinedDraft({}, promoteParts) }
+              ? {
+                  snapshot: combinedDraft({}, promoteParts, {
+                    keys: await partKeysOf(fields),
+                    live: previousDocument ?? {},
+                  }),
+                }
               : undefined
             : await promoteRepo.findWorkingDraft(promoteRef, draftLocaleKey);
           if (workingDraft) {
@@ -19031,6 +19104,13 @@ export class CollectionMutationService extends BaseService {
                 ? (localizedUpdate?.writeLocale ??
                   this.componentSnapshotLocale(params.locale))
                 : null;
+              // Read once: the version records it, and a structured field's
+              // shares are judged on it against the document it replaced.
+              const snapshotParts = await this.snapshotPartsFor(
+                documentParts,
+                fields,
+                tx
+              );
               const { versionNo } = await captureInTx(tx, this.versionCapture, {
                 // An update: a save that changes nothing records nothing.
                 onlyIfChanged: true,
@@ -19047,7 +19127,7 @@ export class CollectionMutationService extends BaseService {
                 // its own document says draft.
                 contentStatus: savedStatus,
                 // See the create path: tagged for the snapshot only.
-                parts: await this.snapshotPartsFor(documentParts, fields, tx),
+                parts: snapshotParts,
                 createdBy: params.user?.id ?? null,
                 // Labelled with a locale only when locale-specific state was
                 // actually captured. A migrated localized collection routes
@@ -19093,6 +19173,11 @@ export class CollectionMutationService extends BaseService {
                   keys: await partKeysOf(fields, {
                     translated: Boolean(localizedUpdate),
                   }),
+                  // A structured field's structure and text are judged apart.
+                  values: {
+                    before: previousDocument ?? {},
+                    after: assembleDocument(snapshotParts),
+                  },
                   // The language's own status rides its translation row; the
                   // document's is the main row's, which a write in the
                   // default language (or of a document without languages)
@@ -24372,6 +24457,8 @@ export class CollectionMutationService extends BaseService {
                 ),
               }),
               keys: updateKeys,
+              // A structured field's structure and text are judged apart.
+              values: { before: previousDocument, after: updatedDocument },
               // The language's own status rides its translation row; the
               // document's is the main row's, which every language shows.
               statusWritten:

@@ -234,6 +234,7 @@ import {
   draftsKeptByPart,
   findPartDrafts,
   holdsPendingChange,
+  partKeysOf,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
 import { pendingChangeCondition } from "../../versions/pending-change-condition";
@@ -6138,9 +6139,16 @@ export class CollectionQueryService extends BaseService {
             ? await findPartDrafts(draftRepo, draftRef, draftLocale)
             : undefined;
         if (parts) sharedChangesPending = parts.shared !== undefined;
+        // A structured field's held share is laid over the entry as this
+        // read assembled it, in the language it reads.
         const workingDraft = parts
           ? holdsPendingChange(parts)
-            ? { snapshot: combinedDraft({}, parts) }
+            ? {
+                snapshot: combinedDraft({}, parts, {
+                  keys: await partKeysOf(fields),
+                  live: expandedEntry,
+                }),
+              }
             : undefined
           : await draftRepo.findWorkingDraft(draftRef, draftLocale);
         // Mirror the write gate's eligibility check before overlaying: a

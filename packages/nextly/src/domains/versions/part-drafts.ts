@@ -30,6 +30,14 @@ import { SYSTEM_TEXT_FIELD_NAMES } from "../collections/system-text-fields";
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { perLanguageFieldNames } from "../i18n/per-language-fields";
 import { perLanguageStorageEnabled } from "../i18n/per-language-storage";
+import {
+  assembleSharedStructure,
+  sameShare,
+  sharedStructureShape,
+  splitSharedStructure,
+  type SharedStructureShape,
+  type StructuredField,
+} from "../i18n/shared-structure";
 
 import { SHARED_PART_ALONE, type ChangedParts } from "./changed-parts";
 import type {
@@ -55,16 +63,17 @@ export interface PartKeys {
   readonly language: ReadonlySet<string>;
   /** Every other declared field. */
   readonly shared: ReadonlySet<string>;
+  /**
+   * The fields both parts hold a share of: a repeater or group keeping one structure across
+   * languages, by name, with what it translates inside. Its structure (rows, their ids and order,
+   * its shared values) is the shared part's; the text inside, keyed by row id, is each language's.
+   * In neither set above.
+   */
+  readonly structured: ReadonlyMap<string, SharedStructureShape>;
 }
 
-/** What {@link partKeysOf} reads of a field. */
-interface PartField {
-  readonly type: string;
-  readonly name?: string;
-  readonly localized?: boolean;
-  readonly virtual?: boolean;
-  readonly options?: unknown;
-}
+/** What {@link partKeysOf} reads of a field: a container's own fields included. */
+type PartField = StructuredField;
 
 /** Whether a field `addressableFields` reached is one stored under a name. */
 function isNamedPartField(
@@ -91,6 +100,10 @@ function isNamedPartField(
  * group stores its children there, so each child is classified as a top-level
  * field is, and none is left out of both drafts.
  *
+ * A repeater or group of a translated document that translates values inside
+ * keeps one structure across languages, and is held by both parts
+ * (`structured`): its structure by the shared part, its text by each language.
+ *
  * `translated: false` classifies a document whose own fields are stored on
  * its shared row alone (it keeps no translations of its own): only its
  * components, kept per language whatever their parent, are a language's.
@@ -114,12 +127,25 @@ export async function partKeysOf(
   // of the stored field list; a declared one is classified as declared.
   const declared = new Set(named.map(field => field.name));
   const system = SYSTEM_TEXT_FIELD_NAMES.filter(name => !declared.has(name));
+  // The same shape the storage splits the field's value by, so a held value
+  // is split where its live one is stored.
+  const structured = new Map<string, SharedStructureShape>();
+  if (options.translated !== false) {
+    for (const field of named) {
+      if (language.has(field.name)) continue;
+      const shape = sharedStructureShape(field);
+      if (shape) structured.set(field.name, shape);
+    }
+  }
   return {
     language,
     shared: new Set([
-      ...named.map(field => field.name).filter(name => !language.has(name)),
+      ...named
+        .map(field => field.name)
+        .filter(name => !language.has(name) && !structured.has(name)),
       ...system,
     ]),
+    structured,
   };
 }
 
@@ -166,6 +192,39 @@ function touchesPart(
   return [...touched].some(key => part.has(key));
 }
 
+/** A save's document before and after it, which a held share is judged by. */
+export interface SaveValues {
+  /** The document the save replaced: its pending change over the live one, or the live one. */
+  readonly before: Record<string, unknown>;
+  /** The document after the save. */
+  readonly after: Record<string, unknown>;
+}
+
+/**
+ * Which shares of the structured fields a save set it changed: the shared part where a
+ * structure changed (a row added, removed or moved, or a shared value inside), the language
+ * where the text inside did. Judged on the values, since one key holds both: a save that sets the
+ * field in one language sends both shares, and changed only one. Without the values, each field
+ * set counts as changing both.
+ */
+function structuredSharesChanged(
+  touched: ReadonlySet<string>,
+  keys: PartKeys,
+  values: SaveValues | undefined
+): { shared: boolean; language: boolean } {
+  let shared = false;
+  let language = false;
+  for (const [name, shape] of keys.structured) {
+    if (!touched.has(name)) continue;
+    if (!values) return { shared: true, language: true };
+    const before = splitSharedStructure(values.before[name], shape);
+    const after = splitSharedStructure(values.after[name], shape);
+    shared ||= !sameShare(before.structure, after.structure);
+    language ||= !sameShare(before.overlay ?? {}, after.overlay ?? {});
+  }
+  return { shared, language };
+}
+
 /**
  * The parts a write in `locale` that set the keys `touched` changed, as its
  * version records them: the language where the write set one of the
@@ -176,6 +235,10 @@ function touchesPart(
  * shows. A write that set only shared values names no language, though the
  * language's values are in the snapshot it records.
  *
+ * A structured field the write set changed the shared part where its structure
+ * changed and the language where its text did (`values`, the document before
+ * and after the write).
+ *
  * A write under no language is a write of a document kept as one part, which
  * is its shared part.
  */
@@ -183,17 +246,25 @@ export function partsWritten(write: {
   locale: string | null;
   touched: ReadonlySet<string>;
   keys: PartKeys;
+  values?: SaveValues;
   statusWritten?: boolean;
   documentStatusWritten?: boolean;
 }): ChangedParts {
   if (write.locale === null) return SHARED_PART_ALONE;
+  const structured = structuredSharesChanged(
+    write.touched,
+    write.keys,
+    write.values
+  );
   const language =
     write.statusWritten === true ||
+    structured.language ||
     touchesPart(write.touched, write.keys.language);
   return {
     locales: language ? [write.locale] : [],
     shared:
       write.documentStatusWritten === true ||
+      structured.shared ||
       touchesPart(write.touched, write.keys.shared),
   };
 }
@@ -217,9 +288,13 @@ export function draftSlotParts(slot: string | null): ChangedParts {
  */
 export function translatedWhenSharedChanged(
   touched: ReadonlySet<string>,
-  keys: PartKeys
+  keys: PartKeys,
+  values?: SaveValues
 ): string[] | null {
-  return touchesPart(touched, keys.shared) ? [...keys.language] : null;
+  return touchesPart(touched, keys.shared) ||
+    structuredSharesChanged(touched, keys, values).shared
+    ? [...keys.language, ...keys.structured.keys()]
+    : null;
 }
 
 /**
@@ -239,23 +314,61 @@ export async function findPartDrafts(
   return { shared, language };
 }
 
+/** Where {@link combinedDraft} finds what a structured field's drafts leave out. */
+export interface StructureSource {
+  /** The document's part keys, whose `structured` fields the drafts hold a share of. */
+  readonly keys: PartKeys;
+  /** The live document in the drafts' language. */
+  readonly live: Record<string, unknown>;
+}
+
 /**
  * The document the drafts describe in one language: `base` with the shared
  * draft's values laid over it, then the language draft's. A draft holds only
  * its part's keys, so neither can overwrite the other's.
  *
+ * A structured field either draft holds is put back together: the shared
+ * draft's structure, else the live one, with each row's text from the
+ * language draft, else as live (`source`). So a reorder held in the shared
+ * draft keeps each language's text on its rows, and a translation held in a
+ * language's draft is laid on the live structure, never on a copy of its own.
+ *
  * Pass the live document as `base` for a whole document, or `{}` for only
- * what the drafts change: a promote writes no more than that.
+ * what the drafts change: a promote writes no more than that. A reader with
+ * no live document to hand passes `{}` as `source.live`: a structured field
+ * only a language's draft holds is then left out.
  */
 export function combinedDraft(
   base: Record<string, unknown>,
-  parts: PartDrafts
+  parts: PartDrafts,
+  source: StructureSource
 ): Record<string, unknown> {
-  return {
+  const shared = valuesOf(parts.shared);
+  const language = valuesOf(parts.language);
+  const combined: Record<string, unknown> = {
     ...base,
-    ...valuesOf(parts.shared),
-    ...valuesOf(parts.language),
+    ...shared,
+    ...language,
   };
+  for (const [name, shape] of source.keys.structured) {
+    const inShared = Object.hasOwn(shared, name);
+    const inLanguage = Object.hasOwn(language, name);
+    if (!inShared && !inLanguage) continue;
+    const live = splitSharedStructure(source.live[name], shape);
+    const structure = inShared ? shared[name] : live.structure;
+    // A language's text with no structure to lay it on is no value of the
+    // field: left out, so a reader shows the field as stored.
+    if (structure === undefined) {
+      delete combined[name];
+      continue;
+    }
+    combined[name] = assembleSharedStructure(
+      structure,
+      [inLanguage ? language[name] : undefined, live.overlay],
+      shape
+    );
+  }
+  return combined;
 }
 
 /** `document`'s values of the keys in `keys`. */
@@ -269,14 +382,37 @@ function pick(
 }
 
 /**
+ * `document`'s share of its structured fields for one part: each field's
+ * structure for the shared part, its text keyed by row id for a language's. A
+ * value the field cannot split (none, or cleared) is the structure's alone.
+ */
+function structuredShares(
+  document: Record<string, unknown>,
+  keys: PartKeys,
+  share: "structure" | "overlay"
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, shape] of keys.structured) {
+    if (!Object.hasOwn(document, name)) continue;
+    const split = splitSharedStructure(document[name], shape);
+    if (share === "structure") out[name] = split.structure;
+    else if (split.overlay !== undefined) out[name] = split.overlay;
+  }
+  return out;
+}
+
+/**
  * Store `document`, the whole document after a held save in `locale`, as its
  * two drafts, on the caller's handle: its shared values in the shared draft
- * and its language values in `locale`'s draft.
+ * and its language values in `locale`'s draft. A structured field is split
+ * between them: its structure in the shared draft, its text in the language's.
  *
  * A part's draft is written only once a save has changed that part: when it
- * already holds a draft, or when this save touched one of its keys. So an edit
- * to a translatable field starts no shared draft, and an edit to a shared
- * field starts no language's.
+ * already holds a draft, or when this save touched one of its keys, or changed
+ * its share of a structured field (judged against `before`, the document the
+ * save replaced). So an edit to a translatable field, inside a row or not,
+ * starts no shared draft, and an edit to a shared field or to a structure
+ * starts no language's.
  */
 export async function storePartDrafts(
   repo: VersionsRepository,
@@ -284,6 +420,7 @@ export async function storePartDrafts(
     ref: VersionRef;
     locale: string;
     document: Record<string, unknown>;
+    before: Record<string, unknown>;
     touched: ReadonlySet<string>;
     keys: PartKeys;
     existing: PartDrafts;
@@ -292,21 +429,39 @@ export async function storePartDrafts(
 ): Promise<void> {
   const touches = (part: ReadonlySet<string>) =>
     touchesPart(input.touched, part);
+  const structured = structuredSharesChanged(input.touched, input.keys, {
+    before: input.before,
+    after: input.document,
+  });
   // Each row records the part it holds (`draftSlotParts`).
-  if (input.existing.shared || touches(input.keys.shared)) {
+  if (
+    input.existing.shared ||
+    structured.shared ||
+    touches(input.keys.shared)
+  ) {
     await repo.upsertWorkingDraft({
       ref: input.ref,
       locale: SHARED_DRAFT_SLOT,
-      snapshot: pick(input.document, input.keys.shared),
+      snapshot: {
+        ...pick(input.document, input.keys.shared),
+        ...structuredShares(input.document, input.keys, "structure"),
+      },
       createdBy: input.createdBy,
       parts: draftSlotParts(SHARED_DRAFT_SLOT),
     });
   }
-  if (input.existing.language || touches(input.keys.language)) {
+  if (
+    input.existing.language ||
+    structured.language ||
+    touches(input.keys.language)
+  ) {
     await repo.upsertWorkingDraft({
       ref: input.ref,
       locale: input.locale,
-      snapshot: pick(input.document, input.keys.language),
+      snapshot: {
+        ...pick(input.document, input.keys.language),
+        ...structuredShares(input.document, input.keys, "overlay"),
+      },
       createdBy: input.createdBy,
       parts: draftSlotParts(input.locale),
     });

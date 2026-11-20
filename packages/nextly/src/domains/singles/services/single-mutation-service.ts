@@ -363,7 +363,11 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { liveSharedSingle, type SharedComparison } from "./live-shared-single";
+import {
+  liveSharedSingle,
+  type SharedComparison,
+  withLiveStructures,
+} from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -974,11 +978,16 @@ export class SingleMutationService extends BaseService {
     );
     const pending =
       singleMeta.versions?.drafts?.enabled === true
-        ? await pendingChangesInSaveOrder(reader, {
-            scopeKind: "single",
-            scopeSlug: singleMeta.slug,
-            entryId: args.entryId,
-          })
+        ? // Only which languages are pending is read here, never their values.
+          await pendingChangesInSaveOrder(
+            reader,
+            {
+              scopeKind: "single",
+              scopeSlug: singleMeta.slug,
+              entryId: args.entryId,
+            },
+            null
+          )
         : [];
     return languagesTold({
       configured: new Set(this.localization?.locales.map(l => l.code) ?? []),
@@ -4449,9 +4458,26 @@ export class SingleMutationService extends BaseService {
                     singleDraftLocale
                   )
                 : undefined;
+            // A structured field's held share is laid over the Single as read
+            // before this write, in the language it publishes.
             const pendingDraft = promoteParts
               ? holdsPendingChange(promoteParts)
-                ? { snapshot: combinedDraft({}, promoteParts) }
+                ? {
+                    snapshot: combinedDraft({}, promoteParts, {
+                      keys: await partKeysOf(fieldConfigs),
+                      // Part drafts are read only for a language's slot.
+                      live:
+                        typeof singleDraftLocale === "string"
+                          ? await withLiveStructures(
+                              tx,
+                              this.adapter,
+                              existingDoc,
+                              companion,
+                              singleDraftLocale
+                            )
+                          : existingDoc,
+                    }),
+                  }
                 : undefined
               : await promoteRepo.findWorkingDraft(
                   promoteRef,
@@ -4731,8 +4757,20 @@ export class SingleMutationService extends BaseService {
             writeLocale !== undefined &&
             companionPhysicallyExists
           ) {
+            // A shared structure's language text is read laid on its
+            // structure, which only the main row holds: without it the read
+            // has nothing to fill.
             const preLocaleRow: Record<string, unknown> = {
               id: existingDoc.id,
+              ...Object.fromEntries(
+                companion.localizedFields
+                  .filter(f => f.sharedStructure)
+                  .map(f => [
+                    f.name,
+                    (existingDoc as Record<string, unknown>)[f.column] ??
+                      (existingDoc as Record<string, unknown>)[f.name],
+                  ])
+              ),
             };
             await populateCompanionFields({
               db: tx.getDrizzle<
@@ -5515,11 +5553,20 @@ export class SingleMutationService extends BaseService {
               draftsKeptByPart() && typeof singleDraftLocale === "string"
                 ? await findPartDrafts(draftRepo, draftRef, singleDraftLocale)
                 : undefined;
+            // Which part each key belongs to, read once for the document the
+            // drafts describe and for how this save is split back into them.
+            const heldKeys = await partKeysOf(fieldConfigs);
             const existingDraft = singleParts
               ? holdsPendingChange(singleParts)
-                ? {
-                    snapshot: combinedDraft(await liveDocument(), singleParts),
-                  }
+                ? await (async () => {
+                    const live = await liveDocument();
+                    return {
+                      snapshot: combinedDraft(live, singleParts, {
+                        keys: heldKeys,
+                        live,
+                      }),
+                    };
+                  })()
                 : undefined
               : await draftRepo.findWorkingDraft(draftRef, singleDraftLocale);
             // In read shape whichever it comes from: the save is compared with
@@ -5592,7 +5639,15 @@ export class SingleMutationService extends BaseService {
                 if (
                   Object.prototype.hasOwnProperty.call(companionData, f.column)
                 ) {
-                  pending[f.name] = companionData[f.column];
+                  // A shared structure's column holds this language's text
+                  // alone: laid on the structure the main payload carries.
+                  pending[f.name] = f.sharedStructure
+                    ? assembleStoredValue(
+                        pending[f.name],
+                        [companionData[f.column]],
+                        f.sharedStructure
+                      )
+                    : companionData[f.column];
                   suppliedFieldNames.add(f.name);
                 }
               }
@@ -5726,7 +5781,9 @@ export class SingleMutationService extends BaseService {
               ...suppliedFieldNames,
               ...Object.keys(attemptComponentFields),
             ]);
-            const heldKeys = await partKeysOf(fieldConfigs);
+            // The document before and after the save, which a structured
+            // field's shares are judged by: one key holds structure and text.
+            const heldValues = { before: replaces, after: pending };
             // The draft, and the save as a version of its own. A save that
             // changes nothing against what it replaces records no version.
             const { versionNo: draftVersionNo } = await storeDraftSave(
@@ -5760,6 +5817,7 @@ export class SingleMutationService extends BaseService {
                   locale: singleDraftLocale ?? null,
                   touched: heldTouched,
                   keys: heldKeys,
+                  values: heldValues,
                 }),
                 ...(singleParts && typeof singleDraftLocale === "string"
                   ? {
@@ -5768,6 +5826,7 @@ export class SingleMutationService extends BaseService {
                           ref: draftRef,
                           locale: singleDraftLocale,
                           document: pending,
+                          before: replaces,
                           touched: heldTouched,
                           keys: heldKeys,
                           existing: singleParts,
@@ -6179,6 +6238,12 @@ export class SingleMutationService extends BaseService {
                 keys: await partKeysOf(fieldConfigs, {
                   translated: Boolean(companion),
                 }),
+                // A structured field's structure and text are judged apart:
+                // the Single as read before the write, and as written.
+                values: {
+                  before: existingDoc,
+                  after: parentRow,
+                },
                 // The language's own status rides its translation row; the
                 // Single's is the main row's, which a write in the default
                 // language moves too, and which every language shows.

@@ -86,6 +86,8 @@ import {
   combinedDraft,
   draftsKeptByPart,
   holdsPendingChange,
+  partKeysOf,
+  type PartKeys,
   SHARED_DRAFT_SLOT,
 } from "../../versions/part-drafts";
 import { resolveComponentSchemas } from "../../versions/restore-version";
@@ -1334,7 +1336,8 @@ async function pendingWorkingDrafts(
     new VersionsRepository(connection.db),
     { scopeKind: entity.kind, scopeSlug: entity.slug },
     ids,
-    provisional.draftLocale
+    provisional.draftLocale,
+    await partKeysOf(fields)
   );
   if (found.size === 0) return found;
 
@@ -1360,7 +1363,8 @@ async function workingDraftsOf(
   repo: VersionsRepository,
   scope: Pick<VersionRef, "scopeKind" | "scopeSlug">,
   ids: readonly string[],
-  draftLocale: string | null
+  draftLocale: string | null,
+  keys: PartKeys
 ): Promise<Map<string, PendingDraft>> {
   const draftsOf = async (slot: string | null) => {
     const drafts = new Map<string, VersionRow>();
@@ -1392,7 +1396,9 @@ async function workingDraftsOf(
       ...(language.has(id) ? { language: language.get(id) as VersionRow } : {}),
     };
     if (holdsPendingChange(parts)) {
-      found.set(id, { snapshot: combinedDraft({}, parts) });
+      // Read field by field with no assembled live document to hand, so a
+      // structured field only the language's draft holds reads as stored.
+      found.set(id, { snapshot: combinedDraft({}, parts, { keys, live: {} }) });
     }
   }
   return found;
