@@ -11,7 +11,7 @@
 import {
   FIELD_GROUP_CYCLE,
   fieldGroupCycleMessage,
-  fieldGroupCycleInCode,
+  fieldGroupCyclesInCode,
 } from "../../domains/field-groups/field-group-cycles";
 import {
   ADDRESS_CLASH_REMEDY,
@@ -164,13 +164,13 @@ export function crossEntityProblems(
     });
   }
 
-  // No cycle among the field groups defined in code.
-  const cycle = fieldGroupCycleInCode(
+  // No cycle among the field groups defined in code: each independent one is its own problem.
+  const cycles = fieldGroupCyclesInCode(
     fieldGroups.filter(group => slugKey(group) !== undefined) as Parameters<
-      typeof fieldGroupCycleInCode
+      typeof fieldGroupCyclesInCode
     >[0]
   );
-  if (cycle !== null) {
+  for (const cycle of cycles) {
     const index = fieldGroups.findIndex(
       group => slugKey(group) === cycle[0]?.toLowerCase()
     );

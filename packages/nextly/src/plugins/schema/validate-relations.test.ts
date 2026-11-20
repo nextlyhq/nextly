@@ -241,3 +241,19 @@ describe("collectUnresolvedRelationTargets, for a field whose type holds no fiel
     expect(collectUnresolvedRelationTargets(config)).toEqual([]);
   });
 });
+
+describe("collectUnresolvedRelationTargets, for a container whose fields are not a list", () => {
+  // The configuration's rules report that shape; collecting relationships leaves it to them.
+  it("collects nothing from it, and does not throw", () => {
+    const config = {
+      collections: [
+        {
+          slug: "notes",
+          fields: [{ name: "meta", type: "group", fields: 5 }],
+        },
+      ],
+    } as unknown as NextlyServiceConfig;
+
+    expect(collectUnresolvedRelationTargets(config)).toEqual([]);
+  });
+});

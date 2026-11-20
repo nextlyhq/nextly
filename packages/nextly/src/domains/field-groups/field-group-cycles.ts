@@ -147,23 +147,30 @@ function cycleRefusal(cycle: readonly string[], path: string): NextlyError {
 export function assertNoFieldGroupCycleInCode(
   definitions: readonly FieldGroupDefinition[]
 ): void {
-  const cycle = fieldGroupCycleInCode(definitions);
-  if (cycle !== null) throw cycleRefusal(cycle, "fieldGroups");
+  const [cycle] = fieldGroupCyclesInCode(definitions);
+  if (cycle !== undefined) throw cycleRefusal(cycle, "fieldGroups");
 }
 
 /**
- * The first cycle among the field groups a configuration defines in code, each slug as written,
- * or null where they place each other in none.
+ * Every cycle among the field groups a configuration defines in code, each slug as written, in
+ * the order the groups are declared: one for each set of groups that place each other, so two
+ * cycles that share no group are both named, and one is not named again from each of its groups.
  */
-export function fieldGroupCycleInCode(
+export function fieldGroupCyclesInCode(
   definitions: readonly FieldGroupDefinition[]
-): string[] | null {
+): string[][] {
   const { edges, written } = placementGraph(definitions);
+  const cycles: string[][] = [];
+  const named = new Set<string>();
   for (const key of edges.keys()) {
     const cycle = shortestWay(edges, key, key);
-    if (cycle !== null) return cycle.map(k => written.get(k) ?? k);
+    if (cycle === null) continue;
+    const members = [...new Set(cycle)].sort().join("\u0000");
+    if (named.has(members)) continue;
+    named.add(members);
+    cycles.push(cycle.map(k => written.get(k) ?? k));
   }
-  return null;
+  return cycles;
 }
 
 /** Slugs as their definitions write them. */

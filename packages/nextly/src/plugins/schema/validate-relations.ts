@@ -44,7 +44,13 @@ function relationFieldsOf(
   for (const field of fields ?? []) {
     if (field.type === "relationship") {
       found.push(field);
-    } else if (field.type !== undefined && typeHasNestedFields(field.type)) {
+    } else if (
+      field.type !== undefined &&
+      typeHasNestedFields(field.type) &&
+      Array.isArray(field.fields)
+    ) {
+      // A container whose `fields` is not a list is the configuration's rules' to report
+      // (`GROUP_FIELDS_REQUIRED`, `ARRAY_FIELDS_REQUIRED`), not this walk's to trip over.
       found.push(...relationFieldsOf(field.fields));
     }
   }

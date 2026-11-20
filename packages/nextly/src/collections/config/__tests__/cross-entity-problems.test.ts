@@ -25,3 +25,27 @@ describe("two Singles at one address, one of them with a slug that is not a stri
     ]);
   });
 });
+
+describe("two cycles among field groups that share no group", () => {
+  // Each is its own problem, reported beside the other.
+  it("are both reported, each at its first group", () => {
+    const group = (slug: string, inner: string) => ({
+      slug,
+      fields: [{ name: inner, type: "component", component: inner }],
+    });
+
+    const problems = crossEntityProblems({
+      fieldGroups: [
+        group("a", "b"),
+        group("b", "a"),
+        group("c", "d"),
+        group("d", "c"),
+      ],
+    });
+
+    expect(problems.map(problem => `${problem.code} ${problem.path}`)).toEqual([
+      "FIELD_GROUP_CYCLE fieldGroups[0].fields",
+      "FIELD_GROUP_CYCLE fieldGroups[2].fields",
+    ]);
+  });
+});

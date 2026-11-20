@@ -11,7 +11,7 @@
  * for backwards compatibility. The rules across entities (one slug each, one
  * table per field group, one Single per address, no cycle among field groups)
  * are judged where the configuration is loaded or the site starts
- * (`crossEntityProblems`), with every other problem in it.
+ * with every other problem in it.
  *
  * @module collections/config/define-config
  * @since 1.0.0
@@ -190,8 +190,8 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
  *   group's table collision, two Singles at one address and field groups
  *   placed in a cycle are reported, with every other problem, where the
  *   configuration is loaded (every command) or the site starts, which refuse
- *   it. To judge a configuration without loading it, call
- *   `configurationProblems`.
+ *   it. To judge a configuration, load it with any command that reads its
+ *   entities, such as `nextly migrate:check`, which reports every problem.
  *
  * **Defaults Applied (via sanitizeConfig):**
  * - `collections`: `[]`

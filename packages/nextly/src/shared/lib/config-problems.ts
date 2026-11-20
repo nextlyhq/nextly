@@ -167,6 +167,9 @@ function asUsed(
   effective: readonly unknown[] | undefined
 ): unknown[] {
   if (effective === undefined) return [...declared];
+  // Where nothing transformed the configuration, the effective entities are the declared ones:
+  // each is itself, so two with one slug are each judged as themselves.
+  const held = new Set<unknown>(effective);
   const byPlace = new Map<string, unknown>();
   const bySlug = new Map<string, unknown>();
   for (const entity of effective) {
@@ -179,6 +182,7 @@ function asUsed(
     if (slug !== undefined && !bySlug.has(slug)) bySlug.set(slug, entity);
   }
   return declared.map((entity, index) => {
+    if (held.has(entity)) return entity;
     const traced = byPlace.get(`${kind}[${index}]`);
     if (traced !== undefined) return traced;
     const slug = slugOf(entity);

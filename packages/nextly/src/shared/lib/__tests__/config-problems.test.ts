@@ -282,3 +282,22 @@ describe("a define* collection with no fields of its own, whose address is its s
     );
   });
 });
+
+describe("two collections with one slug, judged where nothing transformed them", () => {
+  // Each is judged as itself: the second's own problem is reported beside the duplicate slug.
+  it("reports the second one's own problem too", () => {
+    const declared = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+        { slug: "notes", fields: [{ name: "select", type: "text" }] },
+      ],
+    };
+
+    const paths = configurationProblems(declared, declared).map(
+      problem => problem.path
+    );
+
+    expect(paths).toContain("collections[1].fields[0].name");
+    expect(paths).toContain("collections[1].slug");
+  });
+});
