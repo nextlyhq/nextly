@@ -71,7 +71,7 @@ export function ShowWhenDialog({
           </DialogDescription>
         </DialogHeader>
         <form
-          className="grid gap-3"
+          className="grid min-w-0 gap-3"
           onSubmit={event => {
             event.preventDefault();
             // A dialog is drawn outside the workbench but sits inside its form in
@@ -82,11 +82,13 @@ export function ShowWhenDialog({
             close();
           }}
         >
-          <div className="grid gap-1.5">
+          <div className="grid min-w-0 gap-1.5">
             <Label htmlFor={`${id}-variable`}>Variable</Label>
+            {/* As wide as its column, not its longest option: a long variable
+                name would otherwise widen the dialog or card past a phone. */}
             <select
               id={`${id}-variable`}
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              className="h-9 w-full min-w-0 max-w-full truncate rounded-md border border-input bg-background px-2 text-sm"
               value={variable}
               onChange={event => setVariable(event.target.value)}
             >

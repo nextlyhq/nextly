@@ -436,11 +436,13 @@ function BlockFields({
     case "list":
       return (
         <div className="grid gap-3">
-          <label className="flex flex-wrap items-center gap-2 text-sm">
+          <label className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
             For each item in
+            {/* As wide as its column, not its longest option: a long variable
+                name would otherwise widen the dialog or card past a phone. */}
             <select
               aria-label="List variable"
-              className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              className="h-9 min-w-0 max-w-full truncate rounded-md border border-input bg-background px-2 text-sm"
               value={block.variable}
               disabled={edit.readOnly}
               onChange={event =>
