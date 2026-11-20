@@ -1,6 +1,5 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
 import { isFieldLocalized } from "../classify-fields";
@@ -85,9 +84,6 @@ export function deriveCompanionTableSpec(
 ): CompanionMigrationSpec | null {
   const spec = deriveCompanionSpec(args);
   if (!args.collectionLocalized) return spec;
-  if (!keepsSharedStructures(args.dbName ?? spec?.mainTable ?? "")) {
-    return spec;
-  }
   const overlays = args.fields
     .filter(field => keepsTranslationsInside(field, true))
     .flatMap(field => {
@@ -101,17 +97,6 @@ export function deriveCompanionTableSpec(
   if (overlays.length === 0) return spec;
   const base = spec ?? companionSpecShell(args);
   return { ...base, columns: [...base.columns, ...overlays] };
-}
-
-/**
- * Whether the entity whose main table is `tableName` keeps one structure across languages for its
- * repeaters and groups, with an overlay column per container on its translation table: a
- * collection's and a Single's do. A field group's instances keep their containers as they are; a
- * field group's table is always its slug under the field-group prefix
- * (`resolveComponentTableName`), which no collection's (`dc_`) or Single's (`single_`) carries.
- */
-export function keepsSharedStructures(tableName: string): boolean {
-  return !tableName.startsWith(STORAGE_FORMAT.tablePrefix);
 }
 
 /** The table a main table's translated values are kept in. */

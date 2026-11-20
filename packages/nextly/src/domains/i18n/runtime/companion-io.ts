@@ -44,10 +44,7 @@ import {
   DOCUMENT_REVISION_COLUMN,
   translationChangeColumns,
 } from "../../versions/document-revision";
-import {
-  isFieldLocalized,
-  resolveLocalizedFieldNames,
-} from "../classify-fields";
+import { resolveLocalizedFieldNames } from "../classify-fields";
 import {
   COMPANION_STRUCTURAL_COLUMNS,
   COMPANION_UPDATED_AT_COLUMN,
@@ -57,7 +54,6 @@ import {
   companionColumnsThatCannotHold,
   judgeCompanionColumns,
 } from "../migration/companion-column-holds";
-import { keepsSharedStructures } from "../migration/derive-companion-spec";
 import { companionIndexFacts } from "../migration/reconcile-companion";
 import {
   recordedBeforeOf,
@@ -155,12 +151,7 @@ function toColumn(name: string): string {
  * built with.
  */
 export function localizedFieldRefs(
-  fields: readonly CompanionFieldLike[],
-  /**
-   * Whether the entity keeps one structure across languages for its repeaters and groups
-   * (`keepsSharedStructures`): only then is such a container a ref of its own.
-   */
-  sharedStructures = true
+  fields: readonly CompanionFieldLike[]
 ): LocalizedFieldRef[] {
   const unique = new Set(
     fields.filter(field => field.unique === true).map(field => field.name)
@@ -178,14 +169,10 @@ export function localizedFieldRefs(
   // A field translated whole, and a repeater or group keeping translations inside, whose ref
   // carries what it translates there, so a read assembles it and a write splits it.
   return fields
-    .filter(field =>
-      sharedStructures
-        ? hasTranslationColumn(field, true)
-        : isFieldLocalized(field, true)
-    )
+    .filter(field => hasTranslationColumn(field, true))
     .map(field => {
       // Null for a field translated whole: a container marked so keeps no shape.
-      const shape = sharedStructures ? sharedStructureShape(field) : null;
+      const shape = sharedStructureShape(field);
       return {
         name: field.name,
         column: toColumn(field.name),
@@ -277,10 +264,7 @@ function companionSchemaOf(args: {
   dialect: SupportedDialect;
   status?: boolean;
 }): CompanionSchema | null {
-  const localizedFields = localizedFieldRefs(
-    args.fields,
-    keepsSharedStructures(args.tableName)
-  );
+  const localizedFields = localizedFieldRefs(args.fields);
   if (localizedFields.length === 0) return null;
 
   const companion = buildCompanionRuntimeTable({
@@ -1106,11 +1090,7 @@ export async function reconcileCompanionColumns(
   // Every column the companion holds: translated fields', and the overlay columns of repeaters and
   // groups keeping translations inside, added like any other missing column. Hoisted so the
   // concurrency recheck in the catch can reuse it.
-  const desired = args.fields.filter(f =>
-    keepsSharedStructures(args.tableName)
-      ? hasTranslationColumn(f, true)
-      : isFieldLocalized(f, true)
-  );
+  const desired = args.fields.filter(f => hasTranslationColumn(f, true));
   // Whether the companion's columns are left in step: false once a failure is reported, so the
   // caller builds nothing more on them, such as a unique index over a column this run refused.
   let failed = false;
@@ -2350,9 +2330,7 @@ async function createOrCompleteCompanionTable(
   const newLocalized = args.fields.filter(f => localizedNames.has(f.name));
   // Created with the companion, never seeded: an overlay column holds translations kept apart
   // from a structure that stays on the main table, so nothing on main is copied into it.
-  const overlays = keepsSharedStructures(args.tableName)
-    ? args.fields.filter(f => keepsTranslationsInside(f, true))
-    : [];
+  const overlays = args.fields.filter(f => keepsTranslationsInside(f, true));
   try {
     if (await companionTableExists(adapter, companionTableName)) {
       // An existing companion normally means there is nothing to do. It means the opposite when a
