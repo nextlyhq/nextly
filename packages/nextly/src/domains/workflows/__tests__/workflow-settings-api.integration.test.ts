@@ -50,6 +50,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildClaims } from "../../../auth/jwt/claims";
+import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import {
   getConfiguredTestDialects,
@@ -619,6 +620,52 @@ describe.each(getConfiguredTestDialects())(
           expect(ofReviewStates).toHaveLength(publishedWorkflows().size);
         } finally {
           counts.mockRestore();
+        }
+      });
+
+      it("reads every workflow's stage counts in statements that do not grow with its stages", async () => {
+        // Measured at the driver, so any read of the review states counts, whatever layer sends
+        // it: the same workflows with three more stages must cost the same statements.
+        current = await bootSteps(dialect);
+        await admin();
+        const reviewReads = async () =>
+          (await statementsOf(dialect, () => door.list(SAM))).filter(
+            statement =>
+              /^\s*select/i.test(statement) &&
+              statement.includes("nextly_review_states")
+          ).length;
+        const before = await reviewReads();
+        const registered = publishedWorkflows();
+        const previous = publishWorkflows(
+          new Map(
+            [...registered].map(([slug, entry]) => {
+              const [, model] = entry.workflow.stages;
+              if (slug !== "editorial" || model === undefined) {
+                return [slug, entry];
+              }
+              const more = ["extra-a", "extra-b", "extra-c"].map(name => ({
+                ...model,
+                name,
+              }));
+              return [
+                slug,
+                {
+                  ...entry,
+                  workflow: {
+                    ...entry.workflow,
+                    stages: [...entry.workflow.stages, ...more],
+                  },
+                },
+              ];
+            })
+          )
+        );
+        try {
+          const after = await reviewReads();
+          expect(before).toBeGreaterThan(0);
+          expect(after).toBe(before);
+        } finally {
+          publishWorkflows(previous);
         }
       });
 
