@@ -85,6 +85,7 @@ import {
 } from "../../domains/schema/migrate/core-reconcile";
 import {
   checkCompanionFiles,
+  judgeCompanionFiles,
   snapshotlessNotice,
 } from "../../domains/schema/migrate/companion-drift";
 import {
@@ -1603,6 +1604,24 @@ export async function previewMigrate(args: {
     dialect
   )) {
     logger.info(`  ✖ a real run would refuse ${file}: ${message}`);
+  }
+  // The translations tables a real run checks before its first file, judged the same way.
+  const { refusal: companionRefusal } = await judgeCompanionFiles({
+    db,
+    dialect,
+    applied: listed.filter(each => each.done).map(each => each.file),
+    pending: listed.filter(each => !each.done).map(each => each.file),
+    runs: new Set(pendingFiles.map(file => file.name)),
+    snapshotOf: name =>
+      loadTargetSnapshot(resolve(args.migrationsDir, "meta"), name),
+  });
+  if (companionRefusal !== undefined) {
+    logger.info(
+      `  ✖ a real run would refuse ${companionRefusal.migration}.sql: the translations table ${companionRefusal.table} lacks what the migrations record of it`
+    );
+    for (const item of companionRefusal.items) {
+      logger.info(`      ${item.kind} ${item.detail}`);
+    }
   }
   await previewOldBuilderFiles({ ...args, logger });
   if (hasLedger) await previewChangedFiles(rows, args, logger);

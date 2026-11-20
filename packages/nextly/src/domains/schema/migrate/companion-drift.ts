@@ -29,6 +29,7 @@ import { readFile } from "node:fs/promises";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { COMPANION_KEY_COLUMNS } from "../../i18n/companion-columns";
 import { companionHistoryKey } from "../../i18n/migration/companion-history";
 import type { LocalizationMigrationIntent } from "../../i18n/migration/migration-intent";
 import { LOCALIZATION_MIGRATION_MARKER } from "../../i18n/migration/write-migration-file";
@@ -161,18 +162,7 @@ function judge(args: {
   const [first] = entity.files;
   if (first === undefined) return { kind: "matches" };
   const table = first.localization.spec.companionTable;
-  // Both snapshots say the table is translated: it should be there throughout.
-  const translated = before?.localized === true && after?.localized === true;
-  // A file that makes or drops the table may have done so already, in a run stopped part-way.
-  const tableLeftToFiles = entity.files.some(
-    file => LEFT_TO_FILE[file.localization.kind].table
-  );
-
-  if (live === undefined) {
-    return translated && !tableLeftToFiles
-      ? { kind: "drift", items: [{ kind: "-", detail: `table ${table}` }] }
-      : { kind: "matches" };
-  }
+  if (live === undefined) return judgeAbsentTable(entity, table, before, after);
   if (before?.localized !== true) {
     return {
       kind: "unchecked",
@@ -181,6 +171,51 @@ function judge(args: {
   }
   // The table is on its way out: nothing of it is named on both sides.
   if (after?.localized !== true) return { kind: "matches" };
+  // The key every translations table has had since the first release, which no snapshot lists:
+  // never rightly missing, whatever the snapshots record of its translated columns.
+  const keys = missingColumns({
+    table,
+    names: COMPANION_KEY_COLUMNS,
+    live,
+    leftToFiles: new Set(),
+  });
+  if (keys.length > 0) return { kind: "drift", items: keys };
+  return judgeTranslatedColumns({ entity, table, before, after, live });
+}
+
+/**
+ * A translations table that is not there: drift where both snapshots say it is translated, so it
+ * should be there throughout, unless a file of the entity makes or drops it, which it may have
+ * done already in a run stopped part-way.
+ */
+function judgeAbsentTable(
+  entity: PendingEntity,
+  table: string,
+  before: TableSpec | undefined,
+  after: TableSpec | undefined
+): Verdict {
+  const translated = before?.localized === true && after?.localized === true;
+  const leftToFiles = entity.files.some(
+    file => LEFT_TO_FILE[file.localization.kind].table
+  );
+  return translated && !leftToFiles
+    ? { kind: "drift", items: [{ kind: "-", detail: `table ${table}` }] }
+    : { kind: "matches" };
+}
+
+/**
+ * The translated columns of a table both snapshots say is translated: drift is each one both
+ * name that the table lacks, unless a file not yet applied adds it. Not judged where a snapshot
+ * does not record them, or where a pending file renames one.
+ */
+function judgeTranslatedColumns(args: {
+  entity: PendingEntity;
+  table: string;
+  before: TableSpec;
+  after: TableSpec;
+  live: readonly ColumnSpec[];
+}): Verdict {
+  const { entity, table, before, after, live } = args;
   if (
     before.localizedColumns === undefined ||
     after.localizedColumns === undefined
@@ -212,10 +247,9 @@ function judge(args: {
   return items.length === 0 ? { kind: "matches" } : { kind: "drift", items };
 }
 
-/** A file this run applies that has no header intent, with its text. */
+/** A file this run applies that has no header intent. */
 interface FileOfNoRecord {
   file: CompanionFileRef;
-  content: string;
   /** A localization file this build cannot read (it carries the marker), or one written by hand. */
   kind: "unread" | "by-hand";
 }
@@ -234,36 +268,49 @@ async function filesOfNoRecord(
     if (hasIntent(file)) continue;
     const content = await readFile(file.filePath, "utf-8");
     if (content.includes(LOCALIZATION_MIGRATION_MARKER)) {
-      found.push({ file, content, kind: "unread" });
+      found.push({ file, kind: "unread" });
     } else if ((await snapshotOf(file.name)) === null) {
-      found.push({ file, content, kind: "by-hand" });
+      found.push({ file, kind: "by-hand" });
     }
   }
   return found;
 }
 
+/** `sql` with its comments and string literals blanked, so that only its statements are read. */
+const statementsOf = (sql: string): string =>
+  sql.replace(/--[^\n]*|\/\*[\s\S]*?\*\/|'(?:[^']|'')*'/g, " ");
+
+/**
+ * Whether `sql`, as its statements, names `table` itself: not inside a comment or a string, and
+ * not as part of a longer name such as `<table>_backup`.
+ */
+function statementsName(sql: string, table: string): boolean {
+  const name = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^A-Za-z0-9_$])${name}(?![A-Za-z0-9_$])`).test(
+    statementsOf(sql)
+  );
+}
+
 /**
  * Why no drift can be asserted of `table`, or undefined when it can: a file of this run that no
- * record describes names the table, so it may be the very change, or the operator's repair,
- * that accounts for the difference.
+ * record describes names the table in the statements it applies, so it may be the very change,
+ * or the operator's repair, that accounts for the difference.
  */
 function whyNotAsserted(
   table: string,
   ofNoRecord: readonly FileOfNoRecord[]
 ): string | undefined {
-  const about = ofNoRecord.find(each => each.content.includes(table));
+  const about = ofNoRecord.find(each =>
+    statementsName(each.file.upSql ?? "", table)
+  );
   if (about === undefined) return undefined;
   return about.kind === "unread"
     ? `${about.file.name}.sql, a localization file this version cannot read, may change the translations table ${table}`
     : `${about.file.name}.sql, a migration written by hand, may change the translations table ${table}`;
 }
 
-/**
- * Checks the translations table of every companion file this run applies against the record the
- * applied files left. Throws the drift refusal for the first entity whose table differs, before
- * any file applies; otherwise says which files were checked and which could not be, with why.
- */
-export async function checkCompanionFiles(args: {
+/** What the check is handed: the run's files, as the ledger divides them, and their snapshots. */
+interface CompanionCheckArgs {
   db: unknown;
   dialect: SupportedDialect;
   /** The files the ledger records as applied, in run order. */
@@ -273,61 +320,148 @@ export async function checkCompanionFiles(args: {
   /** The names of the files this run applies: all of `pending`, or fewer under a step. */
   runs: ReadonlySet<string>;
   snapshotOf: SnapshotOf;
-}): Promise<CompanionCheck> {
-  const checked = new Set<string>();
-  const unchecked = new Map<string, string>();
+}
+
+/** The drift a run is refused for: the companion file, its table, and each difference. */
+export interface CompanionRefusal {
+  migration: string;
+  file: string;
+  table: string;
+  items: DriftItem[];
+}
+
+/**
+ * Judges the translations table of every companion file this run applies against what the
+ * migrations around this point record of it: which files were checked, which could not be and
+ * why, and the drift of the first entity whose table differs. Reads only: a dry run names what
+ * it finds, and a real run refuses it (`checkCompanionFiles`).
+ */
+export async function judgeCompanionFiles(
+  args: CompanionCheckArgs
+): Promise<{ check: CompanionCheck; refusal?: CompanionRefusal }> {
   const ofNoRecord = await filesOfNoRecord(
     args.pending.filter(file => args.runs.has(file.name)),
     args.snapshotOf
   );
-  for (const { file, kind } of ofNoRecord) {
-    if (kind !== "unread") continue;
-    unchecked.set(
-      file.name,
-      "this version cannot read what the file records of its translations table"
-    );
-  }
+  const checked = new Set<string>();
+  const unchecked = unreadFilesUnchecked(ofNoRecord);
   const entities = byEntity(args.pending.filter(hasIntent)).filter(entity =>
     entity.files.some(file => args.runs.has(file.name))
   );
-  if (entities.length === 0) return { checked, unchecked };
+  if (entities.length === 0) return { check: { checked, unchecked } };
 
   const before = await lastSnapshot(args.applied, args.snapshotOf);
-  const after = (await lastSnapshot(args.pending, args.snapshotOf)) ?? before;
-  const tables = entities.flatMap(entity =>
-    entity.files.slice(0, 1).map(file => file.localization.spec.companionTable)
-  );
-  const live = await introspectLiveColumns(args.db, args.dialect, tables);
+  const run: RunRecord = {
+    runs: args.runs,
+    before,
+    after: (await lastSnapshot(args.pending, args.snapshotOf)) ?? before,
+    live: await introspectLiveColumns(
+      args.db,
+      args.dialect,
+      entities.flatMap(entity =>
+        entity.files
+          .slice(0, 1)
+          .map(file => file.localization.spec.companionTable)
+      )
+    ),
+    ofNoRecord,
+  };
   for (const entity of entities) {
-    const [first] = entity.files.filter(file => args.runs.has(file.name));
-    if (first === undefined) continue;
-    const { spec } = first.localization;
-    const judged = judge({
-      entity,
-      before: before?.tables.find(table => table.name === spec.mainTable),
-      after: after?.tables.find(table => table.name === spec.mainTable),
-      live: live.tables.find(table => table.name === spec.companionTable)
-        ?.columns,
-    });
-    const notAsserted = whyNotAsserted(spec.companionTable, ofNoRecord);
-    const verdict: Verdict =
-      judged.kind === "drift" && notAsserted !== undefined
-        ? { kind: "unchecked", why: notAsserted }
-        : judged;
+    const judged = entityVerdict(entity, run);
+    if (judged === undefined) continue;
+    const { first, verdict } = judged;
     if (verdict.kind === "drift") {
-      throw migrationDriftError({
-        migration: first.name,
-        file: first.filePath,
-        translationsTable: spec.companionTable,
-        driftItems: verdict.items,
-      });
+      return {
+        check: { checked, unchecked },
+        refusal: {
+          migration: first.name,
+          file: first.filePath,
+          table: first.localization.spec.companionTable,
+          items: verdict.items,
+        },
+      };
     }
     for (const file of entity.files) {
       if (verdict.kind === "unchecked") unchecked.set(file.name, verdict.why);
       else checked.add(file.name);
     }
   }
-  return { checked, unchecked };
+  return { check: { checked, unchecked } };
+}
+
+/** The localization files of this run this build cannot read, each with why it goes unchecked. */
+function unreadFilesUnchecked(
+  ofNoRecord: readonly FileOfNoRecord[]
+): Map<string, string> {
+  return new Map(
+    ofNoRecord
+      .filter(each => each.kind === "unread")
+      .map(({ file }) => [
+        file.name,
+        "this version cannot read what the file records of its translations table",
+      ])
+  );
+}
+
+/** What the run's check reads each entity against. */
+interface RunRecord {
+  runs: ReadonlySet<string>;
+  before: NextlySchemaSnapshot | null;
+  after: NextlySchemaSnapshot | null;
+  live: { tables: readonly { name: string; columns: ColumnSpec[] }[] };
+  ofNoRecord: readonly FileOfNoRecord[];
+}
+
+/**
+ * One entity's verdict, with the first of its files this run applies, which a refusal names;
+ * undefined when this run applies none of them. Drift a file of the run no record describes may
+ * account for is not asserted (`whyNotAsserted`).
+ */
+function entityVerdict(
+  entity: PendingEntity,
+  run: RunRecord
+): { first: IntentFile; verdict: Verdict } | undefined {
+  const [first] = entity.files.filter(file => run.runs.has(file.name));
+  if (first === undefined) return undefined;
+  const { spec } = first.localization;
+  const judged = judge({
+    entity,
+    before: run.before?.tables.find(table => table.name === spec.mainTable),
+    after: run.after?.tables.find(table => table.name === spec.mainTable),
+    live: run.live.tables.find(table => table.name === spec.companionTable)
+      ?.columns,
+  });
+  const notAsserted =
+    judged.kind === "drift"
+      ? whyNotAsserted(spec.companionTable, run.ofNoRecord)
+      : undefined;
+  return {
+    first,
+    verdict:
+      notAsserted === undefined
+        ? judged
+        : { kind: "unchecked", why: notAsserted },
+  };
+}
+
+/**
+ * Checks the translations table of every companion file this run applies, before any file
+ * applies: throws the drift refusal for the first entity whose table differs; otherwise says
+ * which files were checked and which could not be, with why.
+ */
+export async function checkCompanionFiles(
+  args: CompanionCheckArgs
+): Promise<CompanionCheck> {
+  const { check, refusal } = await judgeCompanionFiles(args);
+  if (refusal !== undefined) {
+    throw migrationDriftError({
+      migration: refusal.migration,
+      file: refusal.file,
+      translationsTable: refusal.table,
+      driftItems: refusal.items,
+    });
+  }
+  return check;
 }
 
 /**

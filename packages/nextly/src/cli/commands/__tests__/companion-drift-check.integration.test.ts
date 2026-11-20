@@ -257,7 +257,7 @@ describeEachDialect(
 
     async function migrate(
       config: unknown,
-      options: { acceptDataLoss?: true } = {}
+      options: { acceptDataLoss?: true; dryRun?: true } = {}
     ) {
       loaded.config = config;
       const { context, said } = command();
@@ -635,6 +635,75 @@ describeEachDialect(
         ...pending,
         "20261029_130000_000_by_hand",
       ]);
+    }, 240_000);
+
+    it("a hand-written file that only mentions the table, without changing it, does not excuse the drift", async () => {
+      const pending = await secondFieldPending();
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(COMPANION)} DROP COLUMN ${q("title")}`
+      );
+      // The table's name in a comment, in a string, in the DOWN part and inside a longer
+      // name: none of them a statement that changes the table when the file applies.
+      const backup = `${COMPANION}_backup`;
+      writeFileSync(
+        join(dir, "migrations", "20261029_130000_000_by_hand.sql"),
+        `-- UP\n-- keeps a copy of ${COMPANION}\nCREATE TABLE ${q(backup)} (${q("id")} INTEGER PRIMARY KEY, ${q("note")} TEXT DEFAULT '${COMPANION}');\n\n-- DOWN\nDROP TABLE ${q(backup)};\nALTER TABLE ${q(COMPANION)} ADD COLUMN ${q("title")} TEXT;\n`
+      );
+
+      const run = await migrate(configWith(["title", "summary"]));
+
+      expect(run.code, run.said).toBe(1);
+      expect(run.said).toMatch(/- .*title/);
+      expect((await pendingFiles()).map(file => file.name)).toEqual([
+        ...pending,
+        "20261029_130000_000_by_hand",
+      ]);
+    }, 240_000);
+
+    it("a key column of the translations table gone by hand is drift", async () => {
+      const pending = await secondFieldPending();
+      // Renamed away, which every dialect allows of a column its key is made of.
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(COMPANION)} RENAME COLUMN ${q("_locale")} TO ${q("_locale_was")}`
+      );
+      expect(await companionColumns()).not.toContain("_locale");
+
+      const run = await migrate(configWith(["title", "summary"]));
+
+      expect(run.code, run.said).toBe(1);
+      expect(run.said).toContain(`- column ${COMPANION}._locale`);
+      expect((await pendingFiles()).map(file => file.name)).toEqual(pending);
+    }, 240_000);
+
+    it("a dry run names the companion file a real run would refuse", async () => {
+      const pending = await secondFieldPending();
+      const companionFile = pending.find(name => name.includes("localization"));
+      await adapter().executeQuery(
+        `ALTER TABLE ${q(COMPANION)} DROP COLUMN ${q("title")}`
+      );
+
+      const run = await migrate(configWith(["title", "summary"]), {
+        dryRun: true,
+      });
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(run.said).toContain(
+        `a real run would refuse ${String(companionFile)}.sql`
+      );
+      expect(run.said).toContain(`- column ${COMPANION}.title`);
+      // Nothing applied, as a dry run applies nothing.
+      expect((await pendingFiles()).map(file => file.name)).toEqual(pending);
+    }, 240_000);
+
+    it("a dry run over a table that matches names no refusal", async () => {
+      await secondFieldPending();
+
+      const run = await migrate(configWith(["title", "summary"]), {
+        dryRun: true,
+      });
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(run.said).not.toContain("a real run would refuse");
     }, 240_000);
 
     /** The migration files as the run lists them, each with its header's intent. */
