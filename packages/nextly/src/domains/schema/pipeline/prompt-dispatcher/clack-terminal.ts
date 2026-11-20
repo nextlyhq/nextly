@@ -195,15 +195,29 @@ async function answeredOrClosed<T>(answer: T | symbol): Promise<T> {
 export class ClackTerminalPromptDispatcher implements PromptDispatcher {
   /**
    * `print` writes the data-loss listing and notices; a test collects them. `asksAboutTypeChanges`
-   * false never asks about clearing a lossy type change's values, even at a terminal: only the
-   * consent naming the column clears them, and one it does not cover is refused. A config reload
-   * runs inside the development server, where the question is not the place to give it.
+   * false never asks about a type change, even at a terminal: a lossy one's values are cleared only
+   * under the consent naming the column and refused without it, and a batch holding any other is
+   * refused as a run without a terminal refuses it, naming where it is confirmed. A config reload
+   * runs inside the development server, where a question is not the place to give it.
    */
   constructor(
     private readonly print: (line: string) => void = line =>
       consoleLogger.warn(line),
     private readonly options: { asksAboutTypeChanges?: boolean } = {}
   ) {}
+
+  /**
+   * Whether `events` hold a type change this dispatcher would ask about where it may not: a pair
+   * with no conversion is always asked about, a lossy one is decided by its consent.
+   */
+  private wouldAskAboutTypeChange(events: readonly ClassifierEvent[]): boolean {
+    return (
+      this.options.asksAboutTypeChanges === false &&
+      events.some(
+        event => event.kind === "type_change" && !isLossyTypeChange(event)
+      )
+    );
+  }
 
   /** Whether this dispatch has printed its consent notices yet. */
   private noticed = false;
@@ -367,8 +381,10 @@ export class ClackTerminalPromptDispatcher implements PromptDispatcher {
     }
 
     // The CLI's one answer to whether anyone can be asked: no terminal,
-    // `--non-interactive` or `CI` all mean the prompts below are not shown.
-    if (!canPrompt()) {
+    // `--non-interactive` or `CI` all mean the prompts below are not shown. A dispatcher that never
+    // asks about a type change answers a batch holding one it would ask about as such a run does:
+    // refused, naming where it is confirmed, never waiting on a question.
+    if (!canPrompt() || this.wouldAskAboutTypeChange(events)) {
       // A batch of nothing but column drops is the data-loss consent's to
       // judge: applied when covered, refused at once, naming the consent
       // that covers it, when not. Anything needing a real decision —

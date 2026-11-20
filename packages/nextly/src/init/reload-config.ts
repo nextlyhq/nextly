@@ -2946,15 +2946,34 @@ async function applyReloadHolding(
     );
     deferredSchemaChange = true;
     deferredEntities.add(`${kind}:${slug}`);
-    withholdChange(
-      kind === "collection"
-        ? desiredCollections
-        : kind === "single"
-          ? desiredSingles
-          : desiredComponents,
-      slug
-    );
   }
+  const heldWhole = new Set(
+    heldBack.map(({ kind, slug }) => `${kind}:${slug}`)
+  );
+  // Held whole: left out of the apply, which then never names its tables, so nothing of it changes
+  // (the drop guard keeps a table outside the desired schema as it is), and out of the registry
+  // syncs after it, so its row keeps recording it as it was and the next reload judges the same
+  // change again.
+  const leaveOutHeld = () => {
+    for (const key of heldWhole) {
+      const [kind, slug] = key.split(":") as [
+        TypeChangedEntity["kind"],
+        string,
+      ];
+      delete (
+        kind === "collection"
+          ? desiredCollections
+          : kind === "single"
+            ? desiredSingles
+            : desiredComponents
+      )[slug];
+    }
+  };
+  const notHeld =
+    (kind: TypeChangedEntity["kind"]) =>
+    (entity: { slug?: unknown }): boolean =>
+      !heldWhole.has(`${kind}:${String(entity.slug)}`);
+  leaveOutHeld();
   // The reload has a change to apply only where an entity it does not hold back has one.
   if (heldBack.length > 0) {
     hasChanges =
@@ -3244,6 +3263,10 @@ async function applyReloadHolding(
       ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
       : undefined;
 
+  // The registry merges above add back every declared entity the desired schema lacks, from its
+  // row: a held one is left out again.
+  leaveOutHeld();
+
   const desired: DesiredSchema = {
     collections: desiredCollections,
     singles: desiredSingles,
@@ -3435,7 +3458,7 @@ async function applyReloadHolding(
         "collectionRegistryService"
       )) as CollectionRegistrySurface;
       const codeFirstConfigs = buildCollectionSyncPayload(
-        newConfig.collections ?? []
+        (newConfig.collections ?? []).filter(notHeld("collection"))
       );
       const collectionSync = await registry.syncCodeFirstCollections(
         codeFirstConfigs,
@@ -3510,7 +3533,7 @@ async function applyReloadHolding(
         "singleRegistryService"
       )) as SingleRegistrySurface;
       const codeFirstSingleConfigs = buildSingleSyncPayload(
-        newConfig.singles ?? []
+        (newConfig.singles ?? []).filter(notHeld("single"))
       );
       let failedSlugs = new Set<string>();
       if (codeFirstSingleConfigs.length > 0) {
@@ -3577,9 +3600,9 @@ async function applyReloadHolding(
       // that description and fail every read and write for it. The metadata and
       // the storage it describes move together or not at all.
       const codeFirstComponentConfigs = buildComponentSyncPayload(
-        (newConfig.fieldGroups ?? []).filter(
-          group => !skippedComponentSlugs.has(group.slug ?? "")
-        )
+        (newConfig.fieldGroups ?? [])
+          .filter(notHeld("fieldGroup"))
+          .filter(group => !skippedComponentSlugs.has(group.slug ?? ""))
       );
       if (codeFirstComponentConfigs.length > 0) {
         // A group the sync reports rather than writes leaves the registry behind the DDL the
@@ -3953,22 +3976,6 @@ const KIND_NOUN = {
   single: "single ",
   fieldGroup: "component ",
 } as const;
-
-/**
- * Hands the apply `slug`'s fields as its registry row records them from before the reload, so the
- * apply finds nothing of it to change: a change held back is not pushed beside the ones that go on.
- */
-function withholdChange(
-  entries: Record<
-    string,
-    { fields: unknown; recordedFields?: readonly unknown[] }
-  >,
-  slug: string
-): void {
-  const entry = entries[slug];
-  if (entry?.recordedFields === undefined) return;
-  entries[slug] = { ...entry, fields: entry.recordedFields };
-}
 
 // Decides whether a collection's ops can be auto-applied from code-first.
 //

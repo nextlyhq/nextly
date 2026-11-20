@@ -215,6 +215,25 @@ describe("a lossy type change at a terminal, where type changes are never asked 
     expect(mockConfirm).not.toHaveBeenCalled();
   });
 
+  it("refuses a pair it would ask about, naming where it is confirmed, without a question", async () => {
+    const offered: TypeChangeEvent = {
+      id: "type_change:dc_posts.code",
+      kind: "type_change",
+      tableName: "dc_posts",
+      columnName: "code",
+      fromType: "text",
+      toType: "integer",
+      isWidening: false,
+      perDialectWarning: buildPerDialectWarning("text", "integer"),
+      dialect: "postgresql",
+    };
+
+    await expect(neverAsking([offered])).rejects.toThrow(
+      /type change on dc_posts\.code/
+    );
+    expect(mockConfirm).not.toHaveBeenCalled();
+  });
+
   it("clears under the consent naming the column, without a question", async () => {
     vi.stubEnv(ENV, "dc_posts.seo");
 

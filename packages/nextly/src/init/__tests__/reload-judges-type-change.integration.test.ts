@@ -40,6 +40,8 @@ const configWith = (
   field: Record<string, unknown>,
   options: {
     localized?: boolean;
+    /** The collection made Draft/Published. */
+    status?: boolean;
     beside?: Record<string, unknown>[];
     other?: Record<string, unknown>[];
   } = {}
@@ -52,6 +54,7 @@ const configWith = (
       defineCollection({
         slug: SLUG,
         ...(options.localized === true ? { localized: true } : {}),
+        ...(options.status === true ? { status: true } : {}),
         fields: [{ name: "v", ...field }, ...(options.beside ?? [])] as never,
       }),
       ...(options.other === undefined
@@ -289,26 +292,80 @@ describe.each(getConfiguredTestDialects())(
       expect(await stored()).toEqual({ a: "12", b: "abc" });
     });
 
-    // A collection held back keeps its translations table's work back with it: a field it starts
-    // translating gets no translations table while the change beside it waits.
-    it("creates no translations table for a collection whose type change it holds back", async () => {
+    // A collection held back is held whole: nothing of it changes, its translations table's work
+    // included, even where a consent would let the move of a newly translated field drop its column.
+    it("changes nothing of a collection whose type change it holds back, its translation and Draft/Published included", async () => {
+      // `v` stays shared whatever the entity does; `w` starts being translated, which moves its
+      // values into a translations table and then drops its column from the main table.
       await withValues(
-        { type: "text" },
+        { type: "text", localized: false },
         { a: "12", b: "abc" },
-        { beside: [{ name: "w", type: "text" }] }
+        {
+          beside: [{ name: "w", type: "text" }],
+          other: [{ name: "o", type: "text" }],
+        }
       );
+      await handle!.adapter.executeQuery(
+        `UPDATE ${q(TABLE)} SET ${q("w")} = 'kept'`
+      );
+      vi.stubEnv("NEXTLY_ACCEPT_DATA_LOSS", `${TABLE}.w`);
+      const columnsBefore = (await columnsOf(TABLE)).sort();
 
       const { said } = await reloadTo(
         { type: "number", localized: false },
         {
           localized: true,
+          status: true,
+          // Another collection's change in the same reload, so its apply runs.
+          other: [
+            { name: "o", type: "text" },
+            { name: "p", type: "text" },
+          ],
           beside: [{ name: "w", type: "text", localized: true }],
         }
       );
 
       expect(said).toMatch(new RegExp(`'${SLUG}' was not applied`));
+      expect(await columnsOf(`dc_${OTHER}`)).toContain("p");
       expect(await tableExists(`${TABLE}_locales`)).toBe(false);
+      // Not a column of it changes: none dropped, and none added for Draft/Published.
+      expect((await columnsOf(TABLE)).sort()).toEqual(columnsBefore);
       expect(await stored()).toEqual({ a: "12", b: "abc" });
+      const kept = (await handle!.adapter.executeQuery(
+        `SELECT ${q("w")} AS w FROM ${q(TABLE)}`
+      )) as Array<{ w: unknown }>;
+      expect(kept.map(row => row.w)).toEqual(["kept", "kept"]);
+    });
+
+    // A collection held back keeps its registry row as it was, so the next reload finds the same
+    // change and judges it again, even where another collection's change ran the registry's sync.
+    it("judges a change it held back again at the next reload, after another collection's change applied", async () => {
+      await withValues(
+        { type: "text" },
+        { a: "12", b: "abc" },
+        { other: [{ name: "w", type: "text" }] }
+      );
+      const to = { type: "number" };
+      const options = {
+        other: [
+          { name: "w", type: "text" },
+          { name: "x", type: "text" },
+        ],
+      };
+
+      const first = await reloadTo(to, options);
+      const second = await reloadTo(to, options);
+
+      expect(first.said).toMatch(new RegExp(`'${SLUG}' was not applied`));
+      expect(second.said).toMatch(new RegExp(`'${SLUG}' was not applied`));
+      expect(await stored()).toEqual({ a: "12", b: "abc" });
+      const [row] = (await handle!.adapter.executeQuery(
+        `SELECT ${q("fields")} AS fields FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${SLUG}'`
+      )) as Array<{ fields: unknown }>;
+      const fields = (
+        typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+      ) as Array<{ name: string; type: string }>;
+      expect(fields.find(field => field.name === "v")?.type).toBe("text");
     });
 
     // A reload runs inside the development server: a value is cleared only under the consent
