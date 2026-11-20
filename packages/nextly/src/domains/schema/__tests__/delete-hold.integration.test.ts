@@ -35,6 +35,7 @@ import type { ServiceContainer } from "../../../services";
 import { consoleLogger } from "../../../shared/types";
 import { holdEntityForWrite } from "../../collections/services/entry-write-hold";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { namedCollectionLockNames } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
 
 // A gate before each migration file's first statement on the file road (`runWritten` asks the
@@ -62,6 +63,11 @@ vi.mock("../migrate/required-column-guard", async importOriginal => {
   };
 });
 
+// A switch that makes the migration try's handle refuse to let the collection's hold go, without
+// running the release: set after the count, on the handle the count ran on, which the hold's
+// release then runs on too. `refused` counts the releases refused.
+const tryRelease = vi.hoisted(() => ({ fails: false, refused: 0 }));
+
 // A gate just after the save's count, inside the file's transaction, with the table held.
 const afterCount = vi.hoisted(() => ({
   armed: false,
@@ -82,6 +88,7 @@ vi.mock("../builder-save/deletion-counts", async importOriginal => {
       const gatedAfter =
         (check: (db: unknown) => Promise<void>) => async (db: unknown) => {
           await check(db);
+          if (tryRelease.fails) await refuseReleaseOn(db);
           if (afterCount.armed) {
             afterCount.paused?.();
             await afterCount.release;
@@ -121,10 +128,30 @@ vi.mock("../builder-save/push-carries-values", async importOriginal => {
 // and a switch that refuses its release once the release has really run (`sessionsOf`).
 const releaseFails = { on: false, holds: 0, refused: 0 };
 
+/** `db`, a MySQL handle the runner gives, made to refuse each statement that lets a named lock go. */
+async function refuseReleaseOn(db: unknown): Promise<void> {
+  const { MySqlDialect } = await import("drizzle-orm/mysql-core");
+  const dialect = new MySqlDialect();
+  const handle = db as { execute(query: unknown): Promise<unknown> };
+  const execute = handle.execute.bind(handle);
+  handle.execute = async (query: unknown) => {
+    const text = dialect.sqlToQuery(
+      query as Parameters<typeof dialect.sqlToQuery>[0]
+    ).sql;
+    if (text.includes("RELEASE_LOCK")) {
+      tryRelease.refused += 1;
+      throw new Error("the release was refused");
+    }
+    return execute(query);
+  };
+}
+
 let instance: TestNextly | undefined;
 afterEach(async () => {
   pushRoad.forced = false;
   releaseFails.on = false;
+  tryRelease.fails = false;
+  tryRelease.refused = 0;
   releaseFails.holds = 0;
   releaseFails.refused = 0;
   fileStart.armed = false;
@@ -683,6 +710,43 @@ describe.each(getConfiguredTestDialects())(
           typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
         ) as Array<{ name: string }>;
         expect(stored.map(field => field.name)).toEqual(["label"]);
+      },
+      60_000
+    );
+
+    // On the file road a release that fails on the migration's connection changes nothing of the
+    // save, which is applied; the connection is closed once its transaction is over, so it does
+    // not go back to the pool holding the collection, and the next write does not wait.
+    it.runIf(dialect === "mysql")(
+      "reports a save its file applied as applied when its hold cannot be let go, and leaves the collection free",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        tryRelease.fails = true;
+
+        await expect(apply(t, 3)).resolves.toBeDefined();
+
+        expect(tryRelease.refused).toBe(1);
+        expect(await hasNoteColumn(t)).toBe(false);
+        // No connection holds the collection's named locks.
+        const [database] = await sql<{ name: string }>(
+          t,
+          "SELECT DATABASE() AS name"
+        );
+        for (const name of namedCollectionLockNames(database?.name ?? null, [
+          SLUG,
+        ])) {
+          const [row] = await sql<{ holder: unknown }>(
+            t,
+            `SELECT IS_USED_LOCK('${name}') AS holder`
+          );
+          expect(row?.holder ?? null).toBeNull();
+        }
+        // So an entry write goes ahead at once.
+        tryRelease.fails = false;
+        await expect(
+          t.nextly.create({ collection: SLUG, data: { label: "after" } })
+        ).resolves.toBeDefined();
       },
       60_000
     );

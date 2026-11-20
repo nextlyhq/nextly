@@ -550,7 +550,7 @@ import {
   entryStillReferenced,
   referrersHolding,
 } from "./entry-still-referenced";
-import { holdEntityForWrite } from "./entry-write-hold";
+import { expectedRegistryIdOf, holdEntityForWrite } from "./entry-write-hold";
 import { publishCallerOf, publishGate, type PublishPart } from "./publish-gate";
 import { type PartsState, publishValueIssues } from "./publish-parts";
 import { requiresEveryLanguage } from "./require-every-language";
@@ -22856,13 +22856,21 @@ export class CollectionMutationService extends BaseService {
    * it to commit, and it waits for such a save to finish. Every transaction that writes entries
    * opens through this, the batch writes included, so none is left without the hold.
    */
-  entryTransaction<T>(
+  async entryTransaction<T>(
     collectionName: string,
     work: (tx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T> {
+    // The registry row the write is made for, read before its transaction opens, so the hold can
+    // refuse a write whose collection was replaced while it waited (`expectedRegistryIdOf`).
+    const expected = await expectedRegistryIdOf(
+      this.collectionService,
+      collectionName,
+      this.adapter,
+      this.dialect
+    );
     return this.adapter.transaction(async tx => {
-      await this.holdForEntryWrite(tx, collectionName);
+      await this.holdForEntryWrite(tx, collectionName, expected);
       return work(tx);
     }, options);
   }
@@ -22873,13 +22881,16 @@ export class CollectionMutationService extends BaseService {
    */
   private holdForEntryWrite(
     tx: TransactionContext,
-    collectionName: string
+    collectionName: string,
+    /** The registry row the write is made for, where it was read (`expectedRegistryIdOf`). */
+    expected?: string
   ): Promise<void> {
     return holdEntityForWrite(
       tx,
       collectionName,
       this.collectionService,
-      this.dialect
+      this.dialect,
+      expected
     );
   }
 

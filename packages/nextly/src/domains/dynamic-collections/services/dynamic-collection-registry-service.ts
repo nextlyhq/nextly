@@ -1114,16 +1114,49 @@ export function holdCollectionOnSession(
  * that starts after waits at the named locks until `release`, which runs on the same connection in
  * the try's `settled`. A take that fails releases what it got before it throws.
  */
-export function holdCollectionOnConnection(
+export async function holdCollectionOnConnection(
   adapter: object,
   db: unknown,
   slug: string
-): Promise<{ release: () => Promise<void> }> {
+): Promise<{ release: () => Promise<void>; connection: string }> {
+  const rowsOn = rowsOnConnection(db);
   // The migration try's transaction, which the runner opens before `before` runs.
-  return holdCollectionWith(
+  const hold = await holdCollectionWith(
     adapter,
-    rowsOnConnection(db),
+    rowsOn,
     slug,
     "in-transaction"
   );
+  try {
+    // The connection the hold belongs to, for `closeHoldingConnection` where its release fails.
+    const [row] = await rowsOn<{ id: unknown }>(
+      sql`SELECT CONNECTION_ID() AS ${sql.identifier("id")}`
+    );
+    return { release: hold.release, connection: String(row?.id) };
+  } catch (error) {
+    await hold.release();
+    throw error;
+  }
+}
+
+/**
+ * Closes MySQL connection `connection` (its `CONNECTION_ID()`) from a pooled connection of
+ * `adapter`: where a hold's release failed on it, so its named locks end with it, rather than
+ * going back to the pool held. Run once the transaction on that connection has ended, never inside
+ * it, which closing would roll back. A connection already gone is passed over.
+ */
+export async function closeHoldingConnection(
+  adapter: {
+    executeQuery(statement: string, params?: SqlParam[]): Promise<unknown>;
+  },
+  connection: string
+): Promise<void> {
+  // A connection id is a whole number read from the server, never caller input.
+  if (!/^\d+$/.test(connection)) return;
+  const compiled = new MySqlDialect().sqlToQuery(
+    sql`KILL ${sql.raw(connection)}`
+  );
+  await adapter
+    .executeQuery(compiled.sql, compiled.params as SqlParam[])
+    .catch(() => undefined);
 }

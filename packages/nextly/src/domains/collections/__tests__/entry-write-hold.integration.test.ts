@@ -76,10 +76,14 @@ describe.each(getConfiguredTestDialects())(
 
     /**
      * The collection held for update by another session, as a deleting save holds it, until the
-     * returned `release` is called; resolves once the hold is taken.
+     * returned `release` is called; resolves once the hold is taken. `whileHeld` runs in the
+     * holding transaction once the hold is taken, committed with it.
      */
     async function holdForUpdate(
-      t: TestNextly
+      t: TestNextly,
+      whileHeld?: (tx: {
+        execute(statement: string): Promise<unknown>;
+      }) => Promise<void>
     ): Promise<{ release: () => Promise<void> }> {
       let held: () => void = () => undefined;
       const isHeld = new Promise<void>(resolve => {
@@ -93,6 +97,7 @@ describe.each(getConfiguredTestDialects())(
       const registry = new DynamicCollectionService(t.adapter, consoleLogger);
       const holding = t.adapter.transaction(async tx => {
         const hold = await registry.holdCollectionsIn(tx, [SLUG], "update");
+        await whileHeld?.(tx);
         held();
         await released;
         await hold.release();
@@ -242,6 +247,39 @@ describe.each(getConfiguredTestDialects())(
         await hold.release();
         await write;
         expect(await notes(t)).toEqual(["written on the caller's transaction"]);
+      },
+      30_000
+    );
+
+    // A write that waited while its collection was deleted and made again under the same slug is
+    // refused, not written into the collection that took its place.
+    onMysql(
+      "refuses a write that waited while its collection was replaced under its slug, and writes nothing",
+      async () => {
+        const t = await boot();
+        // The collection deleted and made again, as the holding session leaves its registry row
+        // once it commits: the slug's row another, under a new id.
+        const hold = await holdForUpdate(t, tx =>
+          tx
+            .execute(
+              `UPDATE dynamic_collections SET id = 'replaced-${SLUG}' WHERE slug = '${SLUG}'`
+            )
+            .then(() => undefined)
+        );
+
+        const { landed, write } = await landsWhileHeld(
+          t.nextly.create({
+            collection: SLUG,
+            data: { title: "t", note: "written into the replacement" },
+          } as never)
+        );
+        expect(landed).toBe(false);
+
+        await hold.release();
+        await expect(write).rejects.toMatchObject({
+          code: "COLLECTION_BEING_CHANGED",
+        });
+        expect(await notes(t)).toEqual([]);
       },
       30_000
     );

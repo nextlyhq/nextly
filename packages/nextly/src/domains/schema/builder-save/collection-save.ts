@@ -58,6 +58,7 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { AddressKind } from "../../../shared/address-rule";
 import {
+  closeHoldingConnection,
   holdCollectionOnConnection,
   holdCollectionOnSession,
 } from "../../dynamic-collections/services/dynamic-collection-registry-service";
@@ -3708,24 +3709,30 @@ async function runWritten(
     unit: { source: string; transaction: boolean },
     after: (db: unknown, statementsExecuted: number) => Promise<void>
   ) =>
-    runUnitInTries(
-      deps.adapter,
-      splitSqlStatements(sql, dialect, unit),
-      unit,
-      inLastTransaction !== undefined && running === ordered.at(-1)
-        ? async (handle: unknown, statementsExecuted: number) => {
-            await after(handle, statementsExecuted);
-            await inLastTransaction();
+    // In each file that deletes removed fields' values, for the values in the tables it is the
+    // last to change: before its first statement and inside its transaction, on every try.
+    runHeld(
+      deps,
+      hold,
+      () => holdIn.get(unit.source),
+      held =>
+        runUnitInTries(
+          deps.adapter,
+          splitSqlStatements(sql, dialect, unit),
+          unit,
+          inLastTransaction !== undefined && running === ordered.at(-1)
+            ? async (handle: unknown, statementsExecuted: number) => {
+                await after(handle, statementsExecuted);
+                await inLastTransaction();
+              }
+            : after,
+          {
+            bounds,
+            notify: line => deps.logger.warn(line),
+            appliedBefore: () => [...applied],
+            ...held,
           }
-        : after,
-      {
-        bounds,
-        notify: line => deps.logger.warn(line),
-        appliedBefore: () => [...applied],
-        // In each file that deletes removed fields' values, for the values in the tables it is
-        // the last to change: before its first statement and inside its transaction, on every try.
-        ...triedHoldOf(deps, hold, () => holdIn.get(unit.source)),
-      }
+        )
     );
   const ordered =
     files.change.length === 0 && files.adopt !== undefined
@@ -3818,38 +3825,44 @@ async function runWritten(
     const adoptedWith = parts.findIndex(part => part.hasSnapshot);
     const adoption = pendingAdoption;
     try {
-      await runUnitInTries(
-        deps.adapter,
-        parts.flatMap(part => part.statements),
-        { source: ordered.join(", "), transaction: true },
-        async handle => {
-          for (const [index, part] of parts.entries()) {
-            await recordRunInTransaction(
-              {
-                file: part.unit,
-                dialect,
-                repo,
-                ...(index === adoptedWith && adoption !== undefined
-                  ? {
-                      recordApplied: (held: unknown) =>
-                        recordAlreadyApplied(adoption, repo.boundTo(held)),
-                    }
-                  : {}),
-              },
-              handle,
-              part.statements.length,
-              undefined
-            );
-          }
-          await inLastTransaction?.();
-        },
-        {
-          bounds,
-          notify: line => deps.logger.warn(line),
-          appliedBefore: () => [],
-          // Every file runs in this one transaction, the deleting one among them.
-          ...triedHoldOf(deps, hold, whole => whole.check),
-        }
+      // Every file runs in this one transaction, the deleting one among them.
+      await runHeld(
+        deps,
+        hold,
+        whole => whole.check,
+        held =>
+          runUnitInTries(
+            deps.adapter,
+            parts.flatMap(part => part.statements),
+            { source: ordered.join(", "), transaction: true },
+            async handle => {
+              for (const [index, part] of parts.entries()) {
+                await recordRunInTransaction(
+                  {
+                    file: part.unit,
+                    dialect,
+                    repo,
+                    ...(index === adoptedWith && adoption !== undefined
+                      ? {
+                          recordApplied: (held: unknown) =>
+                            recordAlreadyApplied(adoption, repo.boundTo(held)),
+                        }
+                      : {}),
+                  },
+                  handle,
+                  part.statements.length,
+                  undefined
+                );
+              }
+              await inLastTransaction?.();
+            },
+            {
+              bounds,
+              notify: line => deps.logger.warn(line),
+              appliedBefore: () => [],
+              ...held,
+            }
+          )
       );
     } catch (error) {
       // A lost race, a busy table's stop, and a count that changed are thrown as they are, as a
@@ -4270,7 +4283,9 @@ function triedHoldOf(
   /** The count this run takes: the whole hold's, or one file's (`DeletionHold.checkIn`). */
   checkOf: (
     hold: SaveDeletionHold
-  ) => ((db: unknown) => Promise<void>) | undefined
+  ) => ((db: unknown) => Promise<void>) | undefined,
+  /** Told the connection a release failed on, to close once the try's transaction has ended. */
+  leftHeld: (connection: string) => void
 ): {
   before?: (db: unknown) => Promise<void>;
   settled?: (db: unknown) => Promise<void>;
@@ -4282,19 +4297,51 @@ function triedHoldOf(
   }
   const { slug } = hold;
   // This try's hold: `before` and `settled` run in turn, one pair per try.
-  let release: (() => Promise<void>) | undefined;
+  let held: Awaited<ReturnType<typeof holdCollectionOnConnection>> | undefined;
   return {
     before: async db => {
-      release = (await holdCollectionOnConnection(deps.adapter, db, slug))
-        .release;
+      held = await holdCollectionOnConnection(deps.adapter, db, slug);
       await check(db);
     },
     settled: async () => {
-      const releasing = release;
-      release = undefined;
-      await releasing?.();
+      const releasing = held;
+      held = undefined;
+      // A release that fails is told and passed over, so the try ends as its statements did. Its
+      // connection may still hold the locks, so it is closed once the try's transaction has ended
+      // (`runHeld`) rather than going back to the pool held.
+      await releasing?.release().catch((error: unknown) => {
+        deps.logger.warn(
+          `Collection '${slug}': its hold for the save could not be let go on the migration's connection (${error instanceof Error ? error.message : String(error)}); that connection is closed once the migration's try is over.`
+        );
+        leftHeld(releasing.connection);
+      });
     },
   };
+}
+
+/**
+ * `run`, a unit run in tries, given the hold's `before` and `settled` for the count `checkOf` picks
+ * (`triedHoldOf`); once it has ended, however it ended, each connection a release failed on is
+ * closed (`closeHoldingConnection`), its transaction over by then.
+ */
+async function runHeld<T>(
+  deps: CollectionSaveDeps,
+  hold: SaveDeletionHold | undefined,
+  checkOf: Parameters<typeof triedHoldOf>[2],
+  run: (hooks: ReturnType<typeof triedHoldOf>) => Promise<T>
+): Promise<T> {
+  const leftHeld: string[] = [];
+  try {
+    return await run(
+      triedHoldOf(deps, hold, checkOf, connection => {
+        leftHeld.push(connection);
+      })
+    );
+  } finally {
+    for (const connection of leftHeld) {
+      await closeHoldingConnection(deps.adapter, connection);
+    }
+  }
 }
 
 /** `apply` under the save's count and hold (`countedThroughApply`), for the save's deletion hold. */
