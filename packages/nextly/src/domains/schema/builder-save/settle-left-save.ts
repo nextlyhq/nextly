@@ -42,6 +42,7 @@ import {
   recordAlreadyApplied,
   snapshotsEquivalent,
 } from "../migrate/drift-reconcile";
+import { blankWrittenFrom } from "../migrate/history-line";
 import { splitSqlStatements } from "../migrate/split-sql";
 import { parseSqlSections } from "../migrate/sql-sections";
 import { tablesChangedIn } from "../migrate/statement-targets";
@@ -418,15 +419,27 @@ async function dependentsOf(
   const saves = new Set(files.map(baseName));
   const meta = join(deps.migrationsDir, "meta");
   const dependents: string[] = [];
+  const withSnapshot = new Set<string>();
   for (const name of await snapshotNamesIn(meta)) {
     const own = name.replace(/\.snapshot\.json$/, "");
+    withSnapshot.add(own);
     if (saves.has(own)) continue;
     const from = await writtenFrom(join(meta, name), own);
     if (from === undefined || from.some(parent => saves.has(parent))) {
       dependents.push(own);
     }
   }
-  return dependents;
+  // And each blank migration (a file with no snapshot, written by hand after `migrate:create
+  // --blank`), whose header states the migration it was written after.
+  for (const file of await sqlFilesIn(deps.migrationsDir)) {
+    const own = baseName(file);
+    if (saves.has(own) || withSnapshot.has(own)) continue;
+    const content = await readIfPresent(join(deps.migrationsDir, file));
+    if (blankWrittenFrom(content ?? "").some(parent => saves.has(parent))) {
+      dependents.push(own);
+    }
+  }
+  return dependents.sort();
 }
 
 /** The snapshot files in `meta`, in name order; none where it is absent. */
@@ -837,9 +850,13 @@ function laterFileOfSave(
   };
 }
 
-/** Whether a file's header names the record's entity. */
+/**
+ * Whether a file's header names the record's entity as one it changes. Only a scoped header says
+ * that (`scoped`): a legacy file's header lists the whole configuration, and names every entity.
+ */
 function namesEntity(content: string, record: LeftSave): boolean {
   const headers = parseEntityHeaders(content);
+  if (!headers.scoped) return false;
   const list =
     record.kind === "collection"
       ? headers.collections

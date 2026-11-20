@@ -1283,6 +1283,96 @@ describe.each(getConfiguredTestDialects())(
       expect(reloads.count, "the start's code-first reload ran").toBe(0);
     }, 300_000);
 
+    // A blank migration written since (`migrate:create --blank`: a file with no snapshot, its SQL
+    // by hand) states the save's file as its parent in its header: its statements take that file's
+    // schema as given, so the settle does not remove the file under it, and the record stays.
+    it("keeps a record whose files a later blank migration was written from", async () => {
+      const t = await boot();
+      await created(t);
+      const filesBefore = sqlFiles();
+      await stopSave(t, [text("heading"), text("alpha")], point =>
+        point.startsWith("unit:")
+      );
+      const written = sqlFiles().filter(f => !filesBefore.includes(f));
+      expect(written.length).toBeGreaterThan(0);
+      const parent = written.at(-1)!.replace(/\.sql$/, "");
+      writeFileSync(
+        join(HISTORY_DIR(), "29991231_000000_000_by_hand.sql"),
+        [
+          "-- Migration: by_hand",
+          `-- Parent: ${parent}`,
+          "",
+          "-- UP",
+          `UPDATE "${TABLE}" SET "alpha" = 'x';`,
+          "",
+          "-- DOWN",
+          "SELECT 1;",
+          "",
+        ].join("\n")
+      );
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["left"]);
+      expect(await recordRow(t), "the record stays").toBeDefined();
+      for (const file of written) {
+        expect(sqlFiles(), "the save's files stay").toContain(file);
+      }
+    }, 300_000);
+
+    // A legacy file's header lists the whole configuration, not what it changes: a later one that
+    // names the entity that way, and changes another table, has not moved past the save.
+    it("brings the registry row up over a later legacy migration whose header lists every entity", async () => {
+      const t = await boot();
+      await created(t);
+      const realDelete = MetaService.prototype.delete;
+      vi.spyOn(MetaService.prototype, "delete").mockImplementation(
+        async function (this: MetaService, key: string) {
+          if (key === RECORD_KEY) await stopHere("clear");
+          return realDelete.call(this, key);
+        }
+      );
+      await stopSave(
+        t,
+        [text("heading"), text("alpha")],
+        point => point === "clear"
+      );
+      vi.mocked(MetaService.prototype.delete).mockRestore();
+      const repo = new SchemaEventsRepository(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect
+      );
+      const later = "29991231_000000_000_legacy.sql";
+      writeFileSync(
+        join(HISTORY_DIR(), later),
+        [
+          "-- Migration: legacy",
+          `-- Singles: ${SLUG}, another_single`,
+          "",
+          "-- UP",
+          'ALTER TABLE "dc_unrelated" ADD COLUMN "x" TEXT;',
+          "",
+          "-- DOWN",
+          "SELECT 1;",
+          "",
+        ].join("\n")
+      );
+      await recordAlreadyApplied({ filename: later }, repo);
+      // The row as it stood before the save's own write.
+      await writeAppliedFieldsRow(t.adapter, {
+        table: "dynamic_singles",
+        slug: SLUG,
+        fields: [text("heading")] as never,
+        localized: false,
+        schemaVersion: (await versionOf(t)) + 1,
+      });
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["all"]);
+      expect(await registryFieldNames(t)).toEqual(["heading", "alpha"]);
+    }, 300_000);
+
     it("keeps the marker of an entity whose row cannot be read", async () => {
       const t = await boot();
       await created(t);
