@@ -406,36 +406,63 @@ async function sqliteCounterCovers(
   ) {
     return false;
   }
-  const [counter] = await sqliteRows(
+  // One statement, compared inside SQLite: both values are 64-bit integers, which a JavaScript
+  // number cannot tell apart above 2^53. No counter yet: SQLite makes it at the first insert, so
+  // the table must hold no row. The highest key is read from the key column by name: `rowid`
+  // reads a column of that name where a table has one.
+  const [answer] = await sqliteRows(
     db,
-    sql`SELECT seq FROM sqlite_sequence WHERE name = ${table}`
+    sql`SELECT CASE
+                 WHEN NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = ${table})
+                   THEN MAX(${sql.identifier(key)}) IS NULL
+                 ELSE (SELECT seq FROM sqlite_sequence WHERE name = ${table})
+                        >= COALESCE(MAX(${sql.identifier(key)}), 0)
+               END AS covers
+        FROM ${sql.identifier(table)}`
   );
-  // Read from the key column by name: `rowid` reads a column of that name where a table has one.
-  const [top] = await sqliteRows(
-    db,
-    sql`SELECT MAX(${sql.identifier(key)}) AS top FROM ${sql.identifier(table)}`
-  );
-  const highest = top?.top;
-  // No counter yet: SQLite makes it at the first insert, so the table must hold no row.
-  if (counter === undefined) return highest === null || highest === undefined;
-  return Number(counter.seq) >= Number(highest ?? 0);
+  return yes(answer?.covers);
 }
 
 /**
  * Whether a table's stored `CREATE TABLE` declares its key `PRIMARY KEY [ASC | DESC]
- * AUTOINCREMENT`, read as words: the word in a string, a quoted name or an expression declares
- * nothing.
+ * [ON CONFLICT <resolution>] AUTOINCREMENT`, read as words: the word in a string, a quoted name
+ * or an expression declares nothing.
  */
 function declaresAutoincrement(createSql: unknown): boolean {
   if (typeof createSql !== "string") return false;
   const words = cursorOf(createSql, "sqlite").rest();
   return words.some(
     (word, at) =>
-      word === "AUTOINCREMENT" &&
-      [words[at - 1], words[at - 2]].includes("KEY") &&
-      (words[at - 1] === "KEY" ||
-        ["ASC", "DESC"].includes(String(words[at - 1])))
+      word === "AUTOINCREMENT" && keyWordsBefore(words.slice(0, at))
   );
+}
+
+/** The conflict resolutions SQLite's `ON CONFLICT` clause names. */
+const CONFLICT_RESOLUTIONS = new Set([
+  "ROLLBACK",
+  "ABORT",
+  "FAIL",
+  "IGNORE",
+  "REPLACE",
+]);
+
+/**
+ * Whether the words before an `AUTOINCREMENT` end in `PRIMARY KEY`, an `ASC` or `DESC` and an
+ * `ON CONFLICT <resolution>` read past: what SQLite allows between the key and the word.
+ */
+function keyWordsBefore(before: readonly unknown[]): boolean {
+  let end = before.length;
+  const resolution = before[end - 1];
+  if (
+    typeof resolution === "string" &&
+    CONFLICT_RESOLUTIONS.has(resolution) &&
+    before[end - 2] === "CONFLICT" &&
+    before[end - 3] === "ON"
+  ) {
+    end -= 3;
+  }
+  if (["ASC", "DESC"].includes(String(before[end - 1]))) end -= 1;
+  return before[end - 1] === "KEY" && before[end - 2] === "PRIMARY";
 }
 
 /** SQLite's indexes and counters of the tables, one table at a time. */

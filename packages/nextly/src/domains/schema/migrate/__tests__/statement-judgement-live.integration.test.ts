@@ -455,5 +455,43 @@ describe.each(LOCK_DIALECTS)(
         ).toBe(false);
       }
     );
+
+    it.runIf(dialect === "sqlite")(
+      "compares a counter with the highest key inside SQLite, and reads a key with a conflict clause",
+      async () => {
+        const coversOf = async (table: string) =>
+          (
+            await readLiveSchema(adapter.getDrizzle(), dialect, [
+              `CREATE TABLE ${table} (id integer)`,
+            ])
+          ).counterCovers(table);
+        // Above 2^53 a JavaScript number reads the counter and the key one below it as equal.
+        const large = `${P}_large`;
+        await adapter.executeQuery(
+          `CREATE TABLE ${large} (id INTEGER PRIMARY KEY AUTOINCREMENT, label text)`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${large} (id, label) VALUES (9007199254740993, 'a')`
+        );
+        expect(await coversOf(large)).toBe(true);
+        await adapter.executeQuery(
+          `UPDATE sqlite_sequence SET seq = 9007199254740992 WHERE name = '${large}'`
+        );
+        expect(await coversOf(large)).toBe(false);
+        // `ON CONFLICT <resolution>` may stand between the key and AUTOINCREMENT.
+        const conflict = `${P}_conflict`;
+        await adapter.executeQuery(
+          `CREATE TABLE ${conflict} (id INTEGER PRIMARY KEY ON CONFLICT REPLACE AUTOINCREMENT, label text)`
+        );
+        await adapter.executeQuery(
+          `INSERT INTO ${conflict} (label) VALUES ('a'), ('b'), ('c')`
+        );
+        expect(await coversOf(conflict)).toBe(true);
+        await adapter.executeQuery(
+          `UPDATE sqlite_sequence SET seq = 1 WHERE name = '${conflict}'`
+        );
+        expect(await coversOf(conflict)).toBe(false);
+      }
+    );
   }
 );
