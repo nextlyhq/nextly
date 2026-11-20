@@ -16,7 +16,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
-import { defineSingle, number, repeater, text } from "../../../config";
+import {
+  defineFieldGroup,
+  defineSingle,
+  fieldGroup,
+  number,
+  repeater,
+  text,
+} from "../../../config";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -29,6 +36,9 @@ import type { SingleEntryService } from "../../singles/services/single-entry-ser
 perLanguageStorageSuite();
 
 const SLUG = "slidesite";
+/** A Single holding a repeatable component, whose instances keep one structure too. */
+const DECK = "decksite";
+const CARD = "deckcard";
 
 /** Booting a site per test takes most of the default timeout on MySQL alone. */
 const BOOT_TIMEOUT = 90_000;
@@ -63,6 +73,23 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
           }),
         ],
       }),
+      defineSingle({
+        slug: DECK,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "cards", component: CARD, repeatable: true }),
+        ],
+      }),
+    ],
+    fieldGroups: [
+      defineFieldGroup({
+        slug: CARD,
+        fields: [text({ name: "label" }), number({ name: "weight" })],
+      }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
   });
@@ -72,11 +99,12 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
 async function save(
   singles: SingleEntryService,
   locale: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  slug: string = SLUG
 ): Promise<void> {
   // Every save here replaces what is stored, as an editor's save does.
   const saved = await singles.update(
-    SLUG,
+    slug,
     { ...data, _overwrite: true },
     { locale, overrideAccess: true }
   );
@@ -86,9 +114,14 @@ async function save(
 async function read(
   singles: SingleEntryService,
   locale: string,
-  editor = false
-): Promise<{ slides: Slide[]; _sharedChangesPending?: boolean }> {
-  const res = await singles.get(SLUG, {
+  editor = false,
+  slug: string = SLUG
+): Promise<{
+  slides: Slide[];
+  cards: Card[];
+  _sharedChangesPending?: boolean;
+}> {
+  const res = await singles.get(slug, {
     locale,
     overrideAccess: true,
     ...(editor ? { includeWorkingDraft: true, status: "all" as const } : {}),
@@ -99,8 +132,18 @@ async function read(
 
 const captions = (slides: Slide[]) => slides.map(slide => slide.caption);
 
+interface Card {
+  id: string;
+  label?: string | null;
+  weight?: number | null;
+}
+
+const labels = (cards: Card[]) => cards.map(card => card.label);
+
 /** The Single's working drafts as stored, by slot (`shared` for none). */
-async function drafts(): Promise<Record<string, Record<string, unknown>>> {
+async function drafts(
+  slug: string = SLUG
+): Promise<Record<string, Record<string, unknown>>> {
   const rows = await current!.adapter.select<{
     locale: string | null;
     snapshot: unknown;
@@ -108,7 +151,7 @@ async function drafts(): Promise<Record<string, Record<string, unknown>>> {
     where: {
       and: [
         { column: "scopeKind", op: "=", value: "single" },
-        { column: "scopeSlug", op: "=", value: SLUG },
+        { column: "scopeSlug", op: "=", value: slug },
         { column: "isAutosave", op: "=", value: false },
         { column: "versionNo", op: "IS NULL" },
         { column: "status", op: "=", value: "draft" },
@@ -146,6 +189,40 @@ async function publishedInBoth(
     ],
     status: "published",
   });
+  return { first: first!.id, second: second!.id };
+}
+
+/** The deck published in English and Spanish with two cards, each label translated. */
+async function deckInBoth(
+  singles: SingleEntryService
+): Promise<{ first: string; second: string }> {
+  await save(
+    singles,
+    "en",
+    {
+      title: "en deck",
+      cards: [
+        { label: "first", weight: 1 },
+        { label: "second", weight: 2 },
+      ],
+      status: "published",
+    },
+    DECK
+  );
+  const [first, second] = (await read(singles, "en", false, DECK)).cards;
+  await save(
+    singles,
+    "es",
+    {
+      title: "es deck",
+      cards: [
+        { id: first!.id, label: "primero", weight: 1 },
+        { id: second!.id, label: "segundo", weight: 2 },
+      ],
+      status: "published",
+    },
+    DECK
+  );
   return { first: first!.id, second: second!.id };
 }
 
@@ -285,6 +362,113 @@ describe.each(getConfiguredTestDialects())(
         expect(captions(english.slides)).toEqual(["second", "first"]);
         expect(Object.keys(await drafts())).toEqual(["en"]);
         expect(captions((await read(singles, "en", true)).slides)).toEqual([
+          "second",
+          "first 2",
+        ]);
+      },
+      BOOT_TIMEOUT
+    );
+
+    it(
+      "holds a translation inside a component's instance in that language's draft only, by instance id",
+      async () => {
+        const singles = await boot(dialect);
+        const { first, second } = await deckInBoth(singles);
+
+        await save(
+          singles,
+          "es",
+          {
+            cards: [
+              { id: first, label: "primero 2", weight: 1 },
+              { id: second, label: "segundo", weight: 2 },
+            ],
+          },
+          DECK
+        );
+
+        const stored = await drafts(DECK);
+        expect(Object.keys(stored)).toEqual(["es"]);
+        expect(stored.es.cards).toMatchObject({
+          [first]: { label: "primero 2" },
+        });
+        expect(JSON.stringify(stored.es.cards)).not.toMatch(/weight/);
+        expect(labels((await read(singles, "es", true, DECK)).cards)).toEqual([
+          "primero 2",
+          "segundo",
+        ]);
+        const english = await read(singles, "en", true, DECK);
+        expect(labels(english.cards)).toEqual(["first", "second"]);
+        expect(english._sharedChangesPending).toBe(false);
+      },
+      BOOT_TIMEOUT
+    );
+
+    it(
+      "holds a reorder of a component's instances in the shared draft, without any language's text",
+      async () => {
+        const singles = await boot(dialect);
+        const { first, second } = await deckInBoth(singles);
+
+        await save(
+          singles,
+          "es",
+          {
+            cards: [
+              { id: second, label: "segundo", weight: 2 },
+              { id: first, label: "primero", weight: 1 },
+            ],
+          },
+          DECK
+        );
+
+        const stored = await drafts(DECK);
+        expect(Object.keys(stored)).toEqual(["shared"]);
+        expect(JSON.stringify(stored.shared.cards)).not.toMatch(
+          /segundo|primero/
+        );
+        const english = await read(singles, "en", true, DECK);
+        expect(labels(english.cards)).toEqual(["second", "first"]);
+        expect(english._sharedChangesPending).toBe(true);
+      },
+      BOOT_TIMEOUT
+    );
+
+    it(
+      "puts a component reorder held in one language live with another language's publish, and only the publishing language's text",
+      async () => {
+        const singles = await boot(dialect);
+        const { first, second } = await deckInBoth(singles);
+        // English holds a reorder and a label of its own.
+        await save(
+          singles,
+          "en",
+          {
+            cards: [
+              { id: second, label: "second", weight: 2 },
+              { id: first, label: "first 2", weight: 1 },
+            ],
+          },
+          DECK
+        );
+        // Spanish holds an edit of its own title alone, and publishes.
+        await save(singles, "es", { title: "es deck 2" }, DECK);
+
+        await save(singles, "es", { status: "published" }, DECK);
+
+        // The reorder is a shared change: Spanish's publish put it live for every language, each
+        // card keeping its Spanish label.
+        expect(labels((await read(singles, "es", false, DECK)).cards)).toEqual([
+          "segundo",
+          "primero",
+        ]);
+        // English's own label edit is not Spanish's to publish.
+        expect(labels((await read(singles, "en", false, DECK)).cards)).toEqual([
+          "second",
+          "first",
+        ]);
+        expect(Object.keys(await drafts(DECK))).toEqual(["en"]);
+        expect(labels((await read(singles, "en", true, DECK)).cards)).toEqual([
           "second",
           "first 2",
         ]);
