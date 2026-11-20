@@ -395,6 +395,7 @@ describe("PushSchemaPipeline.apply with an unanswered column made required", () 
         preCleanupExecutor: { execute: preCleanup },
         migrationJournal: noopMigrationJournal,
         notifier: noopNotifier,
+        adapter: undefined,
       },
       {
         _kitOverride: {
@@ -463,6 +464,7 @@ describe("PushSchemaPipeline.apply with an unanswered column made required", () 
         preCleanupExecutor: noopPreCleanupExecutor,
         migrationJournal: noopMigrationJournal,
         notifier: noopNotifier,
+        adapter: undefined,
       },
       {
         _kitOverride: {

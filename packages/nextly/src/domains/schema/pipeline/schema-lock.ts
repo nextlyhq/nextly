@@ -1729,7 +1729,17 @@ class SchemaLockHold {
       this.lost = true;
       return false;
     }
+    const before = this.confirmedAt;
     this.confirmedAt = Math.max(this.confirmedAt, asked);
+    // On SQLite the extension was written on the one connection, inside the transaction this flow
+    // has open there, where it has one: a rollback of that transaction takes the extension back,
+    // so it takes this confirmation back too, and the next check asks the database again. Only
+    // ever back to an earlier confirmation, so the check is stricter for it, never looser.
+    if (this.dialect === "sqlite" && this.adapter.transactionOpenInFlow()) {
+      await this.adapter.afterRollback(() => {
+        this.confirmedAt = Math.min(this.confirmedAt, before);
+      });
+    }
     return true;
   }
 
