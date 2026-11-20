@@ -26,6 +26,10 @@ import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+
+// Written for per-language storage as every installation runs it (`storage-layout`).
+perLanguageStorageSuite();
 
 let dir: string | undefined;
 let database: UpgradeDatabase | undefined;
@@ -66,7 +70,13 @@ async function migrateDryRun(cwd: string): Promise<string[]> {
   };
   const base = createLogger({ quiet: true });
   const context = {
-    logger: { ...base, info: capture, warn: capture, success: capture, error: capture },
+    logger: {
+      ...base,
+      info: capture,
+      warn: capture,
+      success: capture,
+      error: capture,
+    },
     options: {},
     cwd,
   } as CommandContext;

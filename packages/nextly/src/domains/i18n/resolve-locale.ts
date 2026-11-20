@@ -16,8 +16,12 @@ export function getDefaultLocale(cfg: SanitizedLocalizationConfig): string {
  * releases accepted. Undefined where it names no configured language.
  * The older spelling is accepted for one release; a caller answering over HTTP says so with a
  * deprecation header (`requestedCodeAlias`).
+ *
+ * Every caller that goes on to use a requested code (to read, filter or write rows) takes this
+ * one's answer rather than the code it was handed: rows are stored under the configured code, so
+ * an older spelling used as given would read nothing and write under a code no row is read by.
  */
-function configuredCodeOf(
+export function configuredLocale(
   cfg: SanitizedLocalizationConfig,
   code: string
 ): string | undefined {
@@ -37,7 +41,7 @@ export function requestedCodeAlias(
   code: string | undefined
 ): { requested: string; standard: string } | undefined {
   if (code === undefined) return undefined;
-  const configured = configuredCodeOf(cfg, code);
+  const configured = configuredLocale(cfg, code);
   return configured !== undefined && configured !== code
     ? { requested: code, standard: configured }
     : undefined;
@@ -48,7 +52,7 @@ export function isValidLocale(
   cfg: SanitizedLocalizationConfig,
   code: string
 ): boolean {
-  return configuredCodeOf(cfg, code) !== undefined;
+  return configuredLocale(cfg, code) !== undefined;
 }
 
 /**
@@ -60,7 +64,7 @@ export function resolveRequestedLocale(
   requested: string | undefined
 ): string {
   return (
-    (requested === undefined ? undefined : configuredCodeOf(cfg, requested)) ??
+    (requested === undefined ? undefined : configuredLocale(cfg, requested)) ??
     cfg.defaultLocale
   );
 }
@@ -127,13 +131,16 @@ export function resolveLocaleChain(
   if (fallbackLocale === false || fallbackLocale === NO_FALLBACK) {
     return [requested];
   }
-  if (
-    typeof fallbackLocale === "string" &&
-    isValidLocale(cfg, fallbackLocale)
-  ) {
+  // A named fallback in an older spelling is resolved to its configured code, as the requested
+  // language is: the chain names the code its rows are stored under.
+  const named =
+    typeof fallbackLocale === "string"
+      ? configuredLocale(cfg, fallbackLocale)
+      : undefined;
+  if (named !== undefined) {
     const seen = new Set<string>();
-    return [requested, ...resolveFallbackChain(cfg, fallbackLocale)].filter(
-      code => (seen.has(code) ? false : (seen.add(code), true))
+    return [requested, ...resolveFallbackChain(cfg, named)].filter(code =>
+      seen.has(code) ? false : (seen.add(code), true)
     );
   }
   if (!cfg.fallback) return [requested];

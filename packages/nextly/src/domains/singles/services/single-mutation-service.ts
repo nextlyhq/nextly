@@ -199,6 +199,7 @@ import {
 } from "../../i18n/provenance/provenance-claims";
 import { discardDraftProvenance } from "../../i18n/provenance/record-provenance";
 import {
+  configuredLocale,
   isValidLocale,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
@@ -2528,8 +2529,19 @@ export class SingleMutationService extends BaseService {
   async update(
     slug: string,
     data: Record<string, unknown>,
-    rawOptions: UpdateSingleOptions = {}
+    requested: UpdateSingleOptions = {}
   ): Promise<SingleResult> {
+    // An older spelling of a configured language (`pt_BR` for `pt-BR`), accepted for one release,
+    // is written under the configured code the rows are stored under (`configuredLocale`); a code
+    // naming no configured language is left as given, for the write to refuse.
+    const configured =
+      typeof requested.locale === "string" && this.localization
+        ? configuredLocale(this.localization, requested.locale)
+        : undefined;
+    const rawOptions =
+      configured === undefined || configured === requested.locale
+        ? requested
+        : { ...requested, locale: configured };
     const meta = await resolveSingleForRequest(
       this.adapter,
       this.singleRegistryService,

@@ -1107,6 +1107,7 @@ function buildStaleCondition(args: {
       )`,
       entryId: sql`${tgt}.${parent}`,
       locale: sql`${locale}`,
+      row: sql`${tgt}`,
       provenance: args.provenance,
     })}
   )`;
@@ -1121,6 +1122,8 @@ function languageStale(args: {
   byStamp: SQL;
   entryId: SQL;
   locale: SQL;
+  /** The language's own translation row, whose values say which fields it holds. */
+  row: SQL;
   provenance: ProvenanceScope | undefined;
 }): SQL {
   return args.provenance
@@ -1128,6 +1131,7 @@ function languageStale(args: {
         scope: args.provenance,
         entryId: args.entryId,
         locale: args.locale,
+        row: args.row,
         byStamp: args.byStamp,
       })
     : args.byStamp;
@@ -1402,6 +1406,7 @@ async function readStaleLocales(
             )`,
             entryId: sql`${target}.${parent}`,
             locale: sql`${target}.${localeCol}`,
+            row: sql`${target}`,
             provenance,
           })
         )

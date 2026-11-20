@@ -1941,7 +1941,7 @@ async function applyReloadHolding(
         singles?: SingleDef[];
         fieldGroups?: ComponentDef[];
         webhookAuditEnabled?: boolean;
-        /** The per-language storage choice, which a reload may not change. */
+        /** The deprecated per-language storage setting: it chooses nothing, so a reload ignores it. */
         perLanguageStorage?: boolean;
         auditRetention?: ResolvedAuditRetentionConfig;
         localization?: { defaultLocale?: string };

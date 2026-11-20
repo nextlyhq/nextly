@@ -53,6 +53,10 @@ import {
 import { createLogger } from "../../utils/logger";
 import { collectionRegistryOn } from "../db-sync-registry";
 import { migrateCore } from "../migrate";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+
+// `nextly db:sync` as every installation runs it: per-language storage (`storage-layout`).
+perLanguageStorageSuite();
 
 /** A collection in code throughout; the second configuration adds a column to it. */
 const POSTS = "dsd_posts";
@@ -398,9 +402,10 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
       const config = readFileSync(configFile(), "utf8");
 
       const plain = await dryRun("plain", []);
-      expect(plain).toMatch(
-        /^ℹ Would run add_column dc_dsd_posts\.summary \(/m
-      );
+      // A new text field is kept per language: its column is added by the translation table's
+      // reconcile, which the plan's note names among what it does not show.
+      expect(plain).not.toMatch(/add_column dc_dsd_posts\.summary/);
+      expect(plain).toContain("translation (_locales)");
       expect(plain).toMatch(/^ℹ Would run add_table dc_dsd_moved$/m);
       expect(plain).toMatch(/^ℹ Would run add_table dc_dsd_built$/m);
       // The orphan is left out of the push, as the real run leaves it.
@@ -411,9 +416,10 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
 
       const orphans = await dryRun("remove-orphaned", ["--remove-orphaned"]);
       expect(orphans).toMatch(/^ℹ Would remove table dc_dsd_old\b/m);
-      expect(orphans).toMatch(
-        /^ℹ Would run add_column dc_dsd_posts\.summary \(/m
-      );
+      // A new text field is kept per language: its column is added by the translation table's
+      // reconcile, which the plan's note names among what it does not show.
+      expect(orphans).not.toMatch(/add_column dc_dsd_posts\.summary/);
+      expect(orphans).toContain("translation (_locales)");
 
       const promote = await dryRun("promote", ["--promote", BUILT]);
       expect(promote).toContain(`Would edit ${configFile()}`);
@@ -535,8 +541,11 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
       );
       const planned = plannedSchemaChanges(printed.plain);
       expect(planned.addedTables.length).toBeGreaterThan(0);
-      expect(changed.addedTables).toEqual(planned.addedTables);
-      expect(changed.addedColumns).toEqual(planned.addedColumns);
+      // The translation (_locales) tables the sync creates or reconciles are what the plan's note
+      // says it does not show; every other change is named.
+      const inPlan = (name: string) => !/_locales(\.|$)/.test(name);
+      expect(changed.addedTables.filter(inPlan)).toEqual(planned.addedTables);
+      expect(changed.addedColumns.filter(inPlan)).toEqual(planned.addedColumns);
       expect(plannedSchemaChanges(printed["remove-orphaned"])).toEqual(planned);
       expect(changed.droppedTables).toEqual(
         plannedDrops(printed["remove-orphaned"])

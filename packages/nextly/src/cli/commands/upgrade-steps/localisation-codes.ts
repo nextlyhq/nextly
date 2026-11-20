@@ -21,12 +21,16 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql, type SQL } from "drizzle-orm";
 
 import { standardLanguageCode } from "../../../domains/i18n/config/standard-code";
-import { tablesHoldingCode } from "../../../domains/i18n/older-codes";
+import {
+  storedOlderSpellings,
+  tablesHoldingCode,
+} from "../../../domains/i18n/older-codes";
 import { releaseMemberKey } from "../../../domains/releases/release-member-key";
 import { runStatement } from "../../../domains/schema/pipeline/_internal/run-statement";
 import { versionPinKey } from "../../../domains/versions/version-pins";
 import { workingDraftKey } from "../../../domains/versions/working-draft-key";
 import { NextlyError } from "../../../errors/nextly-error";
+import { LANGUAGES_TABLE } from "../../../schemas/languages/table-name";
 import { MEDIA_USAGE_TABLE } from "../../../schemas/media-usage/table-name";
 import { TRANSLATION_PROVENANCE_TABLE } from "../../../schemas/translation-provenance/table-name";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
@@ -149,6 +153,13 @@ const KEYED_TARGETS: readonly KeyedTarget[] = [
     language: "locale",
     spelled: asWritten,
   },
+  // One language per code in the Settings registry, whatever else its rows hold.
+  {
+    table: LANGUAGES_TABLE,
+    same: [],
+    language: "code",
+    spelled: asWritten,
+  },
   // One use per item per field per language of a document.
   {
     table: MEDIA_USAGE_TABLE,
@@ -169,28 +180,47 @@ async function meetsBoth(
   adapter: DrizzleAdapter,
   target: KeyedTarget,
   conversion: CodeConversion
-): Promise<boolean> {
+): Promise<string | undefined> {
   const a = sql`${sql.identifier("a")}`;
   const b = sql`${sql.identifier("b")}`;
   const column = (alias: SQL, name: string) =>
     sql`${alias}.${sql.identifier(name)}`;
-  const joined = sql.join(
-    target.same.map(name => sql`${column(a, name)} = ${column(b, name)}`),
-    sql` AND `
-  );
+  // A table unique by its language alone (the Settings registry) pairs every two rows.
+  const joined =
+    target.same.length === 0
+      ? sql`1 = 1`
+      : sql.join(
+          target.same.map(name => sql`${column(a, name)} = ${column(b, name)}`),
+          sql` AND `
+        );
   const keyed =
     target.keyed === undefined
       ? sql``
       : sql` AND ${column(a, target.keyed)} IS NOT NULL AND ${column(b, target.keyed)} IS NOT NULL`;
-  const rows = await adapter.queryStatement<{ found: unknown }>(
-    sql`SELECT 1 AS ${sql.identifier("found")} FROM ${sql.identifier(target.table)} ${a} JOIN ${sql.identifier(target.table)} ${b} ON ${joined} WHERE ${column(a, target.language)} = ${target.spelled(conversion.from)} AND ${column(b, target.language)} = ${target.spelled(conversion.to)}${keyed} LIMIT 1`
+  // The first thing held under both, by the columns that make it unique, so the refusal can name it.
+  const named =
+    target.same.length === 0
+      ? sql`1 AS ${sql.identifier("found")}`
+      : sql.join(
+          target.same.map(
+            name => sql`${column(a, name)} AS ${sql.identifier(name)}`
+          ),
+          sql`, `
+        );
+  const [row] = await adapter.queryStatement<Record<string, unknown>>(
+    sql`SELECT ${named} FROM ${sql.identifier(target.table)} ${a} JOIN ${sql.identifier(target.table)} ${b} ON ${joined} WHERE ${column(a, target.language)} = ${target.spelled(conversion.from)} AND ${column(b, target.language)} = ${target.spelled(conversion.to)}${keyed} LIMIT 1`
   );
-  return rows.length > 0;
+  if (row === undefined) return undefined;
+  const key = target.same
+    .map(name => `${name} ${String(row[name])}`)
+    .join(", ");
+  return key === "" ? target.table : `${target.table} (${key})`;
 }
 
 /**
- * The tables where some one thing is kept under both spellings of `conversion`: each translation
- * table with a document translated in both, and each other keyed table the rewrite would collide in.
+ * Where some one thing is kept under both spellings of `conversion`, each named by its table and
+ * the key of the first such thing: each translation table with a document translated in both, and
+ * each other keyed table the rewrite would collide in.
  */
 async function tablesMeetingBoth(
   context: UpgradeStepContext,
@@ -210,8 +240,8 @@ async function tablesMeetingBoth(
   const meeting: string[] = [];
   for (const target of targets) {
     if (!(await context.adapter.tableExists(target.table))) continue;
-    if (await meetsBoth(adapter, target, conversion))
-      meeting.push(target.table);
+    const where = await meetsBoth(adapter, target, conversion);
+    if (where !== undefined) meeting.push(where);
   }
   return meeting;
 }
@@ -219,16 +249,19 @@ async function tablesMeetingBoth(
 /** The refusal of rows kept under both spellings of one language, naming where. */
 function keptUnderBoth(
   conversion: CodeConversion,
-  tables: readonly string[]
+  where: readonly string[],
+  /** Another older spelling of the same code, where two of them meet rather than one and the code. */
+  alongside?: string
 ): NextlyError {
+  const other = alongside ?? conversion.to;
   return new NextlyError({
     code: "NEXTLY_LANGUAGE_CODES_COLLIDE",
     publicMessage:
-      `Rows under both "${conversion.from}" and "${conversion.to}", one language under two codes, ` +
-      `are kept for the same thing in ${tables.join(", ")}; moving "${conversion.from}" to ` +
-      `"${conversion.to}" would make them one. Keep the rows of one spelling, then run ` +
-      "`nextly migrate` again. Nothing was changed.",
-    logContext: { from: conversion.from, to: conversion.to, tables },
+      `Rows under both "${conversion.from}" and "${other}", one language under two codes, are ` +
+      `kept for the same thing in ${where.join("; ")}; moving them to "${conversion.to}" would ` +
+      "make them one. Keep the rows of one spelling, then run `nextly migrate` again. Nothing " +
+      "was changed.",
+    logContext: { from: conversion.from, other, to: conversion.to, where },
   });
 }
 
@@ -240,11 +273,36 @@ async function conversionsToRun(
   context: UpgradeStepContext
 ): Promise<CodeConversion[]> {
   const adapter = context.adapter as unknown as DrizzleAdapter;
-  const conversions = conversionsOf((await configuredLanguages(context)).codes);
+  const configured = (await configuredLanguages(context)).codes;
+  const written = conversionsOf(configured);
+  const tables = await translationTables(context);
+  // The older spellings the rows still hold, which a configuration already corrected to the
+  // standard code no longer names: found as the start finds them, and converted the same way.
+  const conversions = [...written];
+  for (const stored of await storedOlderSpellings(
+    adapter,
+    tables,
+    configured.map(code => standardLanguageCode(code) ?? code)
+  )) {
+    if (!conversions.some(({ from }) => from === stored.from)) {
+      conversions.push(stored);
+    }
+  }
   if (conversions.length === 0) return [];
   // Rewriting a version's languages writes the newer columns: only on a history laid out for them.
   await assertVersionHistoryReady(context);
-  const tables = await translationTables(context);
+  // Two older spellings of one code (`pt_BR` and `PT_br`) both become that code, so each pair is
+  // checked against the other as well as against the code itself, before any row is written.
+  for (const [index, one] of conversions.entries()) {
+    for (const other of conversions.slice(index + 1)) {
+      if (other.to !== one.to) continue;
+      const meeting = await tablesMeetingBoth(context, tables, {
+        from: one.from,
+        to: other.from,
+      });
+      if (meeting.length > 0) throw keptUnderBoth(one, meeting, other.from);
+    }
+  }
   const pending: CodeConversion[] = [];
   for (const conversion of conversions) {
     // Every conversion is checked before any row is written, so one that would collide stops
@@ -253,7 +311,9 @@ async function conversionsToRun(
     if (meeting.length > 0) throw keptUnderBoth(conversion, meeting);
     // Where the start finds rows under the older spelling, the same answer as its refusal.
     const held = await tablesHoldingCode(adapter, tables, conversion.from);
-    if (held.length > 0) pending.push(conversion);
+    if (held.length > 0 || (await registryHolds(context, conversion.from))) {
+      pending.push(conversion);
+    }
   }
   return pending;
 }
@@ -292,6 +352,7 @@ export async function convertLanguageCodes(
     await convertVersions(adapter, from, to);
     await convertPins(context, from, to);
     await convertReleaseMembers(context, from, to);
+    await convertLanguageRegistry(context, from, to);
     // The tables that record a language and nothing computed from it.
     for (const [table, columns] of [
       [TRANSLATION_PROVENANCE_TABLE, ["locale", "sourceLocale"]],
@@ -404,6 +465,76 @@ async function convertPins(
         ),
       },
       { and: [{ column: "id", op: "=", value: row.id }] }
+    );
+  }
+}
+
+/** A row of the Settings language registry, as the conversion reads it. */
+interface RegistryRow {
+  code: string;
+  fallback: string | null;
+  revision: number | null;
+}
+
+/** The Settings registry's rows naming `code`: as their own code or in their fallback list. */
+async function registryRowsNaming(
+  context: UpgradeStepContext,
+  code: string
+): Promise<RegistryRow[]> {
+  if (!(await context.adapter.tableExists(LANGUAGES_TABLE))) return [];
+  const adapter = context.adapter as unknown as DrizzleAdapter;
+  const rows = await adapter.select<RegistryRow>(LANGUAGES_TABLE, {
+    columns: ["code", "fallback", "revision"],
+  });
+  return rows.filter(
+    row => row.code === code || fallbackOf(row).includes(code)
+  );
+}
+
+/** A registry row's fallback codes; a list that cannot be read names none. */
+function fallbackOf(row: RegistryRow): string[] {
+  try {
+    const list: unknown = JSON.parse(row.fallback ?? "[]");
+    return Array.isArray(list)
+      ? list.filter((code): code is string => typeof code === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Whether the Settings registry still names `code`. */
+async function registryHolds(
+  context: UpgradeStepContext,
+  code: string
+): Promise<boolean> {
+  return (await registryRowsNaming(context, code)).length > 0;
+}
+
+/**
+ * The Settings language registry under `from`: the language's own row and every row that falls
+ * back to it, each written once with its revision raised, so every instance reading the registry's
+ * fingerprint notices the change. A language managed in Settings is then named as its content is
+ * stored.
+ */
+async function convertLanguageRegistry(
+  context: UpgradeStepContext,
+  from: string,
+  to: string
+): Promise<void> {
+  const adapter = context.adapter as unknown as DrizzleAdapter;
+  for (const row of await registryRowsNaming(context, from)) {
+    await adapter.update(
+      LANGUAGES_TABLE,
+      {
+        code: row.code === from ? to : row.code,
+        fallback: JSON.stringify(
+          fallbackOf(row).map(code => (code === from ? to : code))
+        ),
+        revision: (row.revision ?? 0) + 1,
+        updatedAt: new Date(),
+      },
+      { and: [{ column: "code", op: "=", value: row.code }] }
     );
   }
 }

@@ -23,6 +23,10 @@ import {
   SITE,
   type UpgradeDatabase,
 } from "./helpers/localisation-upgrade-fixture";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+
+// Written for per-language storage as every installation runs it (`storage-layout`).
+perLanguageStorageSuite();
 
 describeEachDialect("upgrading a Single's translation stamps", dialect => {
   let database: UpgradeDatabase | undefined;
