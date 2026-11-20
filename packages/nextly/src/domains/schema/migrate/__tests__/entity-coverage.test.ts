@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   consentCovers,
+  describeDeletion,
   resolveDataLossConsent,
   type Deletion,
 } from "../data-loss-consent";
@@ -27,6 +28,7 @@ import {
   retiredByRun,
   withEntityCoverage,
 } from "../entity-shared-rows";
+import { coveredEntitiesOf } from "../../migrate-create/generate";
 
 const manyToMany = (name: string, target: string, junctionTable?: string) => ({
   name,
@@ -661,5 +663,153 @@ describe("the server's rule for comparing table names", () => {
         "dc_posts",
       ])
     );
+  });
+});
+
+describe("a field group the run drops", () => {
+  const seo = coveredEntity({
+    kind: "fieldGroup",
+    slug: "seo",
+    tableName: "comp_seo",
+    source: "code",
+    fields: [manyToMany("links", "pages")],
+  });
+
+  it("owns its table and its translations table, and no junction table", () => {
+    // A field group keeps a many-to-many list on its own row.
+    expect(seo.tables).toEqual(["comp_seo", "comp_seo_locales"]);
+  });
+
+  it("takes the values nested in it and its archived translations, and nothing a document keeps", () => {
+    const listed = entityRowsOf(seo);
+    expect(listed.map(d => d.kind === "rows" && d.table)).toEqual([
+      FIELD_GROUP_TABLES,
+      "nextly_i18n_archive",
+    ]);
+    for (const d of listed) {
+      expect(d).toMatchObject({
+        kind: "rows",
+        owner: "comp_seo",
+        of: { kind: "fieldGroup", slug: "seo" },
+      });
+    }
+    expect(describeDeletion(listed[1] as Deletion)).toContain(
+      'rows of field group "seo" in nextly_i18n_archive'
+    );
+  });
+
+  it("is retired by a run whose last snapshot no longer records it among the field groups", async () => {
+    const meta = mkdtempSync(join(tmpdir(), "nextly-retired-fg-"));
+    try {
+      // A collection keeps the slug the field group had: each kind is asked about its own.
+      writeFileSync(
+        join(meta, "0001_a.snapshot.json"),
+        JSON.stringify({
+          version: 1,
+          migrationHash: "a".repeat(64),
+          snapshot: { tables: [] },
+          entities: {
+            collections: { seo: { source: "code", settings: { slug: "seo" } } },
+            singles: {},
+            fieldGroups: {},
+          },
+        })
+      );
+      const retires = await retiredByRun(meta, ["0001_a"]);
+      expect(retires?.({ kind: "fieldGroup", slug: "seo" })).toBe(true);
+      expect(retires?.({ kind: "collection", slug: "seo" })).toBe(false);
+    } finally {
+      rmSync(meta, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a field group's registry and table, under either storage naming", () => {
+  const sqlite = new SQLiteDialect();
+
+  it("reads the field groups from the one registry every reader uses, where both names stand", async () => {
+    // A stopped storage migration leaves both: the same field group in each.
+    const db = {
+      all: (query: SQL) => {
+        const { sql: text } = sqlite.sqlToQuery(query);
+        if (text.includes("sqlite_master")) {
+          return [
+            { name: "dynamic_collections" },
+            { name: "dynamic_singles" },
+            { name: "dynamic_components" },
+            { name: "dynamic_field_groups" },
+          ];
+        }
+        const registry = /FROM "([^"]+)"/.exec(text)?.[1];
+        return registry === "dynamic_components" ||
+          registry === "dynamic_field_groups"
+          ? [
+              {
+                slug: "seo",
+                table_name: "comp_seo",
+                fields: [],
+                source: "code",
+              },
+            ]
+          : [];
+      },
+    };
+    const entities = await readCoveredEntities(db, "sqlite");
+    expect(
+      entities.filter(entity => entity.kind === "fieldGroup")
+    ).toHaveLength(1);
+    // So the field group, alone in naming its table, owns it.
+    expect(entityOwners(entities).mainOf("comp_seo")?.slug).toBe("seo");
+  });
+
+  it("names a recorded field group's table as the last snapshot records it", () => {
+    const record = {
+      collections: {},
+      singles: {},
+      fieldGroups: { seo: { source: "code", settings: { slug: "seo" } } },
+    };
+    const args = {
+      collections: [],
+      singles: [],
+      components: [],
+    } as unknown as Parameters<typeof coveredEntitiesOf>[0];
+    // After the storage migration the snapshot holds `fg_seo`; before it, `comp_seo`.
+    expect(
+      coveredEntitiesOf(args, record as never, new Set(["fg_seo"])).map(
+        e => e.table
+      )
+    ).toEqual(["fg_seo"]);
+    expect(
+      coveredEntitiesOf(args, record as never, new Set(["comp_seo"])).map(
+        e => e.table
+      )
+    ).toEqual(["comp_seo"]);
+    // A table the field group named itself keeps that name, even where another group, made after
+    // the storage migration, owns the `fg_` spelling of it.
+    const custom = {
+      ...record,
+      fieldGroups: {
+        special: {
+          source: "code",
+          settings: { slug: "special", dbName: "comp_custom" },
+        },
+      },
+    };
+    expect(
+      coveredEntitiesOf(
+        args,
+        custom as never,
+        new Set(["comp_custom", "fg_custom"])
+      ).map(e => e.table)
+    ).toEqual(["comp_custom"]);
+    // And where the snapshot holds both spellings of a name the slug gives, the one the storage
+    // migration left under the old naming is this group's.
+    expect(
+      coveredEntitiesOf(
+        args,
+        record as never,
+        new Set(["comp_seo", "fg_seo"])
+      ).map(e => e.table)
+    ).toEqual(["comp_seo"]);
   });
 });

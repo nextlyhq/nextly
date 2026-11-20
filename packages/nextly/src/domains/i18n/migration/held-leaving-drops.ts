@@ -140,8 +140,9 @@ function provenanceNotMoved(
   statements: string[]
 ): NextlyError {
   const notMoved = `its translations step failed, so the translation records of "${rename.from}" were not moved to "${rename.to}". Until they are, no language of ${rename.to} can be found out of date.`;
-  // A Single's save records its row with the change. A Collection's stops before its row is
-  // written, so its answer is followed by the kept file's steps, which finish the rest.
+  // Where the save ran its own migration file, the file is recorded and the Single's or
+  // Collection's row is written with the change, so the answer ends here. A Collection's push
+  // that stops part way adds its kept files' steps after it (`partWayPush`).
   const publicMessage =
     rename.scopeKind === "single"
       ? `Single "${rename.scopeSlug}" was saved: its change landed, but ${notMoved} A developer can finish it with the statements in the server log.`

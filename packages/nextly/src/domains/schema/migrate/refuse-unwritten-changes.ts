@@ -133,13 +133,14 @@ async function recordedInDatabase(
     return {
       settingsDiffer: await settingsBehindConfiguration(args),
       permissions:
-        record.ownedPermissions === undefined || record.point !== newest
+        record.ownedPermissions === undefined ||
+        snapshotAppliedSince(record.point, newest)
           ? await live()
           : livePermissionsByOwner(record.ownedPermissions, APP_OWNER),
     };
   }
   const settingsDiffer = await settingsBehindConfiguration(args, baseline);
-  if (record.point !== newest) {
+  if (snapshotAppliedSince(record.point, newest)) {
     return { settingsDiffer, permissions: await live() };
   }
   return {
@@ -153,6 +154,23 @@ async function recordedInDatabase(
           ),
         }),
   };
+}
+
+/**
+ * Whether a migration with a snapshot (`newest`, its base name) applied after
+ * the record's point. Base names begin with their timestamp, so they sort in
+ * the order the migrations run. A point later than the newest snapshot is a
+ * migration written without one (the per-language table a schema change
+ * creates or extends, written with it), which records nothing the record does
+ * not, so the record's own permissions still hold there. Exported for its
+ * unit test, which pins the order rule.
+ */
+export function snapshotAppliedSince(
+  point: string | null,
+  newest: string | null
+): boolean {
+  if (newest === null) return false;
+  return point === null || newest > point;
 }
 
 /**

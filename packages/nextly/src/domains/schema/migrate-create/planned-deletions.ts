@@ -117,9 +117,7 @@ export function judgedDeletions(args: {
     }),
     entity =>
       removed.some(
-        r =>
-          r.slug === entity.slug &&
-          (r.kind === "Single" ? "single" : r.kind) === entity.kind
+        r => r.slug === entity.slug && REMOVED_KIND[r.kind] === entity.kind
       )
   ).map(deletions => deletions.map(d => withReason(d, args.plan)));
   const seen = new Set<string>();
@@ -157,6 +155,13 @@ export function fileStatements(
 }
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/** The kind each removed entity is listed under, as an entity reference spells it. */
+const REMOVED_KIND = {
+  collection: "collection",
+  Single: "single",
+  "field group": "fieldGroup",
+} as const satisfies Record<RemovedEntity["kind"], CoveredEntity["kind"]>;
 
 /** `deletion` with why it goes, where the plan knows. */
 function withReason(deletion: Deletion, plan: DeletionPlan): Deletion {

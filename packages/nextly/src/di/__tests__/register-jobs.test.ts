@@ -66,6 +66,47 @@ function result(
 }
 
 describe("the registered job types", () => {
+  it("builds the releases drain's repository with the registration, not on each pass", async () => {
+    // Pinned to the registration that built the job registry, as the rest of it is: a pass that
+    // read the container when it ran could mix an older install's database with a newer one's
+    // revalidator after a re-registration.
+    const singletons = new Map<string, unknown>();
+    const wired = vi.fn(() => ({}));
+
+    vi.resetModules();
+    vi.doMock("../registrations/register-releases", () => ({
+      wiredReleasesRepository: wired,
+    }));
+    vi.doMock("../container", () => ({
+      container: {
+        // No service registered beyond these: the releases repository the registry builds takes
+        // no revalidator here.
+        has: () => false,
+        registerSingleton: (name: string, factory: () => unknown) => {
+          singletons.set(name, factory());
+        },
+        get: () => ({
+          getEnabledEndpointsFresh: async () => [],
+          select: async () => [],
+        }),
+      },
+    }));
+    const { registerJobServices } = await import(
+      "../registrations/register-jobs"
+    );
+    const adapter = { select: async () => [] };
+    registerJobServices({
+      adapter,
+      logger: logger(),
+      config: { plugins: [] },
+    } as never);
+
+    expect(singletons.has("jobRegistry")).toBe(true);
+    expect(wired).toHaveBeenCalledTimes(1);
+    expect(wired).toHaveBeenCalledWith(adapter);
+    vi.doUnmock("../registrations/register-releases");
+  });
+
   it("registers releases:drain, so a queued release drain can actually run", async () => {
     // The REAL JobRegistry, and the assertion is a lookup by slug — the same
     // call the runner makes. Asserting that `register` was invoked would pass
@@ -76,6 +117,9 @@ describe("the registered job types", () => {
     vi.resetModules();
     vi.doMock("../container", () => ({
       container: {
+        // No service registered beyond these: the releases repository the registry builds takes
+        // no revalidator here.
+        has: () => false,
         registerSingleton: (name: string, factory: () => unknown) => {
           singletons.set(name, factory());
         },
@@ -152,6 +196,9 @@ describe("the registered job types", () => {
     vi.resetModules();
     vi.doMock("../container", () => ({
       container: {
+        // No service registered beyond these: the releases repository the registry builds takes
+        // no revalidator here.
+        has: () => false,
         registerSingleton: (name: string, factory: () => unknown) => {
           singletons.set(name, factory());
         },

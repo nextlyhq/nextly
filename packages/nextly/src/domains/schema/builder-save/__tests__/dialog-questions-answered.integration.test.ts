@@ -28,6 +28,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../../services";
 import { readTableDefinition } from "../../__tests__/helpers/table-definition";
+import { PushSchemaPipeline } from "../../pipeline/pushschema-pipeline";
 import { junctionTableNameFor } from "../../services/field-column-descriptor";
 
 type Field = { name: string; type: string; component?: string };
@@ -686,6 +687,242 @@ for (const dialect of getConfiguredTestDialects()) {
       });
 
       expect(await links()).toBe(0);
+    }, 60_000);
+  });
+}
+
+// A Builder save that keeps the push (here, by pointing a relationship at another collection,
+// which only the push applies) and also removes a translated field loses values outside the main
+// table: the translations table's column goes in the step after the push, which the push's own
+// questions never covered. The push asks it at its prompt stage, by field name, as the dialog's
+// file road does. (A many-to-many removed on this road keeps its link table: nothing to ask.)
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a translated save that keeps the push (${dialect})`, () => {
+    let t: TestNextly;
+    let basePath: string;
+    const translated = (name: string) => ({ ...text(name), localized: true });
+    const related = {
+      name: "related",
+      type: "relationship",
+      relationTo: "tags",
+      hasMany: true,
+      options: { relationType: "manyToMany", target: "tags" },
+    };
+    // An empty relationship, pointed elsewhere by the save so that it keeps the push.
+    const pick = (target: string) => ({
+      name: "pick",
+      type: "relationship",
+      options: { target, relationType: "manyToOne" },
+    });
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+      for (const name of ["tags", "notes"]) {
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          { name, label: name, fields: [text("name")] }
+        );
+      }
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "posts",
+          label: "posts",
+          localized: true,
+          fields: [
+            translated("heading"),
+            translated("teaser"),
+            related,
+            pick("tags"),
+          ],
+        }
+      );
+      const tag = (await t.nextly.create({
+        collection: "tags",
+        data: { name: "first" },
+      } as never)) as unknown as { item: { id: unknown } };
+      await t.nextly.create({
+        collection: "posts",
+        data: {
+          heading: "Hello",
+          teaser: "Read on",
+          related: [String(tag.item.id)],
+        },
+      } as never);
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    const companionColumns = async () =>
+      (
+        await readTableDefinition(
+          statement => exec(t, statement),
+          (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+          "dc_posts_locales"
+        )
+      ).columns.map(column => column.name);
+    // The save, and whether the push ran for it.
+    const save = async (fields: unknown[], answers: Answers) => {
+      const pushed = vi.spyOn(PushSchemaPipeline.prototype, "apply");
+      try {
+        const refused = await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "posts" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            schemaVersion: await versionOf(t, "dynamic_collections", "posts"),
+            ...answers,
+          }
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        return { refused, pushed: pushed.mock.calls.length > 0 };
+      } finally {
+        pushed.mockRestore();
+      }
+    };
+
+    it("refuses removing a translated field unconfirmed, keeping every language, and drops it once confirmed by name", async () => {
+      const fields = [translated("heading"), related, pick("notes")];
+
+      const unconfirmed = await save(fields, {});
+
+      expect(unconfirmed.pushed, "the save took the push").toBe(true);
+      expect(unconfirmed.refused).toMatchObject({
+        code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      });
+      expect(String(unconfirmed.refused)).toMatch(/cancelled/);
+      expect(await companionColumns()).toContain("teaser");
+
+      const confirmed = await save(fields, {
+        resolutions: { teaser: { action: "confirm_drop" } },
+      });
+      expect(confirmed.refused).toBeUndefined();
+      expect(await companionColumns()).not.toContain("teaser");
+    }, 60_000);
+
+  });
+}
+
+// The same for a translated Single whose save keeps the push.
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a translated Single's save that keeps the push (${dialect})`, () => {
+    let t: TestNextly;
+    let basePath: string;
+    const translated = (name: string) => ({ ...text(name), localized: true });
+    const pick = (target: string) => ({
+      name: "pick",
+      type: "relationship",
+      options: { target, relationType: "manyToOne" },
+    });
+
+    beforeEach(async () => {
+      basePath = await mkdtemp(join(tmpdir(), "nextly-dialog-questions-"));
+      vi.stubEnv("NODE_ENV", "development");
+      t = await createTestNextly({
+        dialect: dialect as TestDialect,
+        basePath,
+        db: DB,
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+      for (const name of ["tags", "notes"]) {
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "createCollection",
+          {},
+          { name, label: name, fields: [text("name")] }
+        );
+      }
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "board",
+          label: "Board",
+          localized: true,
+          fields: [translated("heading"), translated("teaser"), pick("tags")],
+        }
+      );
+      await t.nextly.updateSingle({
+        slug: "board",
+        locale: "en",
+        data: { heading: "Hello", teaser: "Read on", _overwrite: true },
+      } as never);
+    });
+
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await t?.destroy();
+      vi.unstubAllEnvs();
+      await rm(basePath, { recursive: true, force: true });
+    });
+
+    const companionColumns = async () =>
+      (
+        await readTableDefinition(
+          statement => exec(t, statement),
+          (t.adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+          "single_board_locales"
+        )
+      ).columns.map(column => column.name);
+    const save = async (answers: Answers) => {
+      const pushed = vi.spyOn(PushSchemaPipeline.prototype, "apply");
+      try {
+        const refused = await dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "board" },
+          {
+            fields: [translated("heading"), pick("notes")],
+            confirmed: true,
+            localized: true,
+            schemaVersion: await versionOf(t, "dynamic_singles", "board"),
+            ...answers,
+          }
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        return { refused, pushed: pushed.mock.calls.length > 0 };
+      } finally {
+        pushed.mockRestore();
+      }
+    };
+
+    it("refuses removing a translated field unconfirmed, keeping every language, and drops it once confirmed by name", async () => {
+      const unconfirmed = await save({});
+
+      expect(unconfirmed.pushed, "the save took the push").toBe(true);
+      expect(unconfirmed.refused).toMatchObject({
+        code: "NEXTLY_MIGRATION_APPLY_FAILED",
+      });
+      expect(String(unconfirmed.refused)).toMatch(/cancelled/);
+      expect(await companionColumns()).toContain("teaser");
+
+      const confirmed = await save({
+        resolutions: { teaser: { action: "confirm_drop" } },
+      });
+      expect(confirmed.refused).toBeUndefined();
+      expect(await companionColumns()).not.toContain("teaser");
     }, 60_000);
   });
 }

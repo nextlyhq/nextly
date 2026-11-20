@@ -18,6 +18,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import { registryInFileTransaction } from "../../../dispatcher/helpers/applied-fields-row";
 import {
   companionReconcileFailure,
   leavingSettingsStep,
@@ -117,6 +118,7 @@ import {
   toSnakeCase,
 } from "./field-column-descriptor";
 import { withSchemaChangeExcluded } from "./schema-change-exclusion";
+import { unconfirmedTranslatedDrops } from "./translated-drops";
 
 /**
  * The fields the registry records for a collection before a Schema Builder change, as it records
@@ -343,6 +345,13 @@ export interface CollectionSchemaChange {
   renameResolutions: BrowserRenameResolution[];
   eventResolutions: Resolution[];
   legacyResolutions?: LegacyResolutionsBundle;
+  /**
+   * The answers that confirm, by field name, the values the change drops beside the push (a
+   * translated field's column in the translations table, `unconfirmedTranslatedDrops`), where they
+   * differ from `legacyResolutions`: the dialog's counted deletions confirm them too, as on its
+   * file road. Absent, `legacyResolutions` answers them.
+   */
+  confirmedBeside?: LegacyResolutionsBundle;
   /**
    * Whether every pair on the collection's own table not answered above, from a column the change
    * confirms dropping, is a drop and an add: the Builder save's rule, which detects its own
@@ -677,6 +686,24 @@ function changeApply(change: CollectionSchemaChange, deps: SchemaChangeDeps) {
         source: sourceArg,
         promptChannel: channelArg,
         databaseName,
+        // A translated field's values the companion's step after the push drops, asked of the push
+        // by field name, as the save's own file road asks them.
+        unconfirmedDropsBeside: async () => {
+          const legacy = change.confirmedBeside ?? change.legacyResolutions;
+          const unconfirmed = await unconfirmedTranslatedDrops({
+            tableName,
+            builtBy: "collection",
+            dialect,
+            oldFields: (change.collection.fields ??
+              []) as unknown as FieldDefinition[],
+            newFields: change.fields,
+            wasLocalized: change.wasLocalized,
+            isLocalized: change.isLocalized,
+            renameResolutions: change.renameResolutions,
+            ...(legacy === undefined ? {} : { legacy }),
+          });
+          return unconfirmed.map(field => field.name);
+        },
         // Tagged with the collection, so the notifications name what changed.
         uiTargetSlug: slug,
         uiTargetKind: "collection" as const,
@@ -1025,7 +1052,8 @@ async function applyHoldingSchemaLock(
     adapter,
     desired.collections[slug],
     oldFields,
-    fields
+    fields,
+    renamedFieldsOf(change.renameResolutions)
   );
   return result;
 }
@@ -1043,7 +1071,7 @@ type CollectionCompanionRename = Awaited<
  * retyped, at once. The rename answered is returned, which the road carries the companion's values
  * under.
  */
-export async function checkCollectionTranslationChange(
+async function checkCollectionTranslationChange(
   change: CollectionSchemaChange
 ): Promise<CollectionCompanionRename> {
   const { slug, collection, fields } = change;
@@ -1107,7 +1135,7 @@ export async function checkCollectionTranslationChange(
  * A field leaving translation's own preconditions, and its values kept in the archive, before
  * either road alters anything (`archiveFieldsLeavingTranslation`).
  */
-export async function archiveCollectionFieldsLeavingTranslation(
+async function archiveCollectionFieldsLeavingTranslation(
   change: CollectionSchemaChange,
   companionRename: CollectionCompanionRename,
   /** `judgeOnly`: every refusal asked, nothing archived (`archiveFieldsLeavingTranslation`). */
@@ -1137,12 +1165,16 @@ export async function archiveCollectionFieldsLeavingTranslation(
 /**
  * Whether a collection's change is one only its push applies, rather than the migration file its
  * save writes: the rule a Single's and a field group's saves ask (`pushCarriesValues`), over the
- * collection's own table, where its translatable values are stored, and the rename answers.
+ * collection's own table, where its translatable values are stored, and the rename answers. A
+ * change that fills the rows already there with a value (`fills`: a Required field added over
+ * rows, or one with a stated default) carries that value, so it keeps the push, which adds the
+ * column optional, fills it, and only then makes it Required (`fillAddedFields`).
  */
-export async function collectionChangeCarriesValues(
+async function collectionChangeCarriesValues(
   change: CollectionSchemaChange,
   companionRename: CollectionCompanionRename
 ): Promise<boolean> {
+  if ((change.fills?.length ?? 0) > 0) return true;
   const { adapter } = requireSchemaChangeDeps(change.slug);
   const dialect = adapter.dialect;
   const { tableName } = change.collection;
@@ -1171,7 +1203,7 @@ export async function collectionChangeCarriesValues(
  * push road plans it after its push. A setting a field leaving translation takes is not settled
  * here: such a change keeps the push (`collectionChangeCarriesValues`).
  */
-export async function reconcileCollectionCompanionAfterFile(
+async function reconcileCollectionCompanionAfterFile(
   change: CollectionSchemaChange,
   companionRename: CollectionCompanionRename
 ): Promise<void> {
@@ -1316,11 +1348,98 @@ function collectionAsFileLeavesIt(
  * a name another index already holds, so the field would be recorded unique, or indexed, while
  * nothing enforces it.
  */
-export async function refuseCollectionIndexNamesTaken(
+async function refuseCollectionIndexNamesTaken(
   change: CollectionSchemaChange
 ): Promise<void> {
   const { adapter } = requireSchemaChangeDeps(change.slug);
   await refuseIndexNamesTaken(adapter, collectionAsFileLeavesIt(change));
+}
+
+/**
+ * Which road a collection's change takes in development, and what it does around its own
+ * migration file where that file rather than the push carries it: one answer for every save of a
+ * collection's fields, the schema dialog's and a collection update's alike, so the two roads
+ * cannot come to differ by caller.
+ */
+export interface CollectionFileRoad {
+  /**
+   * The checks the change makes over its translations (`checkCollectionTranslationChange`), asked
+   * once: the rename they answer carries the companion's values on either road.
+   */
+  companionRename: () => Promise<CollectionCompanionRename>;
+  /** Whether only the push applies the change (`collectionChangeCarriesValues`). */
+  pushCarriesValues: () => Promise<boolean>;
+  /**
+   * Whether a collection update's change runs its own file rather than the push: only where the
+   * collection stores nothing per language before or after (`registryInFile`), no field stops
+   * being unique, and the push carries no values. A translated collection's update keeps the push,
+   * whose companion steps the file road does not yet match. So does one turning a field's Unique
+   * off: the push drops a unique index the field still has under a name it did not declare, which
+   * the file does not carry.
+   */
+  updateRunsFile: () => Promise<boolean>;
+  /**
+   * Whether the caller's registry write joins the file's own transaction (`inLastTransaction`):
+   * not where the translations table is brought in step after the file (`after`), as the row would
+   * then record the change before that step holds it (`registryInFileTransaction`).
+   */
+  registryInFile: boolean;
+  /**
+   * The preconditions the push asks before it changes anything, asked before anything is
+   * written: an index name the change declares that another index holds, and a field leaving
+   * translation's own.
+   */
+  judge: () => Promise<void>;
+  /** What is written ahead of the file, once every check has passed: a field leaving translation's archive. */
+  before: () => Promise<void>;
+  /**
+   * What the file does not reach, done as the push does it once it has run: the translations table
+   * brought in step. A unique index a field that stops being unique still has under a name the file
+   * did not declare is not dropped here: the file does not carry that drop, so a database the file
+   * is replayed on keeps the index, and this one keeps it too.
+   */
+  after: () => Promise<void>;
+}
+
+/** The road of `change` (`CollectionFileRoad`). */
+export function collectionFileRoad(
+  change: CollectionSchemaChange
+): CollectionFileRoad {
+  let checked: Promise<CollectionCompanionRename> | undefined;
+  const companionRename = () =>
+    (checked ??= checkCollectionTranslationChange(change));
+  const { wasLocalized, isLocalized } = storedPerLanguage(change);
+  const pushCarriesValues = async () =>
+    collectionChangeCarriesValues(change, await companionRename());
+  const registryInFile = registryInFileTransaction({
+    wasStored: wasLocalized,
+    isStored: isLocalized,
+  });
+  return {
+    companionRename,
+    pushCarriesValues,
+    updateRunsFile: async () =>
+      registryInFile &&
+      fieldsStoppingUnique(
+        (change.collection.fields ?? []) as unknown as FieldDefinition[],
+        change.fields,
+        renamedFieldsOf(change.renameResolutions)
+      ).length === 0 &&
+      !(await pushCarriesValues()),
+    registryInFile,
+    judge: async () => {
+      await refuseCollectionIndexNamesTaken(change);
+      await archiveCollectionFieldsLeavingTranslation(
+        change,
+        await companionRename(),
+        { judgeOnly: true }
+      );
+    },
+    before: async () =>
+      archiveCollectionFieldsLeavingTranslation(change, await companionRename()),
+    after: async () =>
+      reconcileCollectionCompanionAfterFile(change, await companionRename()),
+  };
 }
 
 /**
@@ -1493,18 +1612,39 @@ async function companionUniqueNamesHeld(
  * an earlier save took on as the field's, is the column's other uniqueness. A composite index is
  * never touched: it is not the field's.
  */
+/**
+ * The fields a change keeps, by name or under a rename it makes (`renames`, by column), that stop
+ * being unique: a field renamed in the same save keeps whatever unique index its column had, which
+ * follows the column to its new name. Asked of the fields stored on the row (`fieldsStoredOnRow`):
+ * a group with no name has no column and no name of its own, and the fields it holds are the
+ * row's.
+ */
+function fieldsStoppingUnique(
+  oldFields: readonly FieldDefinition[],
+  newFields: readonly FieldDefinition[],
+  renames: ReadonlyArray<{ from: string; to: string }>
+): FieldDefinition[] {
+  const before = fieldsStoredOnRow(oldFields);
+  return fieldsStoredOnRow(newFields).filter(field => {
+    if (field.unique === true) return false;
+    const column = toSnakeCase(field.name);
+    const from = renames.find(rename => rename.to === column)?.from ?? column;
+    return before.some(
+      old => old.unique === true && toSnakeCase(old.name) === from
+    );
+  });
+}
+
 async function dropUniquenessLeftOn(
   adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
   collection: DesiredCollection,
   oldFields: readonly FieldDefinition[],
-  newFields: readonly FieldDefinition[]
+  newFields: readonly FieldDefinition[],
+  /** The renames the change makes, by column, under which a field keeps its column's index. */
+  renames: ReadonlyArray<{ from: string; to: string }>
 ): Promise<void> {
   const { tableName } = collection;
-  const stopped = newFields.filter(
-    field =>
-      field.unique !== true &&
-      oldFields.some(old => old.name === field.name && old.unique === true)
-  );
+  const stopped = fieldsStoppingUnique(oldFields, newFields, renames);
   if (stopped.length === 0) return;
   const db = adapter.getDrizzle();
   const dialect = adapter.dialect;
