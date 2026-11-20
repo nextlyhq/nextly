@@ -1782,7 +1782,7 @@ const SUCCEEDING: readonly SucceedingPath[] = [
           confirmed: true,
           schemaVersion: await versionOf(
             t,
-            "dynamic_components",
+            "dynamic_field_groups",
             "sip_all_card"
           ),
         }

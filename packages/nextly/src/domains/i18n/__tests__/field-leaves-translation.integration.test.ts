@@ -203,12 +203,12 @@ describeEachDialect("a field that stops being translated", dialect => {
     );
     const id = "promo-1";
     await query(
-      `INSERT INTO ${quote(dialect, "comp_promo")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
+      `INSERT INTO ${quote(dialect, "fg_promo")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
         `VALUES ('${id}', 'entry-1', 'dc_pages', 'promo', 7)`
     );
     for (const locale of LOCALES) {
       await query(
-        `INSERT INTO ${quote(dialect, "comp_promo_locales")} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
+        `INSERT INTO ${quote(dialect, "fg_promo_locales")} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
           `VALUES ('${id}', '${locale}', '${VALUES[locale]}')`
       );
     }
@@ -310,8 +310,8 @@ describeEachDialect("a field that stops being translated", dialect => {
       runsFile: true,
       entity: {
         slug: "promo",
-        table: "comp_promo",
-        registry: "dynamic_components",
+        table: "fg_promo",
+        registry: "dynamic_field_groups",
       },
       seed: seedFieldGroup,
       change: async () => {
@@ -323,7 +323,10 @@ describeEachDialect("a field that stops being translated", dialect => {
             fields: SHARED,
             confirmed: true,
             localized: true,
-            schemaVersion: await schemaVersionOf("dynamic_components", "promo"),
+            schemaVersion: await schemaVersionOf(
+              "dynamic_field_groups",
+              "promo"
+            ),
           }
         );
       },
@@ -333,29 +336,32 @@ describeEachDialect("a field that stops being translated", dialect => {
   it.each(PATHS)(
     "keeps them when $path",
     async ({ entity, seed, change, runsFile }) => {
-    const id = await seed();
+      const id = await seed();
 
-    await change();
+      await change();
 
-    const [main] = await query<{ heading: string | null }>(
-      `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, entity.table)} WHERE ${quote(dialect, "id")} = '${id}'`
-    );
-    expect(main?.heading).toBe(VALUES.en);
-    const archived = await query<{ locale: string; value: string }>(
-      `SELECT ${quote(dialect, "locale")} AS locale, ${quote(dialect, "value")} AS value FROM ${quote(dialect, "nextly_i18n_archive")} ` +
-        `WHERE ${quote(dialect, "collection")} = '${entity.slug}' AND ${quote(dialect, "field")} = 'heading' AND ${quote(dialect, "entry_id")} = '${id}' ` +
-        `ORDER BY ${quote(dialect, "locale")}`
-    );
-    // Every other language archived. A save that runs its migration file archives the kept one
-    // too, as `nextly migrate:create`'s file does, so the file's DOWN can put it back.
-    expect(archived).toEqual([
-      { locale: "ar", value: VALUES.ar },
-      ...(runsFile ? [{ locale: "en", value: VALUES.en }] : []),
-      { locale: "es", value: VALUES.es },
-    ]);
-    expect(await columnsOf(`${entity.table}_locales`)).not.toContain("heading");
-    expect(await columnsOf(entity.table)).toContain("heading");
-  });
+      const [main] = await query<{ heading: string | null }>(
+        `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, entity.table)} WHERE ${quote(dialect, "id")} = '${id}'`
+      );
+      expect(main?.heading).toBe(VALUES.en);
+      const archived = await query<{ locale: string; value: string }>(
+        `SELECT ${quote(dialect, "locale")} AS locale, ${quote(dialect, "value")} AS value FROM ${quote(dialect, "nextly_i18n_archive")} ` +
+          `WHERE ${quote(dialect, "collection")} = '${entity.slug}' AND ${quote(dialect, "field")} = 'heading' AND ${quote(dialect, "entry_id")} = '${id}' ` +
+          `ORDER BY ${quote(dialect, "locale")}`
+      );
+      // Every other language archived. A save that runs its migration file archives the kept one
+      // too, as `nextly migrate:create`'s file does, so the file's DOWN can put it back.
+      expect(archived).toEqual([
+        { locale: "ar", value: VALUES.ar },
+        ...(runsFile ? [{ locale: "en", value: VALUES.en }] : []),
+        { locale: "es", value: VALUES.es },
+      ]);
+      expect(await columnsOf(`${entity.table}_locales`)).not.toContain(
+        "heading"
+      );
+      expect(await columnsOf(entity.table)).toContain("heading");
+    }
+  );
 
   /**
    * Ways an archive can refuse the values a change depends on. Each leaves a table in place, so

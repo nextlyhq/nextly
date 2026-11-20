@@ -184,7 +184,7 @@ const KINDS: Kind[] = [
   {
     name: "a field group",
     slug: "meta",
-    table: "comp_meta",
+    table: "fg_meta",
     listed: "components",
     create: fields =>
       dispatchComponents(
@@ -202,7 +202,7 @@ const KINDS: Kind[] = [
           schemaVersion: (
             await t.getService("fieldGroupRegistryService").getComponent("meta")
           ).schemaVersion,
-          ...renameResolutions("comp_meta", rename),
+          ...renameResolutions("fg_meta", rename),
         }
       ),
     remove: () =>
@@ -214,7 +214,7 @@ const KINDS: Kind[] = [
       await (
         t.adapter as unknown as { executeQuery(sql: string): Promise<unknown> }
       ).executeQuery(
-        `INSERT INTO comp_meta (id, _parent_id, _parent_table, _parent_field, _order, heading) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, '${value}')`
+        `INSERT INTO fg_meta (id, _parent_id, _parent_table, _parent_field, _order, heading) VALUES ('kept-1', 'parent-1', 'dc_parent', 'meta', 0, '${value}')`
       );
     },
   },

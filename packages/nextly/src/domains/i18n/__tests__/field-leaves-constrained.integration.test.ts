@@ -211,11 +211,11 @@ describeEachDialect(
       for (const [i, value] of english.entries()) {
         const id = `promo-${i + 1}`;
         await query(
-          `INSERT INTO ${q("comp_promo")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(q).join(", ")}) ` +
+          `INSERT INTO ${q("fg_promo")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(q).join(", ")}) ` +
             `VALUES ('${id}', 'entry-${i + 1}', 'dc_pages', 'promo', 1)`
         );
         await query(
-          `INSERT INTO ${q("comp_promo_locales")} (${["_parent", "_locale", "code"].map(q).join(", ")}) ` +
+          `INSERT INTO ${q("fg_promo_locales")} (${["_parent", "_locale", "code"].map(q).join(", ")}) ` +
             `VALUES ('${id}', 'en', ${value === undefined ? "NULL" : `'${value}'`})`
         );
       }
@@ -225,7 +225,7 @@ describeEachDialect(
     const SYSTEM_COLUMNS: Record<string, Record<string, string>> = {
       dc_posts: { title: "'Extra'", slug: "'extra'" },
       single_hero: { title: "'Extra'", slug: "'extra'" },
-      comp_promo: {
+      fg_promo: {
         _parent_id: "'entry-extra'",
         _parent_table: "'dc_pages'",
         _parent_field: "'promo'",
@@ -361,7 +361,7 @@ describeEachDialect(
         path: "a field group's change is applied with the schema dialog",
         sqliteSkipsColumnModification: false,
         entity: "fieldGroup",
-        table: "comp_promo",
+        table: "fg_promo",
         seed: seedFieldGroup,
         save: async (fields: unknown[]) => {
           await dispatchComponents(
@@ -372,7 +372,7 @@ describeEachDialect(
               confirmed: true,
               localized: true,
               schemaVersion: await schemaVersionOf(
-                "dynamic_components",
+                "dynamic_field_groups",
                 "promo"
               ),
             }
@@ -387,7 +387,7 @@ describeEachDialect(
               confirmed: true,
               localized: true,
               schemaVersion: await schemaVersionOf(
-                "dynamic_components",
+                "dynamic_field_groups",
                 "promo"
               ),
             }
@@ -596,7 +596,7 @@ describeEachDialect(
     const REGISTRY: Record<string, { table: string; slug: string }> = {
       collection: { table: "dynamic_collections", slug: "posts" },
       single: { table: "dynamic_singles", slug: "hero" },
-      fieldGroup: { table: "dynamic_components", slug: "promo" },
+      fieldGroup: { table: "dynamic_field_groups", slug: "promo" },
     };
 
     /** Whether the registry still describes `code` as translated. */
@@ -672,17 +672,17 @@ describeEachDialect(
         });
         return (read.data as { code?: unknown } | undefined)?.code;
       }
-      const system = SYSTEM_COLUMNS.comp_promo;
+      const system = SYSTEM_COLUMNS.fg_promo;
       await query(
-        `INSERT INTO ${q("comp_promo")} (${["id", ...Object.keys(system), "views"].map(q).join(", ")}) ` +
+        `INSERT INTO ${q("fg_promo")} (${["id", ...Object.keys(system), "views"].map(q).join(", ")}) ` +
           `VALUES ('promo-late', ${Object.values(system).join(", ")}, 1)`
       );
       await query(
-        `INSERT INTO ${q("comp_promo_locales")} (${["_parent", "_locale", "code"].map(q).join(", ")}) ` +
+        `INSERT INTO ${q("fg_promo_locales")} (${["_parent", "_locale", "code"].map(q).join(", ")}) ` +
           `VALUES ('promo-late', 'en', '${value}')`
       );
       const [row] = await query<{ code: unknown }>(
-        `SELECT ${q("code")} AS code FROM ${q("comp_promo_locales")} WHERE ${q("_parent")} = 'promo-late'`
+        `SELECT ${q("code")} AS code FROM ${q("fg_promo_locales")} WHERE ${q("_parent")} = 'promo-late'`
       );
       return row?.code;
     }

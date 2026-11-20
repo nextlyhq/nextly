@@ -205,8 +205,8 @@ describeEachDialect(
       },
       {
         path: "a field group's schema dialog",
-        table: "comp_banner",
-        registry: "dynamic_components",
+        table: "fg_banner",
+        registry: "dynamic_field_groups",
         slug: "banner",
         seed: async () => {
           await dispatchComponents(
@@ -217,7 +217,7 @@ describeEachDialect(
           // A field group's rows belong to the entries embedding it, so the row is written as an
           // embedding entry would write it.
           await query(
-            `INSERT INTO ${q("comp_banner")} (${["id", "_parent_id", "_parent_table", "_parent_field", "heading", "views"].map(q).join(", ")}) ` +
+            `INSERT INTO ${q("fg_banner")} (${["id", "_parent_id", "_parent_table", "_parent_field", "heading", "views"].map(q).join(", ")}) ` +
               `VALUES ('banner-1', 'entry-1', 'dc_pages', 'banner', 'Hello', 7), ` +
               `('banner-2', 'entry-2', 'dc_pages', 'banner', NULL, 1)`
           );
@@ -232,7 +232,7 @@ describeEachDialect(
               confirmed: true,
               localized: true,
               schemaVersion: await schemaVersionOf(
-                "dynamic_components",
+                "dynamic_field_groups",
                 "banner"
               ),
             }

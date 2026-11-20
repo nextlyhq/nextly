@@ -221,10 +221,10 @@ describe.each(LOCK_DIALECTS)(
 
     it("is refused while a field-group storage migration is in flight, as db:sync is", async () => {
       const entries = [
-        { kind: "table" as const, from: "comp_hero", to: "fg_hero" },
+        { kind: "table" as const, from: "fg_hero", to: "fg_hero" },
         {
           kind: "registry" as const,
-          from: "dynamic_components",
+          from: "dynamic_field_groups",
           to: "dynamic_field_groups",
         },
       ];

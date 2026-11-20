@@ -615,10 +615,10 @@ describe.each(LOCK_DIALECTS)("db:sync --dry-run on %s", dialect => {
     "names a field-group storage migration in flight as the real run's refusal, exit 0",
     async () => {
       const entries = [
-        { kind: "table" as const, from: "comp_hero", to: "fg_hero" },
+        { kind: "table" as const, from: "fg_hero", to: "fg_hero" },
         {
           kind: "registry" as const,
-          from: "dynamic_components",
+          from: "dynamic_field_groups",
           to: "dynamic_field_groups",
         },
       ];

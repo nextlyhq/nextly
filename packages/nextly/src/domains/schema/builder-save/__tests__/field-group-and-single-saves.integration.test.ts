@@ -6,7 +6,7 @@
  * side of it, and every table a snapshot does not record counts as drift. A
  * field group or a Single the Builder created by pushing its table, with no
  * file, left that table on no record: the next migration, a collection's
- * included, was then refused with "table 'comp_<slug>' present in DB".
+ * included, was then refused with "table 'fg_<slug>' present in DB".
  */
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -256,7 +256,7 @@ describe.each(getConfiguredTestDialects())(
       expect(migrationFiles(t).some(f => /_meta_create\.sql$/.test(f))).toBe(
         true
       );
-      expect(latestSnapshotTables(t)).toContain("comp_meta");
+      expect(latestSnapshotTables(t)).toContain("fg_meta");
     });
 
     it("writes a Single's migration, recording its table", async () => {
@@ -306,7 +306,7 @@ describe.each(getConfiguredTestDialects())(
       expect(written.some(f => /_notice_create\.sql$/.test(f))).toBe(true);
       // ...and nothing of it has run: no table, no file recorded applied, and each entity's row
       // says so, as does the answer the Builder shows.
-      expect(await t.adapter.tableExists("comp_meta")).toBe(false);
+      expect(await t.adapter.tableExists("fg_meta")).toBe(false);
       expect(await t.adapter.tableExists("single_notice")).toBe(false);
       expect(await appliedFiles(t)).toEqual([]);
       expect(
@@ -355,7 +355,7 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(latestSnapshotTables(t)).toEqual(
-        expect.arrayContaining(["comp_meta", "dc_articles"])
+        expect.arrayContaining(["fg_meta", "dc_articles"])
       );
     });
 
@@ -406,13 +406,13 @@ describe.each(getConfiguredTestDialects())(
       expect(migrationFiles(t).some(f => /_meta_update\.sql$/.test(f))).toBe(
         true
       );
-      expect(latestColumns(t, "comp_meta")).toContain("byline");
+      expect(latestColumns(t, "fg_meta")).toContain("byline");
 
       await dispatchComponents("deleteComponent", { slug: "meta" }, undefined);
       expect(migrationFiles(t).some(f => /_meta_delete\.sql$/.test(f))).toBe(
         true
       );
-      expect(latestSnapshotTables(t)).not.toContain("comp_meta");
+      expect(latestSnapshotTables(t)).not.toContain("fg_meta");
     });
 
     it("writes a Single's change and its delete, each on record", async () => {
@@ -473,7 +473,7 @@ describe.each(getConfiguredTestDialects())(
           true
         );
         expect(definedFieldGroup(t, "card")?.labels?.singular).toBe("Edited");
-        expect(latestSnapshotTables(t)).toContain("comp_card");
+        expect(latestSnapshotTables(t)).toContain("fg_card");
       }
     );
 
@@ -496,7 +496,7 @@ describe.each(getConfiguredTestDialects())(
         expect(migrationFiles(t).some(f => /_card_delete\.sql$/.test(f))).toBe(
           true
         );
-        expect(latestSnapshotTables(t)).not.toContain("comp_card");
+        expect(latestSnapshotTables(t)).not.toContain("fg_card");
         expect(definedFieldGroup(t, "card")).toBeUndefined();
       }
     );
@@ -731,27 +731,27 @@ describe.each(getConfiguredTestDialects())(
       await exec(
         `DELETE FROM ${q("nextly_schema_events")} WHERE ${q("event_type")} = 'file_apply'`
       );
-      expect(latestSnapshotTables(t)).not.toContain("comp_meta");
+      expect(latestSnapshotTables(t)).not.toContain("fg_meta");
 
       await save([...fields, { name: "byline", type: "text" }]);
 
       // The save adopted the table: it is on record, every file applied.
-      expect(latestSnapshotTables(t)).toContain("comp_meta");
+      expect(latestSnapshotTables(t)).toContain("fg_meta");
       expect((await appliedFiles(t)).sort()).toEqual(migrationFiles(t).sort());
 
       // A default given by hand, which no snapshot records: the next save runs its file, which
       // finds the table differs from its record and is refused, where the push would restate it.
       if (dialect === "sqlite") {
         const [info] = (await exec(
-          `SELECT type FROM pragma_table_info('comp_meta') WHERE name = 'count'`
+          `SELECT type FROM pragma_table_info('fg_meta') WHERE name = 'count'`
         )) as { type: string }[];
-        await exec(`ALTER TABLE "comp_meta" DROP COLUMN "count"`);
+        await exec(`ALTER TABLE "fg_meta" DROP COLUMN "count"`);
         await exec(
-          `ALTER TABLE "comp_meta" ADD COLUMN "count" ${info!.type} DEFAULT 5`
+          `ALTER TABLE "fg_meta" ADD COLUMN "count" ${info!.type} DEFAULT 5`
         );
       } else {
         await exec(
-          `ALTER TABLE ${q("comp_meta")} ALTER COLUMN ${q("count")} SET DEFAULT 5`
+          `ALTER TABLE ${q("fg_meta")} ALTER COLUMN ${q("count")} SET DEFAULT 5`
         );
       }
       await expect(
@@ -1058,7 +1058,7 @@ describe.each(getConfiguredTestDialects())(
         // One transaction, undone whole: nothing the file describes ran, so it is withdrawn, and
         // the field group is all still there.
         expect(deleted).toBeUndefined();
-        expect(await t.adapter.tableExists("comp_meta")).toBe(true);
+        expect(await t.adapter.tableExists("fg_meta")).toBe(true);
         expect(
           await t.getService("fieldGroupRegistryService").getComponent("meta")
         ).toBeTruthy();
@@ -1123,14 +1123,14 @@ describe.each(getConfiguredTestDialects())(
       await unrecorded.createFieldGroup({
         slug: "legacy",
         label: "Legacy",
-        tableName: "comp_legacy",
+        tableName: "fg_legacy",
         fields: [{ name: "note", type: "text" }],
         source: "ui",
         locked: false,
         schemaHash: "unrecorded",
         schemaVersion: 1,
       } as never);
-      expect(latestSnapshotTables(t)).not.toContain("comp_legacy");
+      expect(latestSnapshotTables(t)).not.toContain("fg_legacy");
 
       // Saved once in the Builder: the save records the table as it stands.
       const component = await t
@@ -1149,8 +1149,8 @@ describe.each(getConfiguredTestDialects())(
         }
       );
 
-      expect(latestSnapshotTables(t)).toContain("comp_legacy");
-      expect(latestColumns(t, "comp_legacy")).toContain("byline");
+      expect(latestSnapshotTables(t)).toContain("fg_legacy");
+      expect(latestColumns(t, "fg_legacy")).toContain("byline");
     });
 
     /** The Builder's definition file, as the saves wrote it. */
@@ -1185,7 +1185,7 @@ describe.each(getConfiguredTestDialects())(
       ).createFieldGroup({
         slug: "older",
         label: "Older",
-        tableName: "comp_older",
+        tableName: "fg_older",
         fields: [
           { name: "note", type: "text" },
           { name: "extra", type: "text" },
@@ -1212,7 +1212,7 @@ describe.each(getConfiguredTestDialects())(
         // as the Builder's prompt answers them.
         renameResolutions: [
           {
-            tableName: "comp_older",
+            tableName: "fg_older",
             fromColumn: "extra",
             toColumn: "byline",
             choice: "drop_and_add",
@@ -1221,7 +1221,7 @@ describe.each(getConfiguredTestDialects())(
         eventResolutions: [
           {
             kind: "confirm_drop",
-            eventId: "destructive_drop:comp_older.extra",
+            eventId: "destructive_drop:fg_older.extra",
           },
         ],
       };
@@ -1247,7 +1247,7 @@ describe.each(getConfiguredTestDialects())(
         { slug: "older" },
         { ...change, acknowledgedConversions: ["extra"] }
       );
-      expect(latestSnapshotTables(t)).toContain("comp_older");
+      expect(latestSnapshotTables(t)).toContain("fg_older");
     });
 
     it("writes a Single's history, revalidation and webhook settings as the definition file spells them", async () => {

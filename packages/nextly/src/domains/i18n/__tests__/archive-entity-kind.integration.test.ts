@@ -158,11 +158,11 @@ describeEachDialect("the archive's entity kind", dialect => {
     );
     const id = "hero-1";
     await query(
-      `INSERT INTO ${q("comp_hero")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(q).join(", ")}) ` +
+      `INSERT INTO ${q("fg_hero")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(q).join(", ")}) ` +
         `VALUES ('${id}', 'entry-1', 'dc_pages', 'hero', 7)`
     );
     await query(
-      `INSERT INTO ${q("comp_hero_locales")} (${["_parent", "_locale", "heading"].map(q).join(", ")}) ` +
+      `INSERT INTO ${q("fg_hero_locales")} (${["_parent", "_locale", "heading"].map(q).join(", ")}) ` +
         `VALUES ('${id}', 'en', 'Group'), ('${id}', 'es', 'Grupo')`
     );
     return id;
@@ -183,7 +183,7 @@ describeEachDialect("the archive's entity kind", dialect => {
         fields,
         confirmed: true,
         localized: true,
-        schemaVersion: await schemaVersionOf("dynamic_components", "hero"),
+        schemaVersion: await schemaVersionOf("dynamic_field_groups", "hero"),
       }
     );
   }
@@ -422,7 +422,7 @@ describeEachDialect("the archive's entity kind", dialect => {
       { slug: "notice", label: "Notice", localized: true, fields: TRANSLATED }
     );
     await createdLongAgo("dynamic_collections", "hero");
-    await createdLongAgo("dynamic_components", "banner");
+    await createdLongAgo("dynamic_field_groups", "banner");
     await createdLongAgo("dynamic_singles", "notice");
     await archiveWithoutTheKind();
     await legacyRow("hero", collectionId, "Antes");
@@ -654,7 +654,7 @@ describeEachDialect("the archive's entity kind", dialect => {
     const collectionId = await seedCollection();
     await seedFieldGroup();
     await createdLongAgo("dynamic_collections", "hero");
-    await createdLongAgo("dynamic_components", "hero");
+    await createdLongAgo("dynamic_field_groups", "hero");
     await archiveWithoutTheKind();
     await legacyRow("hero", collectionId, "Antes");
     await legacyRow("hero", "hero-1", "Grupo");
@@ -662,11 +662,13 @@ describeEachDialect("the archive's entity kind", dialect => {
     // What the storage migration leaves: the registry under its new name, and no old one.
     await query(
       dialect === "mysql"
-        ? "RENAME TABLE `dynamic_components` TO `dynamic_field_groups`"
-        : `ALTER TABLE "dynamic_components" RENAME TO "dynamic_field_groups"`
+        ? "RENAME TABLE `dynamic_field_groups` TO `dynamic_field_groups`"
+        : `ALTER TABLE "dynamic_field_groups" RENAME TO "dynamic_field_groups"`
     );
     forgetFieldGroupStorageNames();
-    expect(await current.adapter.tableExists("dynamic_components")).toBe(false);
+    expect(await current.adapter.tableExists("dynamic_field_groups")).toBe(
+      false
+    );
 
     const restored = await restoreHero();
 
@@ -680,7 +682,7 @@ describeEachDialect("the archive's entity kind", dialect => {
     const collectionId = await seedCollection();
     await seedFieldGroup();
     await createdLongAgo("dynamic_collections", "hero");
-    await createdLongAgo("dynamic_components", "hero");
+    await createdLongAgo("dynamic_field_groups", "hero");
     await archiveWithoutTheKind();
     await legacyRow("hero", collectionId, "Antes");
     await legacyRow("hero", "hero-1", "Grupo");
@@ -701,7 +703,7 @@ describeEachDialect("the archive's entity kind", dialect => {
       adapter: restoreAdapter(),
       collection: "hero",
       kind: "fieldGroup",
-      companionTableName: "comp_hero_locales",
+      companionTableName: "fg_hero_locales",
     });
 
     expect(restored.rowsRead).toBe(0);

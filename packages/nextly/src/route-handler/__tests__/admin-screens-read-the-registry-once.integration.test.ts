@@ -4,7 +4,7 @@
  * catch-all handler.
  *
  * The registry's rows and listings (`dynamic_collections`, `dynamic_singles`,
- * `dynamic_components`) are cached under the database's stored count of
+ * `dynamic_field_groups`) are cached under the database's stored count of
  * registry writes (`storedSchemaSeq`), not for a lifetime. So:
  * - after a warm-up, the requests those screens send read no registry row and
  *   no registry listing, even past the old one-second lifetime and past the
@@ -136,7 +136,7 @@ function registryReads(
   calls: readonly RecordedStatement[]
 ): RecordedStatement[] {
   return calls.filter(call =>
-    /\bfrom\s+["`]?(dynamic_collections|dynamic_singles|dynamic_components)["`]?/i.test(
+    /\bfrom\s+["`]?(dynamic_collections|dynamic_singles|dynamic_field_groups)["`]?/i.test(
       call.text
     )
   );

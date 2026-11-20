@@ -208,8 +208,8 @@ const PATHS: readonly SavePath[] = [
   {
     name: "a field group's Builder apply",
     slug: "fbs_card",
-    table: "comp_fbs_card",
-    registry: "dynamic_components",
+    table: "fg_fbs_card",
+    registry: "dynamic_field_groups",
     translatable: true,
     pushRoad: false,
     create: fieldGroupCreate("fbs_card"),
@@ -220,7 +220,7 @@ const PATHS: readonly SavePath[] = [
         {
           fields,
           confirmed: true,
-          schemaVersion: await versionOf(t, "dynamic_components", "fbs_card"),
+          schemaVersion: await versionOf(t, "dynamic_field_groups", "fbs_card"),
         }
       ),
   },

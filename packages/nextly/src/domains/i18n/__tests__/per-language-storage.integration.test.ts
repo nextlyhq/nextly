@@ -134,17 +134,17 @@ describe.each(getConfiguredTestDialects())(
       const columns = await columnsOf(t, [
         "single_site",
         "single_site_locales",
-        "comp_card",
-        "comp_card_locales",
+        "fg_card",
+        "fg_card_locales",
       ]);
       expect(columns.single_site).toContain("visits");
       expect(columns.single_site).not.toContain("tagline");
       expect(columns.single_site_locales).toEqual(
         expect.arrayContaining(["_parent", "_locale", "tagline"])
       );
-      expect(columns.comp_card).toContain("rank");
-      expect(columns.comp_card).not.toContain("heading");
-      expect(columns.comp_card_locales).toEqual(
+      expect(columns.fg_card).toContain("rank");
+      expect(columns.fg_card).not.toContain("heading");
+      expect(columns.fg_card_locales).toEqual(
         expect.arrayContaining(["_parent", "_locale", "heading"])
       );
     });
@@ -578,8 +578,8 @@ describe.each(getConfiguredTestDialects())(
         "dc_posts_locales",
         "single_footer",
         "single_footer_locales",
-        "comp_badge",
-        "comp_badge_locales",
+        "fg_badge",
+        "fg_badge_locales",
       ]);
       expect(columns.dc_posts).toContain("count");
       expect(columns.dc_posts).not.toContain("heading");
@@ -587,9 +587,9 @@ describe.each(getConfiguredTestDialects())(
       expect(columns.single_footer).toContain("year");
       expect(columns.single_footer).not.toContain("note");
       expect(columns.single_footer_locales).toContain("note");
-      expect(columns.comp_badge).toContain("size");
-      expect(columns.comp_badge).not.toContain("caption");
-      expect(columns.comp_badge_locales).toContain("caption");
+      expect(columns.fg_badge).toContain("size");
+      expect(columns.fg_badge).not.toContain("caption");
+      expect(columns.fg_badge_locales).toContain("caption");
 
       const created = await t.nextly.create({
         collection: "posts",
@@ -1049,8 +1049,8 @@ describe.each(getConfiguredTestDialects())(
         "dc_articles_locales",
         "single_site",
         "single_site_locales",
-        "comp_card",
-        "comp_card_locales",
+        "fg_card",
+        "fg_card_locales",
       ]);
       expect(columns.dc_articles).toEqual(
         expect.arrayContaining(["headline", "excerpt", "views"])
@@ -1058,12 +1058,12 @@ describe.each(getConfiguredTestDialects())(
       expect(columns.single_site).toEqual(
         expect.arrayContaining(["tagline", "visits"])
       );
-      expect(columns.comp_card).toEqual(
+      expect(columns.fg_card).toEqual(
         expect.arrayContaining(["heading", "rank"])
       );
       expect(columns.dc_articles_locales).toEqual([]);
       expect(columns.single_site_locales).toEqual([]);
-      expect(columns.comp_card_locales).toEqual([]);
+      expect(columns.fg_card_locales).toEqual([]);
     });
   }
 );
