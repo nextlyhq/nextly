@@ -2455,6 +2455,7 @@ export class SingleQueryService extends BaseService {
           scopeKind: "single" as const,
           scopeSlug: slug,
           dialect: this.adapter.dialect,
+          fields: companion.localizedFields.map(field => field.name),
         }
       : undefined;
     await populateTranslationStatus({

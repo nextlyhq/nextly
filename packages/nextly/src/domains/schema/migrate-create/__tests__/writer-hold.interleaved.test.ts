@@ -15,7 +15,6 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
-  writeFileSync,
 } from "node:fs";
 import { utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -28,6 +27,8 @@ import {
   acquireWriterHold,
   isWriterHoldHeld,
   isWriterHoldLost,
+  notWrittenError,
+  prepareAll,
   prepareWhole,
   publishHeld,
   setWriterHoldBounds,
@@ -48,6 +49,10 @@ const between = vi.hoisted(() => ({
   noLinks: false,
   /** Before any file is moved, given where it goes. */
   beforeMove: undefined as ((to: string) => void) | undefined,
+  /** The files that cannot be removed, by their paths. */
+  noRemove: undefined as RegExp | undefined,
+  /** Every file removed at its own name (not one waiting aside), in order. */
+  removed: [] as string[],
   /** Every write and move made, in order. */
   made: [] as { step: "write" | "move"; path: string; text?: string }[],
 }));
@@ -98,6 +103,16 @@ vi.mock("node:fs/promises", async importOriginal => {
       // A hold put at its path, not one put back there.
       if (from.endsWith(".new")) await afterPlaced();
     },
+    rm: async (...args: Parameters<typeof real.rm>) => {
+      const path = String(args[0]);
+      if (between.noRemove?.test(path) === true) {
+        throw Object.assign(new Error("EPERM: operation not permitted"), {
+          code: "EPERM",
+        });
+      }
+      if (!path.endsWith(".tmp")) between.removed.push(path);
+      return real.rm(...args);
+    },
     rename: async (from: string, to: string) => {
       between.made.push({
         step: "move",
@@ -134,6 +149,8 @@ afterEach(() => {
   between.beforeSetAside = undefined;
   between.afterPlaced = undefined;
   between.noLinks = false;
+  between.noRemove = undefined;
+  between.removed.length = 0;
   between.beforeMove = undefined;
   vi.restoreAllMocks();
   rmSync(join(dir, ".."), { recursive: true, force: true });
@@ -415,54 +432,189 @@ describe("a writer publishing its files", () => {
     expect(readdirSync(dir).filter(name => name.endsWith(".tmp"))).toEqual([]);
   });
 
-  it("writes the files that go alongside in the same step, after its last check and before the one after", async () => {
-    const companion = join(dir, "20260101_000000_001_one_companion.sql");
-    const steps: string[] = [];
+  /** A companion file of the migration, placed after it, whose own name is taken by a folder. */
+  const companion = () => join(dir, "20260101_000000_001_one_companion.sql");
+  const withCompanion = async () => [
+    ...(await prepared()),
+    await prepareWhole(companion(), "-- companion\n"),
+  ];
 
-    await asWriter(() =>
-      publishHeld(dir, prepared, {
-        stillCurrent: async () => {
-          steps.push("last check");
-        },
-        alongside: () => {
-          // The migration and its snapshot are in place by now.
-          steps.push(
-            existsSync(file()) && existsSync(snapshot())
-              ? "alongside, after the files"
-              : "alongside, before the files"
-          );
-          writeFileSync(companion, "-- companion\n");
-          return [companion];
-        },
-      })
+  it("takes back what it placed where a later file could not follow, while the folder is its own", async () => {
+    mkdirSync(companion(), { recursive: true });
+
+    const failed = await thrownBy(() =>
+      asWriter(() => publishHeld(dir, withCompanion))
     );
 
-    expect(steps).toEqual(["last check", "alongside, after the files"]);
-    expect(existsSync(companion)).toBe(true);
+    expect((failed as { publicMessage: string }).publicMessage).toMatch(
+      /was not written: moving 20260101_000000_001_one_companion\.sql into place failed \(E[A-Z]+\)/
+    );
+    // The migration file was in place, and is not left without its companion.
+    expect(existsSync(file())).toBe(false);
+    expect(existsSync(snapshot())).toBe(false);
+    expect(readdirSync(dir).filter(name => name.endsWith(".tmp"))).toEqual([]);
   });
 
-  it("writes none alongside where the last check refuses", async () => {
-    let written = false;
+  it("takes the migration file back before its snapshot, so it is never there without it", async () => {
+    mkdirSync(companion(), { recursive: true });
+    between.removed.length = 0;
 
-    await thrownBy(() =>
+    await thrownBy(() => asWriter(() => publishHeld(dir, withCompanion)));
+
+    expect(between.removed.filter(path => path.includes("20260101"))).toEqual([
+      file(),
+      snapshot(),
+    ]);
+  });
+
+  it("names a file it placed and could not take back", async () => {
+    mkdirSync(companion(), { recursive: true });
+    between.noRemove = /20260101_000000_000_one\.sql$/;
+
+    const failed = await thrownBy(() =>
+      asWriter(() => publishHeld(dir, withCompanion))
+    );
+
+    const said = (failed as { publicMessage: string }).publicMessage;
+    expect(said).toMatch(/was not written: moving \S*_one_companion\.sql/);
+    expect(said).toMatch(
+      /could not be removed: 20260101_000000_000_one\.sql, 20260101_000000_000_one\.snapshot\.json\..*delete them/
+    );
+    expect(said).not.toContain("the folder is as it was");
+    // The migration file stays with its snapshot, never without it.
+    expect(existsSync(file())).toBe(true);
+    expect(existsSync(snapshot())).toBe(true);
+  });
+
+  it("takes back what it placed where a file waiting aside cannot be removed either", async () => {
+    mkdirSync(companion(), { recursive: true });
+    between.noRemove = /_one_companion\.sql\.[^/]*\.tmp$/;
+
+    const failed = await thrownBy(() =>
+      asWriter(() => publishHeld(dir, withCompanion))
+    );
+
+    // The move's failure is what it reports, and the files it placed are
+    // gone all the same.
+    expect((failed as { publicMessage: string }).publicMessage).toMatch(
+      /was not written: moving 20260101_000000_001_one_companion\.sql into place failed/
+    );
+    expect(existsSync(file())).toBe(false);
+    expect(existsSync(snapshot())).toBe(false);
+  });
+
+  it("removes a snapshot whose migration file was not placed, even once overtaken", async () => {
+    // A translations file that runs before the migration, placed ahead of
+    // the snapshot; the migration file itself cannot follow.
+    const before = join(dir, "20251231_235959_999_one_companion.sql");
+    mkdirSync(file(), { recursive: true });
+    let other: WriterHold | undefined;
+
+    const lost = await thrownBy(() =>
       asWriter(() =>
-        publishHeld(dir, prepared, {
+        publishHeld(
+          dir,
+          async () => {
+            mkdirSync(join(dir, "meta"), { recursive: true });
+            return [
+              await prepareWhole(before, "-- companion\n"),
+              await prepareWhole(snapshot(), "{}"),
+              await prepareWhole(file(), "CREATE TABLE one (id integer);\n"),
+            ];
+          },
+          {
+            stillCurrent: async () => {
+              await lapse();
+              other = await take("migrate:baseline");
+            },
+          }
+        )
+      )
+    );
+
+    expect(isWriterHoldLost(lost)).toBe(true);
+    const said = (lost as { publicMessage: string }).publicMessage;
+    expect(said).toMatch(/as it wrote 20251231_235959_999_one_companion\.sql/);
+    expect(said).toMatch(/could not put 20260101_000000_000_one\.sql in place/);
+    // The companion may be built on by now and stays; a snapshot with no
+    // migration file counts for nothing and would describe one that does
+    // not exist.
+    expect(existsSync(before)).toBe(true);
+    expect(existsSync(snapshot())).toBe(false);
+    await other!.release();
+  });
+
+  it("tells a Builder change to save again, without the file or the system's code", () => {
+    const refused = notWrittenError({
+      command: "the Schema Builder save",
+      whenHeld: "refuse",
+      failed: file(),
+      left: [],
+      cause: Object.assign(new Error("EACCES"), { code: "EACCES" }),
+    });
+
+    expect(refused.publicMessage).toBe(
+      "This change was not saved: a migration file could not be put in place. Save it again."
+    );
+    expect(refused.logMessage).toContain("20260101_000000_000_one.sql");
+  });
+
+  it("leaves no file waiting aside where a later one of the set cannot be written", async () => {
+    mkdirSync(join(dir, "meta"), { recursive: true });
+
+    const failed = await thrownBy(() =>
+      prepareAll([
+        () => prepareWhole(snapshot(), "{}"),
+        () => prepareWhole(join(dir, "no-such-folder", "one.sql"), "x"),
+      ])
+    );
+
+    expect((failed as NodeJS.ErrnoException).code).toBe("ENOENT");
+    expect(readdirSync(join(dir, "meta"))).toEqual([]);
+  });
+
+  it("reports the write that failed where a file before it cannot be removed", async () => {
+    mkdirSync(join(dir, "meta"), { recursive: true });
+    between.noRemove = /\.snapshot\.json\.[^/]*\.tmp$/;
+
+    const failed = await thrownBy(() =>
+      prepareAll([
+        () => prepareWhole(snapshot(), "{}"),
+        () => prepareWhole(join(dir, "no-such-folder", "one.sql"), "x"),
+      ])
+    );
+
+    expect((failed as NodeJS.ErrnoException).code).toBe("ENOENT");
+  });
+
+  it("takes nothing back where it was overtaken by then, and names what it placed", async () => {
+    mkdirSync(companion(), { recursive: true });
+    let other: WriterHold | undefined;
+
+    const lost = await thrownBy(() =>
+      asWriter(() =>
+        publishHeld(dir, withCompanion, {
+          // Stopped past its lease after its last check: the folder is
+          // another writer's before the files go in.
           stillCurrent: async () => {
             await lapse();
-            const other = await take("migrate:baseline");
-            await other.release();
-            throw new Error("overtaken before its files");
-          },
-          alongside: () => {
-            written = true;
-            return [];
+            other = await take("migrate:baseline");
           },
         })
       )
     );
 
-    expect(written).toBe(false);
-    expect(nothingLeft()).toEqual([]);
+    expect(isWriterHoldLost(lost)).toBe(true);
+    expect((lost as { publicMessage: string }).publicMessage).toMatch(
+      /as it wrote 20260101_000000_000_one\.sql/
+    );
+    // And the file that never got to its name, which makes them a part.
+    expect((lost as { publicMessage: string }).publicMessage).toMatch(
+      /could not put 20260101_000000_001_one_companion\.sql in place/
+    );
+    expect(existsSync(file())).toBe(true);
+    expect(existsSync(snapshot())).toBe(true);
+    await other!.release();
   });
 });
 

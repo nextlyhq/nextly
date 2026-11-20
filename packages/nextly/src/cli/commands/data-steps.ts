@@ -28,6 +28,8 @@ import { confirmBackup } from "./backup-confirmation";
 import { dryRunRefusalOf } from "./migrate-create";
 import type {
   UpgradeAdapter,
+  UpgradeReport,
+  UpgradeSite,
   UpgradeStep,
   UpgradeStepContext,
 } from "./upgrade-step";
@@ -35,6 +37,8 @@ import type {
 /** What a run of the steps is handed by its command. */
 export interface DataStepsDeps {
   adapter: UpgradeAdapter;
+  /** The site's configuration, which the steps that bring content into its model judge by. */
+  site?: UpgradeSite;
   /** The command running them, as a refusal and the lock's holder name it: "nextly migrate". */
   command: string;
   /** The steps, in the order they run. */
@@ -72,15 +76,16 @@ export interface PendingDataStep {
   pending: number;
 }
 
-/** What each step is handed: the database and the command's log. */
+/** What each step is handed: the database, the site and the command's log. */
 function stepContext(
-  deps: Pick<DataStepsDeps, "adapter" | "log" | "warn">
+  deps: Pick<DataStepsDeps, "adapter" | "log" | "warn" | "site">
 ): UpgradeStepContext {
   const { adapter } = deps;
   return {
     adapter,
     db: adapter.getDrizzle(),
     dialect: adapter.getCapabilities().dialect,
+    ...(deps.site === undefined ? {} : { site: deps.site }),
     log: deps.log,
     warn: deps.warn,
   };
@@ -98,7 +103,7 @@ const named = ({ step, pending }: PendingDataStep) =>
  * read with that refusal.
  */
 export async function firstDataStepWithWork(
-  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn">
+  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn" | "site">
 ): Promise<PendingDataStep | undefined> {
   const context = stepContext(deps);
   for (const step of deps.steps) {
@@ -249,9 +254,11 @@ export async function previewDataSteps(
     | "interactive"
     | "log"
     | "warn"
+    | "site"
   >
 ): Promise<DryRunPlan> {
-  const { withWork, refusal: countRefusal } = await countForPreview(deps);
+  const { withWork, refusal: countRefusal, report } =
+    await countForPreview(deps);
   const [first] = withWork;
   // A step whose count refused is the run's refusal, before any question.
   const outlook =
@@ -270,6 +277,7 @@ export async function previewDataSteps(
         : []),
       ...(outlook.note !== undefined ? [outlook.note] : []),
     ],
+    report,
   };
 }
 
@@ -278,10 +286,17 @@ export async function previewDataSteps(
  * stops the counting there, as it stops the run, and is the refusal named.
  */
 async function countForPreview(
-  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn">
-): Promise<{ withWork: PendingDataStep[]; refusal?: string }> {
+  deps: Pick<DataStepsDeps, "adapter" | "steps" | "log" | "warn" | "site">
+): Promise<{
+  withWork: PendingDataStep[];
+  refusal?: string;
+  report: UpgradeReport;
+}> {
   const context = stepContext(deps);
   const withWork: PendingDataStep[] = [];
+  // What the steps that move content list of it, each step's lists in step order. Each is asked of
+  // the database as it stands, as each count is, before any step runs.
+  const report: UpgradeReport = { move: [], conflicts: [], check: [] };
   for (const step of deps.steps) {
     let pending: number;
     try {
@@ -289,11 +304,19 @@ async function countForPreview(
     } catch (error) {
       const refusal = dryRunRefusalOf(error);
       if (refusal === undefined) throw error;
-      return { withWork, refusal };
+      return { withWork, refusal, report };
     }
     if (pending > 0) withWork.push({ step, pending });
+    // Asked of every step that lists anything, with work or without: a step can have nothing to
+    // change and still something an editor should check.
+    if (step.report) {
+      const listed = await step.report(context);
+      report.move.push(...listed.move);
+      report.conflicts.push(...listed.conflicts);
+      report.check.push(...listed.check);
+    }
   }
-  return { withWork };
+  return { withWork, report };
 }
 
 /**

@@ -45,16 +45,15 @@ const homepage = defineSingle({
 describe("booting an entity whose slug another kind already holds", () => {
   it("fails the boot instead of losing the single", async () => {
     // 🔴 The registry guard refuses the second registration -- one slug, one
-    // kind -- and the collections sync reports that as a boot failure while
-    // the singles sync kept it to itself: the app ran with the single simply
-    // missing, answering not-found for one the config declares. This pair
-    // reaches the registries because only `defineConfig` screens an app's own
-    // config for it, and the harness builds the config directly -- which is
-    // also the shape a Schema-Builder entity makes, since the fold cannot see
-    // Builder slugs.
-    // Asserted on the error's identity and its operator context rather than
-    // on its message: the public sentence is canonical and says nothing about
-    // which single, which is the point of `logContext`.
+    // kind -- and the singles sync used to keep that to itself: the app ran
+    // with the single simply missing, answering not-found for one the config
+    // declares. The start now judges the configuration's rules across entities
+    // before anything connects (`crossEntityProblems`), whatever built the
+    // config -- the harness builds it directly, as a Schema-Builder entity's
+    // shape is made -- so the pair is refused there, naming the Single's slug,
+    // rather than reaching the registries at all.
+    // Asserted on the error's identity and the problem's place rather than on
+    // its message: the place is what tells which entity to rename.
     await expect(
       createTestNextly({
         collections: [
@@ -63,10 +62,15 @@ describe("booting an entity whose slug another kind already holds", () => {
         singles: [homepage],
       })
     ).rejects.toMatchObject({
-      code: "INTERNAL_ERROR",
-      logContext: {
-        reason: "single-sync-failed",
-        singles: [expect.objectContaining({ slug: "homepage" })],
+      code: "VALIDATION_ERROR",
+      logContext: { reason: "config-invalid" },
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "singles[0].slug",
+            code: "SLUG_DUPLICATE",
+          }),
+        ],
       },
     });
   });

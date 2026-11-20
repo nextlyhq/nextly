@@ -24,7 +24,12 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { blankLineHeader } from "../../domains/schema/migrate/history-line";
 import { settingsOf } from "../../domains/schema/migrate-create/entity-settings";
+import {
+  formatBlankFile,
+  formatMigrationFile,
+} from "../../domains/schema/migrate-create/format-file";
 import type { MinimalConfigField } from "../../domains/schema/migrate-create/generate";
 import { writeSnapshot } from "../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
@@ -444,6 +449,238 @@ describe("runChecks (F11 PR 4)", () => {
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(printed).toHaveBeenCalledWith(
         expect.stringContaining("(MISSING_SNAPSHOT)")
+      );
+    });
+  });
+
+  describe("a blank migration, which has no snapshot by design", () => {
+    it("passes a project whose blank migrations are of both styles", async () => {
+      // As `migrate:create --blank` writes them: one stating no place, as it did earlier, and
+      // one stating the migration it was written after.
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_seed.sql"),
+        formatBlankFile("seed", "postgresql", new Date("2026-01-01T12:00:00Z")),
+        "utf-8"
+      );
+      await writeFile(
+        join(migrationsDir, "20260102_120000_001_backfill.sql"),
+        formatBlankFile(
+          "backfill",
+          "postgresql",
+          new Date("2026-01-02T12:00:00Z"),
+          {
+            line: blankLineHeader({
+              parent: "20260101_120000_001_seed",
+              merges: [],
+            }),
+          }
+        ),
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(printed).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalledWith(1);
+    });
+
+    it("passes a blank migration whose author kept its place and removed the template's comments", async () => {
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_seed.sql"),
+        "-- Migration: seed\n-- Parent: none\n\n-- UP\nSELECT 1;\n",
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(printed).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalledWith(1);
+    });
+
+    it("still refuses a file that only mentions a blank migration, and says how each kind of file is put right", async () => {
+      // Neither mark: the words are in the file, but not as the template's line, and the
+      // header states no place.
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_add_posts.sql"),
+        "-- Migration: add_posts\n--   -- This is a blank migration file for custom SQL.\n-- Parents: none\n\n-- UP\nCREATE TABLE posts (id text);\n",
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      const message = String(printed.mock.calls[0]?.[0]);
+      expect(message).toContain("(MISSING_SNAPSHOT)");
+      expect(message).toContain("nextly migrate:create --blank");
+      expect(message).toContain(
+        "nextly migrate:resolve --applied '20260101_120000_001_add_posts' --skip-verify"
+      );
+    });
+
+    it("holds a file that has a snapshot to it, whatever the file says of itself", async () => {
+      const original = "CREATE TABLE foo (id text);";
+      await writeSnapshot(
+        join(migrationsDir, "meta"),
+        "20260101_120000_001_initial",
+        POSTS_DESIRED,
+        original
+      );
+      // Edited since, and given the blank template's line.
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_initial.sql"),
+        `-- This is a blank migration file for custom SQL.\n${original} -- TAMPERED`,
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: POSTS_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(CHECKSUM_MISMATCH)")
+      );
+    });
+
+    // Each spelling `nextly migrate` opens the UP section with (`isUpMarker`), so the header ends
+    // where the runner's statements begin.
+    it.each(["-- UP", "-- UP: create", "-- UP create comments", "  -- UP  "])(
+      "reads the marks in the file's header only, not in a comment among its statements (%j)",
+      async upLine => {
+        await writeFile(
+          join(migrationsDir, "20260101_120000_001_add_comments.sql"),
+          `-- Migration: add_comments\n\n${upLine}\n-- Parent: posts\n-- This is a blank migration file for custom SQL.\nCREATE TABLE comments (id text);\n`,
+          "utf-8"
+        );
+
+        const logger = makeLogger();
+        await runChecks({
+          migrationsDir,
+          desiredSnapshot: EMPTY_DESIRED,
+          logger: logger as unknown as Parameters<
+            typeof runChecks
+          >[0]["logger"],
+        });
+
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(printed).toHaveBeenCalledWith(
+          expect.stringContaining("(MISSING_SNAPSHOT)")
+        );
+      }
+    );
+
+    it("reads the template's line as the runner reads a line, with the spaces around it trimmed", async () => {
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_seed.sql"),
+        "-- Migration: seed\n  -- This is a blank migration file for custom SQL. \t\r\n\n-- UP\nSELECT 1;\n",
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(printed).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalledWith(1);
+    });
+
+    it("names a dialect's variant to migrate:resolve as that command finds it", async () => {
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_seed.mysql.sql"),
+        "INSERT INTO foo (id) VALUES ('a');",
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      const message = String(printed.mock.calls[0]?.[0]);
+      expect(message).toContain("(MISSING_SNAPSHOT)");
+      expect(message).toContain(
+        "nextly migrate:resolve --applied '20260101_120000_001_seed' --skip-verify"
+      );
+      expect(message).toContain("delete the file");
+    });
+
+    it("quotes the name in the command it advises, so a name with a space or a quote stays one argument", async () => {
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_owner's seed.sql"),
+        "INSERT INTO foo (id) VALUES ('a');",
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      const message = String(printed.mock.calls[0]?.[0]);
+      expect(message).toContain(
+        "nextly migrate:resolve --applied '20260101_120000_001_owner'\\''s seed' --skip-verify"
+      );
+    });
+
+    it("holds a generated migration beside a blank one to its snapshot", async () => {
+      await writeFile(
+        join(migrationsDir, "20260101_120000_001_seed.sql"),
+        formatBlankFile("seed", "postgresql", new Date("2026-01-01T12:00:00Z")),
+        "utf-8"
+      );
+      // A generated file whose snapshot is gone carries neither mark.
+      await writeFile(
+        join(migrationsDir, "20260102_120000_001_add_posts.sql"),
+        formatMigrationFile({
+          name: "add_posts",
+          dialect: "postgresql",
+          sqlStatements: ["CREATE TABLE posts (id text)"],
+          downSqlStatements: ["DROP TABLE posts"],
+          collections: ["posts"],
+          singles: [],
+          components: [],
+          hasUserExt: false,
+        }),
+        "utf-8"
+      );
+
+      const logger = makeLogger();
+      await runChecks({
+        migrationsDir,
+        desiredSnapshot: EMPTY_DESIRED,
+        logger: logger as unknown as Parameters<typeof runChecks>[0]["logger"],
+      });
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "`20260102_120000_001_add_posts.sql` has no paired snapshot"
+        )
       );
     });
   });

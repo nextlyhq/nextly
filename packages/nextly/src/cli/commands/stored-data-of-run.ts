@@ -30,6 +30,7 @@ import {
   runDataSteps,
   type DataStepsDeps,
 } from "./data-steps";
+import type { UpgradeSite } from "./upgrade-step";
 import { MIGRATE_DATA_STEPS } from "./upgrade-steps";
 import {
   storedPasswordsNotice,
@@ -78,13 +79,33 @@ function reportPlan(
 ): void {
   const refusals = plan.refusals ?? [];
   const notes = plan.notes ?? [];
-  if (plan.changes.length + refusals.length + notes.length === 0) return;
+  const report = plan.report;
+  const listed =
+    report !== undefined &&
+    report.move.length + report.conflicts.length + report.check.length > 0;
+  if (plan.changes.length + refusals.length + notes.length === 0 && !listed) {
+    return;
+  }
   logger.newline();
   logger.info(
     "Data stored by an earlier release, once the schema is up to date:"
   );
   for (const { action, target } of plan.changes) {
     logger.info(`  • would ${action} ${target}`);
+  }
+  // What the steps that move content list of it, each list under its heading.
+  if (report !== undefined && listed) {
+    const sections = [
+      ["Would move:", report.move],
+      ["Conflicts, and how a real run settles them:", report.conflicts],
+      ["An editor should check:", report.check],
+    ] as const;
+    for (const [heading, items] of sections) {
+      logger.info(`  ${heading}`);
+      for (const item of items.length > 0 ? items : ["(none)"]) {
+        logger.info(`    - ${item}`);
+      }
+    }
   }
   if (stepped) {
     // A run with `--step` takes the steps only when it applies the last
@@ -133,6 +154,10 @@ export function planWithStoredData(
     changes: reached ? [...plan.changes, ...stored.changes] : plan.changes,
     ...(refusals.length > 0 ? { refusals } : {}),
     ...(notes.length > 0 ? { notes } : {}),
+    // What the steps that move content list of it, where the real run reaches them.
+    ...(reached && stored.report !== undefined
+      ? { report: stored.report }
+      : {}),
   };
 }
 
@@ -154,6 +179,8 @@ export function storedDataOfRun(args: {
   backupConfirmed: boolean;
   /** The schema lock's lease, in seconds, as the configuration sets it. */
   lockTtlSeconds: number | undefined;
+  /** The site's configuration, which the steps that bring content into its model judge by. */
+  site?: UpgradeSite;
 }): StoredDataOfRun {
   const { adapter, logger } = args;
   let confirmed = args.backupConfirmed;
@@ -179,6 +206,7 @@ export function storedDataOfRun(args: {
     log: message => logger.info(message),
     warn: message => logger.warn(message),
     ...(args.underLock !== undefined ? { underLock: args.underLock } : {}),
+    ...(args.site !== undefined ? { site: args.site } : {}),
     ...(args.lockTtlSeconds !== undefined
       ? { lockTtlSeconds: args.lockTtlSeconds }
       : {}),
