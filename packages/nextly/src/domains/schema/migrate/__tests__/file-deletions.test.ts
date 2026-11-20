@@ -1958,6 +1958,12 @@ describe("a prepared statement on MySQL", () => {
     expect(read("mysql", guarded)).toEqual([]);
   });
 
+  it("reads it so for an index whose name holds a backslash", () => {
+    expect(read("mysql", guardedIndexDrop("dc_posts", "posts\\key"))).toEqual(
+      []
+    );
+  });
+
   it("leaves one that starts as Nextly's but runs something else unread, as one that may delete", () => {
     const changed = [
       guarded[0].replace("'DO 0'", "'DROP TABLE `dc_posts`'"),

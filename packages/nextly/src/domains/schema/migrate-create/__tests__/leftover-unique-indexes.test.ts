@@ -89,6 +89,21 @@ describe("the older unique indexes a file drops for a field that stops being uni
     expect(dropped).toEqual({ statements: [], dropped: [] });
   });
 
+  it("says a column stays unique where a UNIQUE in the table's own definition holds it, which no statement drops", async () => {
+    const warn = vi.fn();
+    const dropped = await leftoverUniqueDrops({
+      operations: [stopsUnique],
+      desired: [posts()],
+      dialect: "sqlite",
+      read: live([OWN, null]),
+      warn,
+    });
+    expect(dropped).toEqual({ statements: [], dropped: [] });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("dc_posts"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("code"));
+  });
+
   it("reads nothing, and drops nothing, where no field stops being unique", async () => {
     const read = vi.fn(live([OWN, LEFTOVER]));
     const stillUnique = await leftoverUniqueDrops({

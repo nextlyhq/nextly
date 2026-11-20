@@ -274,9 +274,14 @@ export function guardedIndexDrop(
   );
 }
 
-/** What the first statement of a run says it changes, read back from its text. */
+/**
+ * What the first statement of a run says it changes, read back from its text. A guarded drop's
+ * statement is `literal`'s: one quoted string, or, where a name holds a backslash, a `CONCAT` of
+ * strings around `CHAR(92)`, which the names read back through (`unliteral`). Either way the run is
+ * recognised only where it is exactly what `guardedIndexDrop` renders for those names.
+ */
 const DROP_INDEX_RUN =
-  /^SET @nextly_ddl = \(SELECT IF\(COUNT\(\*\) > 0, 'DROP INDEX `([^`]+)` ON `([^`]+)`'/s;
+  /^SET @nextly_ddl = \(SELECT IF\(COUNT\(\*\) > 0, (?:CONCAT\()?'DROP INDEX `([^`]+)` ON `([^`]+)`'/s;
 const RENAME_RUN =
   /^SET @nextly_ddl = .*'ALTER TABLE `([^`]+)` '.*'RENAME COLUMN `([^`]+)` TO `([^`]+)`'/s;
 const NULLABILITY_RUN =

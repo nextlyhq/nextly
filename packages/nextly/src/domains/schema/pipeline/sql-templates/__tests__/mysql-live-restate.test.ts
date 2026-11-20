@@ -212,6 +212,16 @@ describe("a guarded index drop", () => {
     });
   });
 
+  it("reads a name holding a backslash back as it is, which its literal spells with CONCAT", () => {
+    const run = guardedIndexDrop("dc_po\\sts", "posts\\key");
+    expect(run[0]).toContain("CONCAT(");
+    expect(mysqlLiveRunAt(run, 0)).toEqual({
+      kind: "drop-index",
+      tableName: "dc_po\\sts",
+      indexName: "posts\\key",
+    });
+  });
+
   it("leaves a run with anything changed as written, so the guard still refuses it", () => {
     const changed = [
       run[0].replace("'DO 0'", "'DROP TABLE `dc_posts`'"),

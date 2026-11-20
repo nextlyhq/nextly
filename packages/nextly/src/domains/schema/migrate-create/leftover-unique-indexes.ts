@@ -114,10 +114,11 @@ function guardedDrop(
 
 /**
  * The indexes other than Nextly's own that `live` says hold the column `op` stops holding unique,
- * each one a statement can drop by name. One with no name is the primary key, or SQLite's index
- * for an inline UNIQUE, which no statement drops. One whose name holds the dialect's quote is a
- * valid name no statement here can spell: said to `warn`, for the person to drop by hand, rather
- * than refused part-way through writing the file.
+ * each one a statement can drop by name. One with no name is SQLite's index for a UNIQUE written in
+ * the table's own definition (or a primary key), which no statement drops: the column stays unique
+ * until the table is rebuilt without it, which is said to `warn`, as the file cannot do it. One
+ * whose name holds the dialect's quote is a valid name no statement here can spell: said to `warn`,
+ * for the person to drop by hand, rather than refused part-way through writing the file.
  */
 function otherUniqueIndexes(
   op: DropIndexOp,
@@ -128,7 +129,15 @@ function otherUniqueIndexes(
   const column = op.index.columns[0];
   const others: LeftoverUniqueIndex[] = [];
   for (const name of live.get(column) ?? []) {
-    if (name === null || isOwn(name, op.index.name, dialect)) continue;
+    if (name === null) {
+      warn(
+        `${op.tableName} holds ${column} unique in its own definition as well (a UNIQUE written ` +
+          `with the table), which no statement can drop: ${column} stays unique there until the ` +
+          `table is rebuilt without it.`
+      );
+      continue;
+    }
+    if (isOwn(name, op.index.name, dialect)) continue;
     if (
       !canQuoteIdent(name, dialect) ||
       !canQuoteIdent(op.tableName, dialect)
