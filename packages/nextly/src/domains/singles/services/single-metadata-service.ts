@@ -1664,7 +1664,7 @@ export class SingleMetadataService {
     refuseUnansweredRename(
       `The Single "${input.slug}"`,
       candidates,
-      field => schema.columnNameOf(field),
+      field => schema.storageNameOf(input.existing.tableName, field),
       {
         // A stored field without a name names nothing an answer could refer to.
         before: (input.existing.fields ?? []).flatMap(f =>
@@ -1672,6 +1672,11 @@ export class SingleMetadataService {
         ),
         after: input.fields.map(f => f.name),
       }
+    );
+    schema.refuseRenameJoiningTranslation(
+      `The Single "${input.slug}"`,
+      candidates,
+      { was: input.wasLocalized, is: input.isLocalized }
     );
   }
 

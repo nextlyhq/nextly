@@ -1581,11 +1581,16 @@ export class DynamicCollectionService extends BaseService {
       refuseUnansweredRename(
         `The collection "${collectionName}"`,
         renameCandidates,
-        field => this.schemaService.columnNameOf(field),
+        field => this.schemaService.storageNameOf(collection.tableName, field),
         {
           before: oldUserFields.map(f => f.name),
           after: userDefinedFields.map(f => f.name),
         }
+      );
+      this.schemaService.refuseRenameJoiningTranslation(
+        `The collection "${collectionName}"`,
+        renameCandidates,
+        { was: collectionWasLocalized, is: collectionIsLocalized }
       );
       // The translated field the request answered as a drop and an add, from the same candidates,
       // which the translated-field preflight below is told of, so it takes that removal, and only

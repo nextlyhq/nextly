@@ -41,7 +41,10 @@ import {
   isFieldLocalized,
   resolveLocalizedFieldNames,
 } from "../../i18n/classify-fields";
-import { declinedRename } from "../../schema/field-rename-answers";
+import {
+  answeredRename,
+  declinedRename,
+} from "../../schema/field-rename-answers";
 import {
   builderColumnIsUnique,
   isListMarkedUnique,
@@ -2894,6 +2897,56 @@ ${allColumnDefs.join(",\n")}
   /** The column a field is stored in on its entity's row, or none for one that has no column. */
   columnNameOf(field: FieldDefinition): string | undefined {
     return fieldProducesColumn(field) ? toSnakeCase(field.name) : undefined;
+  }
+
+  /**
+   * Where a field of the entity on `tableName` is stored, as a key two fields share only when one
+   * place holds both: its column, or the junction table a many-to-many's links live in (two
+   * fields naming one `junctionTable` share it). None for a field with neither. What a
+   * `drop_and_add` answer is refused for when both fields of its pair share one
+   * (`refuseUnansweredRename`): the change would keep the place, and what is in it, as it was.
+   */
+  storageNameOf(tableName: string, field: FieldDefinition): string | undefined {
+    if (usesJunctionTable(field)) {
+      return `junction:${this.junctionShape(tableName, field).table}`;
+    }
+    const column = this.columnNameOf(field);
+    return column === undefined ? undefined : `column:${column}`;
+  }
+
+  /**
+   * Refuse, before anything is written, a `rename` answer for a shared field renamed into a
+   * translated one while the entity stays translated. The main table drops the shared column and
+   * the companion adds the translated one empty, since only a field translated before the change
+   * carries its values onto the companion, so the rename would lose the values it asked to keep.
+   * Renamed first and made translated in a second change, or answered `drop_and_add`, it passes.
+   */
+  refuseRenameJoiningTranslation(
+    entity: string,
+    candidates: readonly { from: FieldDefinition; to: FieldDefinition }[],
+    localized: { was: boolean; is: boolean }
+  ): void {
+    if (!localized.was || !localized.is) return;
+    const joining = candidates.find(
+      pair =>
+        this.columnNameOf(pair.from) !== undefined &&
+        !isFieldLocalized(pair.from, true) &&
+        isFieldLocalized(pair.to, true) &&
+        answeredRename(pair)
+    );
+    if (!joining) return;
+    const from = joining.from.name;
+    const to = joining.to.name;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "renames",
+          code: "FIELD_RENAME_JOINS_TRANSLATION",
+          message: `${entity}: "${from}" is shared and "${to}" is translated, and a field can't be renamed and made translated in one change without leaving its values behind. Rename "${from}" to "${to}" first and make it translated in a second change, or answer "drop_and_add".`,
+        },
+      ],
+      logContext: { reason: "field-rename-joins-translation", from, to },
+    });
   }
 
   /**

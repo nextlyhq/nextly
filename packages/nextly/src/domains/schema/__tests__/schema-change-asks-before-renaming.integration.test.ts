@@ -331,6 +331,55 @@ describeEachDialect(
         expect(sqlFiles(), "the migration files").toEqual(files);
       });
     }
+
+    it("refuses dropping and adding a many-to-many for one naming the same junction table, which would keep every link", async () => {
+      // Both name `post_tag_links`, so the change keeps the table and its links as they are.
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "tags",
+          label: "Tags",
+          fields: [{ name: "label", type: "text" }],
+        }
+      );
+      const manyToMany = (name: string) => ({
+        name,
+        type: "relationship",
+        options: {
+          relationType: "manyToMany",
+          target: "tags",
+          junctionTable: "post_tag_links",
+        },
+      });
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        { name: "posts", label: "Posts", fields: [manyToMany("tags")] }
+      );
+
+      const answer = await answerOf(() =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "updateCollection",
+          { collectionName: "posts" },
+          {
+            fields: [manyToMany("labels")],
+            renames: [{ from: "tags", to: "labels", choice: "drop_and_add" }],
+          }
+        )
+      );
+
+      expect(answer).toEqual([
+        expect.objectContaining({
+          code: "FIELD_RENAME_SAME_COLUMN",
+          message: expect.stringMatching(/junction table/),
+        }),
+      ]);
+      expect(await registeredNames(ROADS[0]!)).toEqual(["tags"]);
+    });
   }
 );
 
@@ -473,6 +522,30 @@ describeEachDialect(
           )
         )
       ).toBe("TRANSLATED_FIELD_REMOVED_BESIDE_ADDED");
+    });
+
+    it("refuses renaming a shared field into a translated one, which would leave its values behind, and drops and adds it when asked", async () => {
+      await posts([
+        { name: "views", type: "number", localized: false },
+        { name: "heading", type: "text", localized: true },
+      ]);
+      const fields = [
+        { name: "count", type: "number", localized: true },
+        { name: "heading", type: "text", localized: true },
+      ];
+
+      expect(
+        await codeOf(
+          change(fields, [{ from: "views", to: "count", choice: "rename" }])
+        )
+      ).toBe("FIELD_RENAME_JOINS_TRANSLATION");
+      expect(
+        await codeOf(
+          change(fields, [
+            { from: "views", to: "count", choice: "drop_and_add" },
+          ])
+        )
+      ).toBeUndefined();
     });
 
     it("drops and adds a translated field when the request says so, not refusing its removal as unanswered", async () => {

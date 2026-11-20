@@ -102,12 +102,18 @@ export function declinedRename(pair: FieldPair): boolean {
   return answers(pair)?.choice === "drop_and_add";
 }
 
+/** Whether the running change answered this pair `rename`. */
+export function answeredRename(pair: FieldPair): boolean {
+  return answers(pair)?.choice === "rename";
+}
+
 /**
  * Refuse, before anything is written, a change on a road that takes answers that makes a pair it
  * doesn't answer: each of `pairs`, the change's rename candidates (`renameCandidatesOf`).
  * `entity` names it: `The collection "posts"`, say. A pair answered `drop_and_add` whose two
- * names are one column (`columnOf`, none for a field with no column), as `fooBar` and `foo_bar` are, is refused too: the
- * column cannot be dropped and added again in one change, only renamed. A `rename` answer for a
+ * fields are stored in one place (`storageOf`: one column, as `fooBar` and `foo_bar` are, or one
+ * many-to-many junction table both name; none for a field with neither) is refused too: what is
+ * stored there cannot be dropped and added again in one change, only renamed. A `rename` answer for a
  * field the change removes and one it adds (`names`) that isn't among them is refused as well, as
  * when a change replaces two fields at once, which no candidate pairs: left aside, its fields would
  * be dropped and added with their values lost though the request asked to keep them. An answer
@@ -118,7 +124,7 @@ export function declinedRename(pair: FieldPair): boolean {
 export function refuseUnansweredRename<F extends { name?: string }>(
   entity: string,
   pairs: readonly FieldPair<F>[],
-  columnOf: (field: F) => string | undefined,
+  storageOf: (field: F) => string | undefined,
   /** The entity's field names before the change and after it. */
   names: { before: readonly string[]; after: readonly string[] }
 ): void {
@@ -153,20 +159,20 @@ export function refuseUnansweredRename<F extends { name?: string }>(
     const from = pair.from.name ?? "";
     const to = pair.to.name ?? "";
     const answer = answers(pair);
-    // Only fields stored in a column can collide in one: a field group's rows are told apart by
-    // the field's exact name, whatever column a name like it would have.
-    const fromColumn = columnOf(pair.from);
+    // Only fields stored in a column or a junction table can collide in one: a field group's rows
+    // are told apart by the field's exact name, whatever column a name like it would have.
+    const fromStorage = storageOf(pair.from);
     if (
       answer?.choice === "drop_and_add" &&
-      fromColumn !== undefined &&
-      fromColumn === columnOf(pair.to)
+      fromStorage !== undefined &&
+      fromStorage === storageOf(pair.to)
     ) {
       throw NextlyError.validation({
         errors: [
           {
             path: "renames",
             code: "FIELD_RENAME_SAME_COLUMN",
-            message: `${entity}: "${from}" and "${to}" are stored in the same column, which can't be dropped and added again in one change. Answer "rename" for them, or remove "${from}" and add "${to}" in two changes.`,
+            message: `${entity}: "${from}" and "${to}" are stored in the same place (one column, or one many-to-many junction table), which can't be dropped and added again in one change. Answer "rename" for them, or remove "${from}" and add "${to}" in two changes.`,
           },
         ],
         logContext: { reason: "field-rename-same-column", from, to },
