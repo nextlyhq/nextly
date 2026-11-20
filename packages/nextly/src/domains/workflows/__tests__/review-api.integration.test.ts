@@ -45,6 +45,7 @@ import { apiKeyScope } from "../../../auth/authenticated-scope";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
+import { container } from "../../../di/container";
 import { permissionSlug } from "../../../schemas/_zod/rbac";
 import {
   getConfiguredTestDialects,
@@ -181,7 +182,7 @@ interface Door {
   ): Promise<{ assigned: string[]; refused: Doc[] }>;
   waiting(
     who: Who,
-    query: { page: number; limit: number }
+    query: { page?: number; limit: number; before?: string }
   ): Promise<{
     items: Doc[];
     meta: Doc;
@@ -288,13 +289,18 @@ const REST: Door = {
       refused: answer.errors as Doc[],
     };
   },
-  async waiting(who, { page, limit }) {
+  async waiting(who, { page, limit, before }) {
+    const query = new URLSearchParams({
+      ...(page === undefined ? {} : { page: String(page) }),
+      limit: String(limit),
+      ...(before === undefined ? {} : { before }),
+    });
     const answer = await rest(
       "GET",
       ["workflows", "waiting"],
       who,
       undefined,
-      `?page=${page}&limit=${limit}`
+      `?${query.toString()}`
     );
     return { items: answer.items as Doc[], meta: answer.meta as Doc };
   },
@@ -387,13 +393,14 @@ const DIRECT: Door = {
       })),
     };
   },
-  waiting: (who, { page, limit }) =>
+  waiting: (who, { page, limit, before }) =>
     direct(
       args =>
         app().nextly.workflows.waiting({
           ...args,
-          page,
+          ...(page === undefined ? {} : { page }),
           limit,
+          ...(before === undefined ? {} : { before }),
         } as never) as unknown as Promise<{ items: Doc[]; meta: Doc }>,
       who
     ),
@@ -1720,6 +1727,64 @@ describe.each(getConfiguredTestDialects())(
         expect(page.meta.totalCapped).toBeUndefined();
       });
 
+      it("asks whether each assignee may take the step in batches, never one by one", async () => {
+        // Every part here is assigned to someone who may not take Clear: people who no longer
+        // exist, and people without the step. Each such part waits for every holder, so Sam sees
+        // them all. Asked assignee by assignee, 15 distinct assignees cost five times what 3 do;
+        // asked in batches, the same.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        let made = 0;
+        const seed = async (count: number) => {
+          for (let n = 0; n < count; n += 1) {
+            made += 1;
+            // Every third assignee is a real person who reads pages but may not sign off.
+            const id = `assignee-${made}`;
+            if (made % 3 === 0) await person(app(), id, [["read", PAGES]]);
+            await seedState(
+              app(),
+              partOf(PAGES, await entry(app(), PAGES), null),
+              "legal",
+              { definitionHash: HASH, assignee: { kind: "user", id } }
+            );
+          }
+        };
+        const SAM: Who = { kind: "person", id: "sam" };
+        const statements = async () => {
+          // The stored schema count is read again once SCHEMA_VERSION_READ_INTERVAL_MS has passed,
+          // so a slower call could count that read too. Its clock is frozen and the count read once
+          // on it, so neither call below reads it again.
+          vi.useFakeTimers({ toFake: ["performance"] });
+          try {
+            await storedSchemaSeq(app().adapter, { fresh: true });
+            // Once to warm what a first call caches, then counted.
+            await door.waiting(SAM, { page: 1, limit: 50 });
+            return await statementsOf(dialect, () =>
+              door.waiting(SAM, { page: 1, limit: 50 })
+            );
+          } finally {
+            vi.useRealTimers();
+          }
+        };
+
+        await seed(3);
+        const few = await statements();
+        await seed(12);
+        const many = await statements();
+        expect(
+          (await door.waiting(SAM, { page: 1, limit: 50 })).meta
+        ).toMatchObject({ total: 15 });
+        // Both lists in the message, so a failure names the statements that differ.
+        expect(
+          many.length,
+          `3 assignees:\n${few.join("\n")}\n\n15 assignees:\n${many.join("\n")}`
+        ).toBe(few.length);
+      });
+
       it("marks the total a floor when it stops before reading everything", async () => {
         // 6 parts Sam may move come first, then 1,000 no one may read. Page 1 needs 6 (its 5 and one
         // more, to know there is a next), which the first window holds, so it stops there: the
@@ -1757,6 +1822,198 @@ describe.each(getConfiguredTestDialects())(
         expect(second.items).toHaveLength(1);
         expect(second.meta).toMatchObject({ total: 6, hasNext: false });
         expect(second.meta.totalCapped).toBeUndefined();
+      });
+
+      it("walks every page by its cursor, each part once, as parts join the end", async () => {
+        // Parts Sam may move, his own work and others', among parts no one may read, three at a time
+        // entering their stage in the same minute (so the row's key orders them). Walked 3 at a time
+        // by `nextBefore`, with 2 more parts joining the end once the walk has begun, every part
+        // comes exactly once, in the list's order, and the last page names no cursor.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const SAM: Who = { kind: "person", id: "sam" };
+        const at = (minute: number) =>
+          new Date(Date.UTC(2026, 10, 1, 10, minute));
+        const waits = async (minute: number, assignee: string) => {
+          await seedState(
+            app(),
+            partOf(PAGES, await entry(app(), PAGES), null),
+            "legal",
+            {
+              definitionHash: HASH,
+              enteredAt: at(minute),
+              assignee: { kind: "user", id: assignee },
+            }
+          );
+        };
+        for (let n = 0; n < 8; n += 1) {
+          await waits(Math.floor(n / 3), n % 2 === 0 ? "sam" : "ghost");
+          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
+            definitionHash: HASH,
+            enteredAt: at(Math.floor(n / 3)),
+          });
+        }
+        const idsOf = (page: { items: Doc[] }) =>
+          page.items.map(item => String((item.document as Doc).entryId));
+
+        let page = await door.waiting(SAM, { page: 1, limit: 3 });
+        const walked = idsOf(page);
+        await waits(30, "sam");
+        await waits(31, "ghost");
+        for (let pages = 1; page.meta.nextBefore !== undefined; pages += 1) {
+          expect(pages, "the walk ends").toBeLessThan(10);
+          expect(page.meta.hasNext).toBe(true);
+          page = await door.waiting(SAM, {
+            limit: 3,
+            before: String(page.meta.nextBefore),
+          });
+          walked.push(...idsOf(page));
+        }
+        expect(page.meta.hasNext).toBe(false);
+
+        const whole = await door.waiting(SAM, { page: 1, limit: 50 });
+        expect(whole.meta).toMatchObject({ total: 10 });
+        expect(walked).toEqual(idsOf(whole));
+      });
+
+      it("refuses a cursor it never gave, and a cursor beside a page number", async () => {
+        // The cursor is opaque: text that is not a well-formed position is invalid input, never
+        // read as the list's start, and so is a well-formed one naming a time no review state can
+        // hold (past the end of 9999, where MySQL's datetime stops); nor is a page number past the
+        // first beside one.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const SAM: Who = { kind: "person", id: "sam" };
+        await seedState(
+          app(),
+          partOf(PAGES, await entry(app(), PAGES), null),
+          "legal",
+          { definitionHash: HASH, assignee: { kind: "user", id: "sam" } }
+        );
+        await seedState(
+          app(),
+          partOf(PAGES, await entry(app(), PAGES), null),
+          "legal",
+          { definitionHash: HASH, assignee: { kind: "user", id: "sam" } }
+        );
+        const first = await door.waiting(SAM, { page: 1, limit: 1 });
+        const cursor = String(first.meta.nextBefore);
+        const notGiven = [
+          "not a cursor",
+          Buffer.from("not json").toString("base64url"),
+          Buffer.from(JSON.stringify({ at: "soon", key: "k" })).toString(
+            "base64url"
+          ),
+          ...[Date.UTC(10000, 0, 1), 8_640_000_000_000_000].map(at =>
+            Buffer.from(JSON.stringify({ at, key: "a".repeat(64) })).toString(
+              "base64url"
+            )
+          ),
+        ];
+        for (const before of notGiven) {
+          expect(
+            await refusalOf(() => door.waiting(SAM, { limit: 1, before }))
+          ).toEqual({ status: 400, code: "VALIDATION_ERROR" });
+        }
+        expect(
+          await refusalOf(() =>
+            door.waiting(SAM, { page: 2, limit: 1, before: cursor })
+          )
+        ).toEqual({ status: 400, code: "VALIDATION_ERROR" });
+      });
+
+      it("marks the total a floor when a registry cannot be listed", async () => {
+        // The Singles registry cannot be listed: a read check then knows no kind for a Single's
+        // documents and reads them as unreadable. The list shows what it can, but its total is a
+        // floor, never an exact count; listed again once it answers, the total is exact.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        for (let n = 0; n < 2; n += 1) {
+          await seedState(
+            app(),
+            partOf(PAGES, await entry(app(), PAGES), null),
+            "legal",
+            { definitionHash: HASH, assignee: { kind: "user", id: "sam" } }
+          );
+        }
+        const SAM: Who = { kind: "person", id: "sam" };
+        const singles = container.get<{ getAllSlugs: () => Promise<string[]> }>(
+          "singleRegistryService"
+        );
+        const down = vi
+          .spyOn(singles, "getAllSlugs")
+          .mockRejectedValue(new Error("the Singles registry is unreachable"));
+        try {
+          const page = await door.waiting(SAM, { page: 1, limit: 10 });
+          expect(page.items).toHaveLength(2);
+          expect(page.meta).toMatchObject({ total: 2, totalCapped: true });
+        } finally {
+          down.mockRestore();
+        }
+        const again = await door.waiting(SAM, { page: 1, limit: 10 });
+        expect(again.meta).toMatchObject({ total: 2 });
+        expect(again.meta.totalCapped).toBeUndefined();
+      });
+
+      it("reads each stage's waiting work on its own, the caller's ids once a read", async () => {
+        // Sam takes the next step out of three stages: Send out of Writing, Clear out of Legal check
+        // and Resume out of On hold. Each read of the review states names one stage, so the waiting
+        // index serves its order and its limit stops the scan (an OR across stages makes the
+        // database sort every match first), and names Sam's people and roles once, not once a stage.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["update", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const at = (minute: number) =>
+          new Date(Date.UTC(2026, 10, 1, 10, minute));
+        const ids: string[] = [];
+        const stages = ["writing", "legal", "hold", "legal", "writing", "hold"];
+        for (const [minute, stage] of stages.entries()) {
+          const id = await entry(app(), PAGES);
+          ids.push(id);
+          await seedState(app(), partOf(PAGES, id, null), stage, {
+            definitionHash: HASH,
+            enteredAt: at(minute),
+            assignee: { kind: "user", id: "sam" },
+          });
+        }
+        const SAM: Who = { kind: "person", id: "sam" };
+
+        const page = await door.waiting(SAM, { page: 1, limit: 10 });
+        expect(
+          page.items.map(item => (item.document as Doc).entryId),
+          "every part, oldest first, across the three stages"
+        ).toEqual(ids);
+        const reads = (
+          await statementsOf(dialect, () =>
+            door.waiting(SAM, { page: 1, limit: 10 })
+          )
+        ).filter(sql => /review_states/i.test(sql) && /order by/i.test(sql));
+        expect(reads.length).toBeGreaterThan(0);
+        const count = (sql: string, pattern: RegExp) =>
+          (sql.match(pattern) ?? []).length;
+        expect(
+          reads.map(sql => ({
+            stages: count(sql, /[`"]stage[`"]\s*=/g),
+            assigneeIds: count(sql, /[`"]assignee_id[`"]\s+(?:not\s+)?in/gi),
+          })),
+          reads.join("\n\n")
+        ).toEqual(reads.map(() => ({ stages: 1, assigneeIds: 2 })));
       });
 
       it("reaches every page of work past what one request reads", async () => {
