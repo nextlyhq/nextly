@@ -15,7 +15,7 @@ So the command removes the files it had just placed, and only those, and stops. 
 
 - Check that the migrations folder and its `meta` folder can be written to and that the disk has room, then run the command again. It writes the whole migration.
 - Where the message names files it could not remove, delete them yourself before running the command again: they are part of the migration that was not finished.
-- Where `nextly migrate` ran at the same moment and now reports one of the removed files as missing, run the command again and apply the migration it writes.
+- Where `nextly migrate` ran at that same moment, it applied a file this command then removed, and the next `nextly migrate` stops with [`MIGRATION_MISSING`](/docs/cli/errors/migration-missing). Record each file it names with `nextly migrate:resolve --removed <file>`, then run this command again and `nextly migrate`. The database already holds that change, so `nextly migrate` records the new file as applied without running it, or stops with [`MIGRATION_NOT_PROVEN`](/docs/cli/errors/migration-not-proven), which says what to check.
 
 ## Example
 
