@@ -143,6 +143,9 @@ function stale(parts: (string | null)[]): Error {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The review's live region sits on the page's body, which the render cleanup does not reach:
+  // a sentence an earlier case left there must not answer for this one.
+  document.getElementById("nextly-review-announcer")?.remove();
   versions = {
     en: [version(7, "en"), version(5, "en", "published")],
     es: [version(9, "es"), version(6, "es", "published")],
@@ -480,8 +483,8 @@ describe("Approve all languages", () => {
 });
 
 /** What every polite status region on the page says now. */
+/** What the review's own live region says: a toast's status region is not the announcement. */
 function announced(): string[] {
-  return Array.from(
-    document.querySelectorAll('[role="status"][aria-live="polite"]')
-  ).map(region => region.textContent?.trim() ?? "");
+  const region = document.getElementById("nextly-review-announcer");
+  return region === null ? [] : [region.textContent?.trim() ?? ""];
 }
