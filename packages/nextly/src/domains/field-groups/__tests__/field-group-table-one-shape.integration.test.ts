@@ -39,6 +39,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { MIGRATION_TARGET } from "../migration/target";
 import {
   readTableDefinition,
   type ColumnDefinition,
@@ -299,9 +300,14 @@ for (const entry of DIALECTS) {
             );
       adapter = entry.make(scratch?.url ?? entry.url ?? "");
       await adapter.connect();
+      // The registry the history's names call for, as `nextly migrate` sets a new database up.
       await reconcileCore({
         db: adapter.getDrizzle(),
         dialect,
+        fieldGroupRegistryTable:
+          fileTableName === TABLE
+            ? MIGRATION_TARGET.registryTable
+            : STORAGE_FORMAT.registryTable,
         logger: { info: () => {}, warn: () => {} },
       });
       dir = await mkdtemp(join(tmpdir(), "nextly-fg-shape-"));
@@ -411,9 +417,9 @@ for (const entry of DIALECTS) {
     });
 
     it("keeps every column of a table a migration made before, through its next migration, adding only the column defaults", async () => {
+      fileTableName = LEGACY_TABLE;
       await openFileDatabase();
       await cp(join(MADE_BEFORE, dialect), dir as string, { recursive: true });
-      fileTableName = LEGACY_TABLE;
       const before = await migrate();
 
       // The fixture's field group is declared in code, as every file-made one is today.
