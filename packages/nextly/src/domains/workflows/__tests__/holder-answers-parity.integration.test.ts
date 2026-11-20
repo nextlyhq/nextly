@@ -141,6 +141,49 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("matches a person's or a role's id as the database does, in another case", async () => {
+      // MySQL compares ids case-insensitively, so an id spelled in another case names the same
+      // person or role there; PostgreSQL and SQLite compare exactly, so there it names no one. The
+      // batch answers as the database matched the id, whichever that is.
+      t = await bootSteps(dialect);
+      const app = t;
+      const clearers = await role(app, "case-clearers", [
+        ["sign-off", "posts"],
+      ]);
+      await person(app, "casey", []);
+      await giveRole(app, "casey", clearers);
+      const spelled = { user: "CASEY", role: clearers.toUpperCase() };
+      const matched = async (table: "users" | "roles", id: string) =>
+        (
+          await app.adapter.select<{ id: unknown }>(table, {
+            columns: ["id"],
+            where: { and: [{ column: "id", op: "=", value: id }] },
+          })
+        ).length > 0;
+      // Not vacuous where it matters: MySQL does match both spellings.
+      if (dialect === "mysql") {
+        expect(await matched("users", spelled.user)).toBe(true);
+        expect(await matched("roles", spelled.role)).toBe(true);
+      }
+
+      const answers = await holderAnswers(
+        app.adapter,
+        [
+          { kind: "user", id: spelled.user },
+          { kind: "role", id: spelled.role },
+        ],
+        "sign-off",
+        "posts"
+      );
+      expect({
+        user: answers.get(holderKey({ kind: "user", id: spelled.user })),
+        role: answers.get(holderKey({ kind: "role", id: spelled.role })),
+      }).toEqual({
+        user: (await matched("users", spelled.user)) ? "holds" : "not-found",
+        role: (await matched("roles", spelled.role)) ? "holds" : "not-found",
+      });
+    });
+
     it("names a missing person and a deactivated one, who hold nothing", async () => {
       t = await bootSteps(dialect);
       await person(t, "away", [["sign-off", "posts"]], { active: false });

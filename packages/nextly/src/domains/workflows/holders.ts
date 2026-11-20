@@ -72,14 +72,45 @@ function chunks(ids: readonly string[]): string[][] {
   return runs;
 }
 
-/** The people among `userIds` that exist, by id, read a statement per 500. */
+/**
+ * Each of `requested` that names a row, mapped to that row, by the spelling asked: the row of that
+ * exact id, else the one row whose id differs from it only in case. MySQL compares ids under a
+ * case-insensitive collation, so it answers an id in another case with the row as stored;
+ * PostgreSQL and SQLite compare exactly and return no such row. A row some request names exactly
+ * is that request's alone, so a spelling the database would not match never borrows it.
+ */
+function byRequestedId<Row extends { id: string }>(
+  requested: readonly string[],
+  rows: readonly Row[]
+): Map<string, Row> {
+  const exact = new Map(rows.map(row => [row.id, row]));
+  const askedExactly = new Set(requested.filter(id => exact.has(id)));
+  const folded = new Map<string, Row | null>();
+  for (const row of rows) {
+    if (askedExactly.has(row.id)) continue;
+    const key = row.id.toLowerCase();
+    // Two rows differing only in case match no other spelling unambiguously.
+    folded.set(key, folded.has(key) ? null : row);
+  }
+  const found = new Map<string, Row>();
+  for (const id of requested) {
+    const row = exact.get(id) ?? folded.get(id.toLowerCase());
+    if (row) found.set(id, row);
+  }
+  return found;
+}
+
+/**
+ * The people among `userIds` that exist, by the id as asked (the row's own id may differ in case,
+ * where the database matched it so: see {@link byRequestedId}), read a statement per 500.
+ */
 export async function readPersons(
   adapter: DrizzleAdapter,
   userIds: readonly string[]
 ): Promise<Map<string, PersonRow>> {
-  const people = new Map<string, PersonRow>();
+  const rows: PersonRow[] = [];
   for (const run of chunks(userIds)) {
-    const rows = await adapter.select<{
+    const found = await adapter.select<{
       id: string;
       name: string | null;
       isActive: boolean | number | null;
@@ -87,16 +118,16 @@ export async function readPersons(
       columns: ["id", "name", "isActive"],
       where: { and: [{ column: "id", op: "IN", value: run }] },
     });
-    for (const row of rows) {
+    for (const row of found) {
       // SQLite stores a boolean as 0 or 1.
-      people.set(row.id, {
+      rows.push({
         id: row.id,
         name: row.name ?? null,
         active: Boolean(row.isActive),
       });
     }
   }
-  return people;
+  return byRequestedId(userIds, rows);
 }
 
 /**
@@ -152,9 +183,14 @@ export async function holderAnswers(
     const holding = new Set(await rolesHolding(adapter, action, resource));
     const existing = await existingRoleIds(adapter, roles);
     for (const id of roles) {
+      const stored = existing.get(id);
       answers.set(
         holderKey({ kind: "role", id }),
-        !existing.has(id) ? "not-found" : holding.has(id) ? "holds" : "lacks"
+        stored === undefined
+          ? "not-found"
+          : holding.has(stored)
+            ? "holds"
+            : "lacks"
       );
     }
   }
@@ -204,7 +240,9 @@ async function peopleAnswers(
         ? "not-found"
         : !person.active
           ? "deactivated"
-          : [...(assigned.get(id) ?? [])].some(roleId => holding.has(roleId))
+          : [...(assigned.get(person.id) ?? [])].some(roleId =>
+                holding.has(roleId)
+              )
             ? "holds"
             : "lacks"
     );
@@ -212,20 +250,25 @@ async function peopleAnswers(
   return answers;
 }
 
-/** The ids among `roleIds` that name a role, read a statement per 500. */
+/**
+ * Each of `roleIds` that names a role, mapped to the role's id as stored (see
+ * {@link byRequestedId}), read a statement per 500.
+ */
 async function existingRoleIds(
   adapter: DrizzleAdapter,
   roleIds: readonly string[]
-): Promise<Set<string>> {
-  const found = new Set<string>();
+): Promise<Map<string, string>> {
+  const rows: { id: string }[] = [];
   for (const run of chunks(roleIds)) {
-    const rows = await adapter.select<{ id: unknown }>("roles", {
+    const found = await adapter.select<{ id: unknown }>("roles", {
       columns: ["id"],
       where: { and: [{ column: "id", op: "IN", value: run }] },
     });
-    for (const row of rows) found.add(String(row.id));
+    for (const row of found) rows.push({ id: String(row.id) });
   }
-  return found;
+  return new Map(
+    [...byRequestedId(roleIds, rows)].map(([id, row]) => [id, row.id])
+  );
 }
 
 function logger(): Logger {
