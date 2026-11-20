@@ -114,7 +114,7 @@ function byRequestedId<Row extends { id: string }>(
  * The people among `userIds` that exist, by the id as asked (the row's own id may differ in case,
  * where the database matched it so: see {@link byRequestedId}), read a statement per 500.
  */
-export async function readPersons(
+async function readPersons(
   adapter: DrizzleAdapter,
   userIds: readonly string[]
 ): Promise<Map<string, PersonRow>> {
