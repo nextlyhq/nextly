@@ -176,7 +176,10 @@ separate migrations. A snapshot written before snapshots recorded fields cannot 
 A working draft keeps the field at its old place, so publishing it after the move would drop the
 pending change. For a collection or a Single, the migration stops before it changes anything
 where a working draft holds a value at the field's old place, naming the field; publish or
-discard those drafts and run `nextly migrate` again. A field group's values sit in the drafts of
+discard those drafts and run `nextly migrate` again. On MySQL, which commits each schema
+statement as it runs, the stopped file is first recorded as cleaned up with
+`nextly migrate:resolve --failed-cleanup <file>`, as the stop's message says: the stop ran before
+the file changed anything. A field group's values sit in the drafts of
 every entity that uses it, which a migration written without the database cannot look through:
 `migrate:create` says so, and you publish or discard those drafts before you run it.
 

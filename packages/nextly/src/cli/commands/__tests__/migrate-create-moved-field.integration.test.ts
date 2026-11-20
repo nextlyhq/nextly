@@ -42,6 +42,7 @@ import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
 import { runMigrateDown } from "../migrate-down";
+import { runMigrateResolve } from "../migrate-resolve";
 
 /** The configuration the commands load, set by each step before it runs them. */
 const loaded = vi.hoisted(() => ({ config: undefined as unknown }));
@@ -366,6 +367,24 @@ describe.each(getConfiguredTestDialects())(
       await again.adapter.delete("nextly_versions", {
         and: [{ column: "entryId", op: "=", value: id }],
       });
+      // MySQL commits each schema statement as it runs, so a file that stopped is recorded as an
+      // attempt to resolve before it runs again; the stop ran before anything changed, which is
+      // what --failed-cleanup records, as the stop's message directs.
+      if (dialect === "mysql") {
+        const file = readdirSync(join(dir, "migrations")).find(f =>
+          f.endsWith("_move_subtitle_in.sql")
+        );
+        const resolved = command();
+        expect(
+          await exiting(() =>
+            runMigrateResolve(
+              { cwd: dir, failedCleanup: file },
+              resolved.context
+            )
+          ),
+          resolved.said.join("\n")
+        ).toBeUndefined();
+      }
       const applied = await apply();
       expect(applied.code, applied.said).toBeUndefined();
       expect(await subtitles(await start(dialect, url, "grouped"), id)).toEqual(
