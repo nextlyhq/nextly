@@ -194,6 +194,32 @@ describe("a chip's friendly name", () => {
     ]);
   });
 
+  it("never offers a link an object declared without fields", () => {
+    const objects: TemplateFormVariable[] = [
+      {
+        name: "shop",
+        description: "",
+        required: true,
+        presentation: {
+          type: "object",
+          fields: [
+            { name: "address", type: "object" },
+            { name: "url", label: "Address" },
+          ],
+        },
+      },
+      {
+        name: "owner",
+        description: "",
+        required: true,
+        presentation: { type: "object" },
+      },
+    ];
+    // `owner` and `shop.address` are objects with no fields declared: no
+    // link can go to them. `shop.url` is a value.
+    expect(addressPaths(objects)).toEqual(["shop.url"]);
+  });
+
   it("offers only paths a written email can store", () => {
     const named: TemplateFormVariable[] = [
       {
@@ -201,9 +227,16 @@ describe("a chip's friendly name", () => {
         description: "",
         required: true,
         presentation: {
-          fields: [{ name: "first-name" }, { name: "last_name" }],
+          fields: [
+            { name: "first-name" },
+            { name: "last_name" },
+            // Over the 200 characters a stored path may hold.
+            { name: "n".repeat(200) },
+          ],
         },
       },
+      // A name the compiler keeps for itself, which no block may read.
+      { name: "nextly_shown", description: "", required: false },
       {
         name: "lines",
         description: "",

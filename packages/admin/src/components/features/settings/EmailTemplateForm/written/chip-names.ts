@@ -11,6 +11,8 @@
  *
  * @module components/features/settings/EmailTemplateForm/written/chip-names
  */
+import { storableVariablePath } from "nextly/api/email-template-preview-types";
+
 import type { EmailTemplateVariableField } from "@admin/services/emailTemplateApi";
 
 import type { TemplateFormVariable } from "../schema";
@@ -146,9 +148,11 @@ function fieldPaths(
   return fields.flatMap(field => {
     if (field.type === "list") return [];
     const path = `${prefix}.${field.name}`;
-    return field.fields && field.fields.length > 0
-      ? fieldPaths(field.fields, path)
-      : [path];
+    // An object is never a value, even one declared without fields.
+    if (field.type === "object" || (field.fields && field.fields.length > 0)) {
+      return fieldPaths(field.fields ?? [], path);
+    }
+    return [path];
   });
 }
 
@@ -208,7 +212,8 @@ export function addressPaths(
   const declared = variables.flatMap(variable => {
     if (!variable.name || variable.presentation?.type === "list") return [];
     const fields = variable.presentation?.fields ?? [];
-    return fields.length > 0
+    // A declared object is never a value itself, fields or none.
+    return fields.length > 0 || variable.presentation?.type === "object"
       ? fieldPaths(fields, variable.name)
       : [variable.name];
   });
@@ -224,15 +229,13 @@ function inItem(path: string): boolean {
   return path === "item" || path.startsWith("item.");
 }
 
-/** A path as a written email stores one: names of letters, digits and _. */
-const STORABLE = /^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$/;
-
 /**
- * The paths a written email can store, as its document's schema allows: a
- * declaration may name a field `first-name`, which no block can refer to.
+ * The paths a written email can store, asked of its document's own rule:
+ * a declaration may name a field `first-name`, or a name the compiler keeps
+ * for itself, or one too long, and no block can refer to those.
  */
 function storable(paths: readonly string[]): string[] {
-  return paths.filter(path => STORABLE.test(path));
+  return paths.filter(path => storableVariablePath(path));
 }
 
 /**

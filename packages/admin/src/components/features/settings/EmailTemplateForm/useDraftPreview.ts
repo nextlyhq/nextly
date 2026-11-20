@@ -87,6 +87,7 @@ export function useDraftPreview(
   const {
     data: preview,
     isPending,
+    isPlaceholderData,
     error,
   } = useDraftEmailTemplatePreview(
     debounced?.draft ?? EMPTY_DRAFT,
@@ -108,6 +109,10 @@ export function useDraftPreview(
   const lastRendered = useRef<DraftPreviewResult | null>(null);
   if (preview !== undefined) lastRendered.current = preview;
   const shown = preview ?? lastRendered.current;
+  // Whether the request answered is for the blocks the editor holds now.
+  const sameBlocks =
+    JSON.stringify(debounced?.draft.blocks ?? null) ===
+    JSON.stringify(request?.draft.blocks ?? null);
 
   return useMemo(
     () => ({
@@ -119,8 +124,15 @@ export function useDraftPreview(
       hasPreview: shown !== null,
       isPreviewPending: isPending && shown === null,
       previewError: error ? error.message : null,
-      previewSource: shown?.source?.html,
+      // The code only of the blocks on screen now: not a render held over
+      // from earlier blocks, nor one of blocks since changed and changed
+      // back while the next request waits, which would show code that
+      // converting the saved email does not store.
+      previewSource:
+        preview !== undefined && !isPlaceholderData && sameBlocks
+          ? preview.source?.html
+          : undefined,
     }),
-    [shown, isPending, error]
+    [shown, isPending, error, preview, isPlaceholderData, sameBlocks]
   );
 }
