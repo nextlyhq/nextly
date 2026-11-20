@@ -107,4 +107,49 @@ describe("UseSourceButton", () => {
       })
     ).toBeInTheDocument();
   });
+
+  // A text inside a repeater's row is translated row by row, and every language has the same
+  // rows in the same order: the field's form path names the same row in the source document.
+  it("fills a text inside a repeater's row from the same row of the source", async () => {
+    const seen: { caption?: unknown; other?: unknown } = {};
+    function Harness() {
+      const form = useForm<Record<string, unknown>>({
+        defaultValues: {
+          slides: [
+            { id: "r1", caption: "primero" },
+            { id: "r2", caption: "" },
+          ],
+        },
+      });
+      seen.caption = form.watch("slides.1.caption");
+      seen.other = form.watch("slides.0.caption");
+      return (
+        <FormProvider {...form}>
+          <TranslationFieldProvider
+            value={{
+              sourceValues: {
+                slides: [
+                  { id: "r1", caption: "first" },
+                  { id: "r2", caption: "second" },
+                ],
+              },
+              sourceLabel: "English",
+            }}
+          >
+            <UseSourceButton
+              fieldName="slides.1.caption"
+              fieldLabel="Caption"
+            />
+          </TranslationFieldProvider>
+        </FormProvider>
+      );
+    }
+    render(<Harness />);
+
+    await userEvent.click(screen.getByRole("button"));
+
+    expect(seen.caption).toBe("second");
+    // The other row keeps its own translation.
+    expect(seen.other).toBe("primero");
+  });
 });

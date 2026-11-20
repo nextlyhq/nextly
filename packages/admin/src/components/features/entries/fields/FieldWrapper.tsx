@@ -15,12 +15,14 @@ import { Globe, Lock } from "lucide-react";
 import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import type { JSX, ReactNode } from "react";
 import { useId } from "react";
+import { get } from "react-hook-form";
 
 import { fieldLabel } from "@admin/lib/field-label";
 import { useLabelLandingCheck } from "@admin/lib/forms/label-landing";
 import { cn } from "@admin/lib/utils";
 
 import { useFieldWithheld } from "../../versions/withheld-fields-context";
+import { holdsTranslatedText } from "../container-text";
 import { useEntryLocale } from "../EntryLocaleContext";
 import { UseSourceButton } from "../TranslationMode/UseSourceButton";
 
@@ -312,28 +314,46 @@ export function FieldWrapper({
   // badge on every shared field was noise on the ordinary editing path. The
   // surprise it guards against — "editing this changes other languages too" —
   // only exists once another language is the one being edited.
+  // A repeater or group keeps one structure in every language, but the text inside its rows is
+  // translated row by row: it is told so, rather than called shared outright.
+  const translatesInside =
+    entryLocale.collectionLocalized &&
+    holdsTranslatedText(field, entryLocale.collectionLocalized);
   const sharedHint =
     entryLocale.collectionLocalized &&
     entryLocale.isNonDefaultLocale &&
     !isLocalizedField &&
     fieldName != null ? (
-      // The whole fact is written out rather than abbreviated to "Shared"
-      // behind a `title` tooltip. A tooltip is unreachable by touch and
-      // awkward by keyboard — the same objection this file already records
-      // against putting description text behind a hover target.
-      <span className="inline-flex w-fit items-center gap-1.5 rounded-sm bg-muted px-2 py-0.5 text-xs font-medium normal-case tracking-normal text-muted-foreground">
-        <Globe className="size-3" aria-hidden="true" />
-        Shared across languages
-      </span>
+      translatesInside ? (
+        <span className="inline-flex w-fit items-center gap-1.5 rounded-sm bg-muted px-2 py-0.5 text-xs font-medium normal-case tracking-normal text-muted-foreground">
+          <Globe className="size-3" aria-hidden="true" />
+          Rows shared across languages; the text inside is translated
+        </span>
+      ) : (
+        // The whole fact is written out rather than abbreviated to "Shared"
+        // behind a `title` tooltip. A tooltip is unreachable by touch and
+        // awkward by keyboard — the same objection this file already records
+        // against putting description text behind a hover target.
+        <span className="inline-flex w-fit items-center gap-1.5 rounded-sm bg-muted px-2 py-0.5 text-xs font-medium normal-case tracking-normal text-muted-foreground">
+          <Globe className="size-3" aria-hidden="true" />
+          Shared across languages
+        </span>
+      )
     ) : null;
 
   // While translating a non-default language, show the default-language value inline on
   // a translatable field so the translator always has the source text (spec §10 — the validated,
   // cheap alternative to a full side-by-side editor). Only primitive (text/number) sources render;
   // structural values (relationships, richText objects) are skipped.
-  const rawSource =
-    isLocalizedField && entryLocale.isNonDefaultLocale && fieldName != null
-      ? entryLocale.sourceValues?.[fieldName]
+  // Read at the field's form path: a text inside a repeater's row is the same row's in the
+  // source, since every language keeps the same rows in the same order.
+  const formPath = fieldPath ?? fieldName;
+  const rawSource: unknown =
+    isLocalizedField &&
+    entryLocale.isNonDefaultLocale &&
+    formPath != null &&
+    entryLocale.sourceValues
+      ? get(entryLocale.sourceValues, formPath)
       : undefined;
   const sourceText =
     typeof rawSource === "string" && rawSource.trim() !== ""
@@ -356,7 +376,7 @@ export function FieldWrapper({
   // pane's own fields — that pane sits outside the context this reads.
   const useSourceAction =
     isLocalizedField && fieldName != null && !writesHeld ? (
-      <UseSourceButton fieldName={fieldName} fieldLabel={label} />
+      <UseSourceButton fieldName={formPath ?? fieldName} fieldLabel={label} />
     ) : null;
 
   // Get width class
