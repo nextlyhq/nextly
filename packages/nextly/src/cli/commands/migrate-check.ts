@@ -86,10 +86,7 @@ import {
   unwrittenChangesError,
 } from "../../domains/schema/migrate/unwritten-changes";
 import { reportMigrationAddresses } from "../../domains/schema/migrate-create/addresses";
-import {
-  recordedTypeColumns,
-  withFieldGroupTables,
-} from "../../domains/schema/migrate-create/app-migration-inputs";
+import { withFieldGroupTables } from "../../domains/schema/migrate-create/app-migration-inputs";
 import {
   appStreamSnapshots,
   compileAppStreamTables,
@@ -106,7 +103,10 @@ import {
   type EntitySettingsRecord,
 } from "../../domains/schema/migrate-create/entity-settings";
 import type { MinimalConfigEntity } from "../../domains/schema/migrate-create/generate";
-import { buildDesiredSnapshotFromConfig } from "../../domains/schema/migrate-create/generate";
+import {
+  buildDesiredSnapshotFromConfig,
+  typeColumnsAsRecorded,
+} from "../../domains/schema/migrate-create/generate";
 import { reportMigrationSiblingFields } from "../../domains/schema/migrate-create/sibling-fields";
 import {
   EMPTY_SNAPSHOT,
@@ -274,7 +274,7 @@ export async function runMigrateCheck(
             merged.components.map(c => [c.slug, c.tableName])
           ),
           // And the discriminator each holds, as `migrate:create` compiles them.
-          fieldGroupTypeColumns: recordedTypeColumns(
+          fieldGroupTypeColumns: typeColumnsAsRecorded(
             (
               await loadLatestSnapshot(resolve(migrationsDir, "meta")).catch(
                 () => null

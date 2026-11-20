@@ -637,15 +637,7 @@ function recordedSingle(
     slug,
     label: row.label,
     fields: row.fields,
-    ...(row.description === undefined || row.description === null
-      ? {}
-      : { description: row.description }),
-    tableName: row.tableName,
-    status: row.status,
-    versions: row.versions,
-    revalidate: row.revalidate,
-    webhooks: row.webhooks,
-    localized: row.localized,
+    ...rowSettings(row),
     ...(row.admin === undefined ? {} : { admin: row.admin }),
   };
 }
@@ -715,6 +707,21 @@ function recordedCollection(
     slug,
     labels: row.labels,
     fields: row.fields,
+    ...rowSettings(row),
+    ...(row.admin === undefined ? {} : { admin: row.admin }),
+  };
+}
+
+/**
+ * The settings a Builder Single's and collection's registry row hold alike, as the sync's payload;
+ * each kind's admin options are its own.
+ */
+function rowSettings(
+  row:
+    | ReturnType<typeof singleRowValues>
+    | ReturnType<typeof collectionRowValues>
+) {
+  return {
     ...(row.description === undefined || row.description === null
       ? {}
       : { description: row.description }),
@@ -724,7 +731,6 @@ function recordedCollection(
     revalidate: row.revalidate,
     webhooks: row.webhooks,
     localized: row.localized,
-    ...(row.admin === undefined ? {} : { admin: row.admin }),
   };
 }
 

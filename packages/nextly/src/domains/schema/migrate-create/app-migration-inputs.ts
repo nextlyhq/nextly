@@ -27,9 +27,7 @@ import {
   type FieldGroupNaming,
   type FieldGroupStorageNames,
 } from "../../field-groups/services/field-group-storage-names";
-import { chooseTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { refuseForkedHistory } from "../migrate/history-line";
-import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import {
   judgeBuilderDefinitions,
   readBuilderDefinitions,
@@ -39,7 +37,6 @@ import {
   buildComponentMetadataUpsert,
   buildSingleMetadataUpsert,
 } from "../ui-schema/metadata-sql";
-import { identifierCaseRules } from "../utils/resolve-catalog-name";
 
 import { assertMigrationAddresses, type JudgedEntity } from "./addresses";
 import {
@@ -48,7 +45,11 @@ import {
   type AppStreamTables,
 } from "./app-stream";
 import type { EntitySettingsRecord, SettingsObject } from "./entity-settings";
-import { removedEntityTables, type MinimalConfigEntity } from "./generate";
+import {
+  removedEntityTables,
+  typeColumnsAsRecorded,
+  type MinimalConfigEntity,
+} from "./generate";
 import { assertMigrationSiblingFields } from "./sibling-fields";
 import {
   EMPTY_SNAPSHOT,
@@ -291,7 +292,7 @@ export async function appMigrationInputs(
           fieldGroupTables: new Map(
             components.map(component => [component.slug, component.tableName])
           ),
-          fieldGroupTypeColumns: recordedTypeColumns(
+          fieldGroupTypeColumns: typeColumnsAsRecorded(
             latest?.data.snapshot,
             [
               ...components,
@@ -319,7 +320,7 @@ export async function appMigrationInputs(
             components.map(component => [component.slug, component.tableName])
           ),
           // And the discriminator each holds as the newest migration recorded it.
-          fieldGroupTypeColumns: recordedTypeColumns(
+          fieldGroupTypeColumns: typeColumnsAsRecorded(
             latest?.data.snapshot,
             components,
             dialect
@@ -567,27 +568,4 @@ function namingOfInputs(
 ): FieldGroupNaming {
   if (requested !== undefined) return requested;
   return latest === null ? "legacy" : snapshotFieldGroupNaming(latest.data);
-}
-
-/**
- * The discriminator each field group's table holds as the newest migration recorded it
- * (`chooseTypeColumns`): `_field_group_type` on a table the history moved to the current names,
- * and a table no migration made yet takes its name's. What the app stream compiles a contribution
- * to a field group against, for `migrate:create` and `migrate:check` alike.
- */
-export function recordedTypeColumns(
-  snapshot: NextlySchemaSnapshot | undefined,
-  components: readonly Pick<MinimalConfigEntity, "tableName">[],
-  dialect: SupportedDialect
-): ReadonlyMap<string, string> {
-  return chooseTypeColumns(
-    (snapshot?.tables ?? []).map(table => ({
-      table: table.name,
-      columns: table.columns.map(column => column.name),
-    })),
-    components.map(component => component.tableName),
-    dialect === "mysql"
-      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
-      : identifierCaseRules({ dialect })
-  );
 }

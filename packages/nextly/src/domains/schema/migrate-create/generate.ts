@@ -1079,8 +1079,11 @@ export async function generateMigration(
   // What a run writes a file for even when no table changes. A move of values is a change of its
   // own though no table's shape changes with it: a field's values moved between two groups,
   // whose columns both stand.
-  const changesBeyondTables =
-    hasSettingsChanges || changedPermissions.length > 0 || movesValues(args);
+  const changesBeyondTables = changesBeyondTablesOf(
+    hasSettingsChanges,
+    changedPermissions,
+    args
+  );
 
   // Not the per-language unique indexes: a snapshot from before the record has none of them, so
   // each reads as new, and recording them is the record's own work. Counted, they would leave a
@@ -3368,6 +3371,16 @@ function valuesMovedIn(
 }
 
 /** Whether the caller's appended statements move any table's values. */
+function changesBeyondTablesOf(
+  hasSettingsChanges: boolean,
+  changedPermissions: readonly unknown[],
+  args: Pick<GenerateArgs, "valuesMovedIn">
+): boolean {
+  return (
+    hasSettingsChanges || changedPermissions.length > 0 || movesValues(args)
+  );
+}
+
 function movesValues(args: Pick<GenerateArgs, "valuesMovedIn">): boolean {
   return valuesMovedIn(args).length > 0;
 }
@@ -3778,15 +3791,10 @@ export function buildDesiredSnapshotFromConfig(
   // Each field group's discriminator, read off the table as the last migration recorded it: the
   // storage migration renames a group's column whatever its table is called, so the name alone
   // cannot say which one an existing table has (`chooseTypeColumns`).
-  const recordedTypeColumns = chooseTypeColumns(
-    (existing?.tables ?? []).map(table => ({
-      table: table.name,
-      columns: table.columns.map(column => column.name),
-    })),
-    components.map(component => component.tableName),
-    dialect === "mysql"
-      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
-      : identifierCaseRules({ dialect })
+  const recordedTypeColumns = typeColumnsAsRecorded(
+    existing,
+    components,
+    dialect
   );
   for (const entity of collections) {
     const c = withKeptScopeFields("collection", entity, kept);
@@ -4315,3 +4323,26 @@ export function buildDesiredSnapshotFromConfigForTest(
 }
 
 export type { RenameCandidate };
+
+/**
+ * The discriminator each field group's table holds as the newest migration recorded it
+ * (`chooseTypeColumns`): `_field_group_type` on a table the history moved to the current names,
+ * and a table no migration made yet takes its name's. What the app stream compiles a contribution
+ * to a field group against, for `migrate:create` and `migrate:check` alike.
+ */
+export function typeColumnsAsRecorded(
+  snapshot: NextlySchemaSnapshot | undefined,
+  components: readonly Pick<MinimalConfigEntity, "tableName">[],
+  dialect: SupportedDialect
+): Map<string, string> {
+  return chooseTypeColumns(
+    (snapshot?.tables ?? []).map(table => ({
+      table: table.name,
+      columns: table.columns.map(column => column.name),
+    })),
+    components.map(component => component.tableName),
+    dialect === "mysql"
+      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+      : identifierCaseRules({ dialect })
+  );
+}
