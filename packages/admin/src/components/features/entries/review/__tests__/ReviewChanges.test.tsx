@@ -30,9 +30,18 @@ vi.mock("@admin/services/versionApi", async importOriginal => {
   };
 });
 vi.mock("@admin/components/features/versions/diff/VersionDiffView", () => ({
-  VersionDiffView: ({ from, to }: { from: number; to: number }) => (
+  VersionDiffView: ({
+    from,
+    to,
+    part,
+  }: {
+    from: number;
+    to: number;
+    part?: string;
+  }) => (
     <p>
       comparing {from} with {to}
+      {part === undefined ? "" : ` (${part})`}
     </p>
   ),
 }));
@@ -110,6 +119,8 @@ let approvedPins: Record<string, number> = {};
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // No versions listed unless a case lists them.
+  listing([]);
   published = { en: 5, es: 6, "": 2 };
   approvedPins = {};
   // The server's `published` baseline, in the part the request names.
@@ -117,12 +128,16 @@ beforeEach(() => {
     (
       _scope: unknown,
       baseline: string,
-      opts: { to?: number; locale?: string }
+      opts: { to?: number; locale?: string; part?: string }
     ) => {
       // A named version carries its own language, as the server takes it:
-      // version 8 is a Spanish save.
+      // version 8 is a Spanish save. The shared part is asked for by name.
       const part =
-        opts.locale === undefined && opts.to === 8 ? "es" : (opts.locale ?? "");
+        opts.part === "shared"
+          ? ""
+          : opts.locale === undefined && opts.to === 8
+            ? "es"
+            : (opts.locale ?? "");
       const from =
         baseline === "since-approved"
           ? approvedPins[part]
@@ -317,7 +332,10 @@ describe("ReviewChanges", () => {
     render(
       <ReviewChanges
         scope={SCOPE}
-        parts={[inReview(), inReview({ part: null, version: "s4" })]}
+        parts={[
+          inReview(),
+          inReview({ part: null, version: "s4", reviewedVersionNo: 4 }),
+        ]}
       />
     );
 
@@ -326,22 +344,17 @@ describe("ReviewChanges", () => {
       screen.getByRole("heading", { name: "Shared fields" })
     ).toBeVisible();
     expect(await screen.findByText("comparing 5 with 7")).toBeInTheDocument();
-    // The shared part's versions are the document's, read in no language.
-    expect(await screen.findByText("comparing 2 with 4")).toBeInTheDocument();
+    // The shared part is compared as the server's shared part.
+    expect(
+      await screen.findByText("comparing 2 with 4 (shared)")
+    ).toBeInTheDocument();
   });
 
-  it("compares the shared fields within their newest version's language, from before the approval", async () => {
-    // A shared change saved in English after the approval, then French saves:
-    // the newest (French 11) carries it, and so does French 10, saved after
-    // it. The baseline is French's version at or before the approval (7),
-    // never one after, so the English change is in what is shown.
-    const at = (time: string) => `2026-11-19T${time}:00.000Z`;
-    listing([
-      { ...version(11, "draft", "fr"), createdAt: at("12:00") },
-      { ...version(10, "draft", "fr"), createdAt: at("11:30") },
-      { ...version(9, "draft", "en"), createdAt: at("11:00") },
-      { ...version(7, "draft", "fr"), createdAt: at("09:00") },
-    ]);
+  it("compares the shared fields alone across languages, from their approval to the version under review", async () => {
+    // A shared change saved in English after the approval, then a French save:
+    // the version under review is French 11, compared from the approval (7)
+    // over the shared fields alone, whatever language each was saved in.
+    approvedPins = { "": 7 };
 
     render(
       <ReviewChanges
@@ -350,41 +363,96 @@ describe("ReviewChanges", () => {
           inReview({
             part: null,
             version: "s11",
-            approval: { versionNo: 7, by: "rita", at: at("10:00") },
+            reviewedVersionNo: 11,
+            approval: {
+              versionNo: 7,
+              by: "rita",
+              at: "2026-11-19T10:00:00.000Z",
+            },
           }),
         ]}
       />
     );
 
-    expect(await screen.findByText("comparing 7 with 11")).toBeInTheDocument();
-    expect(screen.queryByText("comparing 10 with 11")).toBeNull();
     expect(
-      screen.getByText(
-        "Compared within French; shared fields may include earlier changes."
-      )
+      await screen.findByText("comparing 7 with 11 (shared)")
+    ).toBeInTheDocument();
+    expect(baselineSpy).toHaveBeenCalledWith(SCOPE, "since-approved", {
+      to: 11,
+      part: "shared",
+    });
+    expect(
+      screen.getByText("Changes since the approved version.")
+    ).toBeVisible();
+    // Nothing is said about a language compared within: there is none.
+    expect(screen.queryByText(/Compared within/)).toBeNull();
+    // The shared part's comparison reads no versions list.
+    expect(versionsMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true })
+    );
+  });
+
+  it("compares the shared fields from the last publish where they were never approved", async () => {
+    render(
+      <ReviewChanges
+        scope={SCOPE}
+        parts={[inReview({ part: null, version: "s9", reviewedVersionNo: 9 })]}
+      />
+    );
+
+    expect(
+      await screen.findByText("comparing 2 with 9 (shared)")
+    ).toBeInTheDocument();
+    expect(baselineSpy).toHaveBeenCalledWith(SCOPE, "published", {
+      to: 9,
+      part: "shared",
+    });
+    expect(
+      screen.getByText("Changes since the published version.")
     ).toBeVisible();
   });
 
-  it("shows the shared fields' version whole where its language has nothing from before", async () => {
-    listing([
-      version(8, "draft", "fr"),
-      version(4, "draft", null),
-      version(2, "published", null),
-    ]);
+  it("shows the shared fields' version whole where nothing was approved or published", async () => {
+    published = { en: 5 };
 
     render(
       <ReviewChanges
         scope={SCOPE}
-        parts={[inReview({ part: null, version: "s8" })]}
+        parts={[inReview({ part: null, version: "s8", reviewedVersionNo: 8 })]}
       />
     );
 
     expect(
       await screen.findByText(
-        "Nothing was published or approved before: all of it is new."
+        "No published version of this part of the document is kept, so there is nothing published to compare with."
       )
     ).toBeInTheDocument();
     expect(screen.queryByText(/^comparing/)).toBeNull();
+  });
+
+  it("says nothing changed where the shared fields' version under review is the one approved", () => {
+    render(
+      <ReviewChanges
+        scope={SCOPE}
+        parts={[
+          inReview({
+            part: null,
+            version: "s7",
+            reviewedVersionNo: 7,
+            approval: {
+              versionNo: 7,
+              by: "rita",
+              at: "2026-11-19T10:00:00.000Z",
+            },
+          }),
+        ]}
+      />
+    );
+
+    expect(
+      screen.getByText("Nothing changed since it was approved.")
+    ).toBeVisible();
+    expect(baselineSpy).not.toHaveBeenCalled();
   });
 
   it("names the shared fields when they alone wait for this person under a language's editor", async () => {
@@ -420,14 +488,19 @@ describe("ReviewChanges", () => {
     render(
       <ReviewChanges
         scope={SCOPE}
-        parts={[english, inReview({ part: null, version: "s4" })]}
+        parts={[
+          english,
+          inReview({ part: null, version: "s4", reviewedVersionNo: 4 }),
+        ]}
       />
     );
 
     expect(
       screen.getByRole("heading", { name: "Shared fields" })
     ).toBeVisible();
-    expect(await screen.findByText("comparing 2 with 4")).toBeInTheDocument();
+    expect(
+      await screen.findByText("comparing 2 with 4 (shared)")
+    ).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "English" })).toBeNull();
   });
 
