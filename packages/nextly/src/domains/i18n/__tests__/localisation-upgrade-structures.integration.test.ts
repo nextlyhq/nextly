@@ -29,6 +29,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { parsedValue } from "../../../shared/lib/json-column-value";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import { _resetPerLanguageStorage } from "../per-language-storage";
 
 import {
@@ -37,6 +38,10 @@ import {
   previewMigrateData,
   type UpgradeDatabase,
 } from "./helpers/localisation-upgrade-fixture";
+
+// Written for per-language storage, as every installation now runs it; `nextly migrate` then runs
+// the localisation data steps.
+perLanguageStorageSuite();
 
 const SLUG = "slideshows";
 const TABLE = `dc_${SLUG}`;
@@ -240,7 +245,7 @@ describeEachDialect(
 
         // The dry run names it as the real run does.
         const plan = await previewMigrateData(database!.adapter, SITE);
-        expect((plan.refusals ?? []).join("\n")).toMatch(
+        expect((plan.refusals ?? []).join("\n"), JSON.stringify(plan)).toMatch(
           new RegExp(
             `"${SLUG}", field "slides": document ${id}: es has other rows`
           )

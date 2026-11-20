@@ -21,11 +21,15 @@ import {
   repeater,
   text,
 } from "../../../config";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+
+// Written for per-language storage, as every installation now runs it.
+perLanguageStorageSuite();
 
 const LANGUAGES = { locales: ["en", "es"], defaultLocale: "en" };
 

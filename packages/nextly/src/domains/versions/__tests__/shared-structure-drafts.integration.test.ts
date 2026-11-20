@@ -15,6 +15,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import { defineSingle, number, repeater, text } from "../../../config";
 import {
   createTestNextly,
@@ -23,6 +24,9 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
+
+// Written for per-language storage, as every installation now runs it.
+perLanguageStorageSuite();
 
 const SLUG = "slidesite";
 
@@ -44,7 +48,6 @@ afterEach(async () => {
 async function boot(dialect: TestDialect): Promise<SingleEntryService> {
   current = await createTestNextly({
     dialect,
-    perLanguageStorage: true,
     singles: [
       defineSingle({
         slug: SLUG,
