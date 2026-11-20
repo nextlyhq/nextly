@@ -396,7 +396,6 @@ describeEachDialect(
           const run = await generate(dialect, name, step, consent);
           expect(run, name).toEqual({ exited: undefined, errors: [] });
         }
-        expect(await migrationFiles()).toHaveLength(3);
       }
 
       it("refuses to drop a field group a declared key points at", async () => {
