@@ -126,6 +126,18 @@ const HEADER_FOOTER_IN_CODE_ONLY =
   process.env.E2E_HEADER_FOOTER_IN_CODE_ONLY === "1";
 
 /**
+ * The specs of a site whose languages are kept in Settings rather than
+ * declared in its configuration, which locks them. One server answers a whole
+ * run, so they run by themselves, against a playground started with no
+ * languages declared (`E2E_LANGUAGES_UNLOCKED_ONLY=1`), and every other run
+ * leaves them out.
+ */
+const LANGUAGES_UNLOCKED_SPECS = ["**/*-languages-unlocked.spec.ts"];
+
+/** Only the specs of a site whose languages are kept in Settings. */
+const LANGUAGES_UNLOCKED_ONLY = process.env.E2E_LANGUAGES_UNLOCKED_ONLY === "1";
+
+/**
  * Where a run writes its results and report. The dev specs' run has its own,
  * since Playwright empties its results folder as it starts, and a shared one
  * would lose the production run's traces and screenshots beside it. A run on
@@ -135,9 +147,11 @@ const RUN_OUTPUT = DEV_SPECS_ONLY
   ? "dev-specs"
   : HEADER_FOOTER_IN_CODE_ONLY
     ? "header-footer-in-code"
-    : EVERY_DIALECT_ONLY
-      ? E2E_DATABASE.dialect
-      : "suite";
+    : LANGUAGES_UNLOCKED_ONLY
+      ? "languages-unlocked"
+      : EVERY_DIALECT_ONLY
+        ? E2E_DATABASE.dialect
+        : "suite";
 
 /**
  * The commands that start each server, after the database is emptied.
@@ -179,11 +193,13 @@ export default defineConfig({
     "**/production/**",
     ...(SERVER === "production" ? DEV_SPECS : []),
     ...(HEADER_FOOTER_IN_CODE_ONLY ? [] : HEADER_FOOTER_IN_CODE_SPECS),
+    ...(LANGUAGES_UNLOCKED_ONLY ? [] : LANGUAGES_UNLOCKED_SPECS),
   ],
   ...(DEV_SPECS_ONLY ? { testMatch: DEV_SPECS } : {}),
   ...(HEADER_FOOTER_IN_CODE_ONLY
     ? { testMatch: HEADER_FOOTER_IN_CODE_SPECS }
     : {}),
+  ...(LANGUAGES_UNLOCKED_ONLY ? { testMatch: LANGUAGES_UNLOCKED_SPECS } : {}),
   ...(EVERY_DIALECT_ONLY ? { grep: new RegExp(EVERY_DIALECT) } : {}),
   outputDir: `./.playwright/results/${RUN_OUTPUT}`,
 
@@ -297,6 +313,9 @@ export default defineConfig({
       ...(HEADER_FOOTER_IN_CODE_ONLY
         ? { NEXTLY_E2E_SITE_HEADER_FOOTER: "code" }
         : {}),
+      // A site that declares no languages, so Settings keeps them, for the run
+      // of its own specs only (`E2E_LANGUAGES_UNLOCKED_ONLY`).
+      ...(LANGUAGES_UNLOCKED_ONLY ? { NEXTLY_E2E_LANGUAGES: "settings" } : {}),
       // Turns off Next.js's development indicator, whose button a development
       // server injects into the canvas's frame too: a tab stop inside the
       // canvas that a production build never draws, which the keyboard specs
