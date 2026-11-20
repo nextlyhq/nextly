@@ -181,6 +181,10 @@ type ForwardedOption =
   | "wholeDocumentFallback"
   | "sourceLocales"
   | "translations"
+  // Each row's review state beside its values. Shaping, not authority: it is
+  // given only for rows the read already returns, among the parts it may see,
+  // and never to a read that names no one.
+  | "reviewState"
   // `findSingles` filters.
   | "source"
   | "migrationStatus"
