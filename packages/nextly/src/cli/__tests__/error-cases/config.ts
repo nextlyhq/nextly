@@ -44,6 +44,24 @@ function loadError(cause: Error): NextlyError {
 }
 
 export const CONFIG_CASES = {
+  CONFIG_MISSING: () =>
+    new NextlyError({
+      code: "INVALID_INPUT",
+      publicMessage: "Failed to load Nextly configuration.",
+      statusCode: 400,
+      logMessage: "Config loader error",
+      logContext: {
+        projectRoot: PROJECT,
+        names: [
+          "nextly.config.ts",
+          "nextly.config.mts",
+          "nextly.config.js",
+          "nextly.config.mjs",
+        ],
+        folders: [".", "./src", "./config"],
+        reason: "config-missing",
+      },
+    }),
   CONFIG_NOT_FOUND: () =>
     new NextlyError({
       code: "INVALID_INPUT",

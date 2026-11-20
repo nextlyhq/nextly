@@ -479,7 +479,10 @@ export class DynamicCollectionRegistryService extends BaseService {
         updates.webhooks !== undefined
           ? updates.webhooks
           : existing[0].webhooks;
-      moveWebhookRecording(move, stored?.record !== false);
+      // Once the row's write commits: joined to a transaction that rolls back, it never happened.
+      await this.adapter.afterCommit(() =>
+        moveWebhookRecording(move, stored?.record !== false)
+      );
     }
 
     // Mirror the stored change into the live policy so turning the switch off
@@ -490,11 +493,14 @@ export class DynamicCollectionRegistryService extends BaseService {
       updates.webhooks !== undefined &&
       !isConfigOwnedSource(existing[0].source)
     ) {
-      setWebhookRecording(
-        "collection",
-        targetSlug,
-        updates.webhooks?.record !== false,
-        "db"
+      // Once the row's write commits, as the move above.
+      await this.adapter.afterCommit(() =>
+        setWebhookRecording(
+          "collection",
+          targetSlug,
+          updates.webhooks?.record !== false,
+          "db"
+        )
       );
     }
 

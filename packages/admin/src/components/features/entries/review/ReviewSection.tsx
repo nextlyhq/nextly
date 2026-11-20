@@ -42,7 +42,7 @@ import { leadingReviewStep } from "../EntryForm/document-actions";
 import { PanelSection } from "../EntryForm/panels/PanelSection";
 
 import { waitingForWords } from "./review-words";
-import { approves, hidesALanguage, SHARED_APPROVAL_HELD } from "./shared-hold";
+import { approves, useSharedApprovalHold } from "./shared-hold";
 import { StepRefusalNote } from "./StepRefusalNote";
 import { useStepTaker, type StepTaker } from "./useStepTaker";
 
@@ -50,15 +50,28 @@ export interface ReviewSectionProps {
   document: ReleaseDocumentRef;
   /** The language being edited; the default language where none is named. */
   locale?: string | undefined;
+  /**
+   * Why no step can be taken at this moment, as the editor holds its header's
+   * steps (`stepsHold`): unsaved edits, a save on its way, a past version on
+   * screen. The steps here wait for it, and say it.
+   */
+  hold?: string | undefined;
 }
 
 export function ReviewSection({
   document,
   locale,
+  hold,
 }: ReviewSectionProps): JSX.Element | null {
   const { data } = useReviewState(document);
-  const { defaultLocale, getLocale, locales } = useLocalization();
+  const { defaultLocale, getLocale } = useLocalization();
   const taker = useStepTaker(document);
+  // Held where the shared fields' version under review is hidden from this
+  // person: see `shared-hold`.
+  const sharedHeld = useSharedApprovalHold(
+    document,
+    data?.attached === true ? data.review.parts : []
+  );
   const language = locale ?? defaultLocale;
   if (data === undefined || !data.attached) return null;
   const own = data.review.parts.find(part => part.part === language);
@@ -71,9 +84,6 @@ export function ReviewSection({
   );
   if (parts.length === 0) return null;
   const titled = parts.length > 1;
-  // The shared fields' approval is held where this person can't read every
-  // language: see `shared-hold`.
-  const hidden = hidesALanguage(data.review.parts, locales.length);
   return (
     <PanelSection title="Review">
       <div className="space-y-4">
@@ -83,9 +93,8 @@ export function ReviewSection({
             document={document}
             part={part}
             taker={taker}
-            approvalHeld={
-              hidden && part.part === null ? SHARED_APPROVAL_HELD : undefined
-            }
+            hold={hold}
+            approvalHeld={part.part === null ? sharedHeld : undefined}
             title={
               !titled
                 ? null
@@ -106,12 +115,15 @@ function PartBlock({
   document,
   part,
   taker,
+  hold,
   approvalHeld,
   title,
 }: {
   document: ReleaseDocumentRef;
   part: PartReview;
   taker: StepTaker;
+  /** Why every step waits at this moment, where something holds them. */
+  hold: string | undefined;
   /** Why this part's approve steps are held, where they are. */
   approvalHeld: string | undefined;
   title: string | null;
@@ -145,7 +157,12 @@ function PartBlock({
               Due {formatDate(part.dueAt, { dateStyle: "medium" }, part.dueAt)}
             </p>
           )}
-          <PartSteps part={part} taker={taker} approvalHeld={approvalHeld} />
+          <PartSteps
+            part={part}
+            taker={taker}
+            hold={hold}
+            approvalHeld={approvalHeld}
+          />
           <AssignControls document={document} part={part} />
         </>
       )}
@@ -158,10 +175,12 @@ function PartBlock({
 function PartSteps({
   part,
   taker,
+  hold,
   approvalHeld,
 }: {
   part: PartReview;
   taker: StepTaker;
+  hold: string | undefined;
   approvalHeld: string | undefined;
 }): JSX.Element | null {
   const steps = part.steps
@@ -182,6 +201,7 @@ function PartSteps({
           className="h-7 px-2 text-xs"
           disabled={
             taker.pending ||
+            hold !== undefined ||
             part.version === null ||
             (approvalHeld !== undefined && approves(step))
           }
@@ -190,7 +210,13 @@ function PartSteps({
           {step.label}
         </Button>
       ))}
-      {approvalHeld === undefined ||
+      {/* What holds every step is said first, and the shared approval's
+          own hold only where nothing else holds them. */}
+      {hold === undefined ? null : (
+        <p className="w-full text-xs text-muted-foreground">{hold}</p>
+      )}
+      {hold !== undefined ||
+      approvalHeld === undefined ||
       !steps.some(step => approves(step)) ? null : (
         <p className="w-full text-xs text-muted-foreground">{approvalHeld}</p>
       )}

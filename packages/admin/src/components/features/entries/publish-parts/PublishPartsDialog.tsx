@@ -280,18 +280,20 @@ export function PublishPartsDialog({
             Checking what this does to each part…
           </p>
         ) : null}
+        {/* Refusals are read on the dialog's surface, so they take the danger text token, which
+            reaches 4.5:1 there in light and dark; the destructive red is a fill's colour. */}
         {[...general, ...(otherRefusal ? [otherRefusal] : [])].map(message => (
           <p
             key={message}
             role="alert"
-            className="flex items-start gap-2 text-sm text-destructive"
+            className="flex items-start gap-2 text-sm text-danger-text"
           >
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             {message}
           </p>
         ))}
         {changedSince ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-sm text-danger-text">
             This document changed since you opened it. Review the latest
             version, then try again.
           </p>
@@ -398,8 +400,9 @@ function PartRow({
         <div id={describedBy} className="text-sm text-muted-foreground">
           {hint ? <p>{hint}</p> : null}
           {sentence ? <p>{sentence}</p> : null}
+          {/* The danger text token: readable at 4.5:1 on the dialog in light and dark. */}
           {refusals.map(message => (
-            <p key={message} className="text-destructive">
+            <p key={message} className="text-danger-text">
               {message}
             </p>
           ))}

@@ -16,18 +16,33 @@ import { PlainTextPlugin } from "@lexical/react/LexicalPlainTextPlugin";
 import { RichTextPlugin } from "@lexical/react/LexicalRichTextPlugin";
 import { Button } from "@nextlyhq/ui";
 import {
+  $getSelection,
+  $isRangeSelection,
+  $setSelection,
   CLEAR_HISTORY_COMMAND,
   COMMAND_PRIORITY_LOW,
   FOCUS_COMMAND,
   FORMAT_TEXT_COMMAND,
   type LexicalEditor,
+  type RangeSelection,
 } from "lexical";
-import { useEffect, type JSX } from "react";
+import { useContext, useEffect, useState, type JSX } from "react";
 
-import { Bold, Italic } from "@admin/components/icons";
+import { Bold, Italic, Link } from "@admin/components/icons";
+import { toast } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
 
-import { $readRuns, $setRuns, RUN_NODES, type Inline } from "./runs";
+import { ChipViewContext } from "./ChipLabel";
+import { LinkDialog } from "./LinkDialog";
+import {
+  $readRuns,
+  $selectedLink,
+  $setRuns,
+  $setSelectionLink,
+  RUN_NODES,
+  type Inline,
+  type WrittenLink,
+} from "./runs";
 
 /** Whether two run lists store the same text. */
 function sameRuns(a: readonly Inline[], b: readonly Inline[]): boolean {
@@ -88,9 +103,33 @@ function FocusPlugin({
   return null;
 }
 
-/** Bold and italic, for the selected text. */
+/** Bold, italic and a link, for the selected text. */
 function MarksToolbar({ label }: { label: string }): JSX.Element {
   const [editor] = useLexicalComposerContext();
+  const view = useContext(ChipViewContext);
+  // The selection the link is for, kept while the dialog has the focus.
+  const [linking, setLinking] = useState<{
+    selection: RangeSelection;
+    link: WrittenLink | undefined;
+  } | null>(null);
+  const startLink = () => {
+    const found = editor.getEditorState().read(() => {
+      const selection = $getSelection();
+      return $isRangeSelection(selection) && !selection.isCollapsed()
+        ? { selection: selection.clone(), link: $selectedLink() }
+        : null;
+    });
+    if (found) setLinking(found);
+    else toast.info("Select some text first, then add a link.");
+  };
+  const saveLink = (link: WrittenLink | undefined) => {
+    const held = linking;
+    if (!held) return;
+    editor.update(() => {
+      $setSelection(held.selection.clone());
+      $setSelectionLink(link);
+    });
+  };
   return (
     <div
       role="toolbar"
@@ -119,6 +158,26 @@ function MarksToolbar({ label }: { label: string }): JSX.Element {
       >
         <Italic className="size-4" />
       </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Link"
+        title="Link"
+        onMouseDown={event => event.preventDefault()}
+        onClick={startLink}
+      >
+        <Link className="size-4" />
+      </Button>
+      <LinkDialog
+        open={linking !== null}
+        onOpenChange={open => {
+          if (!open) setLinking(null);
+        }}
+        link={linking?.link}
+        choices={view.paths.map(path => ({ path, name: view.name(path) }))}
+        onSave={saveLink}
+      />
     </div>
   );
 }

@@ -28,8 +28,10 @@ import { builderColumnIsUnique, toSnakeCase } from "../field-rules";
 import {
   classifyFieldKind,
   fieldProducesColumn,
+  getColumnDescriptor,
   isTextStorageKind,
 } from "../services/field-column-descriptor";
+import { sameRelationTarget } from "../services/relationship-key-target";
 
 /** Where a field's values are: a column of their own, or a key inside a container's JSON column. */
 export type StoragePlace =
@@ -226,6 +228,15 @@ function storageRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
       `${label(to.field)} is moved and changes type, or how its values are stored, in the same save. Move it and make that change in separate saves.`
     );
   }
+  // A relationship's stored ids name entries of the collection it relates to: moved while that
+  // changes, each would name an entry of a collection it was never chosen from. The target is
+  // read as reads take it, `relationTo` before `options.target` (`sameRelationTarget`).
+  if (!sameRelationTarget(from.field, to.field)) {
+    return refuse(
+      "type-changed",
+      `${label(to.field)} is moved and changes what it relates to in the same save. Move it and change what it relates to in separate saves.`
+    );
+  }
   if (!fieldProducesColumn(from.field) || !fieldProducesColumn(to.field)) {
     return refuse(
       "no-column",
@@ -256,9 +267,10 @@ function placesRefusal(from: PlacedField, to: PlacedField): MoveCheck | null {
     to.containers.slice(shared)
   );
   if (crossing) return crossing;
-  // A group that stores nothing (a virtual one) has no column for its fields' values to be in.
-  const emptyHolder = [from.containers[0], to.containers[0]].find(
-    holder => holder !== undefined && !fieldProducesColumn(holder)
+  // A container that stores nothing (a virtual group, or one a field group holds), anywhere on
+  // either path, has no column or key for its fields' values to be in.
+  const emptyHolder = [...from.containers, ...to.containers].find(
+    holder => !fieldProducesColumn(holder)
   );
   return emptyHolder
     ? refuse(
@@ -274,10 +286,27 @@ function valuesRefusal(
   to: PlacedField,
   entity: MoveEntity
 ): MoveCheck | null {
-  if (to.place.kind === "json" && builderColumnIsUnique(to.field)) {
+  // Unique before the move or after it: a move that also drops the uniqueness is two changes, and
+  // the uniqueness is changed in a save of its own first.
+  if (
+    to.place.kind === "json" &&
+    (builderColumnIsUnique(from.field) || builderColumnIsUnique(to.field))
+  ) {
     return refuse(
       "unique",
       `${label(to.field)} cannot be moved into the group ${label(to.containers[0])}: a group keeps its values in one JSON value, which cannot be kept unique. It can be moved once it is no longer unique (a one-to-one changed to many-to-one, or its unique setting removed), as a change of its own.`
+    );
+  }
+  // Out of a group into a unique column: the column's uniqueness stands before the copy brings
+  // the values that would have to meet it, so the field is moved first and made unique after.
+  if (
+    from.place.kind === "json" &&
+    to.place.kind === "column" &&
+    builderColumnIsUnique(to.field)
+  ) {
+    return refuse(
+      "unique",
+      `${label(to.field)} cannot be moved out of the group ${label(from.containers[0])} as a unique field: its values arrive after the uniqueness is set. Move it first, then make it unique as a change of its own.`
     );
   }
   const perLanguage = keptPerLanguage(from, entity);
@@ -298,7 +327,24 @@ function valuesRefusal(
 function sameStorage(before: FieldDefinition, after: FieldDefinition): boolean {
   const a = classifyFieldKind(before, "collection");
   const b = classifyFieldKind(after, "collection");
+  if (a === "decimal" && b === "decimal") return sameDecimalSize(before, after);
   return a === b || (isTextStorageKind(a) && isTextStorageKind(b));
+}
+
+/**
+ * Whether two decimal fields keep the same digits, with the defaults the column takes where one
+ * states none: a copy into a column with fewer would round each value, as the column's own
+ * descriptor sizes it.
+ */
+function sameDecimalSize(
+  before: FieldDefinition,
+  after: FieldDefinition
+): boolean {
+  const size = (field: FieldDefinition) => {
+    const column = getColumnDescriptor(field, "postgresql", "collection");
+    return `${column?.precision},${column?.scale}`;
+  };
+  return size(before) === size(after);
 }
 
 /**
