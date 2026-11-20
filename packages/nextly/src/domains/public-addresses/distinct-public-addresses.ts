@@ -112,16 +112,34 @@ export function assertConfiguredPublicAddresses(config: {
 
   // Only declarations that passed the rule are compared, so a clash names
   // two addresses that are each a real page.
-  const singles = (config.singles ?? []).filter(
-    (single): single is AddressedSingle =>
-      typeof single.publicAddress === "string"
-  );
-  const clashes = publicAddressClashes({ singles });
+  const clashes = singleAddressClashes(config.singles ?? []);
   if (clashes.length === 0) return;
   throw NextlyError.invalidInput({
     message:
-      `${clashes.map(clashSentence).join(" ")} ` +
-      "A page has one address: give each Single its own `publicAddress`, or remove it from all but one.",
-    logContext: { clashes },
+      `${clashes.map(clash => clash.sentence).join(" ")} ` +
+      ADDRESS_CLASH_REMEDY,
+    logContext: { clashes: clashes.map(({ clash }) => clash) },
   });
+}
+
+/** What a developer does about two Singles at one address. */
+export const ADDRESS_CLASH_REMEDY =
+  "A page has one address: give each Single its own `publicAddress`, or remove it from all but one.";
+
+/**
+ * Each address two or more of `singles` declare, with the sentence naming the clash. Only an
+ * address that is a string is compared; one the template rule refuses is that Single's own
+ * problem, so a caller compares the Singles whose addresses passed it.
+ */
+export function singleAddressClashes(
+  singles: readonly { slug: string; publicAddress?: unknown }[]
+): Array<{ clash: PublicAddressClash; sentence: string }> {
+  const addressed = singles.filter(
+    (single): single is AddressedSingle =>
+      typeof single.publicAddress === "string"
+  );
+  return publicAddressClashes({ singles: addressed }).map(clash => ({
+    clash,
+    sentence: clashSentence(clash),
+  }));
 }
