@@ -705,6 +705,36 @@ describe.each(getConfiguredTestDialects())(
     // A record from before the saved definition was kept says nothing of the entity's shape: a
     // save of it that applied whole keeps its registry row and its record, rather than reading the
     // missing definition as a delete and removing the row.
+    // A save that applied whole with no registry row to bring up (a create stopped before its row
+    // was written): the settle does not make a row, so it keeps the record rather than leaving a
+    // table no registry row names.
+    it("keeps the record of a save that applied whole with no registry row to bring up", async () => {
+      const t = await boot();
+      await created(t);
+      const realDelete = MetaService.prototype.delete;
+      vi.spyOn(MetaService.prototype, "delete").mockImplementation(
+        async function (this: MetaService, key: string) {
+          if (key === RECORD_KEY) await stopHere("clear");
+          return realDelete.call(this, key);
+        }
+      );
+      await stopSave(
+        t,
+        [text("heading"), text("alpha")],
+        point => point === "clear"
+      );
+      vi.mocked(MetaService.prototype.delete).mockRestore();
+      // The row as a create stopped before writing it leaves it: not there.
+      await t.adapter.delete("dynamic_singles", {
+        and: [{ column: "slug", op: "=", value: SLUG }],
+      });
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["all"]);
+      expect(await recordRow(t), "the record stays").toBeDefined();
+    }, 300_000);
+
     it("keeps the registry row and the record of an older save without its saved definition", async () => {
       const t = await boot();
       await created(t);

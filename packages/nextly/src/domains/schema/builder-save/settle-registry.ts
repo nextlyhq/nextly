@@ -31,14 +31,15 @@ export function settleRegistryWriter(
         : await resolveRegistryTableName(adapter);
     if (saved === null) {
       await removeRow(adapter, kind, slug);
-      return;
+      return true;
     }
     const row = await registryRow(adapter, table, slug);
-    // A row gone already (its entity deleted elsewhere since) has nothing to bring up.
-    if (row === undefined) return;
+    // No row: a create stopped before its row was written, or one gone since. There is nothing to
+    // bring up, and the settle does not make a row: answered so, the record stays.
+    if (row === undefined) return false;
     // Already the saved shape (the save's own write committed, or an earlier settle's did before it
     // stopped): written again, it would move the schema version on for nothing.
-    if (holds(row, saved)) return;
+    if (holds(row, saved)) return true;
     const current = Number(row.schema_version);
     await writeAppliedFieldsRow(adapter, {
       table,
@@ -48,6 +49,7 @@ export function settleRegistryWriter(
       // Moved on, as a save's own write moves it, so a Builder holding the old version re-reads.
       schemaVersion: Number.isFinite(current) ? current + 1 : 1,
     });
+    return true;
   };
 }
 

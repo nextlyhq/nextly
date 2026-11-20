@@ -118,12 +118,17 @@ export interface SettleDeps {
     slug: string;
     saved: SavedEntity | null;
   }): Promise<boolean>;
+  /**
+   * Answers whether the row now stands as the save left it: brought up or already so, or removed
+   * for a delete. False where there is no row to bring up (a create stopped before its row was
+   * written), which the settle cannot make.
+   */
   writeRegistry(entity: {
     kind: "single" | "fieldGroup";
     slug: string;
     /** The entity as the saved definition holds it; null where the save deleted it. */
     saved: SavedEntity | null;
-  }): Promise<void>;
+  }): Promise<boolean>;
 }
 
 /** An entity as a definition file holds it. */
@@ -550,7 +555,17 @@ async function settleAll(
     notes.push("the collection's registry row is not brought up yet");
     return "all";
   }
-  await deps.writeRegistry({ kind: record.kind, slug: record.slug, saved });
+  if (
+    !(await deps.writeRegistry({ kind: record.kind, slug: record.slug, saved }))
+  ) {
+    // No row to bring up: a create stopped before its row was written. Cleared, the record would
+    // leave a table no registry row names, and the entity gone from the admin. It stays.
+    deps.logger.warn(
+      `A Builder save of the ${described(record)} applied whole before it stopped, and its files are now recorded applied, but it has no registry row to bring up. Its record stays.`
+    );
+    notes.push("no registry row to bring up");
+    return "all";
+  }
   await clearSettledSave(deps.adapter, deps.projectRoot, record);
   deps.logger.info(
     `Settled a Builder save of the ${described(record)} that applied whole before it stopped: its files are recorded applied and its registry row brought up.`
