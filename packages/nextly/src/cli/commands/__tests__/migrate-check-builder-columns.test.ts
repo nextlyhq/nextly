@@ -476,15 +476,19 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       }
     });
 
-    it("does not judge a unique field that states no width added in the disabling edit", async () => {
+    it("does not judge a unique field that states no width added once translation is off", async () => {
       expect((await create(true, [note])).code).toBeUndefined();
+      // Translation goes off on its own first: `migrate:create` refuses a turn-off beside other
+      // changes to the same table, so the field is added by the next run.
+      const disabled = await create(false, [note]);
+      expect(disabled.code, disabled.said.join("\n")).toBeUndefined();
       const before = sqlFiles();
 
       // `code` was never in the companion, so it does not leave translation: it is a new column
       // on the main table, which the main table's diff adds.
-      const disabled = await create(false, [note, code]);
+      const added = await create(false, [note, code]);
 
-      expect(disabled.code, disabled.said.join("\n")).toBeUndefined();
+      expect(added.code, added.said.join("\n")).toBeUndefined();
       expect(sqlFiles().length).toBeGreaterThan(before.length);
     });
   }

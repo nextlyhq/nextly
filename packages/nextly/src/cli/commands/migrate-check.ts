@@ -390,9 +390,6 @@ export async function runChecks(args: {
     // cross-table seed SQL run verbatim), so skip the snapshot-pairing checks
     // rather than flagging them MISSING_SNAPSHOT.
     if (sqlContent.includes(LOCALIZATION_MIGRATION_MARKER)) continue;
-    // A blank migration is its author's SQL, which `migrate:create --blank` pairs with no
-    // snapshot: there is no hash to hold it to, and none missing.
-    if (isBlankMigration(sqlContent)) continue;
     let result;
     try {
       result = await verifyMigrationHash(metaDir, sqlName, sqlContent);
@@ -407,6 +404,10 @@ export async function runChecks(args: {
       throw err;
     }
     if (!result.ok && result.expected === undefined) {
+      // A blank migration is its author's SQL, which `migrate:create --blank` pairs with no
+      // snapshot, so none is missing. One that does have a snapshot is held to it above, as
+      // any file is.
+      if (isBlankMigration(sqlContent)) continue;
       return exitWithError(logger, migrationSnapshotMissing(sqlName, metaDir));
     }
     if (!result.ok) {
