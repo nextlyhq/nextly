@@ -471,6 +471,96 @@ describe.each(getConfiguredTestDialects())(
       expect(run.code, run.said).toBeUndefined();
     }, 300_000);
 
+    // A create that applied whole and stopped before its registry row was written: the settle
+    // makes no row, but the run's metadata pass adds it from the newest applied snapshot, and the
+    // settle after the run brings it up and clears the record.
+    it("finishes a create stopped before its registry row", async () => {
+      const t = await boot();
+      await new MetaService(t.adapter, consoleLogger).set(RECORD_KEY, {
+        id: "a-create-stopped-before-its-row",
+        kind: "single",
+        slug: SLUG,
+        startedAt: new Date().toISOString(),
+        host: hostname(),
+        database: "unknown",
+        definitionFile: DEFINITION.replace(/^\.\//, ""),
+        definitionBefore: null,
+        definitionAfter: definitionText(),
+        startedFrom: null,
+        files: sqlFiles(),
+        applies: true,
+      });
+      await t.adapter.delete("dynamic_singles", {
+        and: [{ column: "slug", op: "=", value: SLUG }],
+      });
+
+      const run = await migrate();
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(await recordRow(t), "the record clears").toBeUndefined();
+      const [row] = await t.adapter.select<{ slug: string }>(
+        "dynamic_singles",
+        { where: { and: [{ column: "slug", op: "=", value: SLUG }] } }
+      );
+      expect(row?.slug, "the registry row").toBe(SLUG);
+    }, 300_000);
+
+    // A development create stopped before its file ran is withdrawn by the settle: its files go and
+    // its definition is put back, and the run plans from the project as the settle left it, not
+    // from the declarations read before it.
+    it("runs from the project as the settle left it after withdrawing a create", async () => {
+      const t = await boot();
+      const fresh = "settle_fresh";
+      const before = definitionText() ?? "";
+      const filesBefore = sqlFiles();
+      const startedFrom =
+        (await newestSnapshotName(join(historyDir(), "meta"))) ?? null;
+      const manifest = JSON.parse(before) as {
+        singles: Array<Record<string, unknown>>;
+      };
+      const hero = manifest.singles.find(each => each.slug === SLUG) ?? {};
+      manifest.singles.push({
+        ...hero,
+        slug: fresh,
+        label: fresh,
+        fields: [text("title")],
+      });
+      const after = serializeUiSchema(manifest as never);
+      writeFileSync(join(basePath, DEFINITION), after);
+      setNonInteractive(true);
+      const created = await command(context =>
+        runMigrateCreate("fresh", { cwd: basePath }, context)
+      ).finally(() => setNonInteractive(false));
+      expect(created.code, created.said).toBeUndefined();
+      const written = sqlFiles().filter(name => !filesBefore.includes(name));
+      await new MetaService(t.adapter, consoleLogger).set(
+        `builder-save-in-progress:single:${fresh}`,
+        {
+          id: "a-create-stopped-before-its-file",
+          kind: "single",
+          slug: fresh,
+          startedAt: new Date().toISOString(),
+          host: hostname(),
+          database: "unknown",
+          definitionFile: DEFINITION.replace(/^\.\//, ""),
+          definitionBefore: before,
+          definitionAfter: after,
+          startedFrom,
+          files: written,
+          applies: true,
+        }
+      );
+
+      const run = await migrate();
+
+      expect(run.code, run.said).toBeUndefined();
+      expect(sqlFiles().filter(file => written.includes(file))).toEqual([]);
+      expect(definitionText()).toBe(before);
+      expect(run.said, "the run names the withdrawn create").not.toContain(
+        fresh
+      );
+    }, 300_000);
+
     it("refuses a production start that migrates, leaving the files and the definition as they are", async () => {
       const t = await boot();
       const { written, after } = await leftSave(t);

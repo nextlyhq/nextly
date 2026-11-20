@@ -205,14 +205,17 @@ export async function runMigrateCheck(
   const migrationsDir = resolve(cwd, configResult.config.db.migrationsDir);
 
   // A Builder save this machine left part-way against this database refuses the check: the
-  // migrations it reads do not describe the database until the save is settled. Another machine's
-  // or another database's is named only.
-  try {
-    await refuseWhileSaveLeftPartWay({
+  // migrations it reads do not describe the database until the save is settled. Asked before the
+  // check reads anything, and again before it reports a pass, so a save that started while it read
+  // the folder refuses it too. Another machine's or another database's is named only.
+  const refuseLeftSave = async (notice: (line: string) => void) =>
+    refuseWhileSaveLeftPartWay({
       projectRoot: cwd,
       postgresSchema: configResult.config.db.postgres?.schema,
-      notice: line => logger.warn(line),
+      notice,
     });
+  try {
+    await refuseLeftSave(line => logger.warn(line));
   } catch (error) {
     exitWithError(logger, error);
   }
@@ -290,6 +293,8 @@ export async function runMigrateCheck(
       collections: merged.collections,
       singles: merged.singles,
     }),
+    // Asked again, its notices already given once.
+    beforePass: () => refuseLeftSave(() => undefined),
     logger,
   });
 }
@@ -401,6 +406,11 @@ export async function runChecks(args: {
    * snapshot's record of them. Omitted, permissions are not checked.
    */
   permissions?: PermissionRecord;
+  /**
+   * Asked once every check has read what it reads, before the check reports a pass: a Builder save
+   * that started while the check read the folder refuses it then. Omitted, nothing is asked.
+   */
+  beforePass?: () => Promise<void>;
   logger: CommandContext["logger"];
 }): Promise<void> {
   const { migrationsDir, logger } = args;
@@ -570,6 +580,12 @@ export async function runChecks(args: {
         });
   if (permissionDrift !== undefined) {
     return exitWithError(logger, permissionDrift);
+  }
+
+  try {
+    await args.beforePass?.();
+  } catch (error) {
+    exitWithError(logger, error);
   }
 
   logger.success(

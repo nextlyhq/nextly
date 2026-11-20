@@ -36,9 +36,19 @@ export interface MigrateSettleArgs {
   logger: SettleDeps["logger"];
 }
 
-/** What the run is told by its settle: the records it finishes by applying their files. */
+/**
+ * What the run is told by its settle: the records it finishes, which do not refuse it. One left
+ * pending, whose remaining files the run applies; and one that applied whole with no registry row
+ * to bring up, whose row the run's metadata pass adds from the newest applied snapshot. Each is
+ * settled again after the run.
+ */
 export interface MigrateSettled {
   pending: ReadonlySet<string>;
+  /**
+   * Whether the settle changed the project or the ledger: a save withdrawn, finished or recorded.
+   * The run then reads what the project declares again.
+   */
+  changed: boolean;
 }
 
 /**
@@ -52,17 +62,24 @@ export async function settleBeforeMigrate(
 ): Promise<MigrateSettled> {
   // A database with no meta table yet (a first run) holds no record.
   if (!(await args.adapter.tableExists("nextly_meta"))) {
-    return { pending: new Set() };
+    return { pending: new Set(), changed: false };
   }
   const settled = await settleHeld(args);
   const pending = new Set(
-    settled.filter(save => save.outcome === "pending").map(save => save.id)
+    settled
+      .filter(
+        save => save.outcome === "pending" || save.keptFor === "registry-row"
+      )
+      .map(save => save.id)
   );
   await refuseWhileSaveInProgress(args.adapter, {
     allow: pending,
     notice: line => args.logger.warn(line),
   });
-  return { pending };
+  return {
+    pending,
+    changed: settled.some(save => save.outcome !== "left"),
+  };
 }
 
 /**
@@ -81,9 +98,10 @@ export function recheckBeforeFiles(
 }
 
 /**
- * Settle again, once the run has applied its files, the saves the settle before it left pending:
- * their remaining files recorded applied, each is whole and its record clears. One whose files the
- * run did not apply stays, refusing the next run as before.
+ * Settle again, once the run has applied its files and written its registry rows, the saves the
+ * settle before it let through: their remaining files recorded applied, or their row now there to
+ * bring up, each is whole and its record clears. One the run did not finish stays, refusing the
+ * next run as before.
  */
 export async function settleAfterMigrate(
   args: MigrateSettleArgs,

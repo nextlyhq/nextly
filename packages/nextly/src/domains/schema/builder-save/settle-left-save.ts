@@ -53,6 +53,7 @@ import {
   parseSnapshotFile,
   snapshotPathOf,
 } from "../migrate-create/snapshot-io";
+import { assertWriterHold } from "../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { collectionOwnTables } from "../services/field-column-descriptor";
@@ -459,6 +460,9 @@ async function removeSaveFiles(
   repo: SchemaEventsRepository,
   files: readonly string[]
 ): Promise<void> {
+  // Still the folder's writer, where the settle holds it (`nextly migrate`, a Builder save): one
+  // that stalled past its hold's lease removes nothing beneath the writer that took the folder.
+  await assertWriterHold(deps.migrationsDir);
   for (const filename of files) {
     await settleRemovedFileAttempts(deps.adapter, repo, filename);
     await rm(join(deps.migrationsDir, filename), { force: true });

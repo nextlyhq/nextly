@@ -736,11 +736,14 @@ export async function runMigrate(
     // Config and the Builder manifest, merged as generation merges them. The
     // drift check needs the derived-table set, and assembling it here from the
     // config alone missed Builder entities and plugin extends.
-    const resolvedSchema = await resolveDeclaredSchema({
-      projectRoot: cwd,
-      config: configResult.config,
-      deferredExtends: configResult.deferredExtends,
-    });
+    // Read again where the run's settle of a left Builder save changes the project (below).
+    const resolveDeclared = () =>
+      resolveDeclaredSchema({
+        projectRoot: cwd,
+        config: configResult.config,
+        deferredExtends: configResult.deferredExtends,
+      });
+    let resolvedSchema = await resolveDeclared();
 
     // Phase 0: a database that still keeps its migration records the way an
     // earlier release did has them moved into `nextly_schema_events` first.
@@ -780,15 +783,19 @@ export async function runMigrate(
     // What the declared schema names, with the ledger's old Builder marks:
     // the one value every reader of the folder below reads it through.
     // `migrateCore` reads the marks again under the lock.
-    const { declared } = await withOldBuilderMarks({
-      adapter,
-      db,
-      dialect,
-      declared: {
-        junctions: resolvedSchema.junctionsByEntity,
-        tables: resolvedSchema.declaredTables,
-      },
-    });
+    const markedDeclared = async () =>
+      (
+        await withOldBuilderMarks({
+          adapter,
+          db,
+          dialect,
+          declared: {
+            junctions: resolvedSchema.junctionsByEntity,
+            tables: resolvedSchema.declaredTables,
+          },
+        })
+      ).declared;
+    let declared = await markedDeclared();
 
     const serverConstructs = (
       adapter as unknown as DrizzleAdapter
@@ -885,6 +892,12 @@ export async function runMigrate(
       },
     };
     const leftSaves = await settleBeforeMigrate(saveSettle).catch(fail);
+    // A settle that withdrew a save's files or put its definition back has changed what the
+    // project declares: the run reads it again, as it now stands, before planning anything.
+    if (leftSaves.changed) {
+      resolvedSchema = await resolveDeclared();
+      declared = await markedDeclared();
+    }
 
     // The retired-table cleanup has flags of its own: removing those tables
     // and losing rows still in them are each a separate decision from
