@@ -13,6 +13,7 @@ import { HISTORY_FORKED_REASON } from "../../../domains/schema/migrate/history-l
 import {
   WRITER_HOLD_HELD_REASON,
   WRITER_HOLD_LOST_REASON,
+  WRITER_NOT_WRITTEN_REASON,
   WRITER_START_MOVED_REASON,
 } from "../../../domains/schema/migrate-create/writer-hold";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -529,6 +530,26 @@ function overtakenParts(error: NextlyError): CliErrorParts {
   return refusalParts(error, "Another run wrote a migration meanwhile.");
 }
 
+/**
+ * A migration a writer took back out, as the three parts it was built from
+ * (`notWrittenError`); the whole message stands where they are not there.
+ */
+function notWrittenParts(error: NextlyError): CliErrorParts {
+  const parts = error.logContext?.parts as
+    | Partial<Record<"what" | "why" | "next", unknown>>
+    | undefined;
+  const { what, why, next } = parts ?? {};
+  return typeof what === "string" &&
+    typeof why === "string" &&
+    typeof next === "string"
+    ? { what, why, next }
+    : {
+        what: error.publicMessage,
+        why: "A file of the migration could not be moved to its name.",
+        next: "Check that the migrations folder can be written to, then run it again.",
+      };
+}
+
 export const MIGRATION_CODES = defineCodes({
   NEXTLY_MIGRATE_LOCK_BUSY: {
     cause:
@@ -577,6 +598,17 @@ export const MIGRATION_CODES = defineCodes({
         code: "SERVICE_UNAVAILABLE",
         reason: WRITER_START_MOVED_REASON,
         describe: overtakenParts,
+      },
+    ],
+  },
+  MIGRATION_NOT_WRITTEN: {
+    cause:
+      "A migration file could not be moved into place once others of the same migration were there, so the command removed the files it had placed and wrote no migration.",
+    from: [
+      {
+        code: "SERVICE_UNAVAILABLE",
+        reason: WRITER_NOT_WRITTEN_REASON,
+        describe: notWrittenParts,
       },
     ],
   },
