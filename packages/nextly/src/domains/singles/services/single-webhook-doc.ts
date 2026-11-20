@@ -27,6 +27,7 @@ import {
 } from "../../i18n/companion-join";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { cachedCompanionReadiness } from "../../i18n/runtime/companion-readiness";
+import { assembleStoredValue, isWholeValue } from "../../i18n/shared-structure";
 
 import { applyReadShape } from "./single-read-shape";
 
@@ -163,12 +164,18 @@ export async function buildSingleWebhookDoc(
       // value or null (untranslated), matching populateCompanionFields — so a
       // partial translation write's payload lists all localized fields, not
       // only the touched ones.
-      parentRow[f.name] = Object.prototype.hasOwnProperty.call(
+      const stored = Object.prototype.hasOwnProperty.call(
         companionValues,
         f.column
       )
         ? companionValues[f.column]
         : null;
+      // A repeater's or group's column holds this language's text alone (as this write put it),
+      // laid on the structure the row holds; a value already put together is read as it is.
+      parentRow[f.name] =
+        f.sharedStructure && !isWholeValue(stored, f.sharedStructure)
+          ? assembleStoredValue(parentRow[f.name], [stored], f.sharedStructure)
+          : stored;
       // The post-write main row may carry the raw snake_case companion column
       // (merged back after the upsert); the read shape keys a translatable
       // value by field name only, so drop the raw column so `data` and
