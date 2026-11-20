@@ -34,6 +34,17 @@ export function itemsPhrase(count: number): string {
   return `${count} ${count === 1 ? "item" : "items"}`;
 }
 
+/**
+ * How many items `code` holds, by the server's counts, which leave out a
+ * language holding none. Undefined until the counts are read.
+ */
+export function contentCount(
+  counts: Readonly<Record<string, number>> | undefined,
+  code: string
+): number | undefined {
+  return counts === undefined ? undefined : (counts[code] ?? 0);
+}
+
 /** The languages in use, in the site's order. */
 export function activeLanguages(
   languages: readonly LanguageView[]

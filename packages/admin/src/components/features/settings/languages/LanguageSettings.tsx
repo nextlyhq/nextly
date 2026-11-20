@@ -44,6 +44,7 @@ import { AddLanguageDialog } from "./AddLanguageDialog";
 import { EditLanguageDialog } from "./EditLanguageDialog";
 import {
   activeLanguages,
+  contentCount,
   directionLabel,
   fallbackPhrase,
   itemsPhrase,
@@ -165,7 +166,7 @@ export function LanguageSettings({
               key={language.code}
               language={language}
               languages={list.languages}
-              content={content?.[language.code]}
+              content={contentCount(content, language.code)}
               actions={
                 mayChange ? (
                   <LanguageActions
@@ -265,7 +266,7 @@ function RemovedLanguages({
             key={language.code}
             language={language}
             languages={languages}
-            content={content?.[language.code]}
+            content={contentCount(content, language.code)}
             actions={
               onAddBack ? (
                 <Button
@@ -318,7 +319,7 @@ function LanguageDialog({
         <RemoveLanguageDialog
           {...save}
           language={open.language}
-          content={content?.[open.language.code]}
+          content={contentCount(content, open.language.code)}
         />
       );
     case "default":

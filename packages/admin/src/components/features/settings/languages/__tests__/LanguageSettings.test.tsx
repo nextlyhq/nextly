@@ -395,6 +395,21 @@ describe("Settings › Languages", () => {
     );
   });
 
+  it("counts a language the server lists no translations for as holding none", async () => {
+    // The server's summary names only the languages that hold translation
+    // rows; on a site with no translated content it names none at all.
+    await open(THREE, ADMIN, code => ({
+      ...summary("en", code),
+      translationsPerLanguage: { en: 3 },
+    }));
+
+    await waitFor(() =>
+      expect(within(row("English")).getByText("3 items")).toBeInTheDocument()
+    );
+    expect(within(row("Spanish")).getByText("0 items")).toBeInTheDocument();
+    expect(within(row("Arabic")).getByText("0 items")).toBeInTheDocument();
+  });
+
   it("reads correctly on a site with one language: the page is where a second is added", async () => {
     await open({ lockedByConfig: false, languages: [ENGLISH] });
 
