@@ -90,6 +90,22 @@ const run = <T>(t: TestNextly, statement: string) =>
     statement
   ) as unknown as Promise<T[]>;
 
+/**
+ * The values archived when a field leaves translation; none before the archive's table exists, as
+ * it is made by the first archive.
+ */
+async function archivedValues(t: TestNextly): Promise<number> {
+  try {
+    const [row] = await run<{ count: number | string }>(
+      t,
+      "SELECT COUNT(*) AS count FROM nextly_i18n_archive"
+    );
+    return Number(row?.count ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
 async function filesWritten(): Promise<number> {
   return (await readdir(join(basePath, "migrations"))).filter(f =>
     f.endsWith(".sql")
@@ -462,17 +478,7 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
         });
       }
-      const archived = async (): Promise<number> => {
-        try {
-          const [row] = await run<{ count: number | string }>(
-            t,
-            "SELECT COUNT(*) AS count FROM nextly_i18n_archive"
-          );
-          return Number(row?.count ?? 0);
-        } catch {
-          return 0;
-        }
-      };
+      const archived = () => archivedValues(t);
       const before = await archived();
 
       // `notes`, required, leaves translation, which only the push carries, in the same save as a move.
@@ -535,17 +541,8 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
         });
       }
-      const archived = async (): Promise<number> => {
-        try {
-          const [row] = await run<{ count: number | string }>(
-            t,
-            "SELECT COUNT(*) AS count FROM nextly_i18n_archive"
-          );
-          return Number(row?.count ?? 0);
-        } catch {
-          return 0;
-        }
-      };
+      const archived = () => archivedValues(t);
+      const before = await archived();
       // An optional field leaving translation goes by the file, which carries the move with it.
       // The dialog confirms what leaving translation drops from the translations table, as here.
       await saveSingle(
@@ -560,6 +557,9 @@ describe.each(getConfiguredTestDialects())(
         "S"
       );
       expect(read.notes).toBe("English notes");
+      // The archive reader's positive control: leaving translation archives the other
+      // languages' values, which it must find, so its zero in the refusal case above is read.
+      expect(await archived()).toBeGreaterThan(before);
     });
 
     // Outside development the dialog applies a Single's change with its push once the file is

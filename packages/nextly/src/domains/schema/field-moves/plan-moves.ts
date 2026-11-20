@@ -670,12 +670,15 @@ export function planEntityMoves(given: {
     after: rowColumns(args.after),
   };
   const system = systemColumnSets(args);
-  refuseOverlapping(args.moves);
-  refuseSameNames(args.moves);
-  refuseUnpairedNames(args, args.renames ?? []);
-  for (const request of args.moves) {
-    // A field that keeps its path (moved into or out of a group with no name) keeps its place.
-    if (samePath(request.from, request.to)) continue;
+  // A field that keeps its path (moved into or out of a group with no name) keeps its place, so
+  // its hint takes no part in the checks of the moves together either.
+  const moves = args.moves.filter(
+    request => !samePath(request.from, request.to)
+  );
+  refuseOverlapping(moves);
+  refuseSameNames(moves);
+  refuseUnpairedNames({ ...args, moves }, args.renames ?? []);
+  for (const request of moves) {
     const move = checkedMove(request, args, columns, system);
     // A field moving between places on one level (a group with no name) keeps its column, and
     // one whose group only changes its spelling (`seoMeta` to `seo_meta`) keeps its column and

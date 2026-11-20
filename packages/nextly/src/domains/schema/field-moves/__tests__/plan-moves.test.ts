@@ -663,6 +663,22 @@ describe("planEntityMoves", () => {
     }
   });
 
+  it("leaves a same-path hint out of the checks of the moves together", () => {
+    // A hint whose path stays the same moves nothing; beside a real move of a field of the same
+    // name in other groups, it must not read as a second move of that name.
+    expect(() =>
+      planEntityMoves({
+        ...base,
+        before: [text("title"), group("a", [text("title")]), group("b", [])],
+        after: [text("title"), group("a", []), group("b", [text("title")])],
+        moves: [
+          { from: ["title"], to: ["title"] },
+          { from: ["a", "title"], to: ["b", "title"] },
+        ],
+      })
+    ).not.toThrow();
+  });
+
   it("asks a field group's table nothing of title or slug, which are its fields' to take there", () => {
     // A field group's table keeps its own columns (`_parent_id`, `_order`...), none named so.
     const outOnto = (builtBy: "fieldGroup" | "collection") => () =>

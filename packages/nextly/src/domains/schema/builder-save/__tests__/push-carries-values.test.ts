@@ -254,6 +254,12 @@ describe("pushCarriesValues", () => {
           outOfGroup([{ from: ["meta", "tagline"], to: ["tagline"] }])
         )
       ).toBe(false);
+      // A hint whose path stays on the row moves nothing, so the row is still filled by the push.
+      expect(
+        await pushCarriesValues(
+          outOfGroup([{ from: ["tagline"], to: ["tagline"] }])
+        )
+      ).toBe(true);
     });
 
     it("runs the file for a field renamed onto a required one, its column keeping its value", async () => {

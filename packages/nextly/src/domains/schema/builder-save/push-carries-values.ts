@@ -115,11 +115,14 @@ interface MovedField {
   to: readonly string[];
 }
 
-/** The columns of the fields a move brings onto the row, out of a group. */
+/**
+ * The columns of the fields a move brings onto the row, out of a group: a hint whose source is on
+ * the row too moves nothing (the planner skips it), so its field is not counted as brought there.
+ */
 function movedOntoRow(moved: readonly MovedField[] | undefined): Set<string> {
   return new Set(
     (moved ?? []).flatMap(m =>
-      m.to.length === 1 ? [toSnakeCase(m.to[0] ?? "")] : []
+      m.from.length > 1 && m.to.length === 1 ? [toSnakeCase(m.to[0] ?? "")] : []
     )
   );
 }
