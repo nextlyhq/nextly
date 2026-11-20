@@ -1065,7 +1065,7 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      (keepsPartWay(dialect, path) && path.push !== true ? it : it.skip)(
+      (keepsPartWay(dialect, path) ? it : it.skip)(
         "whose settle fails at its ledger write, is put back as it stopped, recorded in progress, and reports the stop first",
         async () => {
           const t = await boot();
