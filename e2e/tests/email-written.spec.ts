@@ -9,7 +9,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { gotoAdmin, type Theme } from "./support/admin";
-import { AA_TAGS } from "./support/axe-scan.mjs";
+import { AA_TAGS, settleTransitions } from "./support/axe-scan.mjs";
 import { LOCK } from "./support/locks";
 import { expectOk } from "./support/runtime-collection";
 import { fileAccount, test } from "./support/test";
@@ -286,6 +286,9 @@ for (const { width, height } of [
       // preview's srcdoc frame has been scanned, from tablet width up where
       // the preview shows. The scan is of the workbench; the email in the
       // sandboxed preview is not part of it.
+      // Settled first, as the shared scan does: in dark, the admin's palette
+      // transitions in, and a scan mid-way measures colours that never stay.
+      await settleTransitions(page);
       const results = await new AxeBuilder({ page })
         .include('[data-testid="workbench-header"]')
         .include("main")

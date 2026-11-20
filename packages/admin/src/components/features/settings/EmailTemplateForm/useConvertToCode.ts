@@ -38,8 +38,6 @@ export function useConvertToCode(
   owns: boolean
 ): ConvertToCode {
   const [open, setOpen] = useState(false);
-  // Between the server's answer and the coded email reaching the workbench.
-  const [refreshing, setRefreshing] = useState(false);
   const queryClient = useQueryClient();
   const { mutate, isPending } = useUpdateEmailTemplate();
   const id = template?.id;
@@ -49,20 +47,16 @@ export function useConvertToCode(
     mutate(
       { id, data: { format: "code" } },
       {
-        onSuccess: () => {
-          // The dialog stays open, and locked, until the coded email is
-          // fetched: closed sooner, the editor would still hold the blocks,
-          // and edits made to them would vanish when the coded email lands.
-          setRefreshing(true);
-          void queryClient
-            .invalidateQueries({ queryKey: emailTemplateKeys.detail(id) })
-            .finally(() => {
-              setRefreshing(false);
-              setOpen(false);
-              toast.success("Converted to code", {
-                description: "The email now opens in the code editor.",
-              });
-            });
+        onSuccess: converted => {
+          // The coded email the server answered with goes straight into the
+          // workbench's copy before the dialog closes: never the blocks, not
+          // while a refetch runs and not if it fails, so no edit is made to
+          // what the server has already converted away.
+          queryClient.setQueryData(emailTemplateKeys.detail(id), converted);
+          setOpen(false);
+          toast.success("Converted to code", {
+            description: "The email now opens in the code editor.",
+          });
         },
         onError: (error: Error) => {
           toast.error("Couldn't convert the email", {
@@ -78,7 +72,7 @@ export function useConvertToCode(
   return {
     open,
     setOpen,
-    isPending: isPending || refreshing,
+    isPending,
     convert,
     menu: base =>
       convertible ? { ...base, onConvert: () => setOpen(true) } : base,

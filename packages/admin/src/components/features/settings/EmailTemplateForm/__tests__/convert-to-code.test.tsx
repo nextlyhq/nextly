@@ -114,48 +114,46 @@ async function openMenu() {
   });
 }
 
-describe("converting, until the coded email arrives", () => {
-  it("keeps the dialog open and locked until the email is fetched again", async () => {
-    api.updateTemplate.mockResolvedValue(template({ format: "code" }));
+describe("converting, when the coded email arrives", () => {
+  it("shows the coded email the server answered with, even when fetching it again fails", async () => {
+    api.updateTemplate.mockResolvedValue(
+      template({ format: "code", blocks: null, htmlContent: "<h1>Hi</h1>" })
+    );
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    // The edit page's query of the email: the first fetch answers at once,
-    // the refetch after converting waits until released.
+    // The edit page's query of the email: the first fetch has the written
+    // email; every fetch after converting fails, as on a dropped connection.
     let fetches = 0;
-    let release: () => void = () => {};
-    const released = new Promise<void>(resolve => {
-      release = resolve;
-    });
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     );
     const { result } = renderHook(
       () => {
-        useQuery({
+        const detail = useQuery({
           queryKey: emailTemplateKeys.detail("t1"),
-          queryFn: async () => {
+          queryFn: () => {
             fetches += 1;
-            if (fetches > 1) await released;
-            return fetches;
+            if (fetches > 1) throw new Error("offline");
+            return template({});
           },
         });
-        return useConvertToCode(template({}), true);
+        return { convert: useConvertToCode(template({}), true), detail };
       },
       { wrapper }
     );
-    await waitFor(() => expect(fetches).toBe(1));
-    act(() => result.current.setOpen(true));
-    act(() => result.current.convert());
+    await waitFor(() =>
+      expect(result.current.detail.data?.format).toBe("written")
+    );
+    act(() => result.current.convert.setOpen(true));
+    act(() => result.current.convert.convert());
 
-    // The server has answered and the email is being fetched again.
+    // Closed with the coded email already in place: no moment shows the
+    // blocks the server has converted away, whatever the refetch does.
+    await waitFor(() => expect(result.current.convert.open).toBe(false));
+    expect(result.current.detail.data?.format).toBe("code");
     await waitFor(() => expect(fetches).toBeGreaterThan(1));
-    expect(result.current.open).toBe(true);
-    expect(result.current.isPending).toBe(true);
-
-    act(() => release());
-    await waitFor(() => expect(result.current.open).toBe(false));
-    expect(result.current.isPending).toBe(false);
+    expect(result.current.detail.data?.format).toBe("code");
   });
 });
 
