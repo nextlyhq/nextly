@@ -14,7 +14,7 @@
  * @module components/features/entries/publish-parts/PublishPartsDialog
  */
 
-import type { JSX } from "react";
+import type { JSX, RefObject } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { AlertTriangle, Loader2 } from "@admin/components/icons";
@@ -38,8 +38,6 @@ import {
   editorMainAction,
   useDialogReturnFocus,
 } from "@admin/hooks/useDialogReturnFocus";
-import { apiErrorMessage } from "@admin/lib/api/parseApiError";
-import { refusedAsChangedSince } from "@admin/lib/document-version";
 import type { ShownCopy } from "@admin/lib/document-version";
 import type {
   PartsLanguageOutcome,
@@ -59,7 +57,12 @@ import {
   withLanguage,
   type PartsChoice,
 } from "./publish-parts-choice";
-import { readyProblems } from "./ready-to-publish";
+import {
+  dialogRefusals,
+  holdingProblems,
+  offersPublishWithoutReview,
+  outcomesByLocale,
+} from "./publish-parts-dialog-state";
 import { ReadyToPublish, WithoutReviewReason } from "./ReadyToPublish";
 
 /**
@@ -158,29 +161,20 @@ export function PublishPartsDialog({
   const refused = refusalsByPart(refusal, [...languages, SHARED_PATH]);
   // What holds Publish where a workflow governs the document, each with its fix. A field it
   // lists is said there, and not again among the general refusals.
-  const problems =
-    review === undefined || direction !== "publish"
-      ? []
-      : readyProblems({
-          choice,
-          parts: review.parts,
-          refusal,
-          translated: languages.length > 0,
-          labelOf,
-        });
-  const general = (refused.get("") ?? []).filter(
-    message => !problems.some(problem => problem.text === message)
-  );
+  const problems = holdingProblems({
+    parts: review?.parts,
+    direction,
+    choice,
+    refusal,
+    languages,
+    labelOf,
+  });
   // Offered only to a person who may, and only while a chosen part waits for approval.
-  const offersWithoutReview =
-    review?.mayPublishWithoutReview === true &&
-    problems.some(problem => problem.unapproved);
-  const outcomes = new Map(
-    (description.data?.languages ?? []).map(language => [
-      language.locale,
-      language,
-    ])
+  const offersWithoutReview = offersPublishWithoutReview(
+    review?.mayPublishWithoutReview,
+    problems
   );
+  const outcomes = outcomesByLocale(description.data);
 
   const confirm = async (withoutReview?: string): Promise<void> => {
     try {
@@ -218,11 +212,8 @@ export function PublishPartsDialog({
     if (problems.length === 0) await confirm();
   };
 
-  const changedSince = refusal !== null && refusedAsChangedSince(refusal);
-  const otherRefusal =
-    refusal !== null && refused.size === 0 && !changedSince
-      ? apiErrorMessage(refusal, "This could not be done.")
-      : null;
+  const { messages, changedSince } = dialogRefusals(refusal, refused, problems);
+  const canMove = choosesAnything(choice) && !move.isPending;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -294,98 +285,178 @@ export function PublishPartsDialog({
           />
         )}
 
-        {description.isFetching ? (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Checking what this does to each part…
-          </p>
-        ) : null}
-        {/* Refusals are read on the dialog's surface, so they take the danger text token, which
-            reaches 4.5:1 there in light and dark; the destructive red is a fill's colour. */}
-        {[...general, ...(otherRefusal ? [otherRefusal] : [])].map(message => (
-          <p
-            key={message}
-            role="alert"
-            className="flex items-start gap-2 text-sm text-danger-text"
-          >
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            {message}
-          </p>
-        ))}
-        {changedSince ? (
-          <p role="alert" className="text-sm text-danger-text">
-            This document changed since you opened it. Review the latest
-            version, then try again.
-          </p>
-        ) : null}
+        <DialogNotices
+          checking={description.isFetching}
+          messages={messages}
+          changedSince={changedSince}
+        />
 
         {reason !== null ? (
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={move.isPending}
-              onClick={() => {
-                setReason(null);
-                setBackFromReason(true);
-              }}
-            >
-              Back
-            </Button>
-            <Button
-              type="button"
-              disabled={
-                !choosesAnything(choice) ||
-                move.isPending ||
-                reason.trim() === ""
-              }
-              onClick={() => void confirmWithoutReview(reason.trim())}
-            >
-              {move.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              Publish without review
-            </Button>
-          </DialogFooter>
+          <ReasonFooter
+            reason={reason}
+            pending={move.isPending}
+            canMove={canMove}
+            onBack={() => {
+              setReason(null);
+              setBackFromReason(true);
+            }}
+            onConfirm={why => void confirmWithoutReview(why)}
+          />
         ) : (
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            {offersWithoutReview ? (
-              <Button
-                ref={offerWithoutReview}
-                type="button"
-                variant="outline"
-                disabled={!choosesAnything(choice) || move.isPending}
-                onClick={() => setReason("")}
-              >
-                Publish without review…
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant={direction === "unpublish" ? "destructive" : "default"}
-              disabled={
-                !choosesAnything(choice) ||
-                move.isPending ||
-                problems.length > 0
-              }
-              onClick={() => void confirm()}
-            >
-              {move.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              {ACTION[direction]}
-            </Button>
-          </DialogFooter>
+          <PartsFooter
+            direction={direction}
+            pending={move.isPending}
+            canMove={canMove}
+            held={problems.length > 0}
+            offersWithoutReview={offersWithoutReview}
+            offerRef={offerWithoutReview}
+            onCancel={() => onOpenChange(false)}
+            onOffer={() => setReason("")}
+            onConfirm={() => void confirm()}
+          />
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * What the dialog says below its parts: that it is asking the server, the refusals read on its
+ * surface, and that the document changed since it was opened.
+ */
+function DialogNotices({
+  checking,
+  messages,
+  changedSince,
+}: {
+  checking: boolean;
+  messages: readonly string[];
+  changedSince: boolean;
+}): JSX.Element {
+  return (
+    <>
+      {checking ? (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Checking what this does to each part…
+        </p>
+      ) : null}
+      {/* Refusals are read on the dialog's surface, so they take the danger text token, which
+          reaches 4.5:1 there in light and dark; the destructive red is a fill's colour. */}
+      {messages.map(message => (
+        <p
+          key={message}
+          role="alert"
+          className="flex items-start gap-2 text-sm text-danger-text"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          {message}
+        </p>
+      ))}
+      {changedSince ? (
+        <p role="alert" className="text-sm text-danger-text">
+          This document changed since you opened it. Review the latest version,
+          then try again.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The footer while the reason to publish without review is written: back to the parts, or
+ * publish with the reason, which is refused while it is blank.
+ */
+function ReasonFooter({
+  reason,
+  pending,
+  canMove,
+  onBack,
+  onConfirm,
+}: {
+  reason: string;
+  pending: boolean;
+  /** Whether anything is chosen and no move is under way. */
+  canMove: boolean;
+  onBack: () => void;
+  onConfirm: (why: string) => void;
+}): JSX.Element {
+  return (
+    <DialogFooter>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={pending}
+        onClick={onBack}
+      >
+        Back
+      </Button>
+      <Button
+        type="button"
+        disabled={!canMove || reason.trim() === ""}
+        onClick={() => onConfirm(reason.trim())}
+      >
+        {pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+        Publish without review
+      </Button>
+    </DialogFooter>
+  );
+}
+
+/**
+ * The footer on the parts: Cancel, the offer to publish without review where it is made, and the
+ * move itself, refused while anything holds it.
+ */
+function PartsFooter({
+  direction,
+  pending,
+  canMove,
+  held,
+  offersWithoutReview,
+  offerRef,
+  onCancel,
+  onOffer,
+  onConfirm,
+}: {
+  direction: PublishPartsDirection;
+  pending: boolean;
+  /** Whether anything is chosen and no move is under way. */
+  canMove: boolean;
+  /** Whether anything holds Publish. */
+  held: boolean;
+  offersWithoutReview: boolean;
+  /** The offer's button, which focus returns to back from the reason. */
+  offerRef: RefObject<HTMLButtonElement | null>;
+  onCancel: () => void;
+  onOffer: () => void;
+  onConfirm: () => void;
+}): JSX.Element {
+  return (
+    <DialogFooter>
+      <Button type="button" variant="outline" onClick={onCancel}>
+        Cancel
+      </Button>
+      {offersWithoutReview ? (
+        <Button
+          ref={offerRef}
+          type="button"
+          variant="outline"
+          disabled={!canMove}
+          onClick={onOffer}
+        >
+          Publish without review…
+        </Button>
+      ) : null}
+      <Button
+        type="button"
+        variant={direction === "unpublish" ? "destructive" : "default"}
+        disabled={!canMove || held}
+        onClick={onConfirm}
+      >
+        {pending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+        {ACTION[direction]}
+      </Button>
+    </DialogFooter>
   );
 }
 

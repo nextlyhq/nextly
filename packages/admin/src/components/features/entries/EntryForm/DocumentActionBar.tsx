@@ -360,8 +360,7 @@ function ToolbarAction({
   onOpenReady: (() => void) | undefined;
 }): JSX.Element {
   const reasonId = useId();
-  const held = reviewHoldOf(action);
-  const reason = reasonFor(action, binding);
+  const { held, reason, disabled } = pressHold(action, binding);
   return (
     <>
       {held === undefined ? null : <HeldReason id={reasonId} reason={held} />}
@@ -369,21 +368,54 @@ function ToolbarAction({
         type="button"
         variant="outline"
         size="sm"
-        disabled={held === undefined && reason !== undefined}
+        disabled={disabled}
         title={reason ?? action.label}
         onClick={binding.onSelect}
         {...(held === undefined ? {} : reviewHeldProps(reasonId, onOpenReady))}
         className={cn(held !== undefined && REVIEW_HELD_CLASS)}
         data-action={action.id}
       >
-        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-        {held === undefined ? null : (
-          <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-        )}
+        <PressMarks pending={pending} held={held} />
         {/* Its words at every width: the button draws no other icon, so a
             label that collapsed would leave it empty. */}
         {action.label}
       </Button>
+    </>
+  );
+}
+
+/**
+ * What holds a press, decided once for every press that may be held: the
+ * workflow's reason where it holds a Publish, any reason at all, and whether
+ * the control is disabled. A Publish the workflow holds stays focusable
+ * (`reviewHeldProps`); any other reason disables the control.
+ */
+function pressHold(
+  action: EditorDocumentAction,
+  binding: ActionBinding
+): { held: string | undefined; reason: string | undefined; disabled: boolean } {
+  const held = reviewHoldOf(action);
+  const reason = reasonFor(action, binding);
+  return { held, reason, disabled: held === undefined && reason !== undefined };
+}
+
+/**
+ * The marks before a press's label: a spinner while an action runs, and a
+ * lock where the workflow holds it, so the hold never rests on colour alone.
+ */
+function PressMarks({
+  pending,
+  held,
+}: {
+  pending: boolean;
+  held: string | undefined;
+}): JSX.Element {
+  return (
+    <>
+      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+      {held === undefined ? null : (
+        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+      )}
     </>
   );
 }
@@ -559,21 +591,14 @@ function PrimaryAction({
   /** What a Publish the workflow holds opens when pressed, where anything. */
   onOpenReady?: (() => void) | undefined;
 }) {
-  const reason = reasonFor(primary.action, primary.binding);
-  const held = reviewHoldOf(primary.action);
+  const { held, reason, disabled } = pressHold(primary.action, primary.binding);
   const reasonId = useId();
   const joined = options.length + dangerOptions.length > 0;
   const press = (
     <Button
       size="sm"
-      {...(held !== undefined
-        ? reviewHeldProps(reasonId, onOpenReady)
-        : primary.binding.submitForm === undefined
-          ? { type: "button" as const, onClick: primary.binding.onSelect }
-          : { type: "submit" as const, form: primary.binding.submitForm })}
-      // A Publish the workflow holds stays focusable (`reviewHeldProps`);
-      // any other reason disables the control.
-      disabled={held === undefined && reason !== undefined}
+      {...primaryPressProps(primary, held, reasonId, onOpenReady)}
+      disabled={disabled}
       /*
         The reason is the title when there is one, so a control an author
         cannot use says why. Three separate permissions and several document
@@ -588,16 +613,67 @@ function PrimaryAction({
         held !== undefined && REVIEW_HELD_CLASS
       )}
     >
-      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-      {held === undefined ? null : (
-        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-      )}
+      <PressMarks pending={pending} held={held} />
       {primary.action.label}
     </Button>
   );
-  const drawn = !joined ? (
-    press
-  ) : (
+  // A held Publish's reason sits before the split, never inside it, so the
+  // press and its arrow stay one control; its slot is kept either way, so
+  // the press is the same element whether held or not.
+  return (
+    <>
+      {held === undefined ? null : <HeldReason id={reasonId} reason={held} />}
+      {joined ? (
+        <PublishSplit
+          press={press}
+          options={options}
+          dangerOptions={dangerOptions}
+          optionsLabel={optionsLabel}
+          menuClassName={menuClassName}
+        />
+      ) : (
+        press
+      )}
+    </>
+  );
+}
+
+/**
+ * How the leading press fires: a Publish the workflow holds opens "Choose
+ * what to publish…" (`reviewHeldProps`); an action that submits a form, such
+ * as Save on a collection with no status column, submits it natively; any
+ * other calls its binding.
+ */
+function primaryPressProps(
+  primary: Bound,
+  held: string | undefined,
+  reasonId: string,
+  onOpenReady: (() => void) | undefined
+) {
+  if (held !== undefined) return reviewHeldProps(reasonId, onOpenReady);
+  return primary.binding.submitForm === undefined
+    ? { type: "button" as const, onClick: primary.binding.onSelect }
+    : { type: "submit" as const, form: primary.binding.submitForm };
+}
+
+/**
+ * The leading press joined to the arrow that opens the other ways to
+ * publish, as one control.
+ */
+function PublishSplit({
+  press,
+  options,
+  dangerOptions,
+  optionsLabel,
+  menuClassName,
+}: {
+  press: JSX.Element;
+  options: Bound[];
+  dangerOptions: Bound[];
+  optionsLabel: string;
+  menuClassName: string | undefined;
+}): JSX.Element {
+  return (
     <div className="flex items-center" data-publish-split="">
       {press}
       <ActionOptionsMenu
@@ -607,15 +683,6 @@ function PrimaryAction({
         {...(menuClassName === undefined ? {} : { menuClassName })}
       />
     </div>
-  );
-  // A held Publish's reason sits before the split, never inside it, so the
-  // press and its arrow stay one control; its slot is kept either way, so
-  // the press is the same element whether held or not.
-  return (
-    <>
-      {held === undefined ? null : <HeldReason id={reasonId} reason={held} />}
-      {drawn}
-    </>
   );
 }
 
