@@ -354,7 +354,7 @@ describe("a detail read from one of the entry's own dates", () => {
     });
     expect(published.getAttribute("aria-invalid")).toBe("false");
     expect(screen.queryByText("That field is gone: choose another")).toBeNull();
-    expect(screen.getByText("from each entry's Created")).toBeTruthy();
+    expect(screen.getByText("from each entry's created date")).toBeTruthy();
 
     expect(await optionsOf("Field that holds date published")).toEqual([
       "Not chosen yet",

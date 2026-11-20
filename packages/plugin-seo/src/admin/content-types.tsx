@@ -274,7 +274,13 @@ function detailHelp(
   if (source !== undefined && !holdsField(type, source)) {
     return "That field is gone: choose another";
   }
-  if (shown !== undefined) return `from each entry's ${shown.label}`;
+  if (shown !== undefined) {
+    // An entry's own date is named as a date: "from each entry's created
+    // date", not by the bare label the picker shows.
+    return shown.kind === "built-in"
+      ? `from each entry's ${shown.label.toLowerCase()} date`
+      : `from each entry's ${shown.label}`;
+  }
   const fromPage = FROM_THE_PAGE[detail];
   return fromPage === undefined
     ? needed
