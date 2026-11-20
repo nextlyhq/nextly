@@ -5,6 +5,8 @@
  *
  * @module domains/i18n/older-codes
  */
+import { createHash } from "node:crypto";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
@@ -220,7 +222,22 @@ export async function storedOlderSpellings(
  */
 export const OLDER_CODES_CHECKED_KEY = "i18n.olderCodesChecked";
 
-/** The value `OLDER_CODES_CHECKED_KEY` records for `codes`: one per configured language set. */
+/**
+ * The columns the scan read when a database recorded it, as a short fingerprint of `CODE_COLUMNS`.
+ * A database whose record was written over fewer columns is scanned again once, so a spelling only
+ * the newer columns hold is found; derived from the list, a column added to it does the same.
+ */
+const SCANNED_COLUMNS = createHash("sha256")
+  .update(
+    CODE_COLUMNS.map(({ table, column }) => `${table}.${column}`).join(",")
+  )
+  .digest("hex")
+  .slice(0, 12);
+
+/**
+ * The value `OLDER_CODES_CHECKED_KEY` records for `codes`: one per configured language set and
+ * set of columns scanned (`SCANNED_COLUMNS`).
+ */
 export function olderCodesCheckedFor(codes: readonly string[]): string {
-  return [...new Set(codes)].sort().join(",");
+  return `${SCANNED_COLUMNS}:${[...new Set(codes)].sort().join(",")}`;
 }

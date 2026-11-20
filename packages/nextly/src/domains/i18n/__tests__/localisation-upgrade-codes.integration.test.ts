@@ -25,6 +25,7 @@ import {
   type VersionRow,
 } from "../../versions/versions-repository";
 import { normalizeLocalization } from "../config/normalize";
+import { MetaService } from "../../meta/services/meta-service";
 import { OLDER_CODES_CHECKED_KEY } from "../older-codes";
 import { ensureI18nArchive } from "../migration/ensure-archive";
 import { _resetPerLanguageStorage } from "../per-language-storage";
@@ -439,6 +440,38 @@ describeEachDialect(
           siteWithLanguages(["en", "pt-BR", "fr"], "en"),
           warningsKept().logger
         )
+      ).rejects.toThrow(/pt_BR[\s\S]*nextly migrate/);
+    });
+
+    // A database started before the scan read every column a code is stored in recorded its scan
+    // over the translation tables alone, in the languages and nothing else. The start reads that
+    // record as a scan of fewer columns and scans once more, so a spelling only a newer column
+    // holds is found. Broken, the earlier record is taken as this scan's and the start goes on.
+    it("scans again a database whose record was written over fewer columns", async () => {
+      database = await openUpgradeDatabase(dialect);
+      await bootSite(database, "upgraded", STANDARD, warningsKept().logger);
+      await ensureI18nArchive(database.adapter as never, dialect);
+      await database.adapter.insert(
+        "nextly_i18n_archive",
+        {
+          collection: ARTICLES,
+          entityKind: "collection",
+          entryId: "e1",
+          locale: "pt_BR",
+          field: "title",
+          value: "olá",
+          archivedAt: new Date("2026-08-01T10:00:00Z"),
+        },
+        { returning: [] }
+      );
+      // The record as the earlier scan wrote it: the configured languages alone.
+      await new MetaService(
+        database.adapter as never,
+        warningsKept().logger as never
+      ).set(OLDER_CODES_CHECKED_KEY, "en,pt-BR");
+
+      await expect(
+        bootSite(database, "upgraded", STANDARD, warningsKept().logger)
       ).rejects.toThrow(/pt_BR[\s\S]*nextly migrate/);
     });
 
