@@ -84,6 +84,7 @@ import {
 } from "./pending-entities";
 import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
+import { recordRetiredDocumentEvents } from "./retired-documents";
 import { endsTheRun, reachStopPoint } from "./stop-points";
 
 /**
@@ -375,6 +376,9 @@ async function markApplied(
 export async function reconcileMigrationMetadata(
   deps: ReconcileMetadataDeps
 ): Promise<ReconcileMetadataResult> {
+  // Every file of the run is recorded applied, a file without a paired snapshot included
+  // (`stop-points.ts`).
+  await reachStopPoint("files recorded");
   const { adapter, dialect } = deps;
 
   /*
@@ -488,6 +492,7 @@ export async function reconcileMigrationMetadata(
   }
   // The registry write has committed (`stop-points.ts`).
   await reachStopPoint("registry written");
+  await deletionEventsOfRetiredDocuments(deps);
   const leftovers = await leftoversOfDroppedEntities(deps);
   return {
     ...swept.result,
@@ -562,6 +567,31 @@ async function holdersInPlace(deps: ReconcileMetadataDeps): Promise<boolean> {
  * them. A pass that cannot read the applied records removes nothing, and says
  * why.
  */
+/**
+ * The deletion events the documents of entities an applied migration dropped still owe
+ * (`retired-documents.ts`), recorded once the registry write has committed, every run, so a run
+ * stopped part-way is finished by the next. A failure costs only this step, which the next run
+ * tries again; a lost lock or a test's stop ends the run.
+ */
+async function deletionEventsOfRetiredDocuments(
+  deps: ReconcileMetadataDeps
+): Promise<void> {
+  if (registryWriteOpen()) return;
+  try {
+    const events = await recordRetiredDocumentEvents(deps.adapter);
+    for (const name of events.recorded) {
+      deps.logger.info(`Recorded the deletion of every document of ${name}.`);
+    }
+  } catch (error) {
+    if (endsTheRun(error)) throw error;
+    deps.logger.warn(
+      `Could not record the deletion of a retired entity's documents: ${
+        error instanceof Error ? error.message : String(error)
+      }. The next \`nextly migrate\` tries again.`
+    );
+  }
+}
+
 async function leftoversOfDroppedEntities(
   deps: ReconcileMetadataDeps
 ): Promise<{ removed: string[]; left: string[] }> {
