@@ -77,4 +77,41 @@ describe("whether a chip shows blank", () => {
     expect(chipShowsBlank({ variable: "item.title" }, data)).toBe(true);
     expect(chipShowsBlank({ variable: "item" }, { item: "x" })).toBe(false);
   });
+
+  it("marks every chip inside an empty list, not only the item's", () => {
+    // `customer.firstName` has a value, but no block of the list ever runs.
+    expect(
+      chipShowsBlank({ variable: "customer.firstName" }, data, "order.none")
+    ).toBe(true);
+    expect(
+      chipShowsBlank({ variable: "customer.firstName" }, data, "order.lines")
+    ).toBe(false);
+  });
+
+  it("shows an address chip only with a complete address, value or fallback", () => {
+    const images = { logo: "logo.png", cdn: "https://cdn.example/l.png" };
+    expect(
+      chipShowsBlank({ variable: "logo" }, images, undefined, "image")
+    ).toBe(true);
+    expect(
+      chipShowsBlank({ variable: "cdn" }, images, undefined, "image")
+    ).toBe(false);
+    // A fallback that is no address does not stand in for one.
+    expect(
+      chipShowsBlank(
+        { variable: "logo", fallback: "a logo" },
+        images,
+        undefined,
+        "image"
+      )
+    ).toBe(true);
+    expect(
+      chipShowsBlank(
+        { variable: "logo", fallback: "https://cdn.example/f.png" },
+        images,
+        undefined,
+        "image"
+      )
+    ).toBe(false);
+  });
 });

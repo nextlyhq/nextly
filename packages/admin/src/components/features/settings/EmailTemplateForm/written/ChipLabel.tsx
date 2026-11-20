@@ -19,8 +19,14 @@ import { ChipFallbackDialog } from "./ChipFallbackDialog";
 export interface ChipView {
   /** A variable path's friendly name. */
   name: ChipNamer;
-  /** Whether a chip shows nothing with the test data. */
-  blank: (chip: { variable: string; fallback?: string }) => boolean;
+  /**
+   * Whether a chip shows nothing with the test data; `address` is set when
+   * it stands for an address, which shows only when complete.
+   */
+  blank: (
+    chip: { variable: string; fallback?: string },
+    address?: AddressKind
+  ) => boolean;
   /** The variable paths offered here, such as for a link's address. */
   paths: readonly string[];
 }
@@ -63,7 +69,7 @@ export function ChipButton({
   const view = useContext(ChipViewContext);
   const [open, setOpen] = useState(false);
   const name = view.name(variable);
-  const blank = view.blank({ variable, fallback });
+  const blank = view.blank({ variable, fallback }, address);
   return (
     <>
       <button
@@ -84,7 +90,7 @@ export function ChipButton({
         onOpenChange={setOpen}
         name={name}
         fallback={fallback}
-        hasTestValue={!view.blank({ variable })}
+        hasTestValue={!view.blank({ variable }, address)}
         address={address}
         onSave={onFallback}
       />

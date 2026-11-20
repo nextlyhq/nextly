@@ -1,13 +1,17 @@
 /**
  * Whether a chip would show blank with the workbench's test data: no value
  * and no fallback. As the renderer reads a chip, an absent value, null and an
- * empty string are no value, while false and 0 are values and show.
+ * empty string are no value, while false and 0 are values and show. A chip
+ * that stands for an address shows only a complete one: anything else the
+ * renderer drops, as it drops an empty value.
  *
- * Inside a list, `item` is each of the list's items in turn, so a chip there
- * shows blank when any item lacks the value, or when there are no items.
+ * Inside a list, nothing shows when the list has no items, since none of its
+ * blocks run; and `item` is each of the list's items in turn, so a chip of
+ * its fields shows blank when any item lacks the value.
  *
  * @module components/features/settings/EmailTemplateForm/written/chip-values
  */
+import { addressProblem, type AddressKind } from "./addresses";
 
 /** A chip as the check needs it: its variable path and its fallback. */
 interface ChipValue {
@@ -25,30 +29,37 @@ function valueAt(data: unknown, path: readonly string[]): unknown {
   return at;
 }
 
-/** Whether a value renders as nothing. */
-function isBlank(value: unknown): boolean {
-  return value === undefined || value === null || value === "";
+/** Whether `value` shows: anything but empty, or for an address a complete one. */
+function shows(value: unknown, address: AddressKind | undefined): boolean {
+  if (address) {
+    return typeof value === "string" && addressProblem(value, address) === null;
+  }
+  return value !== undefined && value !== null && value !== "";
 }
 
 /**
  * Whether `chip` shows nothing with `data`. `list` is the path of the list the
- * chip sits in, if any, whose items `item` stands for.
+ * chip sits in, if any, whose items `item` stands for; `address` is set when
+ * the chip stands for an address.
  */
 export function chipShowsBlank(
   chip: ChipValue,
   data: unknown,
-  list?: string
+  list?: string,
+  address?: AddressKind
 ): boolean {
-  const [head, ...rest] = chip.variable.split(".");
-  const inItem = list !== undefined && head === "item";
-  const items = inItem ? valueAt(data, list.split(".")) : undefined;
+  const items = list === undefined ? undefined : valueAt(data, list.split("."));
   // A list with no items never reaches its blocks: nothing there shows,
-  // whatever fallback a chip has.
-  if (inItem && (!Array.isArray(items) || items.length === 0)) return true;
-  // An empty fallback is no fallback: it shows nothing either.
-  if (chip.fallback !== undefined && chip.fallback !== "") return false;
-  if (Array.isArray(items)) {
-    return items.some(item => isBlank(valueAt(item, rest)));
+  // whatever value or fallback a chip has.
+  if (list !== undefined && (!Array.isArray(items) || items.length === 0)) {
+    return true;
   }
-  return isBlank(valueAt(data, [head, ...rest]));
+  if (chip.fallback !== undefined && shows(chip.fallback, address)) {
+    return false;
+  }
+  const [head, ...rest] = chip.variable.split(".");
+  if (Array.isArray(items) && head === "item") {
+    return items.some(item => !shows(valueAt(item, rest), address));
+  }
+  return !shows(valueAt(data, [head, ...rest]), address);
 }

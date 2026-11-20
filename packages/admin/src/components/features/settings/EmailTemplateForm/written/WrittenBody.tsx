@@ -130,8 +130,9 @@ function chipView(edit: Edit, list?: string): ChipView {
   return {
     name: chipNamer(edit.variables, list),
     // Unknown test data (invalid sample JSON) marks nothing.
-    blank: chip =>
-      edit.sampleData !== null && chipShowsBlank(chip, edit.sampleData, list),
+    blank: (chip, address) =>
+      edit.sampleData !== null &&
+      chipShowsBlank(chip, edit.sampleData, list, address),
     paths: variablePaths(edit.variables, list),
   };
 }
