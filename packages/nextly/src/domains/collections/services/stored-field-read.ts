@@ -1337,7 +1337,7 @@ async function pendingWorkingDrafts(
     { scopeKind: entity.kind, scopeSlug: entity.slug },
     ids,
     provisional.draftLocale,
-    await partKeysOf(fields)
+    await partKeysOf(fields, { executor: connection.executor })
   );
   if (found.size === 0) return found;
 

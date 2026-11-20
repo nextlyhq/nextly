@@ -4476,7 +4476,9 @@ export class SingleMutationService extends BaseService {
               ? holdsPendingChange(promoteParts)
                 ? {
                     snapshot: combinedDraft({}, promoteParts, {
-                      keys: await partKeysOf(fieldConfigs),
+                      keys: await partKeysOf(fieldConfigs, {
+                        executor: tx.getDrizzle(),
+                      }),
                       // Part drafts are read only for a language's slot.
                       live:
                         typeof singleDraftLocale === "string"
@@ -5572,7 +5574,9 @@ export class SingleMutationService extends BaseService {
                 : undefined;
             // Which part each key belongs to, read once for the document the
             // drafts describe and for how this save is split back into them.
-            const heldKeys = await partKeysOf(fieldConfigs);
+            const heldKeys = await partKeysOf(fieldConfigs, {
+              executor: tx.getDrizzle(),
+            });
             const existingDraft = singleParts
               ? holdsPendingChange(singleParts)
                 ? await (async () => {
@@ -6254,6 +6258,7 @@ export class SingleMutationService extends BaseService {
                 ]),
                 keys: await partKeysOf(fieldConfigs, {
                   translated: Boolean(companion),
+                  executor: tx.getDrizzle(),
                 }),
                 // A structured field's structure and text are judged apart:
                 // the Single as read before the write, and as written.

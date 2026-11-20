@@ -3013,7 +3013,9 @@ export class SinglePublishAllService extends BaseService {
     const { parts } = plan;
     const structure: PendingStructure | null = valuesOn
       ? {
-          keys: await partKeysOf(plan.fieldConfigs),
+          keys: await partKeysOf(plan.fieldConfigs, {
+            executor: valuesOn.getDrizzle(),
+          }),
           liveIn: locale =>
             withLiveStructures(
               valuesOn,

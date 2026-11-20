@@ -124,6 +124,11 @@ export async function partKeysOf(
     translated?: boolean;
     /** Each component's fields, by slug; the running site's registry when left out. */
     components?: ComponentFieldsOf;
+    /**
+     * The caller's transaction handle (`tx.getDrizzle()`), for a caller holding one: the registry
+     * is read on it, never on a second connection that cannot see its writes.
+     */
+    executor?: unknown;
   } = {}
 ): Promise<PartKeys> {
   const reached: readonly unknown[] = addressableFields(fields);
@@ -135,7 +140,8 @@ export async function partKeysOf(
   const componentsOf =
     options.translated === false || componentFields.length === 0
       ? undefined
-      : (options.components ?? (await registryComponents(componentFields)));
+      : (options.components ??
+        (await registryComponents(componentFields, options.executor)));
   const language = await perLanguageFieldNames(
     named,
     new Set(
@@ -189,12 +195,14 @@ export async function partKeysOf(
  * as in a unit run with no site: each component then stays whole in the language part.
  */
 async function registryComponents(
-  fields: readonly PartField[]
+  fields: readonly PartField[],
+  executor: unknown
 ): Promise<ComponentFieldsOf | undefined> {
   if (!isServicesRegistered()) return undefined;
   const { resolveComponentSchemas } = await import("./restore-version");
   const schemas = await resolveComponentSchemas(
-    fields as Parameters<typeof resolveComponentSchemas>[0]
+    fields as Parameters<typeof resolveComponentSchemas>[0],
+    executor
   );
   return slug => {
     const schema = schemas.get(slug);

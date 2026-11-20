@@ -10468,7 +10468,7 @@ export class CollectionMutationService extends BaseService {
     }
   ): Promise<PendingStructure> {
     return {
-      keys: await partKeysOf(args.fields),
+      keys: await partKeysOf(args.fields, { executor: tx.getDrizzle() }),
       liveIn: async locale =>
         (
           await this.languageDocumentsOnTx(tx, { ...args, locales: [locale] })
@@ -16124,7 +16124,7 @@ export class CollectionMutationService extends BaseService {
       : undefined;
     // Which part each key belongs to, read once for the document the drafts
     // describe and for how this save is split back into them.
-    const keys = await partKeysOf(fields);
+    const keys = await partKeysOf(fields, { executor: tx.getDrizzle() });
     const existingDraft = parts
       ? holdsPendingChange(parts)
         ? await (async () => {
@@ -18571,7 +18571,9 @@ export class CollectionMutationService extends BaseService {
             ? holdsPendingChange(promoteParts)
               ? {
                   snapshot: combinedDraft({}, promoteParts, {
-                    keys: await partKeysOf(fields),
+                    keys: await partKeysOf(fields, {
+                      executor: tx.getDrizzle(),
+                    }),
                     live: previousDocument ?? {},
                   }),
                 }
@@ -19223,6 +19225,7 @@ export class CollectionMutationService extends BaseService {
                   // a language's.
                   keys: await partKeysOf(fields, {
                     translated: Boolean(localizedUpdate),
+                    executor: tx.getDrizzle(),
                   }),
                   // A structured field's structure and text are judged apart.
                   values: {
@@ -24494,6 +24497,7 @@ export class CollectionMutationService extends BaseService {
         // fields on the shared row; its components alone are a language's.
         const updateKeys = await partKeysOf(fields, {
           translated: Boolean(localizedUpdate),
+          executor: tx.getDrizzle(),
         });
         const versionNo = await this.captureTxVersion(tx, {
           onlyIfChanged: true,
