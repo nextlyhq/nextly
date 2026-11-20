@@ -113,6 +113,39 @@ function guardedDrop(
 }
 
 /**
+ * The indexes other than Nextly's own that `live` says hold the column `op` stops holding unique,
+ * each one a statement can drop by name. One with no name is the primary key, or SQLite's index
+ * for an inline UNIQUE, which no statement drops. One whose name holds the dialect's quote is a
+ * valid name no statement here can spell: said to `warn`, for the person to drop by hand, rather
+ * than refused part-way through writing the file.
+ */
+function otherUniqueIndexes(
+  op: DropIndexOp,
+  live: ReadonlyMap<string, readonly (string | null)[]>,
+  dialect: SupportedDialect,
+  warn: (message: string) => void
+): LeftoverUniqueIndex[] {
+  const column = op.index.columns[0];
+  const others: LeftoverUniqueIndex[] = [];
+  for (const name of live.get(column) ?? []) {
+    if (name === null || isOwn(name, op.index.name, dialect)) continue;
+    if (
+      !canQuoteIdent(name, dialect) ||
+      !canQuoteIdent(op.tableName, dialect)
+    ) {
+      warn(
+        `${op.tableName} holds ${column} unique under the index ${name} as well, a name ` +
+          `this migration cannot write. Drop that index by hand where it stands, or ${column} ` +
+          `stays unique there.`
+      );
+      continue;
+    }
+    others.push({ table: op.tableName, column, index: name });
+  }
+  return others;
+}
+
+/**
  * The file's statements that drop each older unique index left holding a column whose field stops
  * being unique, and those indexes, for the run to name: the file may drop one the user made. A
  * table that cannot be read is said to `warn`, with what to drop by hand if there is such an index.
@@ -147,24 +180,11 @@ export async function leftoverUniqueDrops(args: {
       );
       continue;
     }
-    for (const name of live.get(column) ?? []) {
-      // No name: the primary key, or SQLite's index for an inline UNIQUE, which no statement drops.
-      if (name === null || isOwn(name, op.index.name, args.dialect)) continue;
-      // A name holding the dialect's quote is a valid name no statement here can spell: said, for
-      // the person to drop by hand, rather than refused part-way through writing the file.
-      if (
-        !canQuoteIdent(name, args.dialect) ||
-        !canQuoteIdent(op.tableName, args.dialect)
-      ) {
-        args.warn(
-          `${op.tableName} holds ${column} unique under the index ${name} as well, a name ` +
-            `this migration cannot write. Drop that index by hand where it stands, or ${column} ` +
-            `stays unique there.`
-        );
-        continue;
-      }
-      statements.push(...guardedDrop(args.dialect, op.tableName, column, name));
-      dropped.push({ table: op.tableName, column, index: name });
+    for (const index of otherUniqueIndexes(op, live, args.dialect, args.warn)) {
+      statements.push(
+        ...guardedDrop(args.dialect, index.table, index.column, index.index)
+      );
+      dropped.push(index);
     }
   }
   return { statements, dropped };
