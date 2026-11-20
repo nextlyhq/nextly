@@ -104,7 +104,7 @@ import {
   schemaDraftSplit,
 } from "../../domains/versions/draft-split-eligibility";
 import { resolveBuilderWebhooks } from "../../domains/webhooks/builder-webhooks";
-import { attachedWorkflowSummary } from "../../domains/workflows/registry";
+import { shownWorkflowSummary } from "../../domains/workflows/stage-presentation";
 import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
@@ -1277,7 +1277,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // knows whether a review state is coming before it reads one: one
           // with none publishes without waiting. `null` where none is
           // attached; read by signed-in callers only, as the route is.
-          workflow: attachedWorkflowSummary(
+          workflow: await shownWorkflowSummary(
             "single",
             String((single as { slug?: string }).slug ?? "")
           ),
