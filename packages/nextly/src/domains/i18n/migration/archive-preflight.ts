@@ -176,6 +176,12 @@ export async function archiveFieldsLeavingTranslation(args: {
    * column, so that refusal already asks about each one the change takes away.
    */
   mainDropsConfirmed?: boolean;
+  /**
+   * Set to judge the change and write nothing: every refusal below is asked, and the archive is
+   * not written. A save that asks other questions between its judgements and its first write (a
+   * schema dialog's, `refuseUnansweredDialogQuestions`) judges first this way, and archives after.
+   */
+  judgeOnly?: boolean;
 }): Promise<void> {
   // The companion's columns, read at most once whichever check below asks first.
   let companionRead: Promise<readonly ColumnSpec[]> | undefined;
@@ -317,7 +323,7 @@ export async function archiveFieldsLeavingTranslation(args: {
       },
     });
   }
-  if (leaving.size === 0) return;
+  if (leaving.size === 0 || args.judgeOnly === true) return;
 
   await writeArchiveFirst(
     args.adapter,

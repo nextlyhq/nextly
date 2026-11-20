@@ -27,7 +27,6 @@ import {
   type RemovedCount,
   UNCOUNTED,
 } from "../builder-save/deletion-counts";
-import { usesJunctionTable } from "../field-rules";
 import type { PipelinePreviewResult } from "../pipeline/preview";
 import {
   fieldsStoredOnRow,
@@ -35,10 +34,8 @@ import {
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import { computeFieldDiff } from "../services/field-diff";
-import {
-  relationshipTargetSlug,
-  sameRelationTarget,
-} from "../services/relationship-key-target";
+import { linkMoveOf, type LinkMove } from "../services/field-storage-moves";
+import { relationshipTargetSlug } from "../services/relationship-key-target";
 import type {
   AddedField,
   ChangedField,
@@ -357,11 +354,8 @@ interface LinksDropped {
   count: RemovedCount;
   before: FieldDefinition;
   after: FieldDefinition;
-  /**
-   * Out of its link table (`leaving`); out of its column into a new, empty one (`joining`); or
-   * kept a many-to-many but pointed elsewhere, its table dropped for an empty one (`retargeted`).
-   */
-  direction: "leaving" | "joining" | "retargeted";
+  /** Which way its links move (`linkMoveOf`). */
+  direction: LinkMove;
 }
 
 /**
@@ -402,23 +396,6 @@ async function countLinksDropped(
     dropped.set(before.name, { count, before, after, direction });
   }
   return dropped;
-}
-
-/**
- * Which way a kept relationship's links move, if they do: into a link table, out of one, or to a
- * new one for another target. Kept a many-to-many and pointed the same way, its link table is
- * carried (`sameRelationTarget`, the save's own pairing), so no link moves.
- * The dialog's file road asks the same of a save before it runs (`refuseUnansweredDialogQuestions`).
- */
-export function linkMoveOf(
-  before: FieldDefinition,
-  after: FieldDefinition
-): LinksDropped["direction"] | null {
-  const hadTable = usesJunctionTable(before);
-  const hasTable = usesJunctionTable(after);
-  if (!hadTable) return hasTable ? "joining" : null;
-  if (!hasTable) return "leaving";
-  return sameRelationTarget(before, after) ? null : "retargeted";
 }
 
 /** What a relationship is called on the side of the move that keeps no link table. */

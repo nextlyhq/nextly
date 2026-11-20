@@ -170,9 +170,6 @@ function PartChanges({
         <h3 className="text-xs font-medium text-muted-foreground">{title}</h3>
       )}
       <p className="text-xs text-muted-foreground">{partPairWords(read)}</p>
-      {read.note === undefined ? null : (
-        <p className="text-xs text-muted-foreground">{read.note}</p>
-      )}
       {open && pair?.kind === "pair" ? (
         <VersionDiffView
           scope={scope}
@@ -180,6 +177,8 @@ function PartChanges({
           to={pair.to}
           // A pair the server resolved already holds its comparison.
           {...(pair.seededBy === undefined ? {} : { seededBy: pair.seededBy })}
+          // The shared part's pair compares the shared fields alone.
+          {...(pair.part === undefined ? {} : { part: pair.part })}
         />
       ) : null}
     </div>

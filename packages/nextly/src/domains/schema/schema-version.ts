@@ -433,8 +433,14 @@ export async function writeRegistryRows<T>(
     });
     // Committed: this process's next request reads the stored version at
     // once, so it serves the change and says so, rather than after the
-    // interval another copy's change waits.
-    bumpSchemaVersion();
+    // interval another copy's change waits. Where this joined a transaction
+    // still open, that waits for its commit (`afterCommit`), with the cached
+    // rows cleared again then: a read made before it would file the rows as
+    // they were under the version before.
+    await adapter.afterCommit(() => {
+      bumpSchemaVersion();
+      clearRegistryRowCache();
+    });
     return written;
   } finally {
     // A row read and cached inside the transaction may describe a write that
