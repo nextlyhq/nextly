@@ -1881,8 +1881,10 @@ describe.each(getConfiguredTestDialects())(
       });
 
       it("refuses a cursor it never gave, and a cursor beside a page number", async () => {
-        // The cursor is opaque: text that is not one this list gave is invalid input, never read
-        // as the list's start; nor is a page number past the first beside one.
+        // The cursor is opaque: text that is not a well-formed position is invalid input, never
+        // read as the list's start, and so is a well-formed one naming a time no review state can
+        // hold (past the end of 9999, where MySQL's datetime stops); nor is a page number past the
+        // first beside one.
         current = await bootSteps(dialect);
         await people();
         await person(app(), "sam", [
@@ -1909,6 +1911,11 @@ describe.each(getConfiguredTestDialects())(
           Buffer.from("not json").toString("base64url"),
           Buffer.from(JSON.stringify({ at: "soon", key: "k" })).toString(
             "base64url"
+          ),
+          ...[Date.UTC(10000, 0, 1), 8_640_000_000_000_000].map(at =>
+            Buffer.from(JSON.stringify({ at, key: "a".repeat(64) })).toString(
+              "base64url"
+            )
           ),
         ];
         for (const before of notGiven) {

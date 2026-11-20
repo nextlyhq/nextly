@@ -17,10 +17,17 @@ export interface WaitingPosition {
   partKey: string;
 }
 
+/**
+ * The latest entry time a cursor may name: the end of 9999, the last moment MySQL's `datetime` holds
+ * (PostgreSQL's `timestamptz` and SQLite's integer seconds hold more). A position past it could
+ * never have been handed out, and reading from it would ask a database for a time it can't store.
+ */
+const LATEST_ENTRY_MS = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+
 /** What a cursor carries, once decoded: the entry time in milliseconds, and the part's key. */
 const EncodedPosition = z
   .object({
-    at: z.number().int().min(0).max(8_640_000_000_000_000),
+    at: z.number().int().min(0).max(LATEST_ENTRY_MS),
     key: z.string().regex(/^[0-9a-f]{64}$/),
   })
   .strict();
@@ -50,8 +57,10 @@ export function encodeWaitingCursor(position: WaitingPosition): string {
 }
 
 /**
- * `before` as a request carries it: a cursor this list gave, read back into its position. Anything
- * else is refused as invalid input, never read as the list's start.
+ * `before` as a request carries it: an opaque position from `nextBefore`, read back. Text that is
+ * not a well-formed position, or names a time no review state can hold, is refused as invalid
+ * input, never read as the list's start. The token is not signed: a hand-made position only moves
+ * where the caller's own read starts, and every row it reaches is still checked for their access.
  *
  * @experimental
  */

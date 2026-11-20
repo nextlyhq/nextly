@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-The waiting list (`GET /admin/api/workflows/waiting`, `nextly.workflows.waiting`) asks whether its candidates' assignees may take a step in a few reads, however many distinct assignees there are, and the review-states table gains an index in the order the list reads it (`nextly_review_states_waiting_idx`), which `nextly migrate` and boot add to an existing database.
+The waiting list (`GET /admin/api/workflows/waiting`, `nextly.workflows.waiting`) asks whether its candidates' assignees may take a step in a few reads, however many distinct assignees there are, and the review-states table gains an index in the order the list reads it (`nextly_review_states_waiting_idx`), which `nextly migrate` and boot add to an existing database. The list also pages by cursor: every page with a next one carries `meta.nextBefore`, an opaque position, and passing it back as `before` reads on from there, reaching work behind any number of parts the caller can't see. `page` and `limit` work as before.
