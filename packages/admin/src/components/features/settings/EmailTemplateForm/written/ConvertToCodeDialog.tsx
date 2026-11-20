@@ -36,7 +36,14 @@ export function ConvertToCodeDialog({
   onConvert: () => void;
 }): JSX.Element {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      // Held open while converting: closed, the editor would take edits the
+      // conversion is about to replace.
+      onOpenChange={next => {
+        if (!isPending) onOpenChange(next);
+      }}
+    >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Convert to code?</DialogTitle>

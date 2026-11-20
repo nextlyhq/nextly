@@ -96,15 +96,8 @@ describe("whether a chip shows blank", () => {
     expect(
       chipShowsBlank({ variable: "cdn" }, images, undefined, "image")
     ).toBe(false);
-    // A fallback that is no address does not stand in for one.
-    expect(
-      chipShowsBlank(
-        { variable: "logo", fallback: "a logo" },
-        images,
-        undefined,
-        "image"
-      )
-    ).toBe(true);
+    // A fallback stands in only for an empty value: an incomplete address
+    // is passed on and dropped, whatever the fallback.
     expect(
       chipShowsBlank(
         { variable: "logo", fallback: "https://cdn.example/f.png" },
@@ -112,6 +105,23 @@ describe("whether a chip shows blank", () => {
         undefined,
         "image"
       )
+    ).toBe(true);
+    expect(
+      chipShowsBlank(
+        { variable: "missing", fallback: "https://cdn.example/f.png" },
+        images,
+        undefined,
+        "image"
+      )
     ).toBe(false);
+    // A fallback that is no address does not stand in for one.
+    expect(
+      chipShowsBlank(
+        { variable: "missing", fallback: "a logo" },
+        images,
+        undefined,
+        "image"
+      )
+    ).toBe(true);
   });
 });

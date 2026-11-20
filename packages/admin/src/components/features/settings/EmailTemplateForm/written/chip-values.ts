@@ -34,7 +34,26 @@ function shows(value: unknown, address: AddressKind | undefined): boolean {
   if (address) {
     return typeof value === "string" && addressProblem(value, address) === null;
   }
-  return value !== undefined && value !== null && value !== "";
+  return !isEmpty(value);
+}
+
+/** Whether a value is absent, null or empty: what a fallback stands in for. */
+function isEmpty(value: unknown): boolean {
+  return value === undefined || value === null || value === "";
+}
+
+/**
+ * Whether one value of `chip` shows nothing. Its fallback stands in only for
+ * an empty value: a value that is there but is no complete address is passed
+ * on as it is, and the renderer drops it, fallback or not.
+ */
+function valueShowsBlank(
+  value: unknown,
+  chip: ChipValue,
+  address: AddressKind | undefined
+): boolean {
+  if (!isEmpty(value)) return !shows(value, address);
+  return !(chip.fallback !== undefined && shows(chip.fallback, address));
 }
 
 /**
@@ -54,12 +73,11 @@ export function chipShowsBlank(
   if (list !== undefined && (!Array.isArray(items) || items.length === 0)) {
     return true;
   }
-  if (chip.fallback !== undefined && shows(chip.fallback, address)) {
-    return false;
-  }
   const [head, ...rest] = chip.variable.split(".");
   if (Array.isArray(items) && head === "item") {
-    return items.some(item => !shows(valueAt(item, rest), address));
+    return items.some(item =>
+      valueShowsBlank(valueAt(item, rest), chip, address)
+    );
   }
-  return !shows(valueAt(data, [head, ...rest]), address);
+  return valueShowsBlank(valueAt(data, [head, ...rest]), chip, address);
 }

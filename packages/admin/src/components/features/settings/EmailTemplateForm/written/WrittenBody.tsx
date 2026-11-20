@@ -578,15 +578,15 @@ function BlockCard({
         isDragging && "opacity-60"
       )}
     >
-      <div className="grid grid-cols-1 gap-2 @[40rem]:grid-cols-[1.375rem_1fr]">
+      <div className="grid grid-cols-1 gap-2 @[28rem]:grid-cols-[1.375rem_1fr]">
         {edit.readOnly ? (
-          <span className="hidden @[40rem]:block" />
+          <span className="hidden @[28rem]:block" />
         ) : (
           <button
             ref={setActivatorNodeRef}
             type="button"
             title="Drag to move"
-            className="hidden cursor-grab touch-none items-start justify-center pt-1 text-muted-foreground @[40rem]:flex"
+            className="hidden cursor-grab touch-none items-start justify-center pt-1 text-muted-foreground @[28rem]:flex"
             {...attributes}
             {...listeners}
             // Pointer and touch only: a keyboard moves a block with Move up and

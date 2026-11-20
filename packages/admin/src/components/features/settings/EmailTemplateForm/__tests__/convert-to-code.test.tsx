@@ -155,6 +155,37 @@ describe("the Convert to code dialog", () => {
     expect(button.disabled).toBe(true);
   });
 
+  it("stays open while converting, whatever asks it to close", async () => {
+    const onOpenChange = vi.fn();
+    render(
+      <ConvertToCodeDialog
+        open
+        onOpenChange={onOpenChange}
+        dirty={false}
+        isPending
+        onConvert={() => {}}
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("closes on Escape when not converting", () => {
+    const onOpenChange = vi.fn();
+    render(
+      <ConvertToCodeDialog
+        open
+        onOpenChange={onOpenChange}
+        dirty={false}
+        isPending={false}
+        onConvert={() => {}}
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it("shows the code it becomes when it is known, and says when it appears otherwise", () => {
     const { rerender } = render(
       <ConvertToCodeDialog {...props} dirty={false} onConvert={() => {}} />

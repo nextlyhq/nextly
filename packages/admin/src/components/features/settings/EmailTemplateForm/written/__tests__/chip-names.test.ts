@@ -157,9 +157,40 @@ describe("a chip's friendly name", () => {
     ];
     expect(variablePaths(variables)).toEqual(everywhere);
     expect(variablePaths(variables, "order.lines")).toEqual([
+      // The item itself, which a condition can ask about, then its fields.
+      "item",
       "item.title",
       "item.qty",
       ...everywhere,
+    ]);
+  });
+
+  it("offers an item's containers inside a list, its nested lists included", () => {
+    const shop: TemplateFormVariable[] = [
+      {
+        name: "lines",
+        description: "",
+        required: true,
+        presentation: {
+          type: "list",
+          fields: [
+            {
+              name: "product",
+              type: "object",
+              fields: [{ name: "title" }],
+            },
+            { name: "discounts", type: "list", fields: [{ name: "code" }] },
+          ],
+        },
+      },
+    ];
+    expect(variablePaths(shop, "lines").slice(0, 5)).toEqual([
+      "item",
+      "item.product",
+      "item.product.title",
+      // A condition can ask whether the item's own list has entries.
+      "item.discounts",
+      "lines",
     ]);
   });
 });

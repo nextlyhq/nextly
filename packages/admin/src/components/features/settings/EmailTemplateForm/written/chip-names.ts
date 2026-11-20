@@ -154,10 +154,11 @@ function fieldPaths(
 
 /**
  * Every path a value can be read from here, for a link's address or a
- * block's condition: inside a list its item's paths first, then each
- * declared variable and every field inside it. A list field is offered
- * itself (whether it has items), not what its items hold, which only a list
- * block repeating over it can reach.
+ * block's condition: inside a list the item and every field inside it first,
+ * then each declared variable and every field inside it. Containers are
+ * offered too, as a condition can ask whether one has a value. A list field
+ * is offered itself (whether it has items), not what its items hold, which
+ * only a list block repeating over it can reach.
  */
 export function variablePaths(
   variables: readonly TemplateFormVariable[],
@@ -172,8 +173,12 @@ export function variablePaths(
       if (field.type === "list" || !field.fields) return [path];
       return [path, ...inside(field.fields, path)];
     });
+  const item =
+    list === undefined
+      ? []
+      : ["item", ...inside(partAt(variables, list)?.fields ?? [], "item")];
   return [
-    ...(list === undefined ? [] : itemPaths(variables, list)),
+    ...item,
     ...variables
       .filter(variable => variable.name)
       .flatMap(variable => [
