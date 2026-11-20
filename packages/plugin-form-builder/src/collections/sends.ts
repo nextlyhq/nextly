@@ -75,15 +75,17 @@ export function submissionSendsCollection(): CollectionConfig {
       delete: nobody,
     },
     fields: [
+      // The ids the indexes below are on are keys, never translated, so their
+      // columns stay on the main table the indexes are built on.
       // The submission's id, as stored: the one deletions look up by.
-      text({ name: "submission", required: true }),
-      text({ name: "queuedId", required: true }),
+      text({ name: "submission", required: true, localized: false }),
+      text({ name: "queuedId", required: true, localized: false }),
       text({ name: "sendKey", required: true }),
       // Which form and notification sent it, by id, and the notification's
       // name as it was then, so a renamed or deleted one still reads.
       // Empty on a send recorded before these were kept.
-      text({ name: "form" }),
-      text({ name: "notification" }),
+      text({ name: "form", localized: false }),
+      text({ name: "notification", localized: false }),
       text({ name: "notificationName" }),
       // Where it stands: waiting, retrying, sending, sent, failed or
       // cancelled; and how many attempts it has taken.
@@ -135,7 +137,8 @@ export function submissionResendsCollection(): CollectionConfig {
       delete: nobody,
     },
     fields: [
-      text({ name: "submission", required: true }),
+      // A key the index below is on, never translated: kept on the main table.
+      text({ name: "submission", required: true, localized: false }),
       text({ name: "notification", required: true }),
       text({ name: "requestedBy" }),
       // The digests of the recipients ticked to send again, those left out

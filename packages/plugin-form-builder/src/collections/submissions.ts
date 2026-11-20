@@ -204,10 +204,12 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // never the value itself. Written by the plugin at the write seam, never
     // taken from a caller, and empty when the form allows several responses
     // or the submission is spam. Unique per form (see `indexes`), so two
-    // submissions with the same value cannot both be stored.
+    // submissions with the same value cannot both be stored. A key, never
+    // translated, so its column stays on the main table the index is on.
     text({
       name: "responseKey",
       label: "One-response key",
+      localized: false,
       admin: { hidden: true },
     }),
 
