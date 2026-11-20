@@ -11,7 +11,7 @@
  *
  * The statement now writes seconds. Files generated before it did keep the earlier statement, and
  * write milliseconds again each time one is applied to a database, so this is not a one-time
- * repair: it runs at the end of every `nextly migrate` on SQLite, and once at a start.
+ * repair: it runs in every `nextly migrate` on SQLite, once its files are applied, and once at a start.
  *
  * Written with Drizzle's `sql`, not through the registries' table objects: the value has to be
  * compared and divided as the integer the database holds, which a table's column would decode
