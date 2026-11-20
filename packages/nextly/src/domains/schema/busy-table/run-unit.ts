@@ -75,6 +75,22 @@ export interface BusyTableRun {
    * run. Absent, the unit runs as it always has.
    */
   readonly before?: (db: unknown) => Promise<void>;
+  /**
+   * Run after every try that ran `before`, on the same handle, however the try ends
+   * (`StatementTryBound.settled`): where `before` took something that belongs to the try's
+   * connection, such as a MySQL named lock, it is let go there. Absent, nothing runs.
+   */
+  readonly settled?: (db: unknown) => Promise<void>;
+}
+
+/** The run's `before` and `settled` that it gives, for each try's bound (`StatementTryBound`). */
+function tryHoldOf(
+  run: BusyTableRun
+): Pick<BusyTableRun, "before" | "settled"> {
+  return {
+    ...(run.before === undefined ? {} : { before: run.before }),
+    ...(run.settled === undefined ? {} : { settled: run.settled }),
+  };
 }
 
 /** Where `triggerTables` looks on PostgreSQL. */
@@ -507,7 +523,7 @@ export async function runUnitInTries(
               };
             },
             ...(run.passOver === undefined ? {} : { passOver: run.passOver }),
-            ...(run.before === undefined ? {} : { before: run.before }),
+            ...tryHoldOf(run),
           }
         );
         await stopWatches();

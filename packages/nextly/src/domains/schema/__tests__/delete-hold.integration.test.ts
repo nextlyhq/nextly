@@ -478,7 +478,7 @@ describe.each(getConfiguredTestDialects())(
     }, 60_000);
 
     // PostgreSQL holds the table against writes from the count to the commit. SQLite's suite runs
-    // in memory, on one connection, and MySQL holds no table across its schema statements.
+    // in memory, on one connection. MySQL holds the collection instead (below).
     it.runIf(dialect === "postgresql")(
       "keeps another session's write waiting from the count until the save has committed",
       async () => {
@@ -509,6 +509,93 @@ describe.each(getConfiguredTestDialects())(
         await writing;
         expect(landed).toBe(true);
         expect(await hasNoteColumn(t)).toBe(false);
+      },
+      60_000
+    );
+
+    // MySQL commits a schema statement as it runs, so no transaction holds the table from the
+    // count to the drop: the save holds the collection on the try's connection, as a collection
+    // delete does, and an entry write takes the collection's hold before it writes.
+    it.runIf(dialect === "mysql")(
+      "keeps an entry write waiting from the count until the save is over, then writes it to the new shape",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const { paused, release } = gated(afterCount);
+        const applying = apply(t, 3).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        const reached = await Promise.race([
+          paused.then(() => true),
+          applying.then(() => false),
+        ]);
+        expect(reached).toBe(true);
+
+        // An entry write sent between the count and the drop: it waits for the collection.
+        let landed = false;
+        const writing = t.nextly
+          .create({ collection: SLUG, data: { label: "during" } })
+          .then(() => {
+            landed = true;
+          });
+        await new Promise(resolve => setTimeout(resolve, 1_000));
+        expect(landed).toBe(false);
+
+        release();
+        expect(await applying).toBe("applied");
+        // Once the save let go, the write goes on, onto the table without the field.
+        await writing;
+        expect(landed).toBe(true);
+        expect(await hasNoteColumn(t)).toBe(false);
+      },
+      60_000
+    );
+
+    // An entry write holds the collection's registry row for share until it commits. One that
+    // read the row before the save held the collection, and has not committed, is counted: the
+    // save's hold waits for it.
+    it.runIf(dialect === "mysql")(
+      "counts an entry write that read the collection before the save held it",
+      async () => {
+        const t = await boot();
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        expect(await reviewed()).toBe(3);
+        clearRegistryRowCache();
+
+        // Another session's entry write, under way: the registry row read for share, a value
+        // written to the field, not yet committed.
+        let commit: () => void = () => undefined;
+        const committed = new Promise<void>(resolve => {
+          commit = resolve;
+        });
+        let wrote: () => void = () => undefined;
+        const hasWritten = new Promise<void>(resolve => {
+          wrote = resolve;
+        });
+        const writer = t.adapter.transaction(async tx => {
+          await tx.execute(
+            `SELECT ${q("id")} FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${SLUG}' FOR SHARE`
+          );
+          await tx.execute(
+            `INSERT INTO ${q(TABLE)} (${["id", "title", "slug", "label", "note", "created_at", "updated_at", "_revision"].map(q).join(", ")}) VALUES ('w1', 'w1', 'w1', 'w1', 'in flight', '2026-11-20 00:00:00', '2026-11-20 00:00:00', 1)`
+          );
+          wrote();
+          await committed;
+        });
+        await hasWritten;
+        const applying = apply(t, 3).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        // The write commits while the save waits for it.
+        await new Promise(resolve => setTimeout(resolve, 500));
+        commit();
+        await writer;
+
+        expect(await applying).toMatchObject(refusedWith(4));
+        expect(await hasNoteColumn(t)).toBe(true);
+        expect(await notesHeld(t)).toBe(4);
       },
       60_000
     );

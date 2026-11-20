@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, type SQL } from "drizzle-orm";
 
 import { resolveRelations } from "../../../database/resolve-relations";
 import { NextlyError } from "../../../errors";
@@ -753,7 +753,11 @@ export class DynamicCollectionRegistryService extends BaseService {
     }
     const named =
       this.dialect === "mysql"
-        ? await takeNamedCollectionLocks(tx, slugs)
+        ? await takeNamedCollectionLocks(
+            this.adapter,
+            query => tx.queryStatement(query),
+            slugs
+          )
         : { release: none };
     let rows: { slug: string; id: unknown }[];
     try {
@@ -914,42 +918,144 @@ export function namedCollectionLockNames(
 }
 
 /**
- * The named locks of `slugs` on MySQL ({@link namedCollectionLockNames}),
- * taken on `tx`'s connection, for the database the connection is in.
+ * The database each adapter's connections are in (`DATABASE()`), read once: every connection of
+ * one adapter's pool is opened on the database its configuration names, so one read answers for
+ * all of them, and a hold costs no statement for it after the first. A read that fails is not
+ * kept, and the next hold reads again.
+ */
+const databaseOfAdapter = new WeakMap<object, Promise<string | null>>();
+
+/**
+ * The rows a query answers on the connection a hold runs on: a transaction's
+ * (`TransactionContext.queryStatement`), or a migration try's (`rowsOnConnection`).
+ */
+type RowsOn = <T>(query: SQL) => Promise<T[]>;
+
+function databaseNameOf(
+  adapter: object,
+  rowsOn: RowsOn
+): Promise<string | null> {
+  const known = databaseOfAdapter.get(adapter);
+  if (known !== undefined) return known;
+  const reading = rowsOn<{ name: unknown }>(
+    sql`SELECT DATABASE() AS ${sql.identifier("name")}`
+  ).then(([row]) => (typeof row?.name === "string" ? row.name : null));
+  databaseOfAdapter.set(adapter, reading);
+  reading.catch(() => databaseOfAdapter.delete(adapter));
+  return reading;
+}
+
+/**
+ * One statement that takes `names` in order, each waiting up to the hold's wait, and stops at the
+ * first it does not get: it answers how many it holds, the first that many of `names`. MySQL's
+ * `IF` evaluates only the branch it returns, so no name after a refused one is asked for.
+ */
+function takeInOrder(names: readonly string[]): SQL {
+  let taken: SQL = sql`${names.length}`;
+  for (let index = names.length - 1; index >= 0; index--) {
+    taken = sql`IF(GET_LOCK(${names[index]}, ${NAMED_LOCK_WAIT_SECONDS}) = 1, ${taken}, ${index})`;
+  }
+  return taken;
+}
+
+/**
+ * The named locks of `slugs` on MySQL ({@link namedCollectionLockNames}), taken on the connection
+ * `rowsOn` runs on, for the database the connection is in, in one statement, and released in one, in
+ * the reverse of the order taken.
+ *
+ * Every way the take can end leaves none of them held on the connection: a name not got in time
+ * is refused as `COLLECTION_BEING_CHANGED`, with the names already got released first; a take
+ * that fails part way, whatever it got, releases every name, since `RELEASE_LOCK` of a name the
+ * connection does not hold changes nothing.
  */
 async function takeNamedCollectionLocks(
-  tx: TransactionContext,
+  adapter: object,
+  rowsOn: RowsOn,
   slugs: readonly string[]
 ): Promise<{ release: () => Promise<void> }> {
-  const [selected] = await tx.queryStatement<{ name: unknown }>(
-    sql`SELECT DATABASE() AS ${sql.identifier("name")}`
+  const names = namedCollectionLockNames(
+    await databaseNameOf(adapter, rowsOn),
+    slugs
   );
-  const database = typeof selected?.name === "string" ? selected.name : null;
-  const names = namedCollectionLockNames(database, slugs);
-  const taken: string[] = [];
-  // In the reverse of the order taken, each once.
+  // The names held: the first `held` of `names`.
+  let held = 0;
   const release = async (): Promise<void> => {
-    for (const name of taken.splice(0).reverse()) {
-      await tx.queryStatement(sql`SELECT RELEASE_LOCK(${name})`);
-    }
+    const releasing = names.slice(0, held).reverse();
+    held = 0;
+    if (releasing.length === 0) return;
+    await rowsOn(
+      sql`SELECT ${sql.join(
+        releasing.map(name => sql`RELEASE_LOCK(${name})`),
+        sql`, `
+      )}`
+    );
   };
+  let got: number;
   try {
-    for (const name of names) {
-      const [row] = await tx.queryStatement<{ locked: unknown }>(
-        sql`SELECT GET_LOCK(${name}, ${NAMED_LOCK_WAIT_SECONDS}) AS ${sql.identifier("locked")}`
-      );
-      if (Number(row?.locked) !== 1) {
-        throw NextlyError.conflict({
-          message:
-            "This collection is being changed elsewhere. Try again in a moment.",
-          logContext: { reason: "collection-named-lock-timeout", lock: name },
-        });
-      }
-      taken.push(name);
-    }
+    const [row] = await rowsOn<{ taken: unknown }>(
+      sql`SELECT ${takeInOrder(names)} AS ${sql.identifier("taken")}`
+    );
+    got = Number(row?.taken);
   } catch (error) {
+    held = names.length;
     await release();
     throw error;
   }
-  return { release };
+  if (got === names.length) {
+    held = got;
+    return { release };
+  }
+  // Refused part way: the names it got are released. A count that cannot be read says nothing of
+  // which it got, so every name is.
+  const counted = Number.isInteger(got) && got >= 0 && got < names.length;
+  held = counted ? got : names.length;
+  await release();
+  throw new NextlyError({
+    code: "COLLECTION_BEING_CHANGED",
+    publicMessage:
+      "This collection is being changed elsewhere. Try again in a moment.",
+    logContext: {
+      reason: "collection-named-lock-timeout",
+      ...(counted ? { lock: names[got] } : { taken: String(got) }),
+    },
+  });
+}
+
+/**
+ * The rows a query answers on `db`, the handle a migration try's `before` and `settled` are given
+ * on MySQL (a transaction's Drizzle handle, or the try's session), each answering `[rows, fields]`.
+ */
+function rowsOnConnection(db: unknown): RowsOn {
+  return async <T>(query: SQL): Promise<T[]> => {
+    const [rows] = (await (
+      db as { execute(query: SQL): Promise<unknown> }
+    ).execute(query)) as [T[]];
+    return rows;
+  };
+}
+
+/**
+ * A deleting save's hold of collection `slug` on MySQL, taken on the migration try's own connection
+ * (`db`, the handle the runner gives the try's `before`), as a collection delete holds it
+ * (`holdCollectionsIn` for `"update"`): its named locks first, then its registry row `FOR UPDATE`,
+ * which waits for every entry write that already read the row for share to commit. An entry write
+ * that starts after waits at the named locks until `release`, which runs on the same connection in
+ * the try's `settled`. A take that fails releases what it got before it throws.
+ */
+export async function holdCollectionOnConnection(
+  adapter: object,
+  db: unknown,
+  slug: string
+): Promise<{ release: () => Promise<void> }> {
+  const rowsOn = rowsOnConnection(db);
+  const named = await takeNamedCollectionLocks(adapter, rowsOn, [slug]);
+  try {
+    await rowsOn(
+      sql`SELECT ${sql.identifier("id")} FROM ${sql.identifier("dynamic_collections")} WHERE ${sql.identifier("slug")} = ${slug} FOR UPDATE`
+    );
+  } catch (error) {
+    await named.release();
+    throw error;
+  }
+  return named;
 }

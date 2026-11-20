@@ -8,8 +8,10 @@
  * only where every count still equals the confirmed one (`deletionHoldOf`). On PostgreSQL the
  * tables are locked against writes and left open to reads (`SHARE ROW EXCLUSIVE`); on SQLite the
  * file's transaction already holds the database's one write lock. On MySQL, whose schema
- * statements commit on their own, no transaction holds the count and the drop together: the count
- * is taken just before the statements, compared the same way, and other writes are not held. A
+ * statements commit on their own, no transaction holds the count and the drop together: the save
+ * holds the collection on the try's connection instead (its named locks and registry row, as a
+ * collection delete does), counts under that hold just before the statements, and lets it go once
+ * the try is over (`triedHoldOf` in the collection save), so entry writes wait for it. A
  * save applied by a push rather than its file (a translated collection in development, or an app
  * with no file writer) is compared the same way, just before the push, with nothing held.
  *

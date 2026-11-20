@@ -57,6 +57,7 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { AddressKind } from "../../../shared/address-rule";
+import { holdCollectionOnConnection } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { statedMoment } from "../../dynamic-collections/services/stated-default";
 import {
@@ -3681,7 +3682,7 @@ async function runWritten(
   boundsRead: BusyTableBounds | undefined,
   inLastTransaction?: () => Promise<void>,
   /** The count of what the save deletes, checked in the file that deletes it (`deletionHoldOf`). */
-  hold?: DeletionHold
+  hold?: SaveDeletionHold
 ): Promise<void> {
   const db = deps.adapter.getDrizzle();
   const dialect = deps.adapter.getCapabilities().dialect;
@@ -3713,7 +3714,7 @@ async function runWritten(
         appliedBefore: () => [...applied],
         // In each file that deletes removed fields' values, for the values in the tables it is
         // the last to change: before its first statement and inside its transaction, on every try.
-        ...beforeOf(holdIn.get(unit.source)),
+        ...triedHoldOf(deps, hold, () => holdIn.get(unit.source)),
       }
     );
   const ordered =
@@ -3751,9 +3752,10 @@ async function runWritten(
       // holds part of the save. The files already run stay recorded applied, this one and those
       // after it are kept, recorded nowhere, and the failure says so with what to run next, as a
       // push that failed part way says it.
-      // A count that changed is refused before the file's first statement, inside its run, and
-      // the file's runner reports it as the file failing: given back as the refusal it is.
-      const refusal = countRefusalOf(error) ?? error;
+      // A count that changed, or the collection held elsewhere, is refused before the file's first
+      // statement, inside its run, and the file's runner reports it as the file failing: given
+      // back as the refusal it is.
+      const refusal = holdRefusalOf(error) ?? error;
       if (applied.length > 0) {
         const kept = ordered.slice(applied.length);
         throw partlyAppliedChange(
@@ -3836,7 +3838,7 @@ async function runWritten(
           notify: line => deps.logger.warn(line),
           appliedBefore: () => [],
           // Every file runs in this one transaction, the deleting one among them.
-          ...beforeOf(hold?.check),
+          ...triedHoldOf(deps, hold, whole => whole.check),
         }
       );
     } catch (error) {
@@ -4241,34 +4243,79 @@ async function recordUnits(
   }
 }
 
-/** The run's `before` for a hold's count (`DeletionHold.check`), or none without one. */
-function beforeOf(check: ((db: unknown) => Promise<void>) | undefined): {
+/**
+ * The run's `before` and `settled` for the count `checkOf` picks from a save's deletion hold
+ * (`hold`), or neither without one.
+ *
+ * On PostgreSQL and SQLite the count holds the tables itself (`deletionHoldOf`). On MySQL, whose
+ * schema statements commit on their own, the collection is held instead, on the try's own
+ * connection, before the count (`holdCollectionOnConnection`): an entry write that already read
+ * the collection's registry row commits first and is counted, and one that starts after waits at
+ * the collection's named locks until the try is over, then meets the new shape. The locks belong
+ * to the connection, so `settled` lets them go there, however the try ends.
+ */
+function triedHoldOf(
+  deps: CollectionSaveDeps,
+  hold: SaveDeletionHold | undefined,
+  /** The count this run takes: the whole hold's, or one file's (`DeletionHold.checkIn`). */
+  checkOf: (
+    hold: SaveDeletionHold
+  ) => ((db: unknown) => Promise<void>) | undefined
+): {
   before?: (db: unknown) => Promise<void>;
+  settled?: (db: unknown) => Promise<void>;
 } {
-  return check === undefined ? {} : { before: check };
+  const check = hold === undefined ? undefined : checkOf(hold);
+  if (hold === undefined || check === undefined) return {};
+  if (deps.adapter.getCapabilities().dialect !== "mysql") {
+    return { before: check };
+  }
+  const { slug } = hold;
+  // This try's hold: `before` and `settled` run in turn, one pair per try.
+  let release: (() => Promise<void>) | undefined;
+  return {
+    before: async db => {
+      release = (await holdCollectionOnConnection(deps.adapter, db, slug))
+        .release;
+      await check(db);
+    },
+    settled: async () => {
+      const releasing = release;
+      release = undefined;
+      await releasing?.();
+    },
+  };
 }
 
 /**
  * Whether a failure of the save's one unit reaches the caller as it is, as a file run alone throws
- * it: a lost race, a busy table's stop, and a count that changed (`isDeletionCountRefusal`). Any
- * other names the file whose statement the database refused.
+ * it: a lost race, a busy table's stop, a collection held elsewhere, and a count that changed
+ * (`isDeletionCountRefusal`). Any other names the file whose statement the database refused.
  */
 function passesThroughAsIs(error: unknown): boolean {
   return (
     isConcurrentRun(error) ||
     NextlyError.isCode(error, "NEXTLY_TABLE_BUSY") ||
+    // The collection held elsewhere past the hold's wait, on MySQL (`triedHoldOf`): nothing of
+    // the save ran.
+    NextlyError.isCode(error, "COLLECTION_BEING_CHANGED") ||
     isDeletionCountRefusal(error)
   );
 }
 
 /**
- * The refusal of a count that changed (`isDeletionCountRefusal`) in `error`, itself or as the cause
- * a file's runner wrapped it in (`applyFailedError`); undefined for any other failure.
+ * The refusal the deletion hold made before a file's first statement in `error`, itself or as the
+ * cause a file's runner wrapped it in (`applyFailedError`): a count that changed
+ * (`isDeletionCountRefusal`), or the collection held elsewhere past the hold's wait on MySQL
+ * (`triedHoldOf`). Undefined for any other failure.
  */
-function countRefusalOf(error: unknown): unknown {
-  if (isDeletionCountRefusal(error)) return error;
+function holdRefusalOf(error: unknown): unknown {
+  const isHoldRefusal = (candidate: unknown): boolean =>
+    isDeletionCountRefusal(candidate) ||
+    NextlyError.isCode(candidate, "COLLECTION_BEING_CHANGED");
+  if (isHoldRefusal(error)) return error;
   const cause = NextlyError.is(error) ? error.cause : undefined;
-  return isDeletionCountRefusal(cause) ? cause : undefined;
+  return isHoldRefusal(cause) ? cause : undefined;
 }
 
 /**
@@ -4280,8 +4327,8 @@ function deletionHoldOfSave(
   deps: CollectionSaveDeps,
   save: CollectionSave,
   table: string
-): DeletionHold | undefined {
-  return deletionHoldOf({
+): SaveDeletionHold | undefined {
+  const hold = deletionHoldOf({
     dialect: deps.adapter.getCapabilities().dialect,
     tableName: table,
     localized: save.previous?.localized === true,
@@ -4290,6 +4337,12 @@ function deletionHoldOfSave(
     renamed: save.renamedFields,
     confirmed: save.confirmedDeletions,
   });
+  return hold === undefined ? undefined : { ...hold, slug: save.slug };
+}
+
+/** A save's deletion hold, with the collection it holds on MySQL (`triedHoldOf`). */
+interface SaveDeletionHold extends DeletionHold {
+  readonly slug: string;
 }
 
 /**
