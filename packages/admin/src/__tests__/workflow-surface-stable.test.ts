@@ -8,7 +8,7 @@
  *   editor surfaces), where any tag is one of workflows';
  * - the files workflows share with other features (the config surface, the collection and
  *   Single options, the route parser and dispatcher, the Direct API's namespaces and publish
- *   options, the public error data), where a tag counts
+ *   options, the public error data, the published filter keys), where a tag counts
  *   when its comment, or the declaration under it, is about a workflow or a review.
  *
  * Until the tags come off, the check is held as an expected failure (`it.fails`): it passes
@@ -49,6 +49,8 @@ const SHARED = [
   "packages/nextly/src/errors/public-data.ts",
   "packages/nextly/src/dispatcher/types.ts",
   "packages/nextly/src/init/nextly-instance.ts",
+  // Published as `nextly/reserved-filter-keys`: its workflow filter keys are workflows' surface.
+  "packages/nextly/src/domains/collections/query/reserved-filter-keys.ts",
 ];
 
 /**
