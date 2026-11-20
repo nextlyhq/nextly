@@ -32,6 +32,7 @@ import {
   versionLanguagesFor,
 } from "../versions/document-revision";
 import {
+  decisionsAbout,
   partLiveCondition,
   partLivenessInputs,
 } from "../versions/part-liveness";
@@ -134,19 +135,28 @@ async function readMainRows(
 ): Promise<Map<string, MainRow>> {
   const column = (name: string): SQL =>
     sql`${sql.identifier(entity.tableName)}.${sql.identifier(name)}`;
-  const liveColumns = parts.map(
-    (part, index) =>
-      sql`CASE WHEN ${partLiveCondition({
-        ...liveness,
-        part,
-        defaultLocale,
-        id: column("id"),
-        status: column("status"),
-      })} THEN 1 ELSE 0 END AS ${sql.identifier(`live_${index}`)}`
+  // Each chunk binds its ids once, and each part's condition binds the chunk's own release
+  // decisions (two per id at most) and a few values more: sized so a statement stays well under
+  // SQLite's 999 bound values however many languages the parts name.
+  const perRead = Math.max(
+    1,
+    Math.min(ROWS_PER_READ, Math.floor(800 / (1 + 2 * parts.length) - 4))
   );
   const main = new Map<string, MainRow>();
-  for (let at = 0; at < ids.length; at += ROWS_PER_READ) {
-    const chunk = ids.slice(at, at + ROWS_PER_READ);
+  for (let at = 0; at < ids.length; at += perRead) {
+    const chunk = ids.slice(at, at + perRead);
+    const decisions = decisionsAbout(liveness.decisions, chunk);
+    const liveColumns = parts.map(
+      (part, index) =>
+        sql`CASE WHEN ${partLiveCondition({
+          ...liveness,
+          decisions,
+          part,
+          defaultLocale,
+          id: column("id"),
+          status: column("status"),
+        })} THEN 1 ELSE 0 END AS ${sql.identifier(`live_${index}`)}`
+    );
     const rows = await adapter.queryStatement<Record<string, unknown>>(
       sql`SELECT ${column("id")} AS ${sql.identifier("id")}, ${column(DOCUMENT_REVISION_COLUMN)} AS ${sql.identifier("revision")}, ${sql.join(liveColumns, sql`, `)} FROM ${sql.identifier(entity.tableName)} WHERE ${column("id")} IN (${sql.join(
         chunk.map(id => sql`${id}`),

@@ -9,6 +9,8 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { randomUUID } from "node:crypto";
+
 import { sql, type SQL } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -145,11 +147,21 @@ describe.each(getConfiguredTestDialects())(
       for (const each of combinations()) {
         cases.push(await seedCase(app, tables, each));
       }
+      // Due releases deciding 70,000 other documents too, more than any dialect binds in one
+      // statement (SQLite 32,766, PostgreSQL and MySQL 65,535): a read of one part binds none of
+      // them, so no release takes it past the limit.
+      const others = Array.from({ length: 70_000 }, () => randomUUID());
       const visibility: ReleaseVisibility = {
         decisions: () =>
           Promise.resolve({
-            hide: cases.filter(c => c.release === "hide").map(c => c.id),
-            reveal: cases.filter(c => c.release === "reveal").map(c => c.id),
+            hide: [
+              ...cases.filter(c => c.release === "hide").map(c => c.id),
+              ...others.slice(0, 35_000),
+            ],
+            reveal: [
+              ...cases.filter(c => c.release === "reveal").map(c => c.id),
+              ...others.slice(35_000),
+            ],
           }),
       };
 

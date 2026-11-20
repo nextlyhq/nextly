@@ -9,6 +9,7 @@
 import type { TimeseriesInterval } from "../../domains/collections/query/timeseries-interval";
 import type { PartOutcome } from "../../domains/collections/services/publish-parts";
 import type { FieldRewriteValue } from "../../domains/versions/field-rewrite";
+import type { RowPartReview } from "../../domains/workflows/row-review-states";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
 
 import type {
@@ -19,6 +20,17 @@ import type {
   SingleSlug,
   WhereFilter,
 } from "./shared";
+
+/**
+ * What a row of a list read carries beside its fields when the read asks for its review state
+ * (`reviewState: true`): each part where it stands in the collection's workflow. Absent where the
+ * read did not ask, for a visitor, and for a collection no workflow holds.
+ *
+ * @experimental
+ */
+export interface RowReviewState {
+  _review?: { parts: RowPartReview[] };
+}
 
 /**
  * Arguments for finding multiple documents in a collection.

@@ -167,6 +167,7 @@ import type {
   DirectAPIConfig,
   DuplicateArgs,
   FindArgs,
+  RowReviewState,
   FindByIDArgs,
   FindSingleArgs,
   FoundSingle,
@@ -617,7 +618,7 @@ export class Nextly implements NextlyContext {
    */
   find<TSlug extends CollectionSlug>(
     args: FindArgs<TSlug>
-  ): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
+  ): Promise<ListResult<RowFromCollectionSlug<TSlug> & RowReviewState>> {
     return runAsCaller(this.defaultConfig, args, callArgs =>
       collectionsNs.find(this, callArgs)
     );

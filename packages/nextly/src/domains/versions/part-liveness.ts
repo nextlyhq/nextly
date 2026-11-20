@@ -220,6 +220,28 @@ export async function partLivenessInputs(args: {
 }
 
 /**
+ * The due releases' decisions about `ids` alone: what a statement reading only
+ * those documents needs. A release may decide thousands of documents, and
+ * binding all of them into one statement would pass a dialect's limit on bound
+ * values (SQLite's is 999) though the statement reads a few.
+ *
+ * @experimental
+ */
+export function decisionsAbout(
+  decisions: ReleaseDecisions,
+  ids: readonly string[]
+): ReleaseDecisions {
+  if (decisions.reveal.length === 0 && decisions.hide.length === 0) {
+    return decisions;
+  }
+  const read = new Set(ids);
+  return {
+    reveal: decisions.reveal.filter(id => read.has(id)),
+    hide: decisions.hide.filter(id => read.has(id)),
+  };
+}
+
+/**
  * Whether the part (a language, or null for the part with none) is live:
  * {@link partLiveCondition} asked of one document.
  *
@@ -250,6 +272,8 @@ export async function readPartIsLive(args: {
   const main = sql.identifier(entity.tableName);
   const live = partLiveCondition({
     ...inputs,
+    // Only this document's decisions: a release's others are no question here.
+    decisions: decisionsAbout(inputs.decisions, [entryId]),
     part,
     defaultLocale: args.defaultLocale,
     id: sql`${entryId}`,
