@@ -1,0 +1,32 @@
+---
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/module-specifiers": patch
+"@nextlyhq/plugin-accounts": patch
+"@nextlyhq/plugin-commerce": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-mcp": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/ui": patch
+"create-nextly-app": patch
+"nextly": patch
+---
+
+A plugin whose relationship to another plugin's entity sits inside a group or a repeater, in its own entities or in a field it adds with `contributes.extend`, must now declare that plugin in `dependsOn`, as for a relationship at the top (`NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION`). Where two field groups share a slug, a cycle through either is reported beside the duplicate slug, rather than only after the duplicate is renamed. Compatibility: a plugin that relates to another plugin only through a nested relationship, and does not declare it in `dependsOn`, is now refused, as one relating at the top already was.

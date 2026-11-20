@@ -187,12 +187,14 @@ export function validateCrossPluginRelations(
 
   // Check each relationship field's relationTo: if it targets an entity owned
   // by a DIFFERENT plugin, the source plugin must declare dependsOn on it.
+  // Nested ones too (`relationFieldsOf`): one inside a group or a repeater
+  // relates to the other plugin as one at the top does.
   const checkFields = (
     fields: RelationField[] | undefined,
     source: PluginDefinition
   ): void => {
-    for (const fieldEntry of fields ?? []) {
-      if (fieldEntry.type !== "relationship" || fieldEntry.relationTo == null) {
+    for (const fieldEntry of relationFieldsOf(fields)) {
+      if (fieldEntry.relationTo == null) {
         continue;
       }
       const targets = Array.isArray(fieldEntry.relationTo)

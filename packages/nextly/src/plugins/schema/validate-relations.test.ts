@@ -257,3 +257,35 @@ describe("collectUnresolvedRelationTargets, for a container whose fields are not
     expect(collectUnresolvedRelationTargets(config)).toEqual([]);
   });
 });
+
+describe("validateCrossPluginRelations, for a relationship inside another field", () => {
+  // A relationship nested in a group or a repeater relates to the other plugin all the same, so
+  // the relating plugin must declare it as a dependency.
+  const a = plug("@t/a", { contributes: { collections: [coll("forms")] } });
+  const nested = (name: string) =>
+    ({
+      name,
+      type: "group",
+      fields: [rel("form", "forms")],
+    }) as unknown as FieldConfig;
+
+  it("requires dependsOn for one nested in an entity's field", () => {
+    const b = plug("@t/b", {
+      contributes: { collections: [coll("comments", [nested("meta")])] },
+    });
+
+    expect(caught(() => validateCrossPluginRelations([a, b])).code).toBe(
+      "NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION"
+    );
+  });
+
+  it("requires dependsOn for one nested in a field contributes.extend adds", () => {
+    const b = plug("@t/b", {
+      contributes: { extend: [{ target: "posts", fields: [nested("meta")] }] },
+    });
+
+    expect(caught(() => validateCrossPluginRelations([a, b])).code).toBe(
+      "NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION"
+    );
+  });
+});
