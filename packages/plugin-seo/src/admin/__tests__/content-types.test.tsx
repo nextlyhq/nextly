@@ -9,6 +9,7 @@
  * an on/off filter appear.
  */
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useState, type JSX } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -303,5 +304,83 @@ describe("the Content types tab", () => {
   it("says how a type gets SEO where the site has none yet", () => {
     render(<Tab types={[]} />);
     expect(screen.getByText("No content types yet")).toBeTruthy();
+  });
+});
+
+describe("a detail read from one of the entry's own dates", () => {
+  // A type with no date of its own, as the route lists it with the lifecycle on.
+  const cases = seoType("cases", "Case studies", {
+    mappableFields: [
+      { name: "title", label: "Title" },
+      { name: "author", label: "Author" },
+      { name: "createdAt", label: "Created", kind: "built-in" },
+      { name: "updatedAt", label: "Updated", kind: "built-in" },
+      { name: "firstPublishedAt", label: "First published", kind: "built-in" },
+    ],
+  });
+  const structuredData = {
+    cases: {
+      type: "blogPosting",
+      details: {
+        blogPosting: {
+          datePublished: "createdAt",
+          dateModified: "updatedAt",
+          author: "author",
+        },
+      },
+    },
+  };
+
+  const optionsOf = async (name: string) => {
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("combobox", { name }));
+    const options = (await screen.findAllByRole("option")).map(
+      option => option.textContent
+    );
+    await user.keyboard("{Escape}");
+    return options;
+  };
+
+  it("counts the date published as set, and offers the entry's own dates for it alone", async () => {
+    render(<Tab types={[cases]} structuredData={structuredData} />);
+    fireEvent.click(
+      within(row("Case studies")).getByRole("button", { name: /Case studies/ })
+    );
+    expect(within(row("Case studies")).getByText(/all set/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    const published = screen.getByRole("combobox", {
+      name: "Field that holds date published",
+    });
+    expect(published.getAttribute("aria-invalid")).toBe("false");
+    expect(screen.queryByText("That field is gone: choose another")).toBeNull();
+    expect(screen.getByText("from each entry's Created")).toBeTruthy();
+
+    expect(await optionsOf("Field that holds date published")).toEqual([
+      "Not chosen yet",
+      "Title",
+      "Author",
+      "Created",
+      "First published",
+    ]);
+    expect(await optionsOf("Field that holds author")).not.toContain("Created");
+  });
+
+  it("says the date modified comes from when the content changed, where it is mapped to the last save", async () => {
+    render(<Tab types={[cases]} structuredData={structuredData} />);
+    fireEvent.click(
+      within(row("Case studies")).getByRole("button", { name: /Case studies/ })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    expect(
+      screen.getByText("from when each page's content last changed")
+    ).toBeTruthy();
+    // The choice made in code stays shown, though the screen offers it nowhere.
+    expect(await optionsOf("Field that holds date modified")).toEqual([
+      "Not chosen yet",
+      "Updated",
+      "Title",
+      "Author",
+    ]);
   });
 });

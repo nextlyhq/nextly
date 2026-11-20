@@ -1377,7 +1377,17 @@ page last changed is read from a field named `dateModified`, `modifiedAt`, `corr
 holds a date. Where it is empty, as a correction date is on a page never corrected, it is the
 page's [`<lastmod>`](#the-sitemap-and-robotstxt) date, when its content last changed, rather than
 the row's own `updatedAt`, which every save moves, an SEO-only one included. Map `dateModified`
-(or `datePublished`) to read another field. Structured data states only what the route
+(or `datePublished`) to read another field.
+
+A detail can also be read from one of the dates every entry holds by itself: `createdAt`, and
+`firstPublishedAt` on a type with drafts and publishing. A type with no publish date of its own can
+map `datePublished` to either, in its options or under **SEO › Content types**, which offers them
+as Created and First published for the date published and a video's upload date. Until a new
+page is saved (or, for `firstPublishedAt`, first published), its SEO tab says when the date will be
+set rather than asking for it. `updatedAt` is never read for `dateModified`, even when mapped, for
+the reason above.
+
+Structured data states only what the route
 read for the page, so a relationship names someone only where the route read the entry it holds:
 give a route that shows its author `depth: 1`. The route's own access rules, language and cache
 tags then govern the author as they govern the page, so an unpublished or private author is never

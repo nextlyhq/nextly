@@ -892,3 +892,70 @@ describe("the type a page is described as", () => {
     ]);
   });
 });
+
+describe("a detail read from one of the entry's own dates", () => {
+  // `posts` declares no date: its published date is the day each was created.
+  const fromCreated = rules({
+    posts: {
+      type: "article",
+      details: { article: { datePublished: "createdAt", author: "writer" } },
+    },
+  });
+  const { publishedAt: _declared, ...undated } = POST;
+
+  it("reads the date from the entry, as the row holds it", async () => {
+    const { nodes, problems } = await buildStructuredData(
+      context(),
+      postInput({ ...undated, createdAt: "2026-09-03T09:14:20.705Z" }),
+      ANSWER,
+      fromCreated
+    );
+    expect(problems).toEqual([]);
+    expect(nodeOf(nodes, "Article")?.datePublished).toBe(
+      "2026-09-03T09:14:20.705Z"
+    );
+  });
+
+  it("says when the date is set, not what to type, where the entry has none yet", async () => {
+    // A page never saved has no created date: nothing a person fills in.
+    const { nodes, problems } = await buildStructuredData(
+      context(),
+      postInput(undated),
+      ANSWER,
+      fromCreated
+    );
+    expect(nodeOf(nodes, "Article")).toBeUndefined();
+    expect(problems).toEqual([
+      {
+        type: "article",
+        detail: "datePublished",
+        message: "The date published is set when the page is first saved.",
+        fix: "save",
+        field: "createdAt",
+      },
+    ]);
+  });
+
+  it("says the first publication sets it, for the date a page was first published", async () => {
+    const { problems } = await buildStructuredData(
+      context(),
+      postInput(undated),
+      ANSWER,
+      rules({
+        posts: {
+          type: "article",
+          details: {
+            article: { datePublished: "firstPublishedAt", author: "writer" },
+          },
+        },
+      })
+    );
+    expect(problems).toEqual([
+      expect.objectContaining({
+        message: "The date published is set when the page is first published.",
+        fix: "save",
+        field: "firstPublishedAt",
+      }),
+    ]);
+  });
+});
