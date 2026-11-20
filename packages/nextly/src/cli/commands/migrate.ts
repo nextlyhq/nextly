@@ -86,7 +86,7 @@ import {
 import {
   checkCompanionFiles,
   judgeCompanionFiles,
-  snapshotlessNotice,
+  warnOfSnapshotlessFile,
 } from "../../domains/schema/migrate/companion-drift";
 import {
   consentToCover,
@@ -5332,8 +5332,11 @@ export async function runFileMigrations(args: {
       if (!target) {
         // No paired snapshot: run verbatim + record. A hand-written file is said to have no
         // drift check; a companion file had its table checked before the run's first file.
-        const notice = snapshotlessNotice(filename, companions);
-        if (notice !== undefined) logger.warn(notice);
+        warnOfSnapshotlessFile(
+          message => logger.warn(message),
+          filename,
+          companions
+        );
         // With no snapshot to place the database, a failed attempt that may
         // have left statements applied is refused here as the reconcile
         // refuses it, rather than run again on top of what stayed.

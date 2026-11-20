@@ -470,7 +470,7 @@ export async function checkCompanionFiles(
  * said so with the reason, and any other file is one written by hand, with nothing to check it
  * against.
  */
-export function snapshotlessNotice(
+function snapshotlessNotice(
   filename: string,
   check: CompanionCheck
 ): string | undefined {
@@ -480,4 +480,17 @@ export function snapshotlessNotice(
   return why === undefined
     ? `No snapshot for ${filename}; applying verbatim without drift checks.`
     : `${filename} is applied without a drift check: ${why}.`;
+}
+
+/**
+ * Says, through `warn`, what `nextly migrate` says of a file with no snapshot as it applies it
+ * (`snapshotlessNotice`), when there is anything to say.
+ */
+export function warnOfSnapshotlessFile(
+  warn: (message: string) => void,
+  filename: string,
+  check: CompanionCheck
+): void {
+  const notice = snapshotlessNotice(filename, check);
+  if (notice !== undefined) warn(notice);
 }
