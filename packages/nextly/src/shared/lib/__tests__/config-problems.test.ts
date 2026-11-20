@@ -321,3 +321,47 @@ describe("a define* collection whose own field of a system field's name takes no
     expect(configurationProblems(declared)).toEqual([]);
   });
 });
+
+describe("a define* collection given a second copy of its system title by a plugin's setup", () => {
+  // One copy is the system field; the other declares the same column again.
+  it("is reported as declaring the column twice", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "notes",
+          fields: [{ name: "body", type: "text" }],
+        }),
+      ],
+    };
+    const [notes] = setupTransformerInput(declared, []).collections;
+    const effective = {
+      collections: [
+        { ...notes, fields: [...notes.fields, { ...notes.fields[0] }] },
+      ],
+    };
+
+    expect(configurationProblems(declared, effective)).toContainEqual(
+      expect.objectContaining({
+        path: "collections[0].fields",
+        code: "FIELD_NAME_DUPLICATE",
+      })
+    );
+  });
+});
+
+describe("a define* collection whose index names its system slug", () => {
+  // The index resolves its fields among those the collection has, the system ones included.
+  it("has no problem", () => {
+    const declared = {
+      collections: [
+        defineCollection({
+          slug: "posts",
+          fields: [{ name: "locale", type: "text" }],
+          indexes: [{ fields: ["slug", "locale"] }],
+        } as never),
+      ],
+    };
+
+    expect(configurationProblems(declared)).toEqual([]);
+  });
+});

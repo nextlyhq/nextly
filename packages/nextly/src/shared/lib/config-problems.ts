@@ -111,7 +111,18 @@ function isSystemField(
 }
 
 /**
- * The problems of `entry`: its validator's, of the fields its author declared, the system
+ * The rules about the fields an author declared, asked of those alone: that there is at least
+ * one, and that no two of them are one field declared twice (the sibling-field rule). A system
+ * field beside them is not the author's; whether one of theirs takes its column is asked below.
+ */
+const AUTHORED_RULES: ReadonlySet<string> = new Set([
+  "FIELDS_EMPTY",
+  "FIELD_NAME_DUPLICATE",
+]);
+
+/**
+ * The problems of `entry`. The rules about the author's own declarations are its validator's, of
+ * the fields its author declared, the system
  * fields its `define*` call added set aside (`isSystemField`), as the rules judged it when that
  * call threw. A collection with no field of its own breaks the rule that it declare one, and an
  * author's field may share a system field's name where it takes no column of its own (a
@@ -123,6 +134,7 @@ function isSystemField(
  * (`columnsDeclaredBy`). A field a plugin's setup adds by a system field's name does, and the
  * table could not be made, so it is reported.
  */
+
 function entryProblems<
   P extends { path: string; code: string; message: string },
 >(
@@ -134,10 +146,29 @@ function entryProblems<
   if (systemFields.length === 0 || !Array.isArray(fields)) {
     return [...validate(entry)];
   }
-  const added = fields.filter(field => isSystemField(field, systemFields));
-  const authored = fields.filter(field => !added.includes(field));
+  // Each system field the call added is matched once: a second copy of one (a setup's own
+  // `{ ...title }`) is the author's, and its column is compared with the system field's below.
+  const unmatched = [...systemFields];
+  const added: unknown[] = [];
+  const authored: unknown[] = [];
+  for (const field of fields) {
+    const at = unmatched.findIndex(system => isSystemField(field, [system]));
+    if (at === -1) {
+      authored.push(field);
+    } else {
+      added.push(field);
+      unmatched.splice(at, 1);
+    }
+  }
+  // Each rule is asked of the fields it is about. The rules about the author's own declarations
+  // (`AUTHORED_RULES`) of the fields the author declared; every other rule, which resolves a
+  // field by its name (an index, the title field, the address field), of the entity as the
+  // commands use it, system fields and all.
   const problems: Array<P | { path: string; code: string; message: string }> = [
-    ...validate({ ...(entry as object), fields: authored }),
+    ...validate(entry).filter(problem => !AUTHORED_RULES.has(problem.code)),
+    ...validate({ ...(entry as object), fields: authored }).filter(problem =>
+      AUTHORED_RULES.has(problem.code)
+    ),
   ];
   for (const system of added) {
     const [column] = columnsDeclaredBy([system as { name?: unknown }]);
