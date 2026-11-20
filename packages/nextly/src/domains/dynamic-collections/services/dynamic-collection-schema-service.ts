@@ -2916,17 +2916,19 @@ ${allColumnDefs.join(",\n")}
 
   /**
    * Refuse, before anything is written, a `rename` answer for a shared field renamed into a
-   * translated one while the entity stays translated. The main table drops the shared column and
-   * the companion adds the translated one empty, since only a field translated before the change
-   * carries its values onto the companion, so the rename would lose the values it asked to keep.
-   * Renamed first and made translated in a second change, or answered `drop_and_add`, it passes.
+   * translated one, while the entity stays translated or as this change turns translation on.
+   * The main table drops the shared column and the companion adds the translated one empty: only a
+   * field translated before the change carries its values onto the companion, and turning
+   * translation on seeds a translated column only from a main column of the same name. So the
+   * rename would lose the values it asked to keep. Renamed first and made translated in a second
+   * change, or answered `drop_and_add`, it passes.
    */
   refuseRenameJoiningTranslation(
     entity: string,
     candidates: readonly { from: FieldDefinition; to: FieldDefinition }[],
     localized: { was: boolean; is: boolean }
   ): void {
-    if (!localized.was || !localized.is) return;
+    if (!localized.is) return;
     const joining = candidates.find(
       pair =>
         this.columnNameOf(pair.from) !== undefined &&

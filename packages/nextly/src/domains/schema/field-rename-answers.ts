@@ -119,7 +119,8 @@ export function answeredRename(pair: FieldPair): boolean {
  * be dropped and added with their values lost though the request asked to keep them. An answer
  * naming a field the change doesn't remove or add, as a retry of a rename already recorded does,
  * is about nothing in it, and a `drop_and_add` answer asks for what the change does anyway: both
- * are left aside. Off such a road nothing is refused.
+ * are left aside. A change answering `rename` for more than one pair is refused too: a change
+ * renames one field. Off such a road nothing is refused.
  */
 export function refuseUnansweredRename<F extends { name?: string }>(
   entity: string,
@@ -152,6 +153,25 @@ export function refuseUnansweredRename<F extends { name?: string }>(
         reason: "field-rename-not-offered",
         from: unoffered.from,
         to: unoffered.to,
+      },
+    });
+  }
+  // One rename per change: each step of a change plans the one rename it finds on its own table,
+  // so a second, of another kind or on another table, would be dropped and added instead.
+  const renamed = pairs.filter(pair => answers(pair)?.choice === "rename");
+  if (renamed.length > 1) {
+    const [first, second] = renamed;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "renames",
+          code: "FIELD_RENAME_ONE_AT_A_TIME",
+          message: `${entity}: the change renames "${first.from.name}" and "${second.from.name}", and a change renames one field. Rename each in a change of its own, or answer "drop_and_add" for the others.`,
+        },
+      ],
+      logContext: {
+        reason: "field-rename-one-at-a-time",
+        renamed: renamed.map(pair => pair.from.name),
       },
     });
   }

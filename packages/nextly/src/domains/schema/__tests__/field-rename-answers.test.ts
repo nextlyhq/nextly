@@ -141,6 +141,31 @@ describe("refuseUnansweredRename", () => {
     ).toBeUndefined();
   });
 
+  it("refuses a change renaming two pairs, as each step applies only the rename it finds", async () => {
+    // A shared column's pair and a field group's, each a candidate of its own.
+    const two = async (second: "rename" | "drop_and_add") =>
+      withFieldRenameAnswers(
+        [
+          { from: "heading", to: "headline", choice: "rename" },
+          { from: "hero", to: "banner", choice: second },
+        ],
+        async () =>
+          refuseUnansweredRename(
+            'The collection "posts"',
+            [pair("heading", "headline"), pair("hero", "banner")],
+            field => toSnakeCase(field.name),
+            { before: ["heading", "hero"], after: ["headline", "banner"] }
+          )
+      ).then(
+        () => undefined,
+        (error: unknown) =>
+          (error as { publicData?: { errors?: { code?: string }[] } })
+            .publicData?.errors?.[0]?.code
+      );
+    expect(await two("rename")).toBe("FIELD_RENAME_ONE_AT_A_TIME");
+    expect(await two("drop_and_add")).toBeUndefined();
+  });
+
   it("refuses dropping and adding two names of one column, and lets them be renamed", async () => {
     expect(
       await refusedWith(

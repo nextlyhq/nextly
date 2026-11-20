@@ -584,6 +584,40 @@ describeEachDialect(
       ).toBeUndefined();
     });
 
+    it("refuses renaming a shared field into a translated one as the change turns translation on", async () => {
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "createCollection",
+        {},
+        {
+          name: "posts",
+          label: "Posts",
+          fields: [
+            { name: "views", type: "number", localized: false },
+            { name: "heading", type: "text" },
+          ],
+        }
+      );
+
+      expect(
+        await codeOf(
+          dispatchCollections(
+            {} as ServiceContainer,
+            "updateCollection",
+            { collectionName: "posts" },
+            {
+              localized: true,
+              fields: [
+                { name: "count", type: "number", localized: true },
+                { name: "heading", type: "text" },
+              ],
+              renames: [{ from: "views", to: "count", choice: "rename" }],
+            }
+          )
+        )
+      ).toBe("FIELD_RENAME_JOINS_TRANSLATION");
+    });
+
     it("drops and adds a translated field when the request says so, not refusing its removal as unanswered", async () => {
       await posts([
         { name: "heading", type: "text", localized: true },
