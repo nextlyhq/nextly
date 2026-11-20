@@ -22,6 +22,8 @@ import type {
   ReviewScopeKind,
 } from "../../schemas/review-states/types";
 
+import type { WaitingPosition } from "./waiting-cursor";
+
 /** A document a workflow is attached to: a collection's entry, or a Single. */
 export interface ReviewDocument {
   scopeKind: ReviewScopeKind;
@@ -310,9 +312,29 @@ function waitingWhere(
 }
 
 /**
+ * "Past `after` in the waiting list's order": entered the stage later, or at the same time with a
+ * greater key. Entry time and key order every part exactly once, so a read from a position never
+ * repeats or skips one.
+ */
+function pastPosition(after: WaitingPosition): WhereClause {
+  return {
+    or: [
+      { column: "enteredAt", op: ">", value: after.enteredAt },
+      {
+        and: [
+          { column: "enteredAt", op: "=", value: after.enteredAt },
+          { column: "partKey", op: ">", value: after.partKey },
+        ],
+      },
+    ],
+  };
+}
+
+/**
  * `share` of the review states in the stages `terms` names, oldest entry into their stage first, at
- * most `limit` of them past the first `offset`: the candidates a waiting list decides part by part, read checks and pages
- * from. Bounded, as a stage may hold any number of parts.
+ * most `limit` of them, starting just past `after` where it is given: the candidates a waiting list
+ * decides part by part, read checks and pages from. Bounded, as a stage may hold any number of
+ * parts.
  *
  * @experimental
  */
@@ -321,22 +343,31 @@ export async function readWaitingReviewStates(
   terms: readonly WaitingStageTerms[],
   share: WaitingShare,
   limit: number,
-  // How many of the share's states, in this order, an earlier window already read.
-  offset = 0
+  // The position of the last state an earlier read consumed: a keyset, so a read deep in a long
+  // list costs what its first does.
+  after?: WaitingPosition
 ): Promise<ReviewState[]> {
-  const where = waitingWhere(terms, share);
-  if (where === null) return [];
+  const whose = waitingWhere(terms, share);
+  if (whose === null) return [];
   const rows = await db.select<ReviewStateRow>(REVIEW_STATES_TABLE, {
-    where,
+    where: after === undefined ? whose : { and: [whose, pastPosition(after)] },
     // Stable across pages: entry into the stage, then the row's own key.
     orderBy: [
       { column: "enteredAt", direction: "asc" },
       { column: "partKey", direction: "asc" },
     ],
     limit,
-    ...(offset > 0 ? { offset } : {}),
   });
   return rows.map(fromRow);
+}
+
+/**
+ * Where `state` stands in the waiting list's order: its entry into the stage and its key.
+ *
+ * @experimental
+ */
+export function waitingPosition(state: ReviewState): WaitingPosition {
+  return { enteredAt: state.enteredAt, partKey: orderKey(state) };
 }
 
 /**

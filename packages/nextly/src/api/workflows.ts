@@ -60,6 +60,10 @@ import {
   type WorkflowCaller,
 } from "../domains/workflows/steps";
 import {
+  encodeWaitingCursor,
+  WaitingCursor,
+} from "../domains/workflows/waiting-cursor";
+import {
   listWorkflowSummaries,
   readWorkflowSettingsView,
   refuseDefinitionKeys,
@@ -206,8 +210,18 @@ const WaitingQuery = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
+    /**
+     * An opaque position: pass `nextBefore` back as `before` to get the next page; this list runs
+     * oldest first. Additive to `page`: a list walked by cursor reads from the cursor, a page
+     * number past the first beside it is refused.
+     */
+    before: WaitingCursor.optional(),
   })
-  .passthrough();
+  .passthrough()
+  .refine(query => query.before === undefined || query.page === 1, {
+    path: ["page"],
+    message: "Read the next page by its page number or by before, not both.",
+  });
 
 const SettingsSlug = z.object({ slug: z.string().min(1) }).passthrough();
 
@@ -724,15 +738,36 @@ export const workflowOperations = {
           : { authenticatedScope: asker.scope }),
       })
     );
-    const { items, total, totalCapped } = await waitingFor(adapter(), {
+    const { items, total, totalCapped, next } = await waitingFor(adapter(), {
       caller: asker.caller,
       limit: query.limit,
-      offset: (query.page - 1) * query.limit,
+      // Offset paging (`page`) works as it always has; the cursor is additive, read from where the
+      // page that gave it stopped.
+      offset: query.before === undefined ? (query.page - 1) * query.limit : 0,
+      ...(query.before === undefined ? {} : { after: query.before }),
       readsEntity: (_kind, slug) => Promise.resolve(readable.has(slug)),
       // Each item in the language its part names: an item about a language the caller may not
       // read the document in is left out, as a read of that language would be refused.
       readable: items => readableAmong(asker, items),
     });
+    // Where the next page starts, for a client that walks by cursor rather than page number.
+    const nextBefore =
+      next === null ? {} : { nextBefore: encodeWaitingCursor(next) };
+    if (query.before !== undefined) {
+      // A cursor walk: page and total describe the window returned, as other cursor reads do.
+      return {
+        items,
+        meta: {
+          total: items.length,
+          page: 1,
+          limit: query.limit,
+          totalPages: 1,
+          hasNext: next !== null,
+          hasPrev: true,
+          ...nextBefore,
+        },
+      };
+    }
     const totalPages = Math.max(1, Math.ceil(total / query.limit));
     return {
       items,
@@ -746,6 +781,7 @@ export const workflowOperations = {
         hasPrev: query.page > 1,
         // More may wait than the list read: its total is a floor ("1000+"), as a capped count's is.
         ...(totalCapped ? { totalCapped: true as const } : {}),
+        ...nextBefore,
       },
     };
   },

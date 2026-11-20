@@ -181,7 +181,7 @@ interface Door {
   ): Promise<{ assigned: string[]; refused: Doc[] }>;
   waiting(
     who: Who,
-    query: { page: number; limit: number }
+    query: { page?: number; limit: number; before?: string }
   ): Promise<{
     items: Doc[];
     meta: Doc;
@@ -288,13 +288,18 @@ const REST: Door = {
       refused: answer.errors as Doc[],
     };
   },
-  async waiting(who, { page, limit }) {
+  async waiting(who, { page, limit, before }) {
+    const query = new URLSearchParams({
+      ...(page === undefined ? {} : { page: String(page) }),
+      limit: String(limit),
+      ...(before === undefined ? {} : { before }),
+    });
     const answer = await rest(
       "GET",
       ["workflows", "waiting"],
       who,
       undefined,
-      `?page=${page}&limit=${limit}`
+      `?${query.toString()}`
     );
     return { items: answer.items as Doc[], meta: answer.meta as Doc };
   },
@@ -387,13 +392,14 @@ const DIRECT: Door = {
       })),
     };
   },
-  waiting: (who, { page, limit }) =>
+  waiting: (who, { page, limit, before }) =>
     direct(
       args =>
         app().nextly.workflows.waiting({
           ...args,
-          page,
+          ...(page === undefined ? {} : { page }),
           limit,
+          ...(before === undefined ? {} : { before }),
         } as never) as unknown as Promise<{ items: Doc[]; meta: Doc }>,
       who
     ),
@@ -1815,6 +1821,105 @@ describe.each(getConfiguredTestDialects())(
         expect(second.items).toHaveLength(1);
         expect(second.meta).toMatchObject({ total: 6, hasNext: false });
         expect(second.meta.totalCapped).toBeUndefined();
+      });
+
+      it("walks every page by its cursor, each part once, as parts join the end", async () => {
+        // Parts Sam may move, his own work and others', among parts no one may read, three at a time
+        // entering their stage in the same minute (so the row's key orders them). Walked 3 at a time
+        // by `nextBefore`, with 2 more parts joining the end once the walk has begun, every part
+        // comes exactly once, in the list's order, and the last page names no cursor.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const SAM: Who = { kind: "person", id: "sam" };
+        const at = (minute: number) =>
+          new Date(Date.UTC(2026, 10, 1, 10, minute));
+        const waits = async (minute: number, assignee: string) => {
+          await seedState(
+            app(),
+            partOf(PAGES, await entry(app(), PAGES), null),
+            "legal",
+            {
+              definitionHash: HASH,
+              enteredAt: at(minute),
+              assignee: { kind: "user", id: assignee },
+            }
+          );
+        };
+        for (let n = 0; n < 8; n += 1) {
+          await waits(Math.floor(n / 3), n % 2 === 0 ? "sam" : "ghost");
+          await seedState(app(), partOf(PAGES, randomUUID(), null), "legal", {
+            definitionHash: HASH,
+            enteredAt: at(Math.floor(n / 3)),
+          });
+        }
+        const idsOf = (page: { items: Doc[] }) =>
+          page.items.map(item => String((item.document as Doc).entryId));
+
+        let page = await door.waiting(SAM, { page: 1, limit: 3 });
+        const walked = idsOf(page);
+        await waits(30, "sam");
+        await waits(31, "ghost");
+        for (let pages = 1; page.meta.nextBefore !== undefined; pages += 1) {
+          expect(pages, "the walk ends").toBeLessThan(10);
+          expect(page.meta.hasNext).toBe(true);
+          page = await door.waiting(SAM, {
+            limit: 3,
+            before: String(page.meta.nextBefore),
+          });
+          walked.push(...idsOf(page));
+        }
+        expect(page.meta.hasNext).toBe(false);
+
+        const whole = await door.waiting(SAM, { page: 1, limit: 50 });
+        expect(whole.meta).toMatchObject({ total: 10 });
+        expect(walked).toEqual(idsOf(whole));
+      });
+
+      it("refuses a cursor it never gave, and a cursor beside a page number", async () => {
+        // The cursor is opaque: text that is not one this list gave is invalid input, never read
+        // as the list's start; nor is a page number past the first beside one.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const SAM: Who = { kind: "person", id: "sam" };
+        await seedState(
+          app(),
+          partOf(PAGES, await entry(app(), PAGES), null),
+          "legal",
+          { definitionHash: HASH, assignee: { kind: "user", id: "sam" } }
+        );
+        await seedState(
+          app(),
+          partOf(PAGES, await entry(app(), PAGES), null),
+          "legal",
+          { definitionHash: HASH, assignee: { kind: "user", id: "sam" } }
+        );
+        const first = await door.waiting(SAM, { page: 1, limit: 1 });
+        const cursor = String(first.meta.nextBefore);
+        const notGiven = [
+          "not a cursor",
+          Buffer.from("not json").toString("base64url"),
+          Buffer.from(JSON.stringify({ at: "soon", key: "k" })).toString(
+            "base64url"
+          ),
+        ];
+        for (const before of notGiven) {
+          expect(
+            await refusalOf(() => door.waiting(SAM, { limit: 1, before }))
+          ).toEqual({ status: 400, code: "VALIDATION_ERROR" });
+        }
+        expect(
+          await refusalOf(() =>
+            door.waiting(SAM, { page: 2, limit: 1, before: cursor })
+          )
+        ).toEqual({ status: 400, code: "VALIDATION_ERROR" });
       });
 
       it("reaches every page of work past what one request reads", async () => {
