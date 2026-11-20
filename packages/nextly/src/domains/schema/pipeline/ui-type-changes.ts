@@ -23,6 +23,7 @@ import {
 import {
   entityLabel,
   type EntityTypeChangeInput,
+  perLanguageAfter,
   perLanguageBefore,
   refuseFieldTypeChanges,
 } from "../value-conversion/type-change/field-type-changes";
@@ -81,7 +82,7 @@ function builderSaved(desired: DesiredSchema): SavedEntity[] {
 function entityInput(
   saved: SavedEntity
 ): Omit<EntityTypeChangeInput, "previous" | "next" | "renamed"> {
-  const { kind, entity, previous } = saved;
+  const { kind, entity, previous, next } = saved;
   return {
     label: entityLabel(kind, entity.slug),
     table: entity.tableName,
@@ -91,6 +92,7 @@ function entityInput(
     // read from whichever of the two tables holds its column.
     translationsTable: `${entity.tableName}_locales`,
     ...perLanguageBefore(entity, entity.tableName, previous),
+    ...perLanguageAfter(entity, next),
     builtBy: builtByFor(kind, entity.builderOwned),
     // A field group keeps its fields on its component rows, where a many-to-many has a column.
     ...(kind === "fieldGroup" ? { componentRow: true } : {}),

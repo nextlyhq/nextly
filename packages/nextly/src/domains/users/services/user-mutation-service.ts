@@ -76,6 +76,8 @@ import { DELETED_PRINCIPALS_TABLE } from "../../../schemas/deleted-principals/ta
 import {
   EXTERNAL_IDENTITIES_TABLE,
   externalIdentitiesTables,
+  newExternalIdentityRow,
+  type ExternalIdentityFacts,
 } from "../../../schemas/external-identities";
 import { NOTICES_TABLE, noticesTables } from "../../../schemas/notices";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
@@ -320,6 +322,16 @@ export interface CreateExternalUserData {
   roleIds: string[];
   /** When the provider verified the address; stored as `emailVerified`. */
   emailVerifiedAt: Date;
+  /**
+   * The external identity the account is provisioned for, where the caller
+   * is the sign-in path that owns one: attached IN this creation's
+   * transaction, so the identity table's unique index decides the whole
+   * creation when two first sign-ins race each other past the read — the
+   * loser's account and its roles roll back with the refused insert rather
+   * than standing as an account no identity will ever resolve to. A caller
+   * creating an external account without an identity omits it.
+   */
+  identity?: ExternalIdentityFacts;
 }
 
 /**
@@ -961,7 +973,9 @@ export class UserMutationService extends BaseService {
    * Roles are validated and assigned INSIDE the insert's transaction, unlike
    * `createLocalUser`, which assigns them afterwards and swallows failures —
    * that would leave an active account with fewer privileges than it was
-   * created with, and nothing to say so.
+   * created with, and nothing to say so. An `identity` the caller brings is
+   * attached in that same transaction, for the same reason: an account the
+   * identity table refused must not stand.
    */
   async createExternalUser(
     input: CreateExternalUserData,
@@ -1156,6 +1170,22 @@ export class UserMutationService extends BaseService {
             roleId: role.id,
             createdAt: now,
           });
+        }
+
+        // The identity the account is provisioned for, when the caller
+        // brought one, in the same transaction as the account it belongs to:
+        // two first sign-ins for one identity both pass the read that
+        // precedes them, and the table's unique index is what actually
+        // refuses the second — so its refusal must take the account and its
+        // roles with it rather than leaving an account no identity will ever
+        // resolve to. The row is built by the one builder the explicit link
+        // writes through, so both attaching doors store one shape.
+        if (input.identity !== undefined) {
+          await txDb
+            .insert(
+              externalIdentitiesTables(this.dialect).nextlyExternalIdentities
+            )
+            .values(newExternalIdentityRow(input.identity, newUserId));
         }
 
         // The CANONICAL decision, asked about the account that now exists,

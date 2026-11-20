@@ -117,6 +117,20 @@ function placedByHeader(content: string, base: string): Placed | undefined {
   };
 }
 
+/**
+ * The migrations a blank migration's `content` says it was written after: the parent and the
+ * merges its header states (`blankLineHeader`), none where it states no place. For a reader that
+ * must not take a file away from under a migration written from it.
+ */
+export function blankWrittenFrom(content: string): string[] {
+  const placed = placedByHeader(content, "");
+  if (placed === undefined) return [];
+  return [
+    ...(typeof placed.parent === "string" ? [placed.parent] : []),
+    ...placed.merges,
+  ];
+}
+
 /** The columns an element of a table names: an index's, a key's. */
 function columnsNamedBy(element: Record<string, unknown>): string[] {
   const columns = Array.isArray(element.columns) ? element.columns : [];

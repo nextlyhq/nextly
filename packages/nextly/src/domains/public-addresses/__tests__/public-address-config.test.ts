@@ -81,10 +81,11 @@ describe("a public address declared in code", () => {
 });
 
 describe("two Singles at one address", () => {
+  // Reported where the configuration is loaded or started, with every other problem in it.
   it("stops the configuration, naming both", () => {
-    expect(() =>
-      defineConfig({ singles: [page("home", "/"), page("landing", "/")] })
-    ).toThrow(/Singles "home" and "landing" are both at "\/"/);
+    expect(
+      problemText({ singles: [page("home", "/"), page("landing", "/")] })
+    ).toMatch(/Singles "home" and "landing" are both at "\/"/);
   });
 
   it("is told apart from two addresses that differ", () => {

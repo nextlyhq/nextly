@@ -1368,7 +1368,13 @@ export function defineCollection<
 
     // Marked as declared through this function, so a start refuses it should the configuration's
     // load find a problem this call could not, such as a field type nothing registers.
-    return markDeclaredByDefine(normalized, systemFields);
+    // Recorded as they leave normalization: the address rule may have wrapped the system `slug`
+    // (`withOwnAddressRule`), and that wrapped field is the one the collection carries. They
+    // come first, in the order added.
+    return markDeclaredByDefine(
+      normalized,
+      fieldsWithSystem.slice(0, systemFields.length)
+    );
   } catch (error) {
     if (accepted) throw error;
     return markDeclaredByDefine({ ...config }) as unknown as CollectionConfig;

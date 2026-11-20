@@ -18,6 +18,7 @@ import { useState } from "react";
 import type {
   WorkflowAssignee,
   WorkflowSettingsView,
+  WorkflowStageSummary,
   WorkflowSummary,
 } from "@admin/types/workflows";
 
@@ -80,110 +81,150 @@ export function DefaultReviewerSection({
 
   return (
     <div className="space-y-4">
-      {stages.map(stage => {
-        const field = `defaultReviewers.${stage.name}`;
-        const label = stageLabel(workflow, settings, stage.name);
-        const stored = settings.defaultReviewers[stage.name];
-        const storedKey = stored ? assigneeKey(stored) : NONE;
-        const draft = drafts[stage.name] ?? storedKey;
-        const primary = primaryStepOf(workflow, stage.name);
-        const options = optionsFor(stage.name);
-        const listed = options.some(
-          option => assigneeKey(option.assignee) === storedKey
-        );
-        const selectId = `default-reviewer-${stage.name}`;
-        const error = errors[field];
-        return (
-          <div
-            key={stage.name}
-            className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:items-start"
-          >
-            <div className="space-y-1">
-              <StagePill
-                label={label}
-                colour={settings.labels[stage.name]?.colour}
-              />
-              {primary && (
-                <p className="text-xs text-muted-foreground">
-                  Must be able to take {primary.label}
-                </p>
+      {stages.map(stage => (
+        <ReviewerRow
+          key={stage.name}
+          workflow={workflow}
+          settings={settings}
+          stage={stage}
+          draft={drafts[stage.name]}
+          onDraft={value =>
+            setDrafts(current => ({ ...current, [stage.name]: value }))
+          }
+          onSaved={() =>
+            setDrafts(current =>
+              Object.fromEntries(
+                Object.entries(current).filter(([name]) => name !== stage.name)
+              )
+            )
+          }
+          options={optionsFor(stage.name)}
+          nameOf={nameOf}
+          canChange={canChange}
+          saving={saving}
+          errors={errors}
+          onSave={onSave}
+        />
+      ))}
+    </div>
+  );
+}
+
+interface ReviewerRowProps
+  extends Pick<
+    DefaultReviewerSectionProps,
+    | "workflow"
+    | "settings"
+    | "nameOf"
+    | "canChange"
+    | "saving"
+    | "errors"
+    | "onSave"
+  > {
+  stage: WorkflowStageSummary;
+  /** The choice not yet saved, by its key; absent where none was made. */
+  draft: string | undefined;
+  onDraft: (key: string) => void;
+  /** Forgets the choice once it is saved. */
+  onSaved: () => void;
+  options: ReviewerOption[];
+}
+
+/** One review stage's default reviewer: its pill, its picker and Save, or its reviewer read-only. */
+function ReviewerRow({
+  workflow,
+  settings,
+  stage,
+  draft: chosen,
+  onDraft,
+  onSaved,
+  options,
+  nameOf,
+  canChange,
+  saving,
+  errors,
+  onSave,
+}: ReviewerRowProps): React.JSX.Element {
+  const field = `defaultReviewers.${stage.name}`;
+  const label = stageLabel(workflow, settings, stage.name);
+  const stored = settings.defaultReviewers[stage.name];
+  const storedKey = stored ? assigneeKey(stored) : NONE;
+  const draft = chosen ?? storedKey;
+  const primary = primaryStepOf(workflow, stage.name);
+  const listed = options.some(
+    option => assigneeKey(option.assignee) === storedKey
+  );
+  const selectId = `default-reviewer-${stage.name}`;
+  const error = errors[field];
+  return (
+    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:items-start">
+      <div className="space-y-1">
+        <StagePill label={label} colour={settings.labels[stage.name]?.colour} />
+        {primary && (
+          <p className="text-xs text-muted-foreground">
+            Must be able to take {primary.label}
+          </p>
+        )}
+      </div>
+      {canChange ? (
+        <div className="space-y-1">
+          <label htmlFor={selectId} className="sr-only">
+            Default reviewer for {label}
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <select
+              id={selectId}
+              value={draft}
+              disabled={saving === field}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? `${selectId}-error` : undefined}
+              onChange={event => onDraft(event.target.value)}
+              className="block min-h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground"
+            >
+              <option value={NONE}>No default reviewer</option>
+              {stored && !listed && (
+                <option value={storedKey}>
+                  {nameOf(stored)} (no longer offered)
+                </option>
               )}
-            </div>
-            {canChange ? (
-              <div className="space-y-1">
-                <label htmlFor={selectId} className="sr-only">
-                  Default reviewer for {label}
-                </label>
-                <div className="flex flex-wrap gap-2">
-                  <select
-                    id={selectId}
-                    value={draft}
-                    disabled={saving === field}
-                    aria-invalid={error ? true : undefined}
-                    aria-describedby={error ? `${selectId}-error` : undefined}
-                    onChange={event =>
-                      setDrafts(current => ({
-                        ...current,
-                        [stage.name]: event.target.value,
-                      }))
-                    }
-                    className="block min-h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm text-foreground"
-                  >
-                    <option value={NONE}>No default reviewer</option>
-                    {stored && !listed && (
-                      <option value={storedKey}>
-                        {nameOf(stored)} (no longer offered)
-                      </option>
-                    )}
-                    {options.map(option => (
-                      <option
-                        key={assigneeKey(option.assignee)}
-                        value={assigneeKey(option.assignee)}
-                      >
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={draft === storedKey || saving === field}
-                    aria-label={`Save default reviewer for ${label}`}
-                    onClick={() => {
-                      void onSave(stage.name, parseKey(draft)).then(saved => {
-                        if (saved) {
-                          setDrafts(current =>
-                            Object.fromEntries(
-                              Object.entries(current).filter(
-                                ([name]) => name !== stage.name
-                              )
-                            )
-                          );
-                        }
-                      });
-                    }}
-                  >
-                    Save
-                  </Button>
-                </div>
-                {error && (
-                  <p
-                    id={`${selectId}-error`}
-                    className="text-xs text-danger-text"
-                    role="alert"
-                  >
-                    {error}
-                  </p>
-                )}
-              </div>
-            ) : (
-              <p className="text-sm">
-                {stored ? nameOf(stored) : "No default reviewer"}
-              </p>
-            )}
+              {options.map(option => (
+                <option
+                  key={assigneeKey(option.assignee)}
+                  value={assigneeKey(option.assignee)}
+                >
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              size="sm"
+              disabled={draft === storedKey || saving === field}
+              aria-label={`Save default reviewer for ${label}`}
+              onClick={() => {
+                void onSave(stage.name, parseKey(draft)).then(saved => {
+                  if (saved) onSaved();
+                });
+              }}
+            >
+              Save
+            </Button>
           </div>
-        );
-      })}
+          {error && (
+            <p
+              id={`${selectId}-error`}
+              className="text-xs text-danger-text"
+              role="alert"
+            >
+              {error}
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="text-sm">
+          {stored ? nameOf(stored) : "No default reviewer"}
+        </p>
+      )}
     </div>
   );
 }

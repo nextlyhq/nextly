@@ -643,7 +643,11 @@ export function dispatchIdentities(
   body: unknown
 ): Promise<unknown> {
   const handler = IDENTITY_METHODS[method];
-  if (!handler) throw new Error(`Unknown method: ${method}`);
+  if (!handler) {
+    throw NextlyError.internal({
+      logContext: { reason: "unknown-identity-method", method },
+    });
+  }
   return handler.execute(services.identities, params, body);
 }
 
