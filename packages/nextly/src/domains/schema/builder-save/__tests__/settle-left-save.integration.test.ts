@@ -2170,6 +2170,68 @@ describe.each(getConfiguredTestDialects())(
       expect(wroteFirst, "the work the caller does first ran").toBe(0);
     }, 300_000);
 
+    // A save of the entity whose own record stands is refused before anything is written too, the
+    // work its caller does first included: another host's applying save of it, or this host's that
+    // its settle left and that this save does not finish.
+    it.each(["another-host", "this host"])(
+      "refuses a save over its entity's left record from %s before the work its caller does first",
+      async host => {
+        const t = await boot();
+        await new MetaService(t.adapter, consoleLogger).set(
+          "builder-save-in-progress:collection:settle_notes",
+          {
+            id: "a-left-save-of-notes",
+            kind: "collection",
+            slug: "settle_notes",
+            startedAt: new Date().toISOString(),
+            host: host === "this host" ? hostname() : host,
+            database: "unknown",
+            definitionFile: DEFINITION,
+            definitionBefore: null,
+            definitionAfter: "a definition this save does not write",
+            applies: true,
+          }
+        );
+        const { container } = await import("../../../../di/container");
+        const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
+        let wroteFirst = 0;
+
+        const answer = await answerOf(
+          writeCollectionSave(
+            {
+              ...setup,
+              adapter: t.adapter,
+              applies: true,
+              logger: {
+                info: () => undefined,
+                warn: () => undefined,
+                error: () => undefined,
+              },
+            },
+            {
+              slug: "settle_notes",
+              previous: null,
+              entity: {
+                slug: "settle_notes",
+                labels: { singular: "Note", plural: "Notes" },
+                fields: [text("title")],
+              } as never,
+              change: "create",
+            },
+            {
+              beforeWrite: async () => {
+                wroteFirst += 1;
+              },
+            }
+          )
+        );
+
+        expect(answer).toContain("left part-way");
+        expect(wroteFirst, "the work the caller does first ran").toBe(0);
+      },
+      300_000
+    );
+
     // The start reads its configuration as it always has, from the process's own folder: an app
     // that hands its configuration to `getNextly` may give a `basePath` holding no configuration
     // file, and a pending save there still has its files run.
