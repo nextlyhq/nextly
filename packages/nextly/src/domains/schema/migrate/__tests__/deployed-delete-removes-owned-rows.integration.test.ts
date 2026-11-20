@@ -563,7 +563,14 @@ describe.each(getConfiguredTestDialects())(
         })};\n`
       );
       return runNextly(
-        ["migrate", `--accept-data-loss=${NOTES_TABLE}`, "--non-interactive"],
+        [
+          "migrate",
+          `--accept-data-loss=${NOTES_TABLE}`,
+          "--non-interactive",
+          // A killed run leaves its lock until it lapses; with nothing else running, the next run
+          // clears it, as an operator does after a crash.
+          "--force-unlock",
+        ],
         dir,
         {
           DATABASE_URL: url,
