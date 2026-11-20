@@ -14,12 +14,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { appLocalization } from "../../i18n/configured-locales";
 import { offeredCompanionRename } from "../../i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
-import { linkMoveOf } from "../legacy-preview/translate";
 import { previewDesiredSchema } from "../pipeline/preview";
 import {
   BrowserPromptDispatcher,
@@ -27,16 +25,23 @@ import {
   type LegacyResolutionsBundle,
 } from "../pipeline/prompt-dispatcher/browser";
 import { PromptCancelledError } from "../pipeline/prompt-dispatcher/errors";
+import { pushQuestionSet } from "../pipeline/pushschema-pipeline";
 import type { Resolution } from "../pipeline/resolution/types";
 import type { DesiredSchema } from "../pipeline/types";
 import {
+  columnsNotDescribed,
+  leftoverColumns,
+} from "../services/collection-schema-apply";
+import {
   fieldsStoredOnRow,
   toSnakeCase,
-  usesJunctionTable,
   type ColumnOrigin,
 } from "../services/field-column-descriptor";
 import { rowFieldDiff } from "../services/field-diff";
-import { columnDescriptorAt } from "../value-conversion/type-change/field-type";
+import {
+  fieldsLosingTheirColumn,
+  relationshipsDroppingLinks,
+} from "../services/field-storage-moves";
 
 /**
  * Refuse a dialog save whose request leaves a question the push asks unanswered, judged by the
@@ -61,6 +66,12 @@ export async function refuseUnansweredDialogQuestions(args: {
   renameResolutions: readonly BrowserRenameResolution[];
   eventResolutions: readonly Resolution[];
   legacy?: LegacyResolutionsBundle;
+  /**
+   * Set by a collection's dialog: a column of its own table that no field describes, left
+   * unanswered by the request, is refused as the push refuses it (`columnsNotDescribed`), rather
+   * than as cancelled.
+   */
+  collection?: { slug: string };
 }): Promise<void> {
   const preview = await previewDesiredSchema({
     desired: args.desired,
@@ -71,9 +82,6 @@ export async function refuseUnansweredDialogQuestions(args: {
   const candidates = preview.candidates.filter(
     candidate => candidate.tableName === args.tableName
   );
-  // A drop a rename candidate covers is asked as that pair, as the push asks it: answering
-  // `drop_and_add` is the consent to lose its values.
-  const covered = new Set(candidates.map(candidate => candidate.fromColumn));
   // The drops the request answers for are those of the fields the change removes, as the dialog
   // lists them for the person to confirm (`rowFieldDiff`), a field inside a group with no name
   // included, and those of the fields it keeps by name that lose their column on the row
@@ -143,11 +151,15 @@ export async function refuseUnansweredDialogQuestions(args: {
       unconfirmed.map(field => field.name)
     );
   }
-  const events = preview.events.filter(
-    event =>
-      event.tableName === args.tableName &&
-      (event.kind !== "destructive_drop" ||
-        (removed.has(event.columnName) && !covered.has(event.columnName)))
+  // The push's own questions of the entity's table (`pushQuestionSet`: a drop a rename candidate
+  // covers is asked as that pair), of which the drops asked are those of the fields the change
+  // removes or takes the column of, as the dialog lists them.
+  const asked = pushQuestionSet({
+    candidates,
+    events: preview.events.filter(event => event.tableName === args.tableName),
+  });
+  const events = asked.events.filter(
+    event => event.kind !== "destructive_drop" || removed.has(event.columnName)
   );
   if (candidates.length === 0 && events.length === 0) return;
   const answer = await new BrowserPromptDispatcher(
@@ -160,73 +172,30 @@ export async function refuseUnansweredDialogQuestions(args: {
     classification: preview.classification,
     channel: "browser",
   });
-  if (!answer.proceed) throw cancelled(args.tableName, []);
-}
-
-/**
- * The row's fields, as they were, that the change keeps by name but that no longer have a column
- * there: a field turned into a field group, whose values its group's own table would hold, drops
- * its column and what it holds, as a removed field does. Whether a field has a column is asked of
- * the row it sits on, by its builder's own rule (`columnDescriptorAt`): a field group's row keeps a
- * many-to-many in a column of its own, where a collection keeps it in a link table. A relationship
- * that now keeps its links in a link table is asked of as a move of its links
- * (`relationshipsDroppingLinks`), confirmed by its name.
- */
-function fieldsLosingTheirColumn(
-  oldFields: readonly FieldDefinition[],
-  newFields: readonly FieldDefinition[],
-  row: { dialect: SupportedDialect; builtBy: ColumnOrigin }
-): FieldDefinition[] {
-  const at = {
-    builtBy: row.builtBy,
-    ...(row.builtBy === "fieldGroup" ? { componentRow: true } : {}),
-  };
-  const hasColumn = (field: FieldDefinition) =>
-    columnDescriptorAt(field, row.dialect, at) !== null;
-  const after = new Map(
-    fieldsStoredOnRow(newFields).map(field => [field.name, field] as const)
-  );
-  return fieldsStoredOnRow(oldFields).flatMap(field => {
-    const kept = after.get(field.name);
-    return kept !== undefined &&
-      hasColumn(field) &&
-      !hasColumn(kept) &&
-      !usesJunctionTable(kept)
-      ? [field]
-      : [];
-  });
-}
-
-/**
- * The relationships, as they were, whose links the save drops by a link table: a many-to-many
- * removed, and one kept by name whose links move into, out of or to another link table
- * (`linkMoveOf`, the rule the dialog's preview warns by), none of which carries a link over. Only a
- * collection's or a Single's row keeps a link table; a field group's row keeps a many-to-many in a
- * column of its own, which `fieldsLosingTheirColumn` asks of.
- */
-function relationshipsDroppingLinks(
-  oldFields: readonly FieldDefinition[],
-  newFields: readonly FieldDefinition[],
-  builtBy: ColumnOrigin,
-  dialect: SupportedDialect
-): FieldDefinition[] {
-  if (builtBy === "fieldGroup") return [];
-  const before = fieldsStoredOnRow(oldFields);
-  const now = fieldsStoredOnRow(newFields);
-  const after = new Map(now.map(field => [field.name, field] as const));
-  // A many-to-many renamed under the same target is carried: its link table is renamed with every
-  // link, by the save's own pairing (`detectJunctionRename`), so it drops none.
-  const carried = new DynamicCollectionSchemaService(
-    undefined,
-    dialect
-  ).detectJunctionRename(before, now)?.from.name;
-  return before.filter(field => {
-    if (field.name === carried) return false;
-    const kept = after.get(field.name);
-    return kept === undefined
-      ? usesJunctionTable(field)
-      : linkMoveOf(field, kept) !== null;
-  });
+  if (answer.proceed) return;
+  // What the dispatch left unanswered on the collection's own table, by the push's own decision
+  // once the answers are applied (`leftoverColumns`): a column of it that no field describes,
+  // before or after the change, is one the Builder never made, and the save is refused naming it,
+  // as the push refuses it. One the request answers, as a rename onto a field it adds or a drop it
+  // confirms, is not left over. Any other unanswered question is the cancellation it is.
+  if (args.collection !== undefined) {
+    const described = new Set(
+      [
+        ...fieldsStoredOnRow(args.oldFields),
+        ...fieldsStoredOnRow(args.newFields),
+      ].map(field => toSnakeCase(field.name))
+    );
+    const leftover = leftoverColumns(
+      args.tableName,
+      { candidates, events },
+      answer,
+      args.renameResolutions
+    ).filter(column => !described.has(column));
+    if (leftover.length > 0) {
+      throw columnsNotDescribed(args.collection.slug, args.tableName, leftover);
+    }
+  }
+  throw cancelled(args.tableName, []);
 }
 
 /**

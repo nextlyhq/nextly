@@ -19,9 +19,9 @@
  * `SQLITE_PUSH_KEEPS_PART_WAY` says which, and moves its cases between the two. A save that rolled
  * back whole never reaches the judgement of what applied at all.
  *
- * A collection's update through the push does not hand the writer its registry write yet (the
- * collection metadata service writes the row after the writer returns), so its stop keeps its files
- * for `nextly migrate:resolve` as before: its cases are expected to fail until it does.
+ * A collection's update through the push settles the same way: the collection metadata service
+ * hands the writer its registry write for the settle, with the fields that applied, and brings
+ * this process's running shape to them, so a write and a read through the API reach what landed.
  *
  * Where what the settle writes fails, the save is left as it stopped, its record that it is in
  * progress kept, and the failure that stopped it is still the one reported, the settle's after it.
@@ -70,6 +70,8 @@ import {
 } from "../../migrate-create/writer-hold";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
+import { calculateSchemaHash } from "../../services/schema-hash";
+import { loadUiSchema } from "../../ui-schema/loader";
 import { judgeStoppedSave } from "../stopped-save";
 
 // The judgement of what a stopped save applied, watched as it runs: a save that rolled back whole
@@ -609,6 +611,44 @@ describe.each(getConfiguredTestDialects())(
       return (fields ?? []).map(field => String(field.name)).sort();
     }
 
+    /** The registry row's stored fields, as saved, and its schema hash. */
+    async function storedRowOf(
+      t: TestNextly,
+      path: SavePath
+    ): Promise<{ fields: unknown; schemaHash: unknown }> {
+      clearRegistryRowCache();
+      const [row] = await t.adapter.select<{
+        fields: unknown;
+        schemaHash: unknown;
+      }>(path.registry, {
+        columns: ["fields", "schemaHash"],
+        where: { and: [{ column: "slug", op: "=", value: path.slug }] },
+      });
+      return {
+        fields:
+          typeof row?.fields === "string"
+            ? JSON.parse(row.fields)
+            : row?.fields,
+        schemaHash: row?.schemaHash,
+      };
+    }
+
+    /** The registry row's migration status. */
+    async function migrationStatusOf(
+      t: TestNextly,
+      path: SavePath
+    ): Promise<unknown> {
+      clearRegistryRowCache();
+      const [row] = await t.adapter.select<{ migrationStatus: unknown }>(
+        path.registry,
+        {
+          columns: ["migrationStatus"],
+          where: { and: [{ column: "slug", op: "=", value: path.slug }] },
+        }
+      );
+      return row?.migrationStatus;
+    }
+
     /** The field names the definition file records for the entity. */
     function definedFields(path: SavePath): string[] {
       const file = join(basePath, DEFINITION);
@@ -689,10 +729,6 @@ describe.each(getConfiguredTestDialects())(
       beforeEach(() => {
         vi.mocked(judgeStoppedSave).mockClear();
       });
-      // The collection update's push writes its registry row after the writer returns, so the
-      // writer has no registry write to settle it with: it keeps its files, as before.
-      const settles = path.push === true ? it.fails : it;
-
       // Settled to what applied, the save writes another definition than the one it set out to:
       // its record says so first, so a process stopped after that write leaves a record a later
       // settle judges against what is on disk, not the shape first asked for.
@@ -754,7 +790,7 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      (keepsPartWay(dialect, path) ? settles : it.skip)(
+      (keepsPartWay(dialect, path) ? it : it.skip)(
         "stopped at its second addition, keeps the first: one file for it, recorded applied, the definition and the registry at that shape",
         async () => {
           const t = await boot();
@@ -820,6 +856,33 @@ describe.each(getConfiguredTestDialects())(
           if (path.read !== undefined) {
             expect.soft(await path.read(t)).toMatchObject({ heading: "Hello" });
           }
+          if (path.push === true) {
+            // The update's row records what landed as applied, not the request.
+            expect
+              .soft(await migrationStatusOf(t, path), "the row's status")
+              .toBe("applied");
+            // Its schema hash is the one of the fields it holds, not of those asked for.
+            const stored = await storedRowOf(t, path);
+            expect
+              .soft(stored.schemaHash, "the row's schema hash")
+              .toBe(
+                calculateSchemaHash(
+                  stored.fields as Parameters<typeof calculateSchemaHash>[0]
+                )
+              );
+            // This process's running shape reaches what landed: a value written to `alpha`
+            // through the API is read back.
+            await path.store?.(t, { heading: "Second", alpha: "Landed" });
+            const found = (await t.nextly.find({
+              collection: path.slug,
+            } as never)) as { items: Record<string, unknown>[] };
+            expect
+              .soft(
+                found.items.map(item => item.alpha),
+                "`alpha` read through the API"
+              )
+              .toContain("Landed");
+          }
           // The failure names each change the save asked for, as applied or not.
           expect(namedChanges(outcome.error), "the report").toEqual([
             { field: "alpha", change: "add", applied: true },
@@ -848,6 +911,66 @@ describe.each(getConfiguredTestDialects())(
           expect(saved.filter(f => !appliedNow.includes(f))).toEqual([]);
 
           await expectReplayGives(path, after);
+        },
+        300_000
+      );
+
+      // A save whose settings name a field (the title it uses, say) is settled only where the
+      // definition with what landed still holds: one naming a field that did not land is left as
+      // it stopped, for `nextly migrate:resolve`, and the definition still loads.
+      (keepsPartWay(dialect, path) && path.push === true ? it : it.skip)(
+        "whose title names the field that did not land, is not settled, keeps its files and still loads",
+        async () => {
+          const t = await boot();
+          await path.create(t, [text("heading")]);
+          const folderBefore = filesBelow(history());
+          const appliedBefore = await appliedFiles(t);
+          const failed = failStatement(t, adding(path.table, "beta"));
+
+          const outcome = await outcomeOf(
+            dispatchCollections(
+              {} as ServiceContainer,
+              "updateCollection",
+              { collectionName: path.slug },
+              {
+                fields: [text("heading"), text("alpha"), text("beta")],
+                useAsTitle: "beta",
+              }
+            )
+          );
+
+          expect(failed(), "no statement adding `beta` was met").toBe(1);
+          vi.restoreAllMocks();
+          vi.stubEnv("NODE_ENV", "development");
+          // The staging: `alpha`'s statement committed before `beta`'s failed.
+          const live = await liveColumns(t, path.table);
+          expect(live, "`alpha` was not added before `beta` failed").toContain(
+            "alpha"
+          );
+          expect(live).not.toContain("beta");
+          expect(outcome.failed, "the save was reported as going through").toBe(
+            true
+          );
+          if (!outcome.failed) return;
+          // Not settled: the stopped file kept, recorded nowhere, the row as before.
+          const sql = filesBelow(history()).filter(
+            f => f.endsWith(".sql") && !folderBefore.includes(f)
+          );
+          expect(sql, "the save's files").toHaveLength(1);
+          expect(
+            readFileSync(join(history(), sql[0]!), "utf8").split("-- DOWN")[0]
+          ).toMatch(/["`]beta["`]/);
+          expect
+            .soft(await appliedFiles(t), "the ledger")
+            .toEqual(appliedBefore);
+          expect
+            .soft(await registryFields(t, path), "the registry row")
+            .toEqual(["heading"]);
+          // The definition still loads.
+          await expect(
+            loadUiSchema({ projectRoot: basePath, uiSchemaFile: DEFINITION }),
+            "the definition"
+          ).resolves.toBeDefined();
         },
         300_000
       );
@@ -1160,7 +1283,7 @@ describe.each(getConfiguredTestDialects())(
         300_000
       );
 
-      (keepsPartWay(dialect, path) && path.push !== true ? it : it.skip)(
+      (keepsPartWay(dialect, path) ? it : it.skip)(
         "whose settle fails at its ledger write, is put back as it stopped, recorded in progress, and reports the stop first",
         async () => {
           const t = await boot();
@@ -1199,9 +1322,12 @@ describe.each(getConfiguredTestDialects())(
           vi.stubEnv("NODE_ENV", "development");
           expect(outcome.failed).toBe(true);
           if (!outcome.failed) return;
-          // The stop's own failure first, then the settle's, never the settle's alone.
+          // The stop's own failure first, then the settle's, never the settle's alone. Through the
+          // push the stop is told as the push's failure, through a file as the file's.
           expect(messageOf(outcome.error)).toMatch(
-            /failed part-way, and the statements before the failure stayed applied: .*Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first\.$/s
+            path.push === true
+              ? /^(?!Recording).+ Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first\.$/s
+              : /failed part-way, and the statements before the failure stayed applied: .*Recording what of it applied failed too, so the save stays recorded as in progress, to be settled again: Another run recorded the file first\.$/s
           );
           expect(namedChanges(outcome.error), "a report").toBeUndefined();
           // The stopped file, its snapshot and the definition as the save left them, and no

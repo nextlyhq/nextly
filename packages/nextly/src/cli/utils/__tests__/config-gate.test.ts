@@ -134,3 +134,29 @@ describe("an app's entity a plugin's setup repairs by renaming it", () => {
     );
   });
 });
+
+describe("a configuration cached from one project", () => {
+  // A long-lived process that loaded one project's configuration is no answer for another
+  // project, which a caller that reads the entities would then act on with the first one's.
+  it("is not given for another project that has none, where the caller refuses one", async () => {
+    exported.config = {
+      collections: [
+        { slug: "notes", fields: [{ name: "body", type: "text" }] },
+      ],
+    };
+    await loadConfig({ cwd: project() });
+    const other = realpathSync(
+      mkdtempSync(join(tmpdir(), "nextly-config-gate-other-"))
+    );
+    made.push(other);
+
+    const refused = await loadConfig({ cwd: other, missing: "refuse" }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      logContext: { reason: "config-missing" },
+    });
+  });
+});

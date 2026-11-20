@@ -109,11 +109,13 @@ describeEachDialect("a translated field that is renamed", dialect => {
   }
 
   /**
-   * Whether a save of `table`'s entity runs the migration file it writes, planned from the
-   * migration history: a Single's and a field group's do; a collection's is still applied by its
-   * push.
+   * Whether the save `path` names runs the migration file it writes, planned from the migration
+   * history: every schema dialog's, and a Single's settings save; a collection's settings save
+   * ("the builder saves the collection", "the collection's settings") is still applied by its push.
    */
-  const runsItsFile = (table: string) => !table.startsWith("dc_");
+  const runsItsFile = (path: string) =>
+    !path.startsWith("the builder saves the collection") &&
+    !path.startsWith("the collection's settings");
 
   /**
    * A refused save's drift, told with the way on that works for a save, and no command: the save
@@ -1109,7 +1111,8 @@ describeEachDialect("a translated field that is renamed", dialect => {
 
   it("refuses the schema dialog's rename of a translated field into a type its values do not fit, and changes nothing", async () => {
     // Text and a select keep the same column, so the companion's rename would carry "Hello" and
-    // "Hola" into a select whose only option is "a": judged first, over each language's value.
+    // "Hola" into a select whose only option is "a". The request names that rename, which the
+    // dialog never offers.
     const id = await seedCollection();
 
     const refused = await dispatchCollections(
@@ -1128,7 +1131,18 @@ describeEachDialect("a translated field that is renamed", dialect => {
       (error: unknown) => error
     );
 
-    expect(JSON.stringify(refused)).toMatch(/TYPE_CHANGE_LOSES_VALUES/);
+    // A rename is offered only between fields of one type and storage, so the dialog never offers
+    // this pair, and an answer naming it counts for nothing. Where text and a select share a column
+    // type (SQLite, PostgreSQL), the dialog's save runs its own file, judges the change with no
+    // rename and refuses the translated field's removal beside the added one. On MySQL the select's
+    // column is another type, so the push applies the change (`pushCarriesValues`), which judges
+    // the type change first. Either way it is refused before anything is written, and every
+    // language is kept.
+    expect(JSON.stringify(refused)).toMatch(
+      dialect === "mysql"
+        ? /TYPE_CHANGE_LOSES_VALUES/
+        : /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
+    );
     expect(await companionValues("dc_posts", "heading", id)).toEqual({
       en: "Hello",
       es: "Hola",
@@ -2022,6 +2036,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
   it.each(MATRIX)(
     "keeps every language or refuses, when $path is saved, $storage, answer $answer, $state, $target",
     async ({
+      path,
       table,
       seed,
       save,
@@ -2050,7 +2065,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       // runs, ahead of everything but a storage change.
       if (
         state === "part-applied" &&
-        (runsItsFile(table)
+        (runsItsFile(path)
           ? !mustRefuse(answer, storage)
           : storage === "same storage")
       ) {

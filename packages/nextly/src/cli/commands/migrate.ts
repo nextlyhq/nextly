@@ -134,6 +134,7 @@ import {
   type AppMigrationStanding,
   type FirstRun,
 } from "../../domains/schema/migrate/first-run";
+import { refuseForkedHistory } from "../../domains/schema/migrate/history-line";
 import {
   outsideTransactionNotice,
   runMigrationStatements,
@@ -174,7 +175,6 @@ import {
   asServiceLogger,
   reconcileMigrationMetadata,
 } from "../../domains/schema/migrate/reconcile-metadata";
-import { refuseForkedHistory } from "../../domains/schema/migrate/history-line";
 import { refuseUnwrittenChanges } from "../../domains/schema/migrate/refuse-unwritten-changes";
 import {
   findRegistryDisagreements,
@@ -673,6 +673,8 @@ export async function runMigrate(
   let configResult: Awaited<ReturnType<typeof loadConfig>>;
   try {
     configResult = await loadConfig({
+      // Reads the app's entities: with no configuration file it refuses rather than act on none.
+      missing: "refuse",
       configPath: options.config,
       cwd: options.cwd,
       debug: options.verbose,

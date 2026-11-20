@@ -120,7 +120,9 @@ function inReview(
     steps: [approveStep()],
     waitingFor: null,
     lastMove: null,
-    reviewedVersionNo: null,
+    // The shared part's version under review as its review state names it: the
+    // newest of its rows below. A language's is read from its own list.
+    reviewedVersionNo: part === null ? 4 : null,
     ...over,
   };
 }

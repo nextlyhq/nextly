@@ -632,6 +632,13 @@ exports[`each code, as a command ends with it > CONFIG_LOAD_FAILED 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/config-load-failed  (CONFIG_LOAD_FAILED)"
 `;
 
+exports[`each code, as a command ends with it > CONFIG_MISSING 1`] = `
+"✗ No Nextly configuration file was found in /home/you/app.
+  Why:  Looked for \`nextly.config.ts\`, \`nextly.config.mts\`, \`nextly.config.js\` or \`nextly.config.mjs\` in the project folder, \`src/\` and \`config/\`.
+  Next: Pass \`-c\` the path of your configuration file, or start a new project with \`npx create-nextly-app\`.
+  Docs: https://nextlyhq.com/docs/cli/errors/config-missing  (CONFIG_MISSING)"
+`;
+
 exports[`each code, as a command ends with it > CONFIG_NOT_FOUND 1`] = `
 "✗ \`-c config/nextly.config.ts\` names a configuration file that does not exist.
   Why:  Nothing is at /home/you/app/config/nextly.config.ts.

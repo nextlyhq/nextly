@@ -2036,7 +2036,12 @@ async function applyReloadHolding(
     const previousExtended = currentConfiguredExtensions();
     reloadUndo.push(() => publishConfiguredExtensions(previousExtended));
     clearConfigCache();
-    const result = await loadConfig();
+    // A reload a save starts refuses a missing configuration file, keeping the one it has: a file
+    // deleted or still being renamed is not a configuration that declares nothing. The start's
+    // own reload keeps the default, as a site without one starts today.
+    const result = await loadConfig({
+      missing: opts?.atStart === true ? "defaults" : "refuse",
+    });
     loadedConfig = result.config;
     // Watch exactly what this read: the config and every file it imported. Set
     // before the checks below, which may still refuse the edit; the fix for a
