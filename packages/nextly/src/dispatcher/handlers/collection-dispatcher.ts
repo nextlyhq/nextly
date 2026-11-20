@@ -2413,6 +2413,26 @@ async function dialogDesiredSchema(args: {
 }
 
 /**
+ * The push's questions, asked of a save whose own file carries the change, told the columns the
+ * save's planned moves carry into a group (`movedColumnsOf`), which are not drops.
+ */
+async function askQuestions(
+  change: {
+    questions?: (moved: readonly string[]) => Promise<void>;
+    collection: { tableName: string };
+  },
+  prepared: NonNullable<Awaited<ReturnType<typeof writerSaveOf>>>
+): Promise<void> {
+  if (change.questions === undefined) return;
+  const { movedColumnsOf } = await import(
+    "../../domains/schema/builder-save/collection-save"
+  );
+  await change.questions(
+    movedColumnsOf(prepared.deps, prepared.save, change.collection.tableName)
+  );
+}
+
+/**
  * A field change through the Builder save writer, when the app registered
  * one: written and, in development, run, or applied by `appliedBy` and then
  * recorded. Undefined without a writer, where the push pipeline applies the
@@ -2485,21 +2505,15 @@ async function saveThroughWriter(
   // refused by any of them leaves no archive rows behind (`beforeWrite`).
   const runsFile = prepared.deps.applies && !viaPush;
   if (runsFile) await change.fileRoad?.judge?.();
-  // Loaded here, where a save runs: the writer brings the migration generator
-  // and runner, which a request that writes no field change never needs.
-  const [{ writeCollectionSave, movedColumnsOf }, { appliedFieldsOf }] =
-    await Promise.all([
-      import("../../domains/schema/builder-save/collection-save"),
-      import("../../domains/schema/builder-save/stopped-save"),
-    ]);
-  // The columns the save's planned moves carry, which its questions do not ask to drop.
-  if (!viaPush && change.questions !== undefined) {
-    await change.questions(
-      movedColumnsOf(prepared.deps, prepared.save, change.collection.tableName)
-    );
-  }
+  if (!viaPush) await askQuestions(change, prepared);
   const archiving = runsFile ? change.fileRoad?.before : undefined;
   const beforeWrite = archiving === undefined ? {} : { beforeWrite: archiving };
+  // Loaded here, where a save runs: the writer brings the migration generator
+  // and runner, which a request that writes no field change never needs.
+  const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([
+    import("../../domains/schema/builder-save/collection-save"),
+    import("../../domains/schema/builder-save/stopped-save"),
+  ]);
   const registry = change.registry;
   const inFile = prepared.deps.applies && !viaPush && registry !== undefined;
   const result = await writeCollectionSave(
