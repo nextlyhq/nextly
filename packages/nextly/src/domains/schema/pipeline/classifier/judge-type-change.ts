@@ -12,8 +12,9 @@
 // MySQL it keeps two texts a unique column's collation holds as one. So on every database the push
 // also asks what the new field reads from each value, by the judge a Schema Builder save asks
 // (`value-conversion/type-change`), with the field the registry recorded before the apply and the
-// field the configuration declares now, and takes the worse of the two. Never a rule of its own:
-// a Builder save and a push name the same class for one change.
+// field the configuration declares now, and takes the worse of the two. Never a rule of its own,
+// with one difference a push alone has: a code-first field's own `validate` function is not asked
+// of stored values (`withoutOwnValidate`), since it is written for a whole entry and its request.
 //
 // @module domains/schema/pipeline/classifier/judge-type-change
 
@@ -58,6 +59,11 @@ import { builtByFor } from "../registered-collections";
 import type { DesiredSchema } from "../types";
 import { uniqueColumnLookup } from "../unique-columns";
 
+import {
+  rebuiltIndexRepeats,
+  type IndexedColumn,
+} from "./rebuilt-index-repeats";
+
 /**
  * An entity's fields before and after the apply, and how its table is made: what the per-value
  * judge reads a column's type change from. Plain data, so a type change carries it to the apply,
@@ -78,6 +84,12 @@ export interface FieldReadings {
    * or by a single-column unique index its entity declares.
    */
   unique?: true;
+  /**
+   * On SQLite, for each unique index of several columns the column is one of, the index's other
+   * columns as the live table names them, each with its type once the table is rebuilt: the
+   * values that, beside this column's, the index holds once.
+   */
+  uniqueWith?: readonly (readonly IndexedColumn[])[];
 }
 
 /** One offered type change, judged from the rows its column holds. */
@@ -159,7 +171,8 @@ function fieldReadingsOf(
   schema: DesiredSchema,
   table: string,
   field: FieldDefinition | undefined,
-  unique: boolean
+  unique: boolean,
+  uniqueWith: readonly (readonly IndexedColumn[])[]
 ): FieldReadings | undefined {
   if (field === undefined) return undefined;
   const owner = ownerOf(schema, table);
@@ -172,6 +185,7 @@ function fieldReadingsOf(
     builtBy: builtByFor(owner.kind, owner.e.builderOwned),
     ...(owner.kind === "fieldGroup" ? { componentRow: true as const } : {}),
     ...(unique ? { unique: true as const } : {}),
+    ...(uniqueWith.length > 0 ? { uniqueWith } : {}),
   };
 }
 
@@ -245,7 +259,8 @@ async function fieldVerdict(
       readings.unique === true
         ? { ...change, to: { ...change.to, unique: true } }
         : change
-    );
+    )
+    .map(withoutOwnValidate);
   const [judged] = await judgeFieldTypeChanges({
     db,
     dialect,
@@ -256,6 +271,22 @@ async function fieldVerdict(
   return judged === undefined
     ? null
     : { judgement: judged.result.judgement, cleared: judged.result.cleared };
+}
+
+/**
+ * `change` with the new field's own `validate` function left out, so the judge asks only the
+ * field's built-in rules of each stored value.
+ *
+ * That function is written for a whole entry and its request: it may read the entry's other
+ * fields, or who is writing. The judge has one stored value and neither, so the function would
+ * answer about an entry that does not exist, and a value it refused there would be cleared under
+ * a consent. It judges the value at the entry's next write, as it does for any rule added to a
+ * field whose type stays.
+ */
+function withoutOwnValidate<C extends { to: FieldDefinition }>(change: C): C {
+  if (typeof change.to.validate !== "function") return change;
+  const { validate: _left, ...to } = change.to;
+  return { ...change, to };
 }
 
 /** The rows a reason names, as one text, so two reasons naming the same rows compare equal. */
@@ -325,7 +356,78 @@ export async function judgeOfferedTypeChange(
     { judgement, cleared },
     await fieldVerdict(db, dialect, at.table, fieldReadings)
   );
-  return withRepeatsToClear(db, dialect, at, verdict, fieldReadings);
+  return withRepeatsAcrossColumns(
+    db,
+    at,
+    conversion.to.type,
+    await withRepeatsToClear(db, dialect, at, verdict, fieldReadings),
+    fieldReadings
+  );
+}
+
+/**
+ * `verdict`, blocked for `repeated`: rows a unique index would hold the same value in twice.
+ *
+ * @param count how many rows repeat, where `repeated` names only the first of them
+ */
+function blockedForRepeats(
+  verdict: ColumnVerdict,
+  repeated: readonly RowKey[],
+  count: number = repeated.length
+): ColumnVerdict {
+  if (repeated.length === 0) return verdict;
+  return {
+    judgement: {
+      class: "blocked",
+      reasons: [
+        ...verdict.judgement.reasons,
+        {
+          kind: "repeated",
+          class: reasonClass("repeated"),
+          rows: {
+            first: repeated.slice(0, AFFECTED_ROWS_BOUND),
+            count: Math.max(count, repeated.length),
+          },
+        },
+      ],
+    },
+    cleared: verdict.cleared,
+  };
+}
+
+/**
+ * `verdict`, blocked where a unique index of several columns would hold one set of values twice
+ * once SQLite's rebuild has kept each as its new type (`rebuiltIndexRepeats`): "1" and " 1" are
+ * two texts and one number, so two rows that differ only there become one set to an index of this
+ * column and another. Every column of the index is compared as the rebuild keeps it, so another
+ * of its columns changing type in the same apply is compared at its new type too.
+ *
+ * The rebuild makes the index after copying every value, so such a set ends the apply with the
+ * table already rebuilt. It is refused before any statement, naming the rows.
+ *
+ * @param type the column's type once the table is rebuilt
+ */
+async function withRepeatsAcrossColumns(
+  db: unknown,
+  at: { table: string; column: string; keyedBy: KeyedBy },
+  type: string,
+  verdict: ColumnVerdict,
+  readings: FieldReadings
+): Promise<ColumnVerdict> {
+  if (at.keyedBy !== "id") return verdict;
+  const repeated = new Map<string, RowKey>();
+  let count = 0;
+  for (const others of readings.uniqueWith ?? []) {
+    const found = await rebuiltIndexRepeats(
+      db,
+      at.table,
+      [{ column: at.column, type }, ...others],
+      AFFECTED_ROWS_BOUND
+    );
+    found.first.forEach(key => repeated.set(rowKeyText(key), key));
+    count = Math.max(count, found.count);
+  }
+  return blockedForRepeats(verdict, [...repeated.values()], count);
 }
 
 /**
@@ -360,25 +462,44 @@ async function withRepeatsToClear(
     if (value.text === null || !toClear.has(rowKeyText(value.key))) continue;
     holders.set(value.text, [...(holders.get(value.text) ?? []), value.key]);
   }
-  const repeated = [...holders.values()].filter(keys => keys.length > 1).flat();
-  if (repeated.length === 0) return verdict;
-  return {
-    judgement: {
-      class: "blocked",
-      reasons: [
-        ...verdict.judgement.reasons,
-        {
-          kind: "repeated",
-          class: reasonClass("repeated"),
-          rows: {
-            first: repeated.slice(0, AFFECTED_ROWS_BOUND),
-            count: repeated.length,
-          },
-        },
-      ],
-    },
-    cleared: verdict.cleared,
+  return blockedForRepeats(
+    verdict,
+    [...holders.values()].filter(keys => keys.length > 1).flat()
+  );
+}
+
+/**
+ * The other columns of each unique index of several columns that `column` of `table` is one of,
+ * as the live table names them, each with its type once the table is rebuilt. An index over part
+ * of the table's rows is left out: which rows it holds is the database's to say. So is one naming
+ * a column the live table does not have yet: the apply adds it holding no value in any row, and a
+ * row with no value repeats nothing.
+ */
+function indexedWith(
+  table: TableSpec,
+  live: TableSpec,
+  column: string
+): IndexedColumn[][] {
+  const same = (name: string) => name.toLowerCase() === column.toLowerCase();
+  const asRebuilt = (name: string): IndexedColumn | undefined => {
+    const now = byName(live.columns, name);
+    const next = byName(table.columns, name);
+    return now === undefined || next === undefined
+      ? undefined
+      : { column: now.name, type: next.type };
   };
+  return (table.indexes ?? [])
+    .filter(
+      index =>
+        index.unique &&
+        index.where === undefined &&
+        index.columns.length > 1 &&
+        index.columns.some(same)
+    )
+    .map(index => index.columns.filter(name => !same(name)).map(asRebuilt))
+    .filter((indexed): indexed is IndexedColumn[] =>
+      indexed.every(one => one !== undefined)
+    );
 }
 
 /**
@@ -418,7 +539,14 @@ export function typeChangeJudge(args: {
       args.schema,
       op.tableName,
       field,
-      isUnique(op.tableName, op.columnName)
+      isUnique(op.tableName, op.columnName),
+      // Only SQLite's rebuild lands before a unique index of several columns is made: elsewhere
+      // the database refuses the conversion, and the statement changes nothing.
+      // A change the rebuild converts by a rule of its own (`op.conversion`) writes values the copy
+      // alone would not, so only a plain copy is compared.
+      args.dialect === "sqlite" && op.conversion === undefined
+        ? indexedWith(expectedTable, liveTable, expected.name)
+        : []
     );
     const { judgement, cleared } = await judgeOfferedTypeChange(
       args.db,

@@ -332,6 +332,8 @@ export async function clearConsentedValues(args: {
   /** Told of each clearing statement it runs (`StatementRecord`). */
   statements?: StatementRecord;
 }): Promise<void> {
+  // Each column's rows written since it was judged, told once every consented column is cleared.
+  const left: ReturnType<typeof lateValuesLeft>[] = [];
   for (const event of clearedTypeChanges(args)) {
     const consented = new Set(event.lossy.cleared.map(rowKeyText));
     // The one judgement the classifier asked, asked again: the same rules name the same rows.
@@ -359,8 +361,16 @@ export async function clearConsentedValues(args: {
       await runRecorded(args, statement, false);
     }
     if (args.dialect === "sqlite" && late.length > 0) {
-      throw lateValuesLeft(event, late);
+      left.push(lateValuesLeft(event, late));
     }
+  }
+  // Only now: the rebuild converted every column, so a failure at the first would leave the
+  // later columns' consented values where no later run offers to clear them.
+  if (left.length > 0) {
+    throw NextlyError.validation({
+      errors: left.map(column => column.error),
+      logContext: { columns: left.map(column => column.log) },
+    });
   }
 }
 
@@ -398,8 +408,8 @@ const rowName = (key: RowKey) =>
   "id" in key ? String(key.id) : `${String(key.parent)} (${key.locale})`;
 
 /**
- * The failure of a SQLite apply that converted a column and then found values written after the
- * column was judged. It says what landed, since nothing can be undone there: the column has its
+ * What a SQLite apply that converted a column, and then found values written after the column was
+ * judged, says of that column when it fails. It says what landed, since nothing can be undone there: the column has its
  * new type, the consented values were cleared, and the named rows still hold what they held.
  */
 function lateValuesLeft(
@@ -410,18 +420,19 @@ function lateValuesLeft(
     toType: string;
   },
   late: readonly RowKey[]
-): NextlyError {
+): {
+  error: { path: string; code: string; message: string };
+  log: { column: string; late: string[] };
+} {
   const column = `${event.tableName}.${event.columnName}`;
-  return NextlyError.validation({
-    errors: [
-      {
-        path: `schema.${column}`,
-        code: "CONVERSION_LEFT_A_LATER_VALUE",
-        message: `${column}: ${event.fromType} -> ${event.toType} was made, and the values consented to were cleared. ${late.length === 1 ? "One row holds" : `${String(late.length)} rows hold`} a value written after the column was checked, which the new field cannot read: ${late.map(rowName).join(", ")}. Correct or clear ${late.length === 1 ? "that value" : "those values"}.`,
-      },
-    ],
-    logContext: { column, late: late.map(rowKeyText) },
-  });
+  return {
+    error: {
+      path: `schema.${column}`,
+      code: "CONVERSION_LEFT_A_LATER_VALUE",
+      message: `${column}: ${event.fromType} -> ${event.toType} was made, and the values consented to were cleared. ${late.length === 1 ? "One row holds" : `${String(late.length)} rows hold`} a value written after the column was checked, which the new field cannot read: ${late.map(rowName).join(", ")}. Correct or clear ${late.length === 1 ? "that value" : "those values"}.`,
+    },
+    log: { column, late: late.map(rowKeyText) },
+  };
 }
 
 /**
