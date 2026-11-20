@@ -743,8 +743,13 @@ function settledColumns(
   return { operations: kept, tighten, columns };
 }
 
-/** `tables` with each settled column nullable, as the file leaves it before tightening. */
-function withSettledColumnsNullable(
+/**
+ * `tables` with each of `columns` (`columnKey`) nullable, as the file leaves them before they are
+ * made required: a column whose rows the person settled, and one a move fills from a group. On
+ * SQLite a table rebuilt before that copies its rows into this shape, so a column still to be
+ * filled declared NOT NULL there would refuse every row.
+ */
+function withColumnsNullable(
   tables: readonly TableSpec[],
   columns: ReadonlySet<string>
 ): TableSpec[] {
@@ -757,6 +762,13 @@ function withSettledColumnsNullable(
         : column
     ),
   }));
+}
+
+/** The `columnKey` of each column in `refilled`, a move's or a joining field's. */
+function columnKeysOf(
+  refilled: readonly { table: string; column: string }[] | undefined
+): Set<string> {
+  return new Set((refilled ?? []).map(r => columnKey(r.table, r.column)));
 }
 
 /**
@@ -1175,13 +1187,19 @@ export async function generateMigration(
     args.resolutions ?? [],
     desiredSnapshot.tables
   );
+  // A column a move fills from its group is filled by the statements appended after these, so a
+  // table either list rebuilds holds it nullable until then, as its own add does.
+  const refilled = columnKeysOf(args.refilledColumns);
   const sqlStatements = [
     ...generateStatements(
       settled.operations,
       args.dialect,
       // A table rebuilt here is rebuilt to the shape this file leaves it in: the settings held back.
       tablesWithSettingsHeldBack(
-        withSettledColumnsNullable(desiredSnapshot.tables, settled.columns),
+        withColumnsNullable(
+          desiredSnapshot.tables,
+          new Set([...settled.columns, ...refilled])
+        ),
         heldSettings
       )
     ),
@@ -1189,7 +1207,10 @@ export async function generateMigration(
     ...generateStatements(
       settled.tighten,
       args.dialect,
-      tablesWithSettingsHeldBack(desiredSnapshot.tables, heldSettings)
+      tablesWithSettingsHeldBack(
+        withColumnsNullable(desiredSnapshot.tables, refilled),
+        heldSettings
+      )
     ),
   ];
 
@@ -1197,18 +1218,21 @@ export async function generateMigration(
   // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
   // reverse rename rather than a data-losing drop+add. Object-removing ops
   // recover their original spec from previousSnapshot.
+  const refilledDown = refilledOnTheWayDown(fieldJoinsPlans, args.valueMoves);
   const inverseOps = withCyclicForeignKeysSplit(
     restoredNullable(
       buildInverseOperations(operations, previousSnapshot),
-      refilledOnTheWayDown(fieldJoinsPlans, args.valueMoves)
+      refilledDown
     ),
     args.dialect,
     desiredSnapshot.tables
   );
+  // A table the DOWN rebuilds holds each column it refills nullable until its values are back, as
+  // the column's own add does; each is made required again once they are in.
   const downSqlStatements = generateStatements(
     inverseOps,
     args.dialect,
-    previousSnapshot.tables
+    withColumnsNullable(previousSnapshot.tables, columnKeysOf(refilledDown))
   );
   // 7a'. A translated table this file drops takes its translations table with it, dropped first
   //      so nothing references the main table when it goes; the DOWN makes it again, empty, once
