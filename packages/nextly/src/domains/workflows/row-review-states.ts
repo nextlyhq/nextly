@@ -52,8 +52,12 @@ import {
   type ReviewAssignee,
   type ReviewState,
 } from "./review-state-repository";
-import { readStagePresentation } from "./stage-presentation";
+import {
+  readStagePresentation,
+  type StagePresentation,
+} from "./stage-presentation";
 import { allowsPublish } from "./steps";
+import type { Workflow } from "./types";
 
 /** One part of a listed document, where it stands. @experimental */
 export interface RowPartReview {
@@ -79,70 +83,70 @@ export interface RowPartReview {
 /** Rows per statement: SQLite binds 999 values at most, the lowest of the dialects. */
 const ROWS_PER_READ = 500;
 
-/**
- * Each of `ids`'s parts where they stand, documents of the collection `slug`, by id, among the
- * languages `locales` names and the shared part (`null` considers every language): an empty map
- * for a collection no workflow is attached to. A document whose row is gone has no entry.
- *
- * @experimental
- */
-export async function rowReviewStatesOf(
-  adapter: DrizzleAdapter,
-  slug: string,
-  ids: readonly string[],
+/** The review read's parts: each configured language of a translated collection the read was
+ * judged for (`locales`, null for every one), then the shared part. */
+function listedParts(
+  localized: boolean,
+  localization: ReturnType<typeof appLocalization>,
   locales: readonly string[] | null
-): Promise<Map<string, RowPartReview[]>> {
-  const out = new Map<string, RowPartReview[]>();
-  const registered = workflowAttachedTo("collection", slug);
-  const entity = await entityOf({ scopeKind: "collection", scopeSlug: slug });
-  if (!registered || entity === null || ids.length === 0) return out;
-  const { workflow } = registered;
-  const scope = { scopeKind: "collection" as const, scopeSlug: slug };
-  const table = await documentTableOn(scope);
-  const localization = appLocalization();
-  // The review read's parts: each configured language of a translated collection, then the
-  // shared part; here only those the read was judged for.
-  const parts: (string | null)[] = [
-    ...(table.localized
-      ? (localization?.locales ?? [])
-          .map(locale => locale.code)
-          .filter(code => locales === null || locales.includes(code))
-      : []),
-    null,
-  ];
-  const dialect = adapter.getCapabilities().dialect;
+): (string | null)[] {
+  const languages = localized
+    ? (localization?.locales ?? [])
+        .map(locale => locale.code)
+        .filter(code => locales === null || locales.includes(code))
+    : [];
+  return [...languages, null];
+}
 
-  const states = await readReviewStatesOfDocuments(adapter, scope, ids);
-  const stateOf = new Map<string, ReviewState>();
-  for (const state of states) {
-    stateOf.set(`${state.entryId}:${state.part ?? ""}`, state);
+/** Each review state of `ids`, by document and part. */
+async function statesByPart(
+  adapter: DrizzleAdapter,
+  scope: { scopeKind: "collection"; scopeSlug: string },
+  ids: readonly string[]
+): Promise<Map<string, ReviewState>> {
+  const byPart = new Map<string, ReviewState>();
+  for (const state of await readReviewStatesOfDocuments(adapter, scope, ids)) {
+    byPart.set(partKeyOf(state.entryId, state.part), state);
   }
-  const pendingByEntry = await new VersionsRepository(
-    adapter
-  ).findPendingChangeLocales("collection", slug, [...ids]);
+  return byPart;
+}
 
-  // Each part's liveness and the main row's revision, one statement per 500 rows.
-  const liveness = await partLivenessInputs({
-    adapter,
-    scopeKind: "collection",
-    entity,
-    withLanguages: table.localized,
-  });
+const partKeyOf = (id: string, part: string | null): string =>
+  `${id}:${part ?? ""}`;
+
+/** One document's main row as the page reads it: its revision, and whether each part is live. */
+interface MainRow {
+  revision: number;
+  live: boolean[];
+}
+
+/**
+ * Each document's revision and each of `parts`' liveness (`partLiveCondition`), read together,
+ * one statement per 500 rows. A document whose row is gone has none.
+ */
+async function readMainRows(
+  adapter: DrizzleAdapter,
+  entity: { tableName: string },
+  liveness: Awaited<ReturnType<typeof partLivenessInputs>>,
+  parts: readonly (string | null)[],
+  ids: readonly string[],
+  defaultLocale: string | null
+): Promise<Map<string, MainRow>> {
   const column = (name: string): SQL =>
     sql`${sql.identifier(entity.tableName)}.${sql.identifier(name)}`;
-  const main = new Map<string, { revision: number; live: boolean[] }>();
+  const liveColumns = parts.map(
+    (part, index) =>
+      sql`CASE WHEN ${partLiveCondition({
+        ...liveness,
+        part,
+        defaultLocale,
+        id: column("id"),
+        status: column("status"),
+      })} THEN 1 ELSE 0 END AS ${sql.identifier(`live_${index}`)}`
+  );
+  const main = new Map<string, MainRow>();
   for (let at = 0; at < ids.length; at += ROWS_PER_READ) {
     const chunk = ids.slice(at, at + ROWS_PER_READ);
-    const liveColumns = parts.map(
-      (part, index) =>
-        sql`CASE WHEN ${partLiveCondition({
-          ...liveness,
-          part,
-          defaultLocale: localization?.defaultLocale ?? null,
-          id: column("id"),
-          status: column("status"),
-        })} THEN 1 ELSE 0 END AS ${sql.identifier(`live_${index}`)}`
-    );
     const rows = await adapter.queryStatement<Record<string, unknown>>(
       sql`SELECT ${column("id")} AS ${sql.identifier("id")}, ${column(DOCUMENT_REVISION_COLUMN)} AS ${sql.identifier("revision")}, ${sql.join(liveColumns, sql`, `)} FROM ${sql.identifier(entity.tableName)} WHERE ${column("id")} IN (${sql.join(
         chunk.map(id => sql`${id}`),
@@ -156,85 +160,193 @@ export async function rowReviewStatesOf(
       });
     }
   }
+  return main;
+}
 
-  // The translation counters, where the translations table is there to read, as a part's
-  // version reads them (`partVersionOn`).
+/**
+ * The translation counters of `ids`, where the translations table is there to read, as a part's
+ * version reads them (`partVersionOn`); `reads` false where it is not.
+ */
+async function readCounters(
+  adapter: DrizzleAdapter,
+  table: { table: string; localized: boolean },
+  localized: boolean,
+  ids: readonly string[]
+): Promise<{ reads: boolean; counters: Map<string, Map<string, number>> }> {
+  const dialect = adapter.getCapabilities().dialect;
   const languagesTable = `${table.table}_locales`;
-  const readsLanguages =
-    table.localized &&
-    localization !== undefined &&
+  const reads =
+    localized &&
     (
       await liveColumnNames(adapter.getDrizzle(), dialect, [languagesTable])
     ).has(languagesTable.toLowerCase());
-  const counters = readsLanguages
-    ? await readLanguageRevisions(adapter.getDrizzle(), {
-        dialect,
-        table: languagesTable,
-        ids,
-      })
-    : new Map<string, Map<string, number>>();
+  return {
+    reads,
+    counters: reads
+      ? await readLanguageRevisions(adapter.getDrizzle(), {
+          dialect,
+          table: languagesTable,
+          ids,
+        })
+      : new Map(),
+  };
+}
 
+/**
+ * The document's version as a reader of `part` holds it: its revision, and the counters of the
+ * languages a read of that part names (a language with no translation row counts 0).
+ */
+function partVersion(
+  revision: number,
+  part: string | null,
+  readsLanguages: boolean,
+  localization: ReturnType<typeof appLocalization>,
+  ownCounters: ReadonlyMap<string, number> | undefined
+): string {
+  const languages = versionLanguagesFor({
+    localized: readsLanguages,
+    localization,
+    locale: part ?? undefined,
+  });
+  return encodeDocumentVersion(
+    revision,
+    languages
+      ? Object.fromEntries(
+          languages.map(code => [code, ownCounters?.get(code) ?? 0])
+        )
+      : undefined
+  );
+}
+
+/** One part where it stands, its waiting still to be named. */
+function partReview(
+  workflow: Workflow,
+  shown: (stage: string) => StagePresentation,
+  part: string | null,
+  stage: string | null,
+  state: ReviewState | null,
+  version: string
+): RowPartReview {
+  return {
+    part,
+    stage,
+    stageLabel: stage === null ? null : shown(stage).label,
+    stageColour: stage === null ? null : shown(stage).colour,
+    publishable: stage !== null && allowsPublish(workflow, stage),
+    enteredAt: state?.enteredAt ?? null,
+    assignee: state?.assignee ?? null,
+    dueAt: state?.dueAt ?? null,
+    waitingFor: null,
+    revision: state?.revision ?? 0,
+    version,
+  };
+}
+
+/**
+ * Whom each listed part waits for, named into it: every assignee and default reviewer of the page
+ * asked at once (`prime`), each part decided, and every name read once for the page.
+ */
+async function nameEachPart(
+  adapter: DrizzleAdapter,
+  workflow: Workflow,
+  slug: string,
+  listed: readonly { review: RowPartReview; input: WaitingPartInput }[]
+): Promise<void> {
+  const decider = partWaitsDecider(adapter, workflow, slug);
+  await decider.prime(listed.map(each => each.input));
+  const decided: { slug: string; waits: PartWaits }[] = [];
+  for (const { input } of listed) {
+    decided.push({ slug, waits: await decider.decide(input) });
+  }
+  const names = await nameWaits(adapter, decided);
+  for (const [index, { review }] of listed.entries()) {
+    review.waitingFor = names[index] ?? null;
+  }
+}
+
+/**
+ * Each of `ids`'s parts where they stand, documents of the collection `slug`, by id, among the
+ * languages `locales` names and the shared part (`null` considers every language): an empty map
+ * for a collection no workflow is attached to. A document whose row is gone has no entry.
+ *
+ * @experimental
+ */
+export async function rowReviewStatesOf(
+  adapter: DrizzleAdapter,
+  slug: string,
+  ids: readonly string[],
+  locales: readonly string[] | null
+): Promise<Map<string, RowPartReview[]>> {
+  const registered = workflowAttachedTo("collection", slug);
+  const entity = await entityOf({ scopeKind: "collection", scopeSlug: slug });
+  if (!registered || entity === null || ids.length === 0) return new Map();
+  const { workflow } = registered;
+  const scope = { scopeKind: "collection" as const, scopeSlug: slug };
+  const table = await documentTableOn(scope);
+  const localization = appLocalization();
+  const parts = listedParts(table.localized, localization, locales);
+  const stateOf = await statesByPart(adapter, scope, ids);
+  const pendingByEntry = await new VersionsRepository(
+    adapter
+  ).findPendingChangeLocales("collection", slug, [...ids]);
+  const liveness = await partLivenessInputs({
+    adapter,
+    scopeKind: "collection",
+    entity,
+    withLanguages: table.localized,
+  });
+  const main = await readMainRows(
+    adapter,
+    entity,
+    liveness,
+    parts,
+    ids,
+    localization?.defaultLocale ?? null
+  );
+  const { reads, counters } = await readCounters(
+    adapter,
+    table,
+    table.localized && localization !== undefined,
+    ids
+  );
   const shown = await readStagePresentation(adapter, workflow);
-  const listed: { id: string; review: RowPartReview }[] = [];
-  const inputs: WaitingPartInput[] = [];
+
+  const listed: {
+    id: string;
+    review: RowPartReview;
+    input: WaitingPartInput;
+  }[] = [];
   for (const id of ids) {
     const row = main.get(id);
     if (!row) continue;
     const pending = pendingPartsOf(pendingByEntry.get(id) ?? new Set());
     for (const [index, part] of parts.entries()) {
-      const state = stateOf.get(`${id}:${part ?? ""}`) ?? null;
+      const state = stateOf.get(partKeyOf(id, part)) ?? null;
       const stage = partStage(workflow, state, {
         live: row.live[index] === true,
         pending: pending(part),
       });
-      const languages = versionLanguagesFor({
-        localized: readsLanguages,
+      const version = partVersion(
+        row.revision,
+        part,
+        reads,
         localization,
-        locale: part ?? undefined,
-      });
-      const ownCounters = counters.get(id);
+        counters.get(id)
+      );
       listed.push({
         id,
-        review: {
-          part,
+        review: partReview(workflow, shown, part, stage, state, version),
+        input: {
           stage,
-          stageLabel: stage === null ? null : shown(stage).label,
-          stageColour: stage === null ? null : shown(stage).colour,
-          publishable: stage !== null && allowsPublish(workflow, stage),
-          enteredAt: state?.enteredAt ?? null,
           assignee: state?.assignee ?? null,
-          dueAt: state?.dueAt ?? null,
-          waitingFor: null,
-          revision: state?.revision ?? 0,
-          version: encodeDocumentVersion(
-            row.revision,
-            languages
-              ? Object.fromEntries(
-                  // A language with no translation row counts 0, as a part's version spells it.
-                  languages.map(code => [code, ownCounters?.get(code) ?? 0])
-                )
-              : undefined
-          ),
+          enteredBy: state?.enteredBy ?? null,
         },
-      });
-      inputs.push({
-        stage,
-        assignee: state?.assignee ?? null,
-        enteredBy: state?.enteredBy ?? null,
       });
     }
   }
-  // Whom each part waits for: every assignee and default reviewer of the page asked at once,
-  // then each part decided, and every name read once for the page.
-  const decider = partWaitsDecider(adapter, workflow, slug);
-  await decider.prime(inputs);
-  const decided: { slug: string; waits: PartWaits }[] = [];
-  for (const input of inputs) {
-    decided.push({ slug, waits: await decider.decide(input) });
-  }
-  const names = await nameWaits(adapter, decided);
-  for (const [index, { id, review }] of listed.entries()) {
-    review.waitingFor = names[index] ?? null;
+  await nameEachPart(adapter, workflow, slug, listed);
+  const out = new Map<string, RowPartReview[]>();
+  for (const { id, review } of listed) {
     out.set(id, [...(out.get(id) ?? []), review]);
   }
   return out;

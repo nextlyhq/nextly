@@ -49,6 +49,72 @@ const RELEASES: readonly Release[] = ["none", "hide", "reveal"];
 const OWN: readonly Own[] = ["published", "draft", "none"];
 const PARTS: readonly (string | null)[] = [null, "en", "es"];
 
+/** One document of the matrix: its main row's status, a due release, its languages' own status. */
+interface Case {
+  id: string;
+  main: MainStatus;
+  release: Release;
+  own: Own;
+}
+
+/** A note with a translation row in each language, its statuses then set as `each` says. */
+async function seedCase(
+  app: TestNextly,
+  tables: { main: SQL; languages: SQL },
+  each: Omit<Case, "id">
+): Promise<Case> {
+  const created = await app.nextly.create({
+    collection: "notes",
+    data: { title: "Hello" },
+    overrideAccess: true,
+  });
+  const id = String((created.item as { id: string }).id);
+  // A translation row in each language, so its status can be set or the row removed.
+  for (const locale of ["en", "es"]) {
+    await app.nextly.update({
+      collection: "notes",
+      id,
+      locale,
+      // An update names its version or says it overwrites; this one read none.
+      data: { title: `Hello ${locale}`, _overwrite: true },
+      overrideAccess: true,
+    } as never);
+  }
+  await exec(
+    app,
+    sql`UPDATE ${tables.main} SET ${sql.identifier("status")} = ${each.main} WHERE ${sql.identifier("id")} = ${id}`
+  );
+  await exec(
+    app,
+    each.own === "none"
+      ? sql`DELETE FROM ${tables.languages} WHERE ${sql.identifier("_parent")} = ${id}`
+      : sql`UPDATE ${tables.languages} SET ${sql.identifier("_status")} = ${each.own} WHERE ${sql.identifier("_parent")} = ${id}`
+  );
+  return { id, ...each };
+}
+
+/** What `languageIsLive` decides for `part` of `each`, a due withdrawal deciding first. */
+function decided(each: Case, part: string | null): boolean {
+  return (
+    each.release !== "hide" &&
+    languageIsLive({
+      mainStatus: each.main,
+      ownStatus: each.own === "none" ? null : each.own,
+      locale: part,
+      defaultLocale: "en",
+      perLanguageStatus: true,
+      mainRevealed: each.release === "reveal",
+    })
+  );
+}
+
+/** Every combination the matrix asks about. */
+function combinations(): Omit<Case, "id">[] {
+  return MAIN.flatMap(main =>
+    RELEASES.flatMap(release => OWN.map(own => ({ main, release, own })))
+  );
+}
+
 describe.each(getConfiguredTestDialects())(
   "whether a part is live (integration, %s)",
   dialect => {
@@ -71,48 +137,13 @@ describe.each(getConfiguredTestDialects())(
         scopeSlug: "notes",
       });
       if (!entity) throw new Error("no notes in the registry");
-      const main = sql.identifier(entity.tableName);
-      const languages = sql.identifier(`${entity.tableName}_locales`);
-
-      const cases: {
-        id: string;
-        main: MainStatus;
-        release: Release;
-        own: Own;
-      }[] = [];
-      for (const mainStatus of MAIN) {
-        for (const release of RELEASES) {
-          for (const own of OWN) {
-            const created = await app.nextly.create({
-              collection: "notes",
-              data: { title: "Hello" },
-              overrideAccess: true,
-            });
-            const id = String((created.item as { id: string }).id);
-            // A translation row in each language, so its status can be set or the row removed.
-            for (const locale of ["en", "es"]) {
-              await app.nextly.update({
-                collection: "notes",
-                id,
-                locale,
-                // An update names its version or says it overwrites; this one read none.
-                data: { title: `Hello ${locale}`, _overwrite: true },
-                overrideAccess: true,
-              } as never);
-            }
-            await exec(
-              app,
-              sql`UPDATE ${main} SET ${sql.identifier("status")} = ${mainStatus} WHERE ${sql.identifier("id")} = ${id}`
-            );
-            await exec(
-              app,
-              own === "none"
-                ? sql`DELETE FROM ${languages} WHERE ${sql.identifier("_parent")} = ${id}`
-                : sql`UPDATE ${languages} SET ${sql.identifier("_status")} = ${own} WHERE ${sql.identifier("_parent")} = ${id}`
-            );
-            cases.push({ id, main: mainStatus, release, own });
-          }
-        }
+      const tables = {
+        main: sql`${sql.identifier(entity.tableName)}`,
+        languages: sql`${sql.identifier(`${entity.tableName}_locales`)}`,
+      };
+      const cases: Case[] = [];
+      for (const each of combinations()) {
+        cases.push(await seedCase(app, tables, each));
       }
       const visibility: ReleaseVisibility = {
         decisions: () =>
@@ -137,17 +168,7 @@ describe.each(getConfiguredTestDialects())(
             visibility,
           });
           answered.push(`${label}=${live}`);
-          const decided =
-            each.release !== "hide" &&
-            languageIsLive({
-              mainStatus: each.main,
-              ownStatus: each.own === "none" ? null : each.own,
-              locale: part,
-              defaultLocale: "en",
-              perLanguageStatus: true,
-              mainRevealed: each.release === "reveal",
-            });
-          expected.push(`${label}=${decided}`);
+          expected.push(`${label}=${decided(each, part)}`);
         }
       }
       expect(answered).toEqual(expected);
