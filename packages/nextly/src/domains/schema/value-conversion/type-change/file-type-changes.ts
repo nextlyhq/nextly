@@ -110,14 +110,14 @@ function fieldsOf(
  * The renames the statements make: each column's (a plain `RENAME COLUMN`, and on MySQL the
  * prepared run `migrate:create` writes to rename a column a check uses, which amounts to the plain
  * rename, `mysqlLiveRunAt`), and each table's new name by its old one, lower-cased as they are
- * read. The run's other statements rename nothing.
+ * read, in the order they run. The run's other statements rename nothing.
  */
 function renamesMadeBy(
   statements: readonly string[],
   dialect: SupportedDialect
-): { columns: ConfirmedColumnRename[]; tables: Map<string, string> } {
+): { columns: ConfirmedColumnRename[]; tables: [string, string][] } {
   const columns: ConfirmedColumnRename[] = [];
-  const tables = new Map<string, string>();
+  const tables: [string, string][] = [];
   statements.forEach((statement, at) => {
     const run =
       dialect === "mysql" ? mysqlLiveRunAt(statements, at) : undefined;
@@ -134,7 +134,7 @@ function renamesMadeBy(
           toColumn: rename.to,
         });
       } else {
-        tables.set(rename.from, rename.to);
+        tables.push([rename.from, rename.to]);
       }
     }
   });
@@ -208,6 +208,31 @@ function entitiesByTable(
 }
 
 /**
+ * Each table the file leaves renamed, by the name it had before the file, following the renames in
+ * the order they run: a table renamed twice keeps its first name. A table the file made itself and
+ * renamed into place (SQLite's rebuild writes `__new_<table>` and renames it over the table) is
+ * no table of the entity before, so it never replaces the name the table had.
+ */
+function tablesBefore(
+  renames: readonly (readonly [string, string])[],
+  before: EntitySettingsRecord
+): Map<string, string> {
+  const known = new Set(
+    KINDS.flatMap(([key, kind]) => [
+      ...entitiesByTable(before, key, kind).keys(),
+    ])
+  );
+  const origin = new Map<string, string>();
+  for (const [from, to] of renames) {
+    const first = origin.get(from) ?? from;
+    origin.delete(from);
+    if (!known.has(first) && origin.has(to)) continue;
+    origin.set(to, first);
+  }
+  return origin;
+}
+
+/**
  * The entities whose field types the file changes, each as the type-change precondition reads it:
  * an entity both snapshots record, whose fields, paired by name or by a rename the file's
  * statements make, change type with a column on both sides. An entity the file adds or removes,
@@ -220,9 +245,7 @@ export function fileTypeChangesOf(
   const { before, target, dialect } = source;
   if (before === undefined || target === undefined) return [];
   const renames = renamesMadeBy(source.statements, dialect);
-  const tableBefore = new Map(
-    [...renames.tables].map(([from, to]) => [to, from])
-  );
+  const tableBefore = tablesBefore(renames.tables, before);
   return KINDS.flatMap(([key, kind]) => {
     // Paired by their table, not their slug: a slug the file renames keeps its table where it
     // states one (`dbName`), and a table the file renames is paired through the rename.
@@ -360,14 +383,16 @@ function entityTypeChange(args: {
     at,
   });
   if (changes.length === 0 && unread.length === 0) return [];
-  // A relationship whose storage changes shape is the file's own to answer for: its statements
-  // carry the guard that refuses a held link and the conversion that carries one (a reference list's
-  // or a translated relation's), each with its own message on every database, which run first.
+  // A relationship whose storage changes shape, a relationship on both sides, is the file's own to
+  // answer for: its statements carry the guard that refuses a held link and the conversion that
+  // carries one (a reference list's or a translated relation's), each with its own message on every
+  // database, which run first. A relationship becoming another type, or one becoming a
+  // relationship, is judged here as any change is: no statement of the file guards it.
   const relationsShaped = new Set(
     changes
       .filter(
         change =>
-          change.fromType.relation !== undefined ||
+          change.fromType.relation !== undefined &&
           change.toType.relation !== undefined
       )
       .map(change => change.to.name)

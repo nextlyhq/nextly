@@ -11,6 +11,7 @@
  * the config loader and the command's connection are stood in for.
  */
 import { randomBytes } from "node:crypto";
+import { readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +27,10 @@ import {
 } from "../../../database/test-database-ddl";
 import { clearServices } from "../../../di/register";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
+import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   createTestNextly,
@@ -34,6 +38,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import type { ServiceContainer } from "../../../services";
 import { _resetEnvCache } from "../../../shared/lib/env";
 import type { CommandContext } from "../../program";
@@ -304,6 +309,112 @@ describe.each(getConfiguredTestDialects())(
 
       const after = await prices(adapter);
       expect(Object.values(after).map(Number)).toEqual([12, 34]);
+    }, 180_000);
+
+    /**
+     * A hand-written migration, with no snapshot and no declared purpose, placed right after the
+     * create file: it runs between it and the type change's file.
+     */
+    function handWritten(name: string, up: string): void {
+      const dir = join(project, "database", "history");
+      const [first] = readdirSync(dir)
+        .filter(file => file.endsWith(".sql"))
+        .sort();
+      const file = `${first.replace(/\.sql$/, "")}_z_${name}`;
+      writeFileSync(
+        join(dir, `${file}.sql`),
+        `-- Migration: ${file}\n\n-- UP\n${up};\n\n-- DOWN\nSELECT 1;\n`
+      );
+    }
+
+    // A hand-written file states no field types: it runs as written, and the change after it is
+    // judged once it has, so a cleanup that makes every value readable lets the change through.
+    it("judges the change after a hand-written cleanup, once the cleanup has run", async () => {
+      const adapter = await deployedHolding({ r1: "12", r2: "abc" });
+      handWritten(
+        "cleanup",
+        `UPDATE ${q(TABLE)} SET ${q("price")} = '0' WHERE ${q("price")} = 'abc'`
+      );
+
+      expect(await migrate()).toBe("applied");
+
+      const after = await prices(adapter);
+      expect(Object.values(after).map(Number)).toEqual([12, 0]);
+    }, 180_000);
+
+    // A step that stops before the change's own file never judges it.
+    it("applies a hand-written file under --step 1 without judging the change after it", async () => {
+      const adapter = await deployedHolding({ r1: "12", r2: "abc" });
+      handWritten(
+        "touch",
+        `UPDATE ${q(TABLE)} SET ${q("title")} = ${q("title")}`
+      );
+
+      expect(await migrate({ step: 1 })).toBe("applied");
+
+      expect(await prices(adapter)).toEqual({ r1: "12", r2: "abc" });
+    }, 180_000);
+
+    // Plugin modules run before the app's files and may change their tables, which a dry run does
+    // not run: it says the type changes were not checked, rather than listing a clean run.
+    it("says in a dry run that it did not check the type changes behind a pending plugin module", async () => {
+      await deployedHolding({ r1: "12", r2: "abc" });
+      const notes = defineTable("notes", {
+        id: col.id(),
+        label: col.shortText(),
+        ...col.timestamps(),
+      });
+      const tablesByDialect = {} as Parameters<
+        typeof buildPluginMigration
+      >[0]["tablesByDialect"];
+      for (const each of ["postgresql", "mysql", "sqlite"] as const) {
+        tablesByDialect[each] = (
+          await buildExtensionSchema({
+            dialect: each,
+            coreTableNames: CORE_TABLE_NAMES,
+            entities: [],
+            pluginPrefixes: new Map([["mtcplug", "mtcplug"]]),
+            plugins: [
+              { owner: { kind: "plugin", id: "mtcplug" }, tables: [notes] },
+            ],
+          })
+        ).specs;
+      }
+      const built = buildPluginMigration({
+        pluginName: "mtcplug",
+        schemaVersion: 1,
+        name: "v1",
+        now: new Date(Date.UTC(2026, 9, 1, 10, 0, 0, 1)),
+        tablesByDialect,
+        existing: [],
+      });
+      if (!built) throw new Error("no plugin module generated");
+      run.config = defineConfig({
+        collections: [],
+        plugins: [
+          {
+            name: "mtcplug",
+            version: "1.0.0",
+            nextly: "*",
+            contributes: { schema: { migrations: [built.module] } },
+          },
+        ],
+        db: {
+          migrationsDir: join(project, "database", "history"),
+          uiSchemaFile: join(project, "schema", "builder.json"),
+        },
+      } as never);
+      const said = vi.spyOn(logger, "info");
+
+      await migrate({ dryRun: true });
+
+      const lines = said.mock.calls.flat().map(String).join("\n");
+      expect(lines).toMatch(
+        /field type changes in .+\.sql were not checked: plugin modules run first/
+      );
+      expect(lines).not.toMatch(
+        /a real run would refuse it: Collection 'posts'/
+      );
     }, 180_000);
   }
 );

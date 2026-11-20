@@ -1602,8 +1602,19 @@ export async function previewMigrate(args: {
     await previewFileTypeChanges(
       listed.map(({ file }) => file),
       pendingFiles[0],
-      { db, dialect, metaDir: resolve(args.migrationsDir, "meta") },
+      {
+        db,
+        dialect,
+        metaDir: resolve(args.migrationsDir, "meta"),
+        runs: new Set(pendingFiles),
+      },
       logger
+    );
+  } else if (pendingFiles.length > 0) {
+    // Plugin modules run first and may change the tables these files judge, which a dry run does
+    // not run: said, rather than listing the files as though nothing would be refused.
+    logger.info(
+      `  ⚠ field type changes in ${pendingFiles[0].name}.sql were not checked: plugin modules run first, so a real run judges them only after those`
     );
   }
   // The translations tables deleted entities left, which a real run judges with its files'
@@ -1905,12 +1916,20 @@ function previewPendingFile(
 async function previewFileTypeChanges(
   files: readonly ParsedMigration[],
   first: ParsedMigration,
-  args: { db: unknown; dialect: SupportedDialect; metaDir: string },
+  args: {
+    db: unknown;
+    dialect: SupportedDialect;
+    metaDir: string;
+    /** The files the real run would apply, its step's. */
+    runs: ReadonlySet<ParsedMigration>;
+  },
   logger: Pick<CommandContext["logger"], "info">
 ): Promise<void> {
   const at = files.indexOf(first);
   if (at < 0) return;
-  const change = await changeFilesFrom(files, at, args.metaDir);
+  const change = await changeFilesFrom(files, at, args.metaDir, file =>
+    args.runs.has(file)
+  );
   if (change === null) return;
   const before = await newestSnapshotBefore(files, at, args.metaDir);
   for (const refusal of await fileTypeChangeRefusals(
@@ -4869,15 +4888,18 @@ async function refusePendingFilesTheServerCannotHold(args: {
 }
 
 /**
- * The files one change between two snapshots is written in, from `files[at]`: the files with no
- * snapshot of their own that `migrate:create` writes ahead of the change's own file (a translated
- * field's moves and renames among them), and that file, whose snapshot records the change. Null
- * where no file from `at` on has a snapshot: a hand-written file states no field types.
+ * The files one change between two snapshots is written in, from `files[at]`: the companion files
+ * `migrate:create` writes ahead of the change's own file, each declaring what it is for
+ * (`localization`; a translated field's moves and renames among them), and that file, whose
+ * snapshot records the change. Null where `files[at]` begins no such change: a hand-written file,
+ * which states no field types and runs as it is written, before anything after it is judged; or a
+ * change whose own file `within` leaves out (the run stops before it).
  */
 async function changeFilesFrom(
   files: readonly ParsedMigration[],
   at: number,
-  metaDir: string
+  metaDir: string,
+  within: (file: ParsedMigration) => boolean = () => true
 ): Promise<{
   files: readonly ParsedMigration[];
   /** What `refuseFileTypeChanges` is asked with, judged after the change `before` records. */
@@ -4887,8 +4909,12 @@ async function changeFilesFrom(
   ) => Parameters<typeof refuseFileTypeChanges>[1];
 } | null> {
   for (let end = at; end < files.length; end += 1) {
+    if (!within(files[end])) return null;
     const target = await loadTargetSnapshot(metaDir, files[end].name);
-    if (target === null) continue;
+    if (target === null) {
+      if (files[end].localization === undefined) return null;
+      continue;
+    }
     const written = files.slice(at, end + 1);
     return {
       files: written,
@@ -5355,7 +5381,9 @@ export async function runFileMigrations(args: {
       // every old column still holds its values: a value the new type cannot read refuses the run
       // before any statement, naming the field, its rows and the file (`refuseFileTypeChanges`).
       if (index > judgedThrough) {
-        const change = await changeFilesFrom(all, index, metaDir);
+        const change = await changeFilesFrom(all, index, metaDir, file =>
+          plan.runs.has(file)
+        );
         if (change !== null) {
           judgedThrough = index + change.files.length - 1;
           await refuseFileTypeChanges(db, change.source(beforeFile, dialect));

@@ -341,6 +341,63 @@ describe("fileTypeChangesOf", () => {
     expect(unrenamed).toEqual([]);
   });
 
+  // SQLite changes a column's type by rebuilding its table: a `__new_` table made in the file and
+  // renamed over the table. That rename is no table the entity had before, so the entity is still
+  // paired through the file's own rename of its table, and judged, as on PostgreSQL and MySQL.
+  it("pairs an entity through its table rename where SQLite's rebuild also renames into place", () => {
+    const before = record({ collections: { posts: posts(TEXT) } });
+    const target = record({
+      collections: { stories: declared({ slug: "stories", fields: [SELECT] }) },
+    });
+
+    const found = fileTypeChangesOf(
+      source(
+        before,
+        target,
+        [
+          'ALTER TABLE "dc_posts" RENAME TO "dc_stories"',
+          'CREATE TABLE "__new_dc_stories" ("id" text PRIMARY KEY, "heading" text)',
+          'INSERT INTO "__new_dc_stories" SELECT "id", "heading" FROM "dc_stories"',
+          'DROP TABLE "dc_stories"',
+          'ALTER TABLE "__new_dc_stories" RENAME TO "dc_stories"',
+        ],
+        "sqlite"
+      )
+    );
+
+    expect(found.map(f => [f.slug, f.input.table])).toEqual([
+      ["stories", "dc_posts"],
+    ]);
+  });
+
+  // Only a relationship's change of storage shape is left to the file's own guard and conversion:
+  // a relationship becoming another type is judged here, as no statement of the file guards it.
+  it("leaves a relationship's change of shape to the file, and judges one becoming a text", () => {
+    const authorOne = {
+      name: "author",
+      type: "relationship",
+      relationTo: "authors",
+    };
+    const authorMany = { ...authorOne, hasMany: true };
+    const authorText = { name: "author", type: "text" };
+    const shaped = fileTypeChangesOf(
+      source(
+        record({ collections: { posts: posts(authorOne) } }),
+        record({ collections: { posts: posts(authorMany) } })
+      )
+    );
+    const retyped = fileTypeChangesOf(
+      source(
+        record({ collections: { posts: posts(authorOne) } }),
+        record({ collections: { posts: posts(authorText) } })
+      )
+    );
+
+    expect(shaped[0]?.input.ignore).toEqual(new Set(["author"]));
+    expect(retyped).toHaveLength(1);
+    expect(retyped[0]?.input.ignore).toBeUndefined();
+  });
+
   it("refuses, without reading a row, a table rename it cannot read beside a field of another type", async () => {
     const before = record({ collections: { posts: posts(TEXT) } });
     const target = record({
