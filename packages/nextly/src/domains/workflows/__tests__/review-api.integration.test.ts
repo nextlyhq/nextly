@@ -1960,6 +1960,55 @@ describe.each(getConfiguredTestDialects())(
         expect(again.meta.totalCapped).toBeUndefined();
       });
 
+      it("reads each stage's waiting work on its own, the caller's ids once a read", async () => {
+        // Sam takes the next step out of three stages: Send out of Writing, Clear out of Legal check
+        // and Resume out of On hold. Each read of the review states names one stage, so the waiting
+        // index serves its order and its limit stops the scan (an OR across stages makes the
+        // database sort every match first), and names Sam's people and roles once, not once a stage.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["update", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        const at = (minute: number) =>
+          new Date(Date.UTC(2026, 10, 1, 10, minute));
+        const ids: string[] = [];
+        const stages = ["writing", "legal", "hold", "legal", "writing", "hold"];
+        for (const [minute, stage] of stages.entries()) {
+          const id = await entry(app(), PAGES);
+          ids.push(id);
+          await seedState(app(), partOf(PAGES, id, null), stage, {
+            definitionHash: HASH,
+            enteredAt: at(minute),
+            assignee: { kind: "user", id: "sam" },
+          });
+        }
+        const SAM: Who = { kind: "person", id: "sam" };
+
+        const page = await door.waiting(SAM, { page: 1, limit: 10 });
+        expect(
+          page.items.map(item => (item.document as Doc).entryId),
+          "every part, oldest first, across the three stages"
+        ).toEqual(ids);
+        const reads = (
+          await statementsOf(dialect, () =>
+            door.waiting(SAM, { page: 1, limit: 10 })
+          )
+        ).filter(sql => /review_states/i.test(sql) && /order by/i.test(sql));
+        expect(reads.length).toBeGreaterThan(0);
+        const count = (sql: string, pattern: RegExp) =>
+          (sql.match(pattern) ?? []).length;
+        expect(
+          reads.map(sql => ({
+            stages: count(sql, /[`"]stage[`"]\s*=/g),
+            assigneeIds: count(sql, /[`"]assignee_id[`"]\s+(?:not\s+)?in/gi),
+          })),
+          reads.join("\n\n")
+        ).toEqual(reads.map(() => ({ stages: 1, assigneeIds: 2 })));
+      });
+
       it("reaches every page of work past what one request reads", async () => {
         // 1,005 parts no one may read come first, then 10 Sam may: more hidden parts than one window
         // holds. The list reads on, a window at a time, until it has the page and one more, so both

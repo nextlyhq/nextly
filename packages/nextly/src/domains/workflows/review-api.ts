@@ -46,6 +46,7 @@ import {
   type ReviewState,
   type WaitingShare,
   type WaitingStageTerms,
+  type WaitingTerms,
 } from "./review-state-repository";
 import {
   readStagePresentation,
@@ -449,7 +450,11 @@ export async function waitingFor(
   const isMine = (who: ReviewAssignee) =>
     mine.some(each => each.kind === who.kind && each.id === who.id);
   const deciderOf = decidersByEntity(adapter);
-  const terms = await stageTerms(takeable, mine, isMine, deciderOf);
+  // Who the caller stands for, once for every stage the list reads.
+  const terms: WaitingTerms = {
+    mine,
+    stages: await stageTerms(takeable, isMine, deciderOf),
+  };
   // Each workflow's stage presentation, its settings read once for the whole request.
   const presentations = new Map<
     string,
@@ -655,13 +660,12 @@ async function primeDeciders(
 }
 
 /**
- * Each takeable stage's terms: the caller's own assignees, and whether an unassigned part waits for
- * them by the stage alone (its default reviewer is theirs, or it waits for every holder), asked as
- * of a part no one brought in.
+ * Each takeable stage's terms: whether an unassigned part waits for the caller by the stage alone
+ * (its default reviewer is theirs, or it waits for every holder), asked as of a part no one brought
+ * in.
  */
 async function stageTerms(
   takeable: readonly ScopedStage[],
-  mine: readonly ReviewAssignee[],
   isMine: (who: ReviewAssignee) => boolean,
   deciderOf: (scoped: ScopedStage) => Decider
 ): Promise<WaitingStageTerms[]> {
@@ -676,7 +680,6 @@ async function stageTerms(
       kind: scoped.kind,
       slug: scoped.slug,
       stage: scoped.stage,
-      mine,
       unassigned:
         unassigned?.kind === "holders" ||
         (unassigned?.kind === "one" && isMine(unassigned.who)),
@@ -705,7 +708,7 @@ interface ShareCursor {
  */
 function waitingScan(
   adapter: DrizzleAdapter,
-  terms: readonly WaitingStageTerms[],
+  terms: WaitingTerms,
   after: WaitingPosition | undefined
 ): {
   read: number;
