@@ -22,7 +22,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { forgetFieldGroupStorageNames } from "../../field-groups/storage/resolve-storage-names";
+import {
+  forgetFieldGroupStorageNames,
+  resolveRegistryNameFromCatalog,
+} from "../../field-groups/storage/resolve-storage-names";
 import { reconcileCore } from "../../schema/migrate/core-reconcile";
 import { restoreI18nArchive } from "../migration/restore-archive";
 import { teardownEntityI18n } from "../migration/teardown-entity-i18n";
@@ -367,11 +370,17 @@ describeEachDialect("the archive's entity kind", dialect => {
 
   /** What `nextly migrate` runs first, which adds the column to an older archive. */
   async function migrateCore(): Promise<void> {
+    const db = (
+      current.adapter as unknown as { getDrizzle(): unknown }
+    ).getDrizzle();
     await reconcileCore({
-      db: (
-        current.adapter as unknown as { getDrizzle(): unknown }
-      ).getDrizzle(),
+      db,
       dialect: current.adapter.dialect,
+      // The registry the database holds, as `nextly migrate` resolves it before its core reconcile.
+      fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+        dialect: current.adapter.dialect,
+        getDrizzle: <T>() => db as T,
+      }),
       logger: { info: () => {}, warn: () => {} },
     });
   }

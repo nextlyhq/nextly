@@ -21,6 +21,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { FieldGroupRegistryService } from "../../domains/field-groups/services/field-group-registry-service";
 import { FieldGroupSchemaService } from "../../domains/field-groups/services/field-group-schema-service";
+import { typeColumnForNewTable } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   type CollectionMetadata,
   DynamicCollectionRegistryService,
@@ -32,7 +33,6 @@ import { deriveCompanionSpec } from "../../domains/i18n/migration/derive-compani
 import { buildCompanionCreateOnlySql } from "../../domains/i18n/migration/generate-up";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import type { ResolvedVersionsConfig } from "../../schemas/versions/types";
 import type { Logger } from "../../services/shared";
 
@@ -299,7 +299,7 @@ export async function seedBuilderComponent(
     adapter,
     tableName,
     schemaService.generateRuntimeSchema(tableName, userFields, {
-      typeColumn: STORAGE_FORMAT.columns.type,
+      typeColumn: typeColumnForNewTable(tableName),
     })
   );
 

@@ -79,7 +79,10 @@ const DIALECTS: {
   },
 ];
 
+/** The group's table on a new site, as the Builder creates it and a new history records it. */
 const TABLE = "fg_card";
+/** The group's table in the fixture below, whose history an earlier release wrote. */
+const LEGACY_TABLE = "comp_card";
 /** The migration dev's `migrate:create` wrote for `FIELDS` before this change, per dialect. */
 const MADE_BEFORE = join(
   __dirname,
@@ -161,6 +164,8 @@ for (const entry of DIALECTS) {
     let scratch: ScratchDatabase | null = null;
     let dir: string | undefined;
     let made = 0;
+    /** The file road's table: a new history's, or the fixture's where a case copies it. */
+    let fileTable = TABLE;
 
     afterEach(async () => {
       await t?.destroy();
@@ -171,6 +176,7 @@ for (const entry of DIALECTS) {
       scratch = null;
       if (dir !== undefined) await rm(dir, { recursive: true, force: true });
       dir = undefined;
+      fileTable = TABLE;
       made = 0;
       vi.unstubAllEnvs();
     });
@@ -277,7 +283,7 @@ for (const entry of DIALECTS) {
     }
 
     const fileTable = () =>
-      readTableDefinition(statement => fileExec(statement), dialect, TABLE);
+      readTableDefinition(statement => fileExec(statement), dialect, fileTable);
 
     async function openFileDatabase(): Promise<void> {
       scratch =
@@ -328,13 +334,15 @@ for (const entry of DIALECTS) {
         components: [
           {
             slug: "card",
-            tableName: TABLE,
+            tableName: fileTable,
             fields,
             ...(source === "builder"
               ? { settings: { source, settings: { slug: "card" } } }
               : {}),
           },
         ],
+        // A new history starts on the current names; the fixture's stays on the legacy ones.
+        fieldGroupNaming: fileTable === TABLE ? "current" : "legacy",
         nonInteractive: true,
         autoAcceptRenames: true,
         now: new Date(Date.UTC(2026, 10, 11, 12, made)),
@@ -401,6 +409,7 @@ for (const entry of DIALECTS) {
     it("keeps every column of a table a migration made before, through its next migration, adding only the column defaults", async () => {
       await openFileDatabase();
       await cp(join(MADE_BEFORE, dialect), dir as string, { recursive: true });
+      fileTable = LEGACY_TABLE;
       const before = await migrate();
 
       // The fixture's field group is declared in code, as every file-made one is today.
