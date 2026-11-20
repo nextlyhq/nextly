@@ -770,22 +770,43 @@ export async function readIndexUniqueness(
  * Each column comes with the name of the index that covers it, so turning Unique off drops the
  * index that is there rather than one of the names the generator would have used. The name is
  * null where no statement can drop it by name: the primary key, and SQLite's index for an inline
- * `UNIQUE`, which only a table rebuild removes.
+ * `UNIQUE`, which only a table rebuild removes. Where several cover one column, the last read
+ * (`readUniqueIndexesByColumn` has them all).
  */
 export async function readUniqueColumns(
   db: unknown,
   dialect: SupportedDialect,
   tableName: string
 ): Promise<Map<string, string | null>> {
-  const unique = (await readIndexes(db, dialect, tableName)).filter(
-    index => index.unique && index.wholeColumns && index.columns.length === 1
-  );
+  const byColumn = await readUniqueIndexesByColumn(db, dialect, tableName);
   return new Map(
-    unique.map(index => [
-      index.columns[0],
-      index.droppableByName ? index.name : null,
-    ])
+    [...byColumn].map(([column, names]) => [column, names[names.length - 1]])
   );
+}
+
+/**
+ * Every index that holds a column unique on its own, by the column, each by its name (null where
+ * no statement can drop it by name), read as `readUniqueColumns` reads them. A column can be held
+ * unique by more than one: an older table keeps an index under a name Nextly did not make beside
+ * the one Nextly declares, and a migration file written while both stand has to name the other.
+ */
+export async function readUniqueIndexesByColumn(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<Map<string, (string | null)[]>> {
+  const byColumn = new Map<string, (string | null)[]>();
+  for (const index of await readIndexes(db, dialect, tableName)) {
+    if (!index.unique || !index.wholeColumns || index.columns.length !== 1) {
+      continue;
+    }
+    const column = index.columns[0];
+    byColumn.set(column, [
+      ...(byColumn.get(column) ?? []),
+      index.droppableByName ? index.name : null,
+    ]);
+  }
+  return byColumn;
 }
 
 /** An object of the database holding a name an index is about to take. */
