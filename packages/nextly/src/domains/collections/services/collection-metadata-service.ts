@@ -642,11 +642,17 @@ export class CollectionMetadataService extends BaseService {
               report
             ) as unknown as FieldDefinition[];
             await writeRow(applied);
-            settled(applied);
+            // Told once the settle commits: one rolled back leaves the running shape as it was.
+            await this.adapter.afterCommit(() => settled(applied));
           },
         }
       );
-      pushed.throwIfFailed(written.files, written.checked);
+      // A settle that failed is told after the push's own failure, never in its place.
+      pushed.throwIfFailed(
+        written.files,
+        written.checked,
+        written.settleFailure
+      );
       return undefined;
     } catch (error: unknown) {
       return errorToMetadataResult(
