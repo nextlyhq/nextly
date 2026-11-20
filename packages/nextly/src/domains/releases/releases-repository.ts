@@ -2717,33 +2717,11 @@ export class ReleasesRepository {
         });
         await this.lookUpDue(page, due, now);
         for (const member of page) {
-          const release = due.get(member.releaseId);
-          if (!release || countOf(member.entryId) > limit) continue;
-          const releases = counted.get(member.entryId) ?? new Set<string>();
-          releases.add(release.id);
-          counted.set(member.entryId, releases);
-          if (releases.size > limit) {
-            overflow.push({
-              scopeKind: member.scopeKind,
-              scopeSlug: member.scopeSlug,
-              entryId: member.entryId,
-            });
-            continue;
-          }
-          const held = holding.get(release.id) ?? { release, members: [] };
-          held.members.push(member);
-          holding.set(release.id, held);
+          takeDueHolder(member, due, counted, limit, holding, overflow);
         }
         const last = page[page.length - 1];
         if (page.length < size || last === undefined) break;
-        const pastBound = countOf(last.entryId) > limit;
-        after = pageAfter(last, pastBound);
-        // A page continuing within `last`'s document reads only what that document may still
-        // need, the bound plus one less the releases counted for it, so no more than the bound
-        // plus one of its due holders is read. Past the bound, the next page starts at another
-        // document and is a full one. Releases not due take a row without counting, so a
-        // document mostly held by them is read in smaller pages near its bound.
-        size = pastBound ? limit + 1 : limit + 1 - countOf(last.entryId);
+        ({ after, size } = nextHolderPage(last, countOf(last.entryId), limit));
       }
     }
     return { holding: [...holding.values()], overflow };
@@ -3556,4 +3534,55 @@ export class ReleasesRepository {
     });
     return new Map(rows.map(row => [row.id, { scheduledAt: row.scheduledAt }]));
   }
+}
+
+/**
+ * Count one member toward its document's due holders (`dueHoldersOf`): a release once however
+ * many of the document's languages it holds. A member of a release not due counts nothing; one
+ * past the bound reports the document as over it instead of being kept.
+ */
+function takeDueHolder(
+  member: ReleaseMemberRow,
+  due: ReadonlyMap<string, ReleaseRow | null>,
+  counted: Map<string, Set<string>>,
+  limit: number,
+  holding: Map<string, { release: ReleaseRow; members: ReleaseMemberRow[] }>,
+  overflow: ReleaseRecheckDocument[]
+): void {
+  const release = due.get(member.releaseId);
+  if (!release || (counted.get(member.entryId)?.size ?? 0) > limit) return;
+  const releases = counted.get(member.entryId) ?? new Set<string>();
+  releases.add(release.id);
+  counted.set(member.entryId, releases);
+  if (releases.size > limit) {
+    overflow.push({
+      scopeKind: member.scopeKind,
+      scopeSlug: member.scopeSlug,
+      entryId: member.entryId,
+    });
+    return;
+  }
+  const held = holding.get(release.id) ?? { release, members: [] };
+  held.members.push(member);
+  holding.set(release.id, held);
+}
+
+/**
+ * Where the walk's next page of members starts and how many rows it asks for, after `last`, whose
+ * document has `counted` due holders so far. A page continuing within that document reads only
+ * what it may still need, the bound plus one less those counted, so no more than the bound plus
+ * one of its due holders is read; past the bound, the next page starts at another document and is
+ * a full one. Releases not due take a row without counting, so a document mostly held by them is
+ * read in smaller pages near its bound.
+ */
+function nextHolderPage(
+  last: ReleaseMemberRow,
+  counted: number,
+  limit: number
+): { after: ReleasesWhere; size: number } {
+  const pastBound = counted > limit;
+  return {
+    after: pageAfter(last, pastBound),
+    size: pastBound ? limit + 1 : limit + 1 - counted,
+  };
 }

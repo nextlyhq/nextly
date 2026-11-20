@@ -1,6 +1,6 @@
 /**
- * The registry row of a Single or a field group whose left Builder save landed whole, brought to
- * the saved shape by a settle (`settleLeftSave`): written as a Builder apply writes it
+ * The registry row of an entity whose left Builder save landed whole, brought to the saved shape
+ * by a settle (`settleLeftSave`): written as a Builder apply writes it
  * (`writeAppliedFieldsRow`), or, where the save deleted the entity, removed as the migrations
  * remove a dropped entity's row (`removeRegistryRow`).
  *
@@ -10,25 +10,27 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { writeAppliedFieldsRow } from "../../../dispatcher/helpers/applied-fields-row";
+import type { AddressKind } from "../../../shared/address-rule";
 import { canonicalJson } from "../../../shared/lib/canonical-json";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
-import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 import { mediaUsageTablePresent } from "../../versions/entity-teardown";
 import { removeRegistryRow } from "../migrate/registry-row-removal";
 import { inRegistryStep, writeRegistryRows } from "../schema-version";
 
-import type { SavedEntity, SettleDeps } from "./settle-left-save";
+import {
+  registryTableOf,
+  type SavedEntity,
+  type SettleDeps,
+} from "./settle-left-save";
 
 /** The registry writer a settle is handed, over `adapter`. */
 export function settleRegistryWriter(
   adapter: DrizzleAdapter
 ): SettleDeps["writeRegistry"] {
   return async ({ kind, slug, saved }) => {
-    const table =
-      kind === "single"
-        ? "dynamic_singles"
-        : await resolveRegistryTableName(adapter);
+    // A collection's row is written as a Single's is: the same columns, in its own table.
+    const table = await registryTableOf(adapter, kind);
     if (saved === null) {
       await removeRow(adapter, kind, slug);
       return true;
@@ -56,7 +58,7 @@ export function settleRegistryWriter(
 /** Remove the entity's registry row, with what goes with it, where it still stands. */
 async function removeRow(
   adapter: DrizzleAdapter,
-  kind: "single" | "fieldGroup",
+  kind: AddressKind,
   slug: string
 ): Promise<void> {
   await writeRegistryRows(
@@ -78,23 +80,6 @@ async function removeRow(
     },
     { wrote: removed => removed > 0 }
   );
-}
-
-/** Whether the entity's registry row already holds the saved fields, read over `adapter`. */
-export function settleRegistryReader(
-  adapter: DrizzleAdapter
-): SettleDeps["registryHolds"] {
-  return async ({ kind, slug, saved }) => {
-    const table =
-      kind === "collection"
-        ? "dynamic_collections"
-        : kind === "single"
-          ? "dynamic_singles"
-          : await resolveRegistryTableName(adapter);
-    const row = await registryRow(adapter, table, slug);
-    if (saved === null) return row === undefined;
-    return row !== undefined && holds(row, saved);
-  };
 }
 
 interface RegistryRow {

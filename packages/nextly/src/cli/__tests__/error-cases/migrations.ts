@@ -37,6 +37,7 @@ import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapsh
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
 import { forkedHistoryError } from "../../../domains/schema/migrate/history-line";
 import {
+  notWrittenError,
   writerHeldError,
   writerLostError,
 } from "../../../domains/schema/migrate-create/writer-hold";
@@ -229,6 +230,17 @@ export const MIGRATION_CASES = {
   // As a command that stalled past its lease finds another holding the files.
   MIGRATIONS_WRITER_OVERTAKEN: () =>
     writerLostError("migrate:create", "migrate:baseline"),
+  // As a command whose translations file could not be moved into place takes its migration back out.
+  MIGRATION_NOT_WRITTEN: () =>
+    notWrittenError({
+      command: "migrate:create",
+      whenHeld: "wait",
+      failed: "migrations/20261020_120000_001_create_localization_posts.sql",
+      left: [],
+      cause: Object.assign(new Error("EACCES: permission denied, rename"), {
+        code: "EACCES",
+      }),
+    }),
   // As `tableBusyError` builds it once a migration's tries for a busy table run out with nothing
   // of the file left, the holder a PostgreSQL session.
   TABLE_BUSY: () =>

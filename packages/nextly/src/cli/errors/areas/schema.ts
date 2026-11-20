@@ -146,6 +146,22 @@ function unreadableSaveRecord(error: NextlyError): CliErrorParts {
   };
 }
 
+/**
+ * A Builder save refused over an earlier save of the same entity left part-way: the message's first
+ * sentence says what was left, the rest how to settle it.
+ */
+function earlierSaveLeft(error: NextlyError): CliErrorParts {
+  const [what = error.publicMessage, ...next] = sentences(error.publicMessage);
+  return {
+    what,
+    why: "An earlier Builder save was left part-way and is not settled, and a save written over it would start from a state nothing has finished.",
+    next:
+      next.length > 0
+        ? next.join(" ")
+        : "Start the app in development (`next dev`): its start settles the earlier save. Then save again.",
+  };
+}
+
 /** Whether `error`'s message starts with the words its throw site gives one cause. */
 const startsWith =
   (prefix: string) =>
@@ -411,6 +427,30 @@ export const SCHEMA_CODES = defineCodes({
         code: "CONFLICT",
         reason: "builder-save-record-unreadable",
         describe: unreadableSaveRecord,
+      },
+    ],
+  },
+  // A Builder save refused because an earlier save it would build on was left part-way and is
+  // not settled: one its host's settle could not settle, or one whose remaining files have not run.
+  BUILDER_SAVE_EARLIER_LEFT: {
+    cause:
+      "A Builder save was refused, because an earlier Builder save was left part-way and is not settled.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "builder-save-left-unsettled",
+        describe: earlierSaveLeft,
+      },
+      {
+        code: "CONFLICT",
+        reason: "builder-save-pending-files",
+        describe: earlierSaveLeft,
+      },
+      // A save of another entity, refused while a save of any entity stands left part-way.
+      {
+        code: "CONFLICT",
+        reason: "builder-save-left-elsewhere",
+        describe: earlierSaveLeft,
       },
     ],
   },

@@ -87,6 +87,12 @@ export function createReleasesDrainJob(deps: {
    * than defaulted to silence.
    */
   onOutcome: (result: ApplyDueReleasesResult) => void | Promise<void>;
+  /**
+   * The repository each pass runs on, built when the pass starts. The install's wiring hands
+   * the one carrying its cache revalidator, so a held release's flush reaches the pages readers
+   * are served. Optional: left out, a pass runs on a repository of `db` that flushes no pages.
+   */
+  repository?: () => ReleasesRepository;
 }): JobDefinition {
   return defineJob({
     slug: RELEASES_DRAIN_JOB,
@@ -104,7 +110,7 @@ export function createReleasesDrainJob(deps: {
       // the pass thinks it is, without making the budget unmeasurable.
       const passNow = () =>
         new Date(context.now.getTime() + (Date.now() - startedAt));
-      const repository = new ReleasesRepository(deps.db);
+      const repository = deps.repository?.() ?? new ReleasesRepository(deps.db);
       // Half of what is left of the pass, on the pass's own clock: the other
       // half is kept for running what is due, whatever the stop finds.
       const stopBy =
