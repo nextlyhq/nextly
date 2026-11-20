@@ -561,7 +561,7 @@ async function judge(
 ): Promise<"none" | "all" | "pending" | "left"> {
   const ledger = await ledgerOf(repo, files);
   const unrecorded = files.filter(f => !ledger.recorded.includes(f));
-  return decide({
+  const outcome = decide({
     recorded: ledger.recorded.length,
     unrecorded: unrecorded.length,
     started: ledger.started.length,
@@ -573,6 +573,24 @@ async function judge(
     ...(await whereTablesStand(deps, record, files)),
     unrecordedHaveSnapshots: await everyHasSnapshot(deps, unrecorded),
   });
+  // A later step that joined the record and wrote no file yet: what landed is the earlier steps',
+  // not the save the record now describes, whose definition it would otherwise write.
+  return outcome === "all" && !latestStepWritten(record, files)
+    ? "left"
+    : outcome;
+}
+
+/**
+ * Whether the latest step of the save wrote any of `files`: always, for a save of one step; for
+ * one a later step joined, where a file is not among those the earlier steps wrote (`stepFrom`).
+ */
+function latestStepWritten(
+  record: LeftSave,
+  files: readonly string[]
+): boolean {
+  if (record.stepFrom === undefined) return true;
+  const earlier = (record.files ?? []).slice(0, record.stepFrom);
+  return files.some(file => !earlier.includes(file));
 }
 
 /** The outcome, from the facts `judge` gathered. */

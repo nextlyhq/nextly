@@ -925,6 +925,70 @@ describe.each(getConfiguredTestDialects())(
     // its own, after the rest: the record its first step made is the save's, so the second goes
     // on under it (no refusal), and the record says what that step writes, so a stop inside it
     // settles against the step's definition and finds its files.
+    // A later step that joined the record and was killed before it wrote any file: the record
+    // describes that step's definition, but only the earlier step's files landed. The settle keeps
+    // the record and leaves the registry row as the earlier step wrote it, rather than writing the
+    // later step's settings over DDL that never ran.
+    it("keeps the record of a save killed after a later step joined it, before that step's file", async () => {
+      const t = await boot();
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: SLUG,
+          label: SLUG,
+          localized: true,
+          fields: [text("heading", { localized: true })],
+        }
+      );
+      const compareAndSet = MetaService.prototype.compareAndSet;
+      vi.spyOn(MetaService.prototype, "compareAndSet").mockImplementation(
+        async function (
+          this: MetaService,
+          ...args: Parameters<MetaService["compareAndSet"]>
+        ) {
+          const done = await compareAndSet.apply(this, args);
+          const next = args[2] as { stepFrom?: number };
+          if (args[0] === RECORD_KEY && next.stepFrom !== undefined) {
+            await stopHere("joined");
+          }
+          return done;
+        }
+      );
+      const reached = new Promise<void>(resolve => {
+        kill.reached = resolve;
+      });
+      kill.at = point => point === "joined";
+      // The schema route, which writes a field leaving translation as Required in two steps.
+      stopped = dispatchSingles(
+        "updateSingleSchema",
+        { slug: SLUG },
+        { fields: [text("heading", { localized: false, required: true })] }
+      ).catch((error: unknown) => error);
+      const outcome = await Promise.race([
+        reached.then(() => "reached"),
+        stopped.then(answer => `the save ended first: ${String(answer)}`),
+      ]);
+      expect(outcome, "the save never reached its second step").toBe("reached");
+      vi.mocked(MetaService.prototype.compareAndSet).mockRestore();
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["left"]);
+      expect(await recordRow(t), "the record stays").toBeDefined();
+      const [row] = await t.adapter.select<{ fields: unknown }>(
+        "dynamic_singles",
+        { where: { and: [{ column: "slug", op: "=", value: SLUG }] } }
+      );
+      const fields = (
+        typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+      ) as { name: string; required?: boolean }[];
+      expect(
+        fields.find(field => field.name === "heading")?.required,
+        "the registry row, as the earlier step wrote it"
+      ).not.toBe(true);
+    }, 300_000);
+
     it("brings the record to a later step of the same save, rather than refusing it", async () => {
       const t = await boot();
       await dispatchSingles(

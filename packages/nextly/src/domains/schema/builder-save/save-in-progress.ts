@@ -119,6 +119,12 @@ const savedRecord = z.object({
    * it from them. Absent from a record written before it was kept.
    */
   applies: z.boolean().optional(),
+  /**
+   * Where a later step of the save joined the record (`joinedStep`): how many of `files` the
+   * earlier steps wrote. The latest step's files are those after them, so a settle can tell a stop
+   * before that step wrote anything from a save that landed whole. Absent from a one-step save.
+   */
+  stepFrom: z.number().int().nonnegative().optional(),
 });
 type SaveInProgress = z.infer<typeof savedRecord>;
 
@@ -483,6 +489,8 @@ async function joinedStep(
       ? {}
       : { definitionAfter: step.definitionAfter }),
     ...(step.filesAt === undefined ? {} : { filesAt: step.filesAt }),
+    // The files the earlier steps wrote come first; this step's follow them.
+    stepFrom: (record.files ?? []).length,
   }));
   return startedSaveOf(entry, meta, key, "later");
 }
