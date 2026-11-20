@@ -63,6 +63,7 @@ import {
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
 import { registerExtensionTables } from "../domains/schema/extension/register-tables";
+import { pluginCollectionSources } from "../domains/schema/migrate/plugin/plugin-collection-sources";
 import { createApplyDesiredSchema } from "../domains/schema/pipeline/apply";
 import { RealClassifier } from "../domains/schema/pipeline/classifier/classifier";
 import { hasRelationSwitches } from "../domains/schema/pipeline/companion-shape-switches";
@@ -106,6 +107,7 @@ import {
 import {
   isCodeOwned,
   mergeRegisteredCollectionsSafely,
+  withoutHandedToBuilder,
 } from "../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../domains/schema/pipeline/rename-detector";
 import type {
@@ -444,6 +446,7 @@ interface CollectionRegistrySurface {
       status?: boolean;
       localized?: boolean;
       source?: string;
+      configPath?: string | null;
     }>
   >;
   updateMigrationStatus(slug: string, status: string): Promise<unknown>;
@@ -2434,7 +2437,21 @@ async function applyReloadHolding(
     localized?: boolean;
     indexes?: DesiredCollection["indexes"];
   }> = [];
-  for (const c of newConfig.collections ?? []) {
+  // A collection a demote handed to the Schema Builder, while its entry is still in the
+  // configuration, is built from the Builder's registry row (merged in below), not from that entry.
+  // A registry that cannot be read leaves every entry in: the merge below reports it and falls back
+  // to the configuration alone, as before.
+  const registryForTargets = (await resolve("collectionRegistryService")) as
+    | CollectionRegistrySurface
+    | undefined;
+  const configuredCollections = withoutHandedToBuilder(
+    newConfig.collections ?? [],
+    typeof registryForTargets?.getAllCollections === "function"
+      ? await registryForTargets.getAllCollections().catch(() => [])
+      : [],
+    pluginCollectionSources(newConfig.plugins ?? [])
+  );
+  for (const c of configuredCollections) {
     if (!c.slug) continue;
     targets.push({
       slug: c.slug,

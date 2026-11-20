@@ -17,6 +17,7 @@
 
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 
+import { DEMOTED_FROM_CODE } from "./demoted-from-code";
 import type { DesiredCollection } from "./types";
 
 /**
@@ -49,6 +50,51 @@ export interface RegisteredCollectionRow {
   locked?: boolean;
   /** `code`, `plugin:<name>`, or the UI source. Read only to corroborate `locked`. */
   source?: string;
+  /**
+   * The configuration file a code row came from, or {@link DEMOTED_FROM_CODE} on a row a demote
+   * handed to the Schema Builder (`isHandedToBuilder`).
+   */
+  configPath?: string | null;
+}
+
+/**
+ * Whether a registry row is a collection `nextly db:sync --demote` handed to the Schema Builder:
+ * the Builder's by its source, with the demote's mark. A collection made in the Builder carries no
+ * mark, so a code entry that later takes its address is applied to it as before.
+ *
+ * The one answer to this question, for the registry's own sync and `nextly migrate`'s registry
+ * write as much as for the roads that build a desired schema (`withoutHandedToBuilder`).
+ */
+export function isHandedToBuilder(
+  row: Pick<RegisteredCollectionRow, "source" | "configPath">
+): boolean {
+  return row.source === "ui" && row.configPath === DEMOTED_FROM_CODE;
+}
+
+/**
+ * The configuration's collections without those a demote handed to the Schema Builder, so a road
+ * that builds a desired schema from code takes the Builder's row for that address instead
+ * (`mergeRegisteredCollections` adds it as any registry-only collection).
+ *
+ * Until its entry is removed from `nextly.config.ts`, that entry would otherwise win the merge: a
+ * field the Builder added would read as unwanted, and an edit to the entry would still change the
+ * table. A plugin's collection (`pluginSlugs`) is never left out: a plugin registers its own again
+ * at every start, so no demote hands it over.
+ */
+export function withoutHandedToBuilder<T extends { slug?: string | null }>(
+  configured: readonly T[],
+  registered: readonly RegisteredCollectionRow[],
+  pluginSlugs: Pick<ReadonlySet<string>, "has">
+): T[] {
+  const handedOver = new Set(
+    registered.filter(isHandedToBuilder).map(row => row.slug)
+  );
+  return configured.filter(
+    entry =>
+      typeof entry.slug !== "string" ||
+      !handedOver.has(entry.slug) ||
+      pluginSlugs.has(entry.slug)
+  );
 }
 
 /**

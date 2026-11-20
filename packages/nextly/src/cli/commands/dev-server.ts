@@ -52,6 +52,7 @@ import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/databa
 import { freshPushSchema } from "../../domains/schema/pipeline/fresh-push";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
 import { ClackTerminalPromptDispatcher } from "../../domains/schema/pipeline/prompt-dispatcher/clack-terminal";
+import { pluginCollectionSources } from "../../domains/schema/migrate/plugin/plugin-collection-sources";
 import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
 import { noopPreRenameExecutor } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
 import {
@@ -62,6 +63,7 @@ import {
 import {
   mergeRegisteredCollectionsSafely,
   mergeRegisteredSafely,
+  withoutHandedToBuilder,
 } from "../../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type {
@@ -544,7 +546,26 @@ export async function desiredSchemaForSync(
   // a transaction on PG/SQLite). Build the desired-collections bucket
   // alongside the runtime-schema registration for the resolver.
   const desiredCollections: Record<string, DesiredCollection> = {};
-  for (const collection of config.collections) {
+  const registryLogger: ServiceLogger = {
+    info: (msg: string) => logger.debug(msg),
+    warn: (msg: string) => logger.warn(msg),
+    error: (msg: string) => logger.error(msg),
+    debug: (msg: string) => logger.debug(msg),
+  };
+  const registry = new CollectionRegistryService(
+    drizzleAdapter,
+    registryLogger
+  );
+  // A collection a demote handed to the Schema Builder, while its entry is still in the
+  // configuration, is built from the Builder's registry row (merged in below), not from that entry.
+  // A registry that cannot be read leaves every entry in: the merge below reports it and falls back
+  // to the configuration alone, as before.
+  const configured = withoutHandedToBuilder(
+    config.collections,
+    registriesPresent ? await registry.getAllCollections().catch(() => []) : [],
+    pluginCollectionSources(config.plugins ?? [])
+  );
+  for (const collection of configured) {
     const baseTableName =
       collection.dbName ?? collection.slug.replace(/-/g, "_");
     const tableName = baseTableName.startsWith("dc_")
@@ -622,17 +643,6 @@ export async function desiredSchemaForSync(
   // Schema Builder exist solely in the registry, and on SQLite/MySQL the diff
   // introspects the whole database, so leaving them out proposes dropping
   // every one of them. Same helper the HMR path uses.
-  const registryLogger: ServiceLogger = {
-    info: (msg: string) => logger.debug(msg),
-    warn: (msg: string) => logger.warn(msg),
-    error: (msg: string) => logger.error(msg),
-    debug: (msg: string) => logger.debug(msg),
-  };
-  const registry = new CollectionRegistryService(
-    drizzleAdapter,
-    registryLogger
-  );
-
   // Singles and components created in the Schema Builder are registry-only
   // too, and the same whole-database introspection applies to their
   // `single_*` and `comp_*` tables, so omitting them proposes the same
