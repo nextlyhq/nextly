@@ -252,6 +252,30 @@ const REGISTRIES = [
 ] as const;
 
 /**
+ * The registries a database holds that are read for its entities. A database may hold the
+ * field-group registry under both names, as a stopped storage migration leaves it: only the one
+ * every reader of it uses (`chooseRegistryTable`) is read, so a field group is never read twice and
+ * made to dispute its own table. `present` holds the names lower-cased.
+ */
+function registriesToRead(
+  present: ReadonlySet<string>,
+  dialect: SupportedDialect
+): (typeof REGISTRIES)[number][] {
+  const fieldGroupRegistry = chooseRegistryTable(
+    [...present],
+    // Lower-cased, so compared folded on every server.
+    dialect === "mysql"
+      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
+      : identifierCaseRules({ dialect })
+  ).name;
+  return REGISTRIES.filter(
+    registry =>
+      present.has(registry.table) &&
+      (registry.kind !== "fieldGroup" || registry.table === fieldGroupRegistry)
+  );
+}
+
+/**
  * The collections and Singles the database's registries record, read on the
  * run's own connection. An absent registry adds no entity. A registry that is
  * there but cannot be read makes the read cover no entity at all: from the
@@ -276,25 +300,8 @@ export async function readCoveredEntities(
   } catch {
     return [];
   }
-  // A database may hold the field-group registry under both names, as a stopped storage
-  // migration leaves it: only the one every reader of it uses is read, so a field group is never
-  // read twice and made to dispute its own table.
-  const fieldGroupRegistry = chooseRegistryTable(
-    [...present],
-    // The names are read lower-cased above, so they are compared folded on every server.
-    dialect === "mysql"
-      ? identifierCaseRules({ dialect, lowerCaseTableNames: 1 })
-      : identifierCaseRules({ dialect })
-  ).name;
   const entities: CoveredEntity[] = [];
-  for (const registry of REGISTRIES) {
-    if (!present.has(registry.table)) continue;
-    if (
-      registry.kind === "fieldGroup" &&
-      registry.table !== fieldGroupRegistry
-    ) {
-      continue;
-    }
+  for (const registry of registriesToRead(present, dialect)) {
     let rows: RegistryRow[];
     try {
       rows = await querySqlRows<RegistryRow>(

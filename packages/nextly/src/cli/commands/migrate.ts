@@ -218,6 +218,7 @@ import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { danglingReferences } from "../../domains/schema/migrate/sqlite-foreign-keys";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import {
+  endsTheRun,
   isStoppedAtPoint,
   reachStopPoint,
   withStopPoints,
@@ -2888,6 +2889,13 @@ export async function migrateCore(
       debug: (m: string) => deps.logger.debug(m),
     },
   });
+  /**
+   * The registry rows of the files that applied before one failed with `error`, except after a
+   * test's stop at a point (`stop-points.ts`), which ends the run where it stands.
+   */
+  const recordMetadataAfter = async (error: unknown): Promise<void> => {
+    if (!isStoppedAtPoint(error)) await recordMetadata();
+  };
   const recordMetadata = async (): Promise<void> => {
     deps.logger.info("Phase 3: recording migration metadata...");
     try {
@@ -2896,7 +2904,7 @@ export async function migrateCore(
       // A run that lost the schema lock stops here: it is not a bookkeeping
       // failure to warn about and carry on from into Phase 4's writes. Nor is
       // a test's stop at a point (`stop-points.ts`).
-      if (isSchemaLockLost(error) || isStoppedAtPoint(error)) throw error;
+      if (endsTheRun(error)) throw error;
       // The whole pass failed, so nothing was read: say so in the result
       // rather than returning zeroes that read like "nothing needed doing".
       metadata = {
@@ -2937,6 +2945,15 @@ export async function migrateCore(
           await assertSchemaLockHeld();
           await deps.markOrphanedPermissions?.(scope, applied.name);
         };
+  /**
+   * What follows an applied app migration: its orphaned permissions marked, then the point a test
+   * stops the run at once the file and that are done (`stop-points.ts`), since a later run passes
+   * over a recorded file and nothing of it may be left for one.
+   */
+  const afterApplied = async (applied: AppliedAppMigration): Promise<void> => {
+    await markOrphans?.(applied);
+    await reachStopPoint(`${applied.name}.sql: recorded applied`);
+  };
   const dz = deps.adapter as unknown as DrizzleAdapter;
   /**
    * Store the registry record on `tx` at the point the database is now at,
@@ -3222,16 +3239,13 @@ export async function migrateCore(
           runFiles,
           judgedFiles,
           firstRun.beforeApply,
-          markOrphans
+          afterApplied
         ));
       } catch (error) {
-        // A test's stop at a point ends the run where it stands
-        // (`stop-points.ts`): nothing after the point may run.
-        if (isStoppedAtPoint(error)) throw error;
         // A file failed after earlier ones applied: their registry rows are
         // still written, from the newest snapshot that did apply, before the
         // failure ends the run.
-        await recordMetadata();
+        await recordMetadataAfter(error);
         throw error;
       }
 
@@ -5317,8 +5331,6 @@ export async function runFileMigrations(args: {
         } catch (err) {
           throw NextlyError.is(err) ? err : applyFailedError(filename, err);
         }
-        // The file and its ledger row have committed (`stop-points.ts`).
-        await reachStopPoint(`${filename}: recorded applied`);
         applied++;
         lastApplied = filename;
         appliedFiles.push(filename);
@@ -5456,9 +5468,6 @@ export async function runFileMigrations(args: {
           previous,
         });
       }
-      // The file, its ledger row and what applying it marks have committed (`stop-points.ts`): a
-      // later run passes over a recorded file, so nothing of it may be left for one.
-      await reachStopPoint(`${filename}: recorded applied`);
       before = target;
       beforeContributions = targetFile?.contributions ?? {};
       beforeFile = targetFile;

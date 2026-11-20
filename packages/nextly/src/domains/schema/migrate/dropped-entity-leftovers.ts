@@ -44,13 +44,10 @@ import type {
 } from "../migrate-create/entity-settings";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
 import { readForeignKeyTargets } from "../pipeline/live-table-facts";
-import {
-  assertSchemaLockHeld,
-  isSchemaLockLost,
-} from "../pipeline/schema-lock";
+import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 
 import { droppedEntities, RECORDED_KINDS } from "./registry-history";
-import { isStoppedAtPoint, reachStopPoint } from "./stop-points";
+import { endsTheRun, reachStopPoint } from "./stop-points";
 
 /** One dropped entity whose leftovers may remain, with every table it was recorded with. */
 interface DroppedEntity {
@@ -176,10 +173,9 @@ export async function removeDroppedEntityLeftovers(args: {
       );
     } catch (error) {
       // A run that lost the schema lock stops: it may change nothing further, and the caller
-      // must not go on as if only this entity's removal had failed.
-      if (isSchemaLockLost(error)) throw error;
-      // A test's stop at a point ends the run there (`stop-points.ts`), never one entity's.
-      if (isStoppedAtPoint(error)) throw error;
+      // must not go on as if only this entity's removal had failed. So does a test's stop at a
+      // point (`stop-points.ts`).
+      if (endsTheRun(error)) throw error;
       left.push(`${word} "${entity.slug}"`);
       if (dropped.length > 0) {
         removedFrom.push(removedLine(word, entity.slug, droppedParts(dropped)));

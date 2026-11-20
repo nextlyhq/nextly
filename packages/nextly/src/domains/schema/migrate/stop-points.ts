@@ -13,6 +13,7 @@
  */
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { isSchemaLockLost } from "../pipeline/schema-lock";
 
 /** What a test runs at each point a run reaches; one that throws fails the run there. */
 export type StopPointHook = (point: string) => void | Promise<void>;
@@ -23,6 +24,14 @@ export const KILL_AT_VARIABLE = "NEXTLY_TEST_KILL_AT";
 let installed: StopPointHook | undefined;
 
 const STOPPED_AT_POINT = "stopped-at-point";
+
+/**
+ * Whether `error` ends the run rather than one step of it: a lost schema lock, or a test's stop at
+ * a point. A step that carries on from its own failures rethrows these.
+ */
+export function endsTheRun(error: unknown): boolean {
+  return isSchemaLockLost(error) || isStoppedAtPoint(error);
+}
 
 /** Whether `error` is a test's stop at a point (`reachStopPoint`), which always ends the run. */
 export function isStoppedAtPoint(error: unknown): boolean {
