@@ -444,23 +444,51 @@ export async function refuseBesideLeftSaves(args: {
   slug: string;
   notify: (line: string) => void;
 }): Promise<void> {
+  const left = await leftBeside(args);
+  if (left.named.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `An earlier Builder save was left part-way and is not settled, so this save was not started: ${left.named.join("; ")}. ${waysOut(left).join(" ")}`,
+    logContext: {
+      reason: "builder-save-left-elsewhere",
+      saves: left.named,
+    },
+  });
+}
+
+/**
+ * The saves of other entities left part-way that refuse this one, each named, with what settles
+ * it: this host's start, or by hand where that start leaves it (`byHand`); another host's start
+ * (`elsewhere`); or, for a record that cannot be read, its removal by hand (`unreadable`). A save
+ * made outside development is given a notice instead, and the records this save's own scope made
+ * (an earlier step of the same save) are its own.
+ */
+async function leftBeside(args: {
+  adapter: DrizzleAdapter;
+  projectRoot: string;
+  kind: SaveInProgressKind;
+  slug: string;
+  notify: (line: string) => void;
+}): Promise<{
+  named: string[];
+  byHand: string[];
+  elsewhere: Set<string>;
+  unreadable: string[];
+}> {
   const own = saveInProgressKey(args.kind, args.slug);
-  // The records this save's own scope made (an earlier step of the same save) are its own.
   const ours = new Set((scopes.getStore() ?? []).map(entry => entry.record.id));
   const here = hostname();
-  // Each save named, then a way out that works for each, as sentences of their own so the
-  // command line's reading of the refusal keeps them whole: this host's start settles what it
-  // can and names in its log one it leaves, which is cleared by hand; another host's start
-  // settles its own; a record that cannot be read is removed by hand.
-  const named: string[] = [];
-  const byHand: string[] = [];
-  const elsewhere = new Set<string>();
-  const unreadable: string[] = [];
+  const left = {
+    named: [] as string[],
+    byHand: [] as string[],
+    elsewhere: new Set<string>(),
+    unreadable: [] as string[],
+  };
   for (const row of await readSavesInProgress(args.adapter)) {
     if (row.key === own) continue;
     if (!("record" in row)) {
-      named.push(`the record ${row.key}, which could not be read`);
-      unreadable.push(unreadableRecordStep(row.key));
+      left.named.push(`the record ${row.key}, which could not be read`);
+      left.unreadable.push(unreadableRecordStep(row.key));
       continue;
     }
     const { record } = row;
@@ -471,36 +499,38 @@ export async function refuseBesideLeftSaves(args: {
       );
       continue;
     }
-    named.push(described(record));
+    left.named.push(described(record));
     if (record.host === here) {
-      byHand.push(clearByHand(args.projectRoot, record));
+      left.byHand.push(clearByHand(args.projectRoot, record));
     } else {
-      elsewhere.add(record.host);
+      left.elsewhere.add(record.host);
     }
   }
-  if (named.length === 0) return;
-  const ways = [
-    ...(byHand.length > 0
-      ? [
-          `To settle it, ${SETTLES}.`,
-          `If the start leaves it, as its log then says: ${byHand.join(" ")}`,
-        ]
-      : []),
-    ...(elsewhere.size > 0
-      ? [
-          `One left on another machine is settled by a development start on that machine (${[...elsewhere].join(", ")}).`,
-        ]
-      : []),
-    ...unreadable,
-  ];
-  throw NextlyError.conflict({
-    reason: "state",
-    message: `An earlier Builder save was left part-way and is not settled, so this save was not started: ${named.join("; ")}. ${ways.join(" ")}`,
-    logContext: {
-      reason: "builder-save-left-elsewhere",
-      saves: named,
-    },
-  });
+  return left;
+}
+
+/**
+ * A way out that works for each save left (`leftBeside`), each a sentence of its own so the
+ * command line's reading of the refusal keeps it whole.
+ */
+function waysOut(left: {
+  byHand: readonly string[];
+  elsewhere: ReadonlySet<string>;
+  unreadable: readonly string[];
+}): string[] {
+  const ways: string[] = [];
+  if (left.byHand.length > 0) {
+    ways.push(
+      `To settle it, ${SETTLES}.`,
+      `If the start leaves it, as its log then says: ${left.byHand.join(" ")}`
+    );
+  }
+  if (left.elsewhere.size > 0) {
+    ways.push(
+      `One left on another machine is settled by a development start on that machine (${[...left.elsewhere].join(", ")}).`
+    );
+  }
+  return [...ways, ...left.unreadable];
 }
 
 /**
