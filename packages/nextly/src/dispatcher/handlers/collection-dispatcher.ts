@@ -52,21 +52,35 @@ import type {
   BuilderSaveSetup,
   writeCollectionSave,
 } from "../../domains/schema/builder-save/collection-save";
+import {
+  type ConfirmedDeletion,
+  deletionHoldOf,
+} from "../../domains/schema/builder-save/deletion-counts";
+import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
+  renamedFieldsOf,
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
-import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
-import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
+import type {
+  BrowserRenameResolution,
+  LegacyResolutionsBundle,
+} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import type { DesiredCollection } from "../../domains/schema/pipeline/types";
+import type {
+  DesiredCollection,
+  DesiredSchema,
+} from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
 import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
+  archiveCollectionFieldsLeavingTranslation,
+  checkCollectionTranslationChange,
+  collectionChangeCarriesValues,
   fieldsAsStored,
+  reconcileCollectionCompanionAfterFile,
   recordedFieldsOf,
   refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
@@ -81,14 +95,20 @@ import {
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
 import { bumpSchemaVersion } from "../../route-handler/schema-version";
-import type { FieldDefinition } from "../../schemas/dynamic-collections";
+import type {
+  DynamicCollectionRecord,
+  FieldDefinition,
+} from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { SLUG_PATTERN } from "../../shared/slug-pattern";
 import { consoleLogger } from "../../shared/types";
-import { afterEnclosingCommit } from "../helpers/applied-fields-row";
+import {
+  afterEnclosingCommit,
+  registryInFileTransaction,
+} from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -328,6 +348,96 @@ const TogetherParam = z
       )
       .max(500)
   );
+
+/**
+ * The counts of removed fields' values the person confirmed in the review, as an apply's body
+ * sends them: each field's name and a whole number of values. Absent where the body sends none,
+ * and the save then deletes as it always has (`CollectionSave.confirmedDeletions`).
+ */
+const ConfirmedDeletionsBody = z.object({
+  confirmedDeletions: z
+    .array(
+      z.object({
+        field: z.string().min(1),
+        count: z.number().int().min(0),
+      })
+    )
+    .max(500)
+    .optional(),
+});
+
+function readConfirmedDeletions(
+  body: unknown
+): z.infer<typeof ConfirmedDeletionsBody>["confirmedDeletions"] {
+  try {
+    return ConfirmedDeletionsBody.parse(body ?? {}).confirmedDeletions;
+  } catch (error) {
+    if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+    throw error;
+  }
+}
+
+/**
+ * The dialog's confirmations by field name, as its questions read them
+ * (`refuseUnansweredDialogQuestions`): each field's own resolution, and each removed field whose
+ * count of values the person confirmed deleting (`confirmedDeletions`), a count being its drop
+ * confirmed. Nothing where the body sends neither.
+ */
+function dialogConfirmations(
+  tableName: string,
+  resolutions: Record<string, FieldResolution> | undefined,
+  confirmedDeletions: ReturnType<typeof readConfirmedDeletions>
+): { legacy?: LegacyResolutionsBundle } {
+  const confirmDrop: LegacyResolutionsBundle["byFieldName"][string] = {
+    action: "confirm_drop",
+  };
+  const counted = (confirmedDeletions ?? []).map(
+    deletion => [deletion.field, confirmDrop] as const
+  );
+  if (resolutions === undefined && counted.length === 0) return {};
+  return {
+    legacy: {
+      tableName,
+      byFieldName: { ...Object.fromEntries(counted), ...resolutions },
+    },
+  };
+}
+
+/** The save's answer of the counts confirmed, where the body sent them; nothing otherwise. */
+function confirmedDeletionsAnswer(
+  confirmedDeletions: z.infer<
+    typeof ConfirmedDeletionsBody
+  >["confirmedDeletions"]
+): { confirmedDeletions?: readonly ConfirmedDeletion[] } {
+  return confirmedDeletions === undefined ? {} : { confirmedDeletions };
+}
+
+/**
+ * The counts the person confirmed, compared just before the schema pipeline's push deletes the
+ * removed fields' values, where no save writer runs the save: with nothing held, as a push the
+ * writer runs compares them (`DeletionHold.compare`). Refuses where a count changed.
+ */
+async function comparedBeforePipelinePush(args: {
+  dialect: Parameters<typeof deletionHoldOf>[0]["dialect"];
+  tableName: string;
+  localized: boolean;
+  previous: readonly unknown[] | undefined;
+  next: FieldDefinition[];
+  /** The rename answers: a field renamed keeps its values, so it is not compared. */
+  renames: readonly BrowserRenameResolution[] | undefined;
+  confirmed: readonly ConfirmedDeletion[] | undefined;
+  db: unknown;
+}): Promise<void> {
+  await deletionHoldOf({
+    dialect: args.dialect,
+    tableName: args.tableName,
+    localized: args.localized,
+    previous: (args.previous ?? []) as unknown as FieldDefinition[],
+    next: args.next,
+    renamed: renamedFieldsOf(args.renames ?? []),
+    confirmed: args.confirmed,
+  })?.compare(args.db);
+}
 
 function parseTogetherParam(value: string | undefined): string[] {
   if (value === undefined) return [];
@@ -844,39 +954,12 @@ const COLLECTIONS_METHODS: Record<
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
 
-      // Build a full DesiredSchema so drizzle-kit sees all managed tables.
-      // Without this, singles/components in the live DB are absent from the
-      // desired snapshot and drizzle-kit offers them as rename candidates.
-      const desired = await buildFullDesiredSchema();
-      desired.collections[p.collectionName] = {
+      const desired = await dialogDesiredSchema({
         slug: p.collectionName,
-        tableName,
-        // As the apply's first push creates them (`fieldsAsFirstPushed`).
-        fields: fieldsAsFirstPushed({
-          oldFields: currentFields,
-          newFields: fields as FieldDefinition[],
-          entity: collection,
-          requestedLocalized: previewLocalized,
-        }) as DesiredCollection["fields"],
-        // Carry the Draft/Published flag so previewDesiredSchema injects
-        // the `status` column into the desired snapshot.
-        status: collection.status === true,
-        // i18n: carry the localized flag so the push diff OMITS translatable
-        // columns from the main table's desired snapshot (they live in the
-        // companion `_locales` table). buildFullDesiredSchema already sets this
-        // from the registry, but the splice above overwrites that entry, so we
-        // must re-supply it or the preview would show translatable columns being
-        // added to the main table. The REQUEST's flag wins when the Builder
-        // sent one: the apply prefers it too, and a preview that diffed against
-        // the persisted flag instead would collect resolutions for DDL the
-        // apply is not going to run.
-        localized:
-          previewLocalized ??
-          (collection as { localized?: boolean }).localized === true,
-        // Authored in the Schema Builder: this is the Builder's own save path.
-        builderOwned: true,
-        recordedFields: recordedFieldsOf(collection),
-      };
+        collection,
+        fields: fields as FieldDefinition[],
+        requestedLocalized: previewLocalized,
+      });
 
       const preview = await builderSchemaPreviewBody({
         desired,
@@ -985,6 +1068,9 @@ const COLLECTIONS_METHODS: Record<
       // The lifecycle the Builder's pending settings ask for, read (and a malformed value refused)
       // before the lock is taken.
       const requestedLifecycle = readRequestedLifecycle(body);
+      // The counts the person confirmed deleting, read with the rest of the request, before the
+      // lock: a malformed one refuses the save before anything is read from the database.
+      const confirmedDeletions = readConfirmedDeletions(body);
       assertValidFieldsPayload(sentFields, {
         kind: "collection",
         stored: "under-lock",
@@ -1167,6 +1253,17 @@ const COLLECTIONS_METHODS: Record<
               await applyCollectionSchemaChange({ ...change, onLanded })
             ).summary;
           });
+          // The checks the change makes over its translations, asked once, where the save runs in
+          // development: the push asks them again itself; the file road asks them here, before
+          // anything is written. The rename they answer carries the companion's values on either.
+          let translationChecked:
+            | ReturnType<typeof checkCollectionTranslationChange>
+            | undefined;
+          const companionRename = () =>
+            (translationChecked ??= checkCollectionTranslationChange(change));
+          // Asked before the writer plans anything, as the push asks them before it plans its
+          // change, so a refusal of a translated field's change is the one either road gives.
+          await companionRename();
           const newSchemaVersion = currentVersion + 1;
           // The registry's row of the save: the fields as stored, the advanced schema version and
           // the translation state this apply ran with, written with the stored version in one
@@ -1202,31 +1299,153 @@ const COLLECTIONS_METHODS: Record<
             // And again once a file's transaction it joined commits (`afterEnclosingCommit`).
             await afterEnclosingCommit(adapter);
           };
+          // After a schema apply (rename, add, drop) two independent in-memory
+          // caches hold Drizzle table objects that are now stale:
+          //
+          //   1. CollectionFileManager.schemaRegistry: used by query-service
+          //      SELECT / JOIN builders (loadDynamicSchema path).
+          //   2. SchemaRegistry.dynamicSchemas: used by adapter.insert /
+          //      update / delete / select (getTableObject path).
+          //
+          // Both must be refreshed with the same freshly-generated table built
+          // from the apply payload's `fields`. Replacing in-place (rather than
+          // invalidate + lazy-rebuild) avoids the race where a concurrent
+          // request could arrive between the invalidation and the DB write of
+          // the new `dynamic_collections.fields`, picking up the stale schema.
+          const refreshRuntime = (stored: FieldDefinition[]): void => {
+            try {
+              // i18n: thread `localized`/`status` so the refreshed MAIN runtime table
+              // omits translatable columns (kept in lockstep with the desired snapshot
+              // above), then register the companion `_locales` runtime table too so
+              // per-language reads/writes resolve in THIS process without a restart.
+              const { table: freshTable } = generateRuntimeSchema(
+                tableName,
+                stored,
+                dialect,
+                {
+                  localized: isStoredPerLanguage,
+                  status: collection.status === true,
+                }
+              );
+              getCollectionsHandlerFromDI()?.refreshCollectionSchema(
+                tableName,
+                freshTable
+              );
+              getSchemaRegistryFromDI()?.registerDynamicSchema(
+                tableName,
+                freshTable
+              );
+              if (isStoredPerLanguage) {
+                const companion = buildCompanionRuntimeTable({
+                  slug: p.collectionName,
+                  tableName,
+                  fields: fields as FieldDefinition[],
+                  dialect,
+                  localized: true,
+                  // As saved, not as the record read before the save: a save that turns
+                  // translation on gives a Draft/Published collection its per-language `_status`.
+                  status: publishesPerLanguage({
+                    localized: isLocalized,
+                    status: (collection as { status?: unknown }).status,
+                  }),
+                });
+                if (companion) {
+                  getCollectionsHandlerFromDI()?.refreshCollectionSchema(
+                    companion.companionTableName,
+                    companion.table
+                  );
+                  getSchemaRegistryFromDI()?.registerDynamicSchema(
+                    companion.companionTableName,
+                    companion.table
+                  );
+                }
+              }
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              consoleLogger.warn(
+                `[applySchemaChanges] In-memory schema refresh failed for ` +
+                  `'${p.collectionName}': ${msg}. Entry queries may reference ` +
+                  `old column names until next server restart.`
+              );
+            }
+          };
           const written = await saveThroughWriter({
             // Where the save runs its file, the row is written in the file's own transaction, so a
-            // failed write leaves the save as it was and is answered as the failure it is.
-            registry: storedFields => writeRow(storedFields, false),
+            // failed write leaves the save as it was and is answered as the failure it is. Not where
+            // the translations table is brought in step after the file: the row would then record
+            // the change before that step holds it, so it is written after it, as a Single's is.
+            ...(registryInFileTransaction({
+              wasStored: storesPerLanguage({ localized: wasLocalized }),
+              isStored: isStoredPerLanguage,
+            })
+              ? {
+                  registry: (stored: FieldDefinition[]) =>
+                    writeRow(stored, false),
+                }
+              : {}),
+            // A file stopped part way and settled to what applied: this process's tables and the
+            // admin's schema version follow the fields it recorded, as after an apply. Asked only
+            // where the registry write runs in the file's transaction.
+            settled: storedFields => {
+              refreshRuntime(storedFields);
+              bumpSchemaVersion();
+            },
             appliedBy: push.appliedBy,
-            // Whether the push applies the change in development, the writer recording its
-            // migration once the push has run: a translated collection, or one turning
-            // translation on or off, whose push carries its values across the change; and a change
-            // reaching a relation's storage (`reachesRelationStorage`), which the push plans from
-            // the live table, where the file alone, written from the newest snapshot, does not.
-            pushWhen: async () =>
-              wasLocalized ||
-              isLocalized ||
-              reachesRelationStorage({
-                before: collection.fields ?? [],
-                after: fields as unknown as FieldDefinition[],
-                liveTable: async () =>
-                  (
-                    await introspectLiveSnapshot(
-                      adapter.getDrizzle(),
-                      dialect,
-                      [tableName]
-                    )
-                  ).tables[0],
+            // Where the file carries the change, the push's questions are asked of it first: a
+            // rename the request does not answer, or a drop it does not confirm, refuses the save
+            // before anything is written, as the push refuses it.
+            questions: async () =>
+              refuseUnansweredDialogQuestions({
+                desired: await dialogDesiredSchema({
+                  slug: p.collectionName,
+                  collection,
+                  fields: fields as unknown as FieldDefinition[],
+                  requestedLocalized: readRequestLocalized(body),
+                }),
+                db: adapter.getDrizzle(),
+                dialect,
+                tableName,
+                // The builder that made the table, which the offered rename is judged by.
+                builtBy: "collection",
+                oldFields: (collection.fields ??
+                  []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+                renameResolutions: renameResolutions ?? [],
+                eventResolutions: eventResolutions ?? [],
+                ...dialogConfirmations(
+                  tableName,
+                  resolutions,
+                  confirmedDeletions
+                ),
               }),
+            // Whether the push applies the change in development, the writer recording its
+            // migration once the push has run: where it carries values across the change, as a
+            // Single's and a field group's saves ask it (`pushCarriesValues`). Any other change,
+            // a translated collection's included, runs its own file.
+            pushWhen: async () =>
+              collectionChangeCarriesValues(change, await companionRename()),
+            // A field leaving translation archived before the file runs, and the translations
+            // table brought in step with the main table the file left.
+            fileRoad: {
+              judge: async () =>
+                archiveCollectionFieldsLeavingTranslation(
+                  change,
+                  await companionRename(),
+                  { judgeOnly: true }
+                ),
+              before: async () =>
+                archiveCollectionFieldsLeavingTranslation(
+                  change,
+                  await companionRename()
+                ),
+              after: async () =>
+                reconcileCollectionCompanionAfterFile(
+                  change,
+                  await companionRename()
+                ),
+            },
             slug: p.collectionName,
             collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
@@ -1238,15 +1457,30 @@ const COLLECTIONS_METHODS: Record<
               ...(acknowledgedConversions === undefined
                 ? {}
                 : { acknowledgedConversions }),
+              ...confirmedDeletionsAnswer(confirmedDeletions),
             },
           });
           // Thrown before the registry row is written: the row keeps the fields the database
           // held before, as the kept files record the change still to finish.
-          push.throwIfFailed(written?.files ?? []);
+          push.throwIfFailed(written?.files ?? [], written?.checked);
           const storedFields =
             written === undefined
               ? (fields as unknown as FieldDefinition[])
               : written.fields;
+          // Without a save writer, the pipeline's push deletes the removed fields' values: the counts
+          // the person confirmed are compared just before it (`comparedBeforePipelinePush`).
+          if (written === undefined) {
+            await comparedBeforePipelinePush({
+              dialect,
+              tableName,
+              localized: wasLocalized,
+              previous: collection.fields,
+              next: fields as unknown as FieldDefinition[],
+              renames: renameResolutions,
+              confirmed: confirmedDeletions,
+              db: adapter.getDrizzle(),
+            });
+          }
           const result =
             written !== undefined
               ? { summary: pushedSummary }
@@ -1317,74 +1551,7 @@ const COLLECTIONS_METHODS: Record<
             );
           }
 
-          // After a schema apply (rename, add, drop) two independent in-memory
-          // caches hold Drizzle table objects that are now stale:
-          //
-          //   1. CollectionFileManager.schemaRegistry: used by query-service
-          //      SELECT / JOIN builders (loadDynamicSchema path).
-          //   2. SchemaRegistry.dynamicSchemas: used by adapter.insert /
-          //      update / delete / select (getTableObject path).
-          //
-          // Both must be refreshed with the same freshly-generated table built
-          // from the apply payload's `fields`. Replacing in-place (rather than
-          // invalidate + lazy-rebuild) avoids the race where a concurrent
-          // request could arrive between the invalidation and the DB write of
-          // the new `dynamic_collections.fields`, picking up the stale schema.
-          try {
-            // i18n: thread `localized`/`status` so the refreshed MAIN runtime table
-            // omits translatable columns (kept in lockstep with the desired snapshot
-            // above), then register the companion `_locales` runtime table too so
-            // per-language reads/writes resolve in THIS process without a restart.
-            const { table: freshTable } = generateRuntimeSchema(
-              tableName,
-              storedFields,
-              dialect,
-              {
-                localized: isStoredPerLanguage,
-                status: collection.status === true,
-              }
-            );
-            getCollectionsHandlerFromDI()?.refreshCollectionSchema(
-              tableName,
-              freshTable
-            );
-            getSchemaRegistryFromDI()?.registerDynamicSchema(
-              tableName,
-              freshTable
-            );
-            if (isStoredPerLanguage) {
-              const companion = buildCompanionRuntimeTable({
-                slug: p.collectionName,
-                tableName,
-                fields: fields as FieldDefinition[],
-                dialect,
-                localized: true,
-                // As saved, not as the record read before the save: a save that turns
-                // translation on gives a Draft/Published collection its per-language `_status`.
-                status: publishesPerLanguage({
-                  localized: isLocalized,
-                  status: (collection as { status?: unknown }).status,
-                }),
-              });
-              if (companion) {
-                getCollectionsHandlerFromDI()?.refreshCollectionSchema(
-                  companion.companionTableName,
-                  companion.table
-                );
-                getSchemaRegistryFromDI()?.registerDynamicSchema(
-                  companion.companionTableName,
-                  companion.table
-                );
-              }
-            }
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            consoleLogger.warn(
-              `[applySchemaChanges] In-memory schema refresh failed for ` +
-                `'${p.collectionName}': ${msg}. Entry queries may reference ` +
-                `old column names until next server restart.`
-            );
-          }
+          refreshRuntime(storedFields);
 
           // The dispatcher fires bumpSchemaVersion directly after a
           // successful pipeline apply. The bump only matters for UI-first
@@ -1990,20 +2157,32 @@ export const shouldLogF14HintReceiptForTest = shouldLogF14HintReceipt;
  * A registry row as the writer reads it: its table and its fields, which the
  * registry stores as the field definitions they were saved as.
  */
-function writerRowOf(collection: { tableName: string; fields?: unknown }): {
+function writerRowOf(collection: {
+  tableName: string;
+  fields?: unknown;
+  localized?: unknown;
+}): {
   tableName: string;
   fields: FieldDefinition[];
+  localized: boolean;
 } {
   return {
     tableName: collection.tableName,
     fields: (collection.fields ?? []) as FieldDefinition[],
+    // Whether the collection is translated as the registry stores it: where its values are, for a
+    // collection the definition file lacks (`saveOfSchemaChange`).
+    localized: collection.localized === true,
   };
 }
 
 /** What a field change gives the Builder save writer. */
 interface WriterChange {
   slug: string;
-  collection: { tableName: string; fields?: FieldDefinition[] };
+  collection: {
+    tableName: string;
+    fields?: FieldDefinition[];
+    localized?: boolean;
+  };
   fields: FieldDefinition[];
   localized: boolean;
   answers: SchemaChangeAnswers;
@@ -2066,6 +2245,50 @@ async function writerSaveOf(change: WriterChange): Promise<
 }
 
 /**
+ * The full desired schema a collection's dialog change is planned against: this collection as the
+ * change leaves it, its fields as the apply's first push creates them (`fieldsAsFirstPushed`), and
+ * every other managed table as it is, so drizzle-kit sees them all rather than offering a Single's
+ * or a field group's table as a rename candidate. What the dialog's preview shows, and what a save
+ * that runs its own migration file asks the push's questions of (`refuseUnansweredDialogQuestions`).
+ */
+async function dialogDesiredSchema(args: {
+  slug: string;
+  collection: DynamicCollectionRecord;
+  fields: FieldDefinition[];
+  /** The request's localized flag, when the Builder sent one. */
+  requestedLocalized: boolean | undefined;
+}): Promise<DesiredSchema> {
+  const { slug, collection, fields } = args;
+  const currentFields = (collection.fields ??
+    []) as unknown as FieldDefinition[];
+  const desired = await buildFullDesiredSchema();
+  desired.collections[slug] = {
+    slug,
+    tableName: collection.tableName,
+    // As the apply's first push creates them (`fieldsAsFirstPushed`).
+    fields: fieldsAsFirstPushed({
+      oldFields: currentFields,
+      newFields: fields,
+      entity: collection,
+      requestedLocalized: args.requestedLocalized,
+    }) as DesiredCollection["fields"],
+    // Carry the Draft/Published flag so the desired snapshot has the `status` column.
+    status: collection.status === true,
+    // i18n: the push diff OMITS translatable columns from the main table's desired snapshot (they
+    // live in the companion `_locales` table). The request's flag wins when the Builder sent one,
+    // as the apply prefers it: planning against the persisted flag instead would ask about DDL the
+    // apply is not going to run.
+    localized:
+      args.requestedLocalized ??
+      (collection as { localized?: boolean }).localized === true,
+    // Authored in the Schema Builder: this is the Builder's own save path.
+    builderOwned: true,
+    recordedFields: recordedFieldsOf(collection),
+  };
+  return desired;
+}
+
+/**
  * A field change through the Builder save writer, when the app registered
  * one: written and, in development, run, or applied by `appliedBy` and then
  * recorded. Undefined without a writer, where the push pipeline applies the
@@ -2082,18 +2305,45 @@ async function saveThroughWriter(
      */
     pushWhen?: () => Promise<boolean>;
     /**
+     * What the save does around its own migration file where development runs it rather than the
+     * push: `judge`, the preconditions the push would ask, judged before anything else, the dialog's
+     * questions included; `before`, what is written ahead of the file (a field leaving
+     * translation's archive), once the questions are answered and the writer's own checks have
+     * passed (`beforeWrite`); `after`, what the file does not
+     * reach, brought in step once it ran (a translations table). A failure of `after` leaves the
+     * file recorded applied, as the database stands as it says.
+     */
+    fileRoad?: {
+      judge?: () => Promise<void>;
+      before: () => Promise<void>;
+      after: () => Promise<void>;
+    };
+    /**
      * The caller's registry write for the save, given the fields as stored. Where the writer runs
      * the save's file in development, it runs inside the last file's transaction, after its ledger
      * row, so a failed write leaves the save as it was (`inLastTransaction`); elsewhere the caller
      * writes it once this returns.
      */
     registry?: (fields: FieldDefinition[]) => Promise<void>;
+    /**
+     * After `registry`, for a file that stopped part way and was settled to what applied: what the
+     * caller does after an apply, given the fields the row recorded.
+     */
+    settled?: (fields: FieldDefinition[]) => void;
+    /**
+     * The questions the push asks before it changes anything, asked where the save's file rather
+     * than the push carries the change, before anything is written: a dialog's request that leaves
+     * one unanswered is refused as the push refuses it (`refuseUnansweredDialogQuestions`).
+     */
+    questions?: () => Promise<void>;
   }
 ): Promise<
   | {
       fields: FieldDefinition[];
       applied: boolean;
       files: readonly string[];
+      /** Of kept files, the one a resolve checks against the database (the writer's). */
+      checked?: string | null;
       registryWritten: boolean;
     }
   | undefined
@@ -2104,11 +2354,22 @@ async function saveThroughWriter(
     change.appliedBy !== undefined &&
     prepared.deps.applies &&
     (change.pushWhen === undefined || (await change.pushWhen()));
+  // In the push's order, before anything is written: the change's preconditions first, which say
+  // why a change cannot be made at all; then the push's questions; then the writer's own checks
+  // (its history, its plan, the translations table's drift); and only once all have passed, what
+  // the file road writes ahead of its file (a field leaving translation's archive), so a save
+  // refused by any of them leaves no archive rows behind (`beforeWrite`).
+  const runsFile = prepared.deps.applies && !viaPush;
+  if (runsFile) await change.fileRoad?.judge?.();
+  if (!viaPush) await change.questions?.();
+  const archiving = runsFile ? change.fileRoad?.before : undefined;
+  const beforeWrite = archiving === undefined ? {} : { beforeWrite: archiving };
   // Loaded here, where a save runs: the writer brings the migration generator
   // and runner, which a request that writes no field change never needs.
-  const { writeCollectionSave } = await import(
-    "../../domains/schema/builder-save/collection-save"
-  );
+  const [{ writeCollectionSave }, { appliedFieldsOf }] = await Promise.all([
+    import("../../domains/schema/builder-save/collection-save"),
+    import("../../domains/schema/builder-save/stopped-save"),
+  ]);
   const registry = change.registry;
   const inFile = prepared.deps.applies && !viaPush && registry !== undefined;
   const result = await writeCollectionSave(
@@ -2117,13 +2378,29 @@ async function saveThroughWriter(
     viaPush && change.appliedBy !== undefined
       ? { appliedBy: change.appliedBy }
       : inFile
-        ? { inLastTransaction: () => registry(prepared.fields) }
-        : {}
+        ? {
+            ...beforeWrite,
+            inLastTransaction: () => registry(prepared.fields),
+            // A file that stops part way is settled to what of it applied: the row then records
+            // the fields as far as the database holds them.
+            onSettled: async report => {
+              const applied = appliedFieldsOf(
+                change.collection.fields ?? [],
+                prepared.fields,
+                report
+              );
+              await registry(applied);
+              change.settled?.(applied);
+            },
+          }
+        : beforeWrite
   );
+  if (runsFile) await change.fileRoad?.after();
   return {
     fields: prepared.fields,
     applied: result.applied,
     files: result.files,
+    ...(result.checked === undefined ? {} : { checked: result.checked }),
     registryWritten: inFile,
   };
 }

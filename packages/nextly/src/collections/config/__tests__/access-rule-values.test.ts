@@ -25,6 +25,13 @@ import type { SingleConfig } from "../../../singles/config/types";
 import { defineCollection } from "../define-collection";
 import type { CollectionConfig } from "../define-collection";
 import { validateCollectionConfig } from "../validate-config";
+import { configurationProblems } from "../../../shared/lib/config-problems";
+
+/** Every problem the configuration's load reports for these entities, as one text. */
+const problemText = (entities: Parameters<typeof configurationProblems>[0]) =>
+  configurationProblems(entities)
+    .map(problem => `[${problem.code}] ${problem.path}: ${problem.message}`)
+    .join("\n");
 
 const title = { type: "text" as const, name: "title" };
 
@@ -97,13 +104,17 @@ describe("a collection's access rules", () => {
   });
 
   it("is refused at startup, naming the key, when one is misspelt", () => {
-    expect(() =>
-      defineCollection({
-        slug: "posts",
-        fields: [title],
-        access: { reed: () => true } as never,
+    expect(
+      problemText({
+        collections: [
+          defineCollection({
+            slug: "posts",
+            fields: [title],
+            access: { reed: () => true } as never,
+          }),
+        ],
       })
-    ).toThrow(/reed/);
+    ).toMatch(/reed/);
   });
 });
 

@@ -37,6 +37,18 @@ function makeAdapter(
       delete: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue({ rowCount: 3 }),
       }),
+      // The translation transition record is looked up and not found: there is none to forget.
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            limit: vi.fn().mockReturnValue(
+              Object.assign(Promise.resolve([]), {
+                for: vi.fn().mockResolvedValue([]),
+              })
+            ),
+          }),
+        }),
+      }),
     }),
   };
 }
@@ -109,6 +121,7 @@ describe("teardownEntityI18n dialect SQL", () => {
       companionDropped: true,
       archiveRowsPurged: 3,
       provenanceRowsPurged: 0,
+      transitionRecordsPurged: 0,
     });
   });
 

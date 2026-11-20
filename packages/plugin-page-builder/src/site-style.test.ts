@@ -1,12 +1,15 @@
-import type {
-  BreakpointSet,
-  FontFaceDef,
-  NamedClass,
-  SiteTokenSet,
+import {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  type BreakpointSet,
+  type FontFaceDef,
+  type NamedClass,
+  type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
+  configuredClassesAt,
   removedSiteStyleOption,
   resolveSiteStyle,
   siteBreakpoints,
@@ -338,6 +341,109 @@ describe("the site's fluid range across the tiers", () => {
     expect(
       tokenOverrideOf({ tokens: [] }, { tokens: [lead] }).fluidRange
     ).toEqual({ min: 360, max: 1280 });
+  });
+});
+
+describe("a text style the site's code makes fluid, across the site's range", () => {
+  const SIZES = { small: 16, large: 32 };
+  const NEW = { min: 400, max: 800 };
+  /** A code text style whose Desktop size "Fluid…" made across `range`. */
+  const codeLead = (
+    range: { min: number; max: number } = DEFAULT_FLUID_RANGE
+  ): NamedClass =>
+    ({
+      id: "t-code-lead",
+      slug: "code-lead",
+      label: "Code lead",
+      orderIndex: 0,
+      role: "text",
+      styles: { base: { base: { fontSize: fluidValue(SIZES, range) } } },
+      fluidSizes: { base: SIZES },
+    }) as NamedClass;
+  /** A stored tier holding a range and nothing else. */
+  const storedRange = (range: { min: number; max: number }) => ({
+    tokens: { tokens: [], fluidRange: range },
+  });
+  const sizeOf = (style: { classes?: readonly NamedClass[] }, id: string) =>
+    (
+      style.classes?.find(entry => entry.id === id)?.styles as
+        | { base?: { base?: { fontSize?: unknown } } }
+        | undefined
+    )?.base?.base?.fontSize;
+
+  it("follows a range the site stores, keeping its sizes", () => {
+    const merged = resolveSiteStyle(
+      { classes: [codeLead()] },
+      storedRange(NEW)
+    );
+    expect(sizeOf(merged, "t-code-lead")).toBe(fluidValue(SIZES, NEW));
+    expect(merged.classes?.[0]?.fluidSizes).toEqual({ base: SIZES });
+  });
+
+  it("is made again from the range the code made it across, not the default", () => {
+    const coded = { min: 320, max: 1440 };
+    const defaults = {
+      tokens: { tokens: [], fluidRange: coded },
+      classes: [codeLead(coded)],
+    };
+    expect(
+      sizeOf(resolveSiteStyle(defaults, storedRange(NEW)), "t-code-lead")
+    ).toBe(fluidValue(SIZES, NEW));
+    // Nothing stored: the code's range is the site's, and the size is the code's.
+    expect(resolveSiteStyle(defaults).classes?.[0]).toBe(defaults.classes[0]);
+  });
+
+  it("leaves a code size typed by hand beside its sizes as the code wrote it", () => {
+    // Not the clamp its sizes make across the code's range: the developer's.
+    const typed = {
+      ...codeLead(),
+      styles: { base: { base: { fontSize: "20px" } } },
+    } as NamedClass;
+    const merged = resolveSiteStyle({ classes: [typed] }, storedRange(NEW));
+    expect(merged.classes?.[0]).toBe(typed);
+  });
+
+  it("gives way to a stored override of it, as stored", () => {
+    const override = {
+      ...codeLead(),
+      styles: { base: { base: { fontSize: "30px" } } },
+    } as NamedClass;
+    const merged = resolveSiteStyle(
+      { classes: [codeLead()] },
+      { ...storedRange(NEW), classes: [override] }
+    );
+    expect(merged.classes).toHaveLength(1);
+    expect(merged.classes?.[0]).toBe(override);
+  });
+
+  it("answers the code's own objects while the site's range is the code's", () => {
+    const classes = [codeLead()];
+    expect(resolveSiteStyle({ classes }).classes?.[0]).toBe(classes[0]);
+    expect(
+      resolveSiteStyle({ classes }, storedRange(DEFAULT_FLUID_RANGE))
+        .classes?.[0]
+    ).toBe(classes[0]);
+    expect(configuredClassesAt({ classes }, storedRange(NEW).tokens)).not.toBe(
+      classes
+    );
+    expect(
+      configuredClassesAt({ classes }, storedRange(DEFAULT_FLUID_RANGE).tokens)
+    ).toBe(classes);
+  });
+
+  it("follows the range when locked: a lock guards the site's edits, and nothing stored moves", () => {
+    const locked = { ...codeLead(), locked: true } as NamedClass;
+    const merged = resolveSiteStyle({ classes: [locked] }, storedRange(NEW));
+    expect(sizeOf(merged, "t-code-lead")).toBe(fluidValue(SIZES, NEW));
+    expect(merged.classes?.[0]?.locked).toBe(true);
+  });
+
+  it("is the code tier configuredClassesAt answers for the merged tokens", () => {
+    const defaults = { classes: [codeLead()] };
+    const merged = resolveSiteStyle(defaults, storedRange(NEW));
+    expect(configuredClassesAt(defaults, merged.tokens)).toEqual(
+      merged.classes
+    );
   });
 });
 

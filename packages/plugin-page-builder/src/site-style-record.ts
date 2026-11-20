@@ -64,13 +64,16 @@ import {
   type TokenKind,
 } from "@nextlyhq/blocks-engine";
 
+import { isFluidRange } from "./site-fluid-range";
 import {
   BUILT_IN_NAME_FIELDS,
+  configuredClassesAt,
   resolveSiteStyle,
   siteStyleOf,
   withBuiltInNames,
   type SiteStyleData,
 } from "./site-style";
+import { readStoredJson } from "./stored-json";
 
 /**
  * One section's verdict: the narrowed value a reader may use, and the issues
@@ -182,25 +185,6 @@ function isStoredTokenShape(entry: unknown): entry is StoredTokenShape {
     optionalRecord(entry.extensions) &&
     optionalRecord(entry.unreadExtension) &&
     (entry.fluid === undefined || isFluidSizes(entry.fluid))
-  );
-}
-
-/**
- * The site's fluid range as stored: two positive, finite widths in px, the
- * smallest screen below the largest, or a fluid size would grow across no
- * width at all.
- */
-export function isFluidRange(
-  value: unknown
-): value is { min: number; max: number } {
-  return (
-    isPlainRecord(value) &&
-    typeof value.min === "number" &&
-    typeof value.max === "number" &&
-    Number.isFinite(value.min) &&
-    Number.isFinite(value.max) &&
-    value.min > 0 &&
-    value.min < value.max
   );
 }
 
@@ -1316,6 +1300,30 @@ export function checkStoredBreakpoints(
   const viewport = readAxis("viewport");
   const container = readAxis("container");
   return { value: { viewport, container }, issues };
+}
+
+/**
+ * The config's classes as the site draws them, over a stored or sent tokens
+ * section: the one merge's derivation (`configuredClassesAt`) across the range
+ * that section stores, else the code's own.
+ *
+ * For the writes that compare with the code's classes outside the merge: a
+ * breakpoint removal's strip, its undo's restore, and the lock guard that
+ * accepts both. They meet the code's styles as the site draws them, or an
+ * override they store would keep the clamp the code made across its own range
+ * and stop following the site's. Read as stored data: SQLite hands the
+ * section back as text, and an unreadable one leaves the code's range.
+ */
+export function configuredClassesOver(
+  defaults: SiteStyleData | undefined,
+  tokens: unknown
+): readonly NamedClass[] {
+  return (
+    configuredClassesAt(
+      defaults,
+      checkStoredTokens(readStoredJson(tokens)).value
+    ) ?? []
+  );
 }
 
 /**

@@ -20,6 +20,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "../../../errors/nextly-error";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import type { Logger } from "../../../shared/types";
 import {
@@ -33,16 +34,14 @@ import {
 } from "../../collections/services/collection-sync-service";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { MIGRATION_TARGET } from "../../field-groups/migration/target";
 import {
   FieldGroupRegistryService,
   toCodeFirstComponentConfig,
   type CodeFirstComponentConfig,
   type CodeFirstComponentSource,
 } from "../../field-groups/services/field-group-registry-service";
-import {
-  resolveFieldGroupRegistryTable,
-  type FieldGroupRegistryName,
-} from "../../field-groups/storage/resolve-storage-names";
+import type { FieldGroupRegistryName } from "../../field-groups/storage/resolve-storage-names";
 import {
   SingleRegistryService,
   toCodeFirstSingleConfig,
@@ -347,6 +346,27 @@ async function removeRows(
   );
 }
 
+/**
+ * The field-group registry the database holds, read on the transaction the registry write holds
+ * (`adapterForReads`), each probe a step of its own, as `tableStands` asks: a catalog listing
+ * would run on another connection, blind to the transaction. The legacy registry where it is
+ * there, as the catalog's own choice prefers it, else the migrated one, else legacy.
+ */
+async function fieldGroupRegistryOf(
+  adapter: DrizzleAdapter
+): Promise<FieldGroupRegistryName> {
+  const view = adapterForReads(adapter);
+  const exists = (table: string) =>
+    inRegistryStep(adapter, () => view.tableExists(table));
+  if (await exists(STORAGE_FORMAT.registryTable)) {
+    return STORAGE_FORMAT.registryTable;
+  }
+  if (await exists(MIGRATION_TARGET.registryTable)) {
+    return MIGRATION_TARGET.registryTable;
+  }
+  return STORAGE_FORMAT.registryTable;
+}
+
 /** The table a stored registry row names, where it names one. */
 function storedTableOf(row: unknown): string | undefined {
   const tableName =
@@ -394,10 +414,8 @@ async function recordedRows(
   const singles = new SingleRegistryService(deps.adapter, deps.logger);
   const fieldGroups = new FieldGroupRegistryService(deps.adapter, deps.logger);
   // The field-group registry under the name the database holds it, which a Builder group's new
-  // row is written into and named by.
-  const fieldGroupRegistry = (
-    await resolveFieldGroupRegistryTable(deps.adapter)
-  ).name;
+  // row is written into and named by (`fieldGroupRegistryOf`).
+  const fieldGroupRegistry = await fieldGroupRegistryOf(deps.adapter);
   // A slug the system keeps for its own resources is never a registry row,
   // whatever a snapshot says.
   const kept = ([slug]: [string, RecordedEntitySettings]) =>

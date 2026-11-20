@@ -25,6 +25,7 @@ import {
   assertVersionDocumentReadable,
   assertDocumentUpdatable,
   compareDocumentVersions,
+  type ComparisonPart,
   type ComparisonQuery,
   historyListLanguages,
   parseComparisonQuery,
@@ -540,6 +541,8 @@ export async function getVersionDiffForDocument(
     to?: number;
     /** A registered comparison baseline's name. */
     baseline?: string;
+    /** `shared`: the shared fields alone, across languages. */
+    part?: ComparisonPart;
     modifiedOnly?: boolean;
   }
 ): Promise<VersionDiff> {
@@ -548,6 +551,7 @@ export async function getVersionDiffForDocument(
     to: args.to,
     baseline: args.baseline,
     locale: args.locale,
+    part: args.part,
     modifiedOnly: args.modifiedOnly === true,
   };
   assertComparisonRequest(query);

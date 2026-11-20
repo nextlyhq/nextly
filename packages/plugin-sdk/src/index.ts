@@ -13,6 +13,8 @@
  * @packageDocumentation
  */
 
+import type { PluginContext } from "nextly";
+
 /** @public The plugin entry point — wraps a definition for `defineConfig({ plugins })`. */
 export { definePlugin } from "nextly";
 
@@ -821,6 +823,53 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental Review state for the person or API key a plugin acts for:
+ * `ctx.services.workflows` (`PluginWorkflowsService`), reading a document's review state
+ * (`PluginWorkflowReview`), what waits for the caller (`PluginWorkflowWaitingQuery`,
+ * `PluginWorkflowWaitingPart`) and the definition of the workflow attached to a collection or
+ * Single (`PluginWorkflowDefinition`), and submitting for review (`PluginWorkflowSubmitInput`,
+ * `PluginWorkflowSeenPart`, `PluginWorkflowSubmitResult`), each document or entity named as
+ * `PluginWorkflowDocumentRef` or `PluginWorkflowEntityRef` names it. Each is read off the service's own signature, so the names
+ * here cannot drift from what the service takes and returns. Experimental until review through
+ * plugins is finished: its shape may still change.
+ */
+export type PluginWorkflowsService = PluginContext["services"]["workflows"];
+/** @experimental A collection or a Single, as `definitionOf` names it. */
+export type PluginWorkflowEntityRef = Parameters<
+  PluginWorkflowsService["definitionOf"]
+>[0];
+/** @experimental A document, as `reviewState` names it. */
+export type PluginWorkflowDocumentRef = Parameters<
+  PluginWorkflowsService["reviewState"]
+>[0]["document"];
+/** @experimental A workflow's stages and steps, as `definitionOf` tells them. */
+export type PluginWorkflowDefinition = NonNullable<
+  Awaited<ReturnType<PluginWorkflowsService["definitionOf"]>>["workflow"]
+>;
+/** @experimental A document's review state, part by part, as `reviewState` tells it. */
+export type PluginWorkflowReview = Awaited<
+  ReturnType<PluginWorkflowsService["reviewState"]>
+>;
+/** @experimental A page of what waits for the caller, as `waiting` takes it. */
+export type PluginWorkflowWaitingQuery = NonNullable<
+  Parameters<PluginWorkflowsService["waiting"]>[0]
+>;
+/** @experimental A part waiting for the caller, as `waiting` lists it. */
+export type PluginWorkflowWaitingPart = Awaited<
+  ReturnType<PluginWorkflowsService["waiting"]>
+>["items"][number];
+/** @experimental A submit for review, as `submit` takes it. */
+export type PluginWorkflowSubmitInput = Parameters<
+  PluginWorkflowsService["submit"]
+>[0];
+/** @experimental A part as the caller saw it, as a submit names it. */
+export type PluginWorkflowSeenPart = PluginWorkflowSubmitInput["seen"][number];
+/** @experimental What a submit moved and left, as `submit` tells it. */
+export type PluginWorkflowSubmitResult = Awaited<
+  ReturnType<PluginWorkflowsService["submit"]>
+>;
+
+/**
  * @experimental Read-only registry access to the app's Singles.
  *
  * Forwarded here because this package is the supported import surface for a
@@ -869,6 +918,21 @@ export type {
  *   still be reaching past the boundary that makes one possible.
  */
 export { getCachedNextly } from "nextly";
+
+/**
+ * @experimental Whether the request in hand is in Next's draft mode, as
+ *   Nextly's own content routes ask it: false outside a request (a page drawn
+ *   by a test or a script, or the CLI), and Next's own signals during a
+ *   prerender handed back to it rather than read as no.
+ *
+ *   For a plugin's server component that draws differently in the preview
+ *   pane. `next/headers` is imported inside the call, so a module using this
+ *   can be loaded by plain Node, which can't load `next/headers` itself.
+ *   Re-exported, so a plugin asks the same question core asks, through the
+ *   surface its compatibility is governed on; `@experimental` per the ladder
+ *   above.
+ */
+export { isDraftModeRequest } from "nextly/runtime";
 
 /**
  * @experimental Whether a failure means Nextly is unavailable (its start

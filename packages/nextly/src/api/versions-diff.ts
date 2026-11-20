@@ -11,7 +11,7 @@
  * ```typescript
  * // In your Next.js app: app/api/versions/[kind]/[slug]/[id]/diff/route.ts
  * export { GET } from 'nextly/api/versions-diff';
- * // GET .../diff?from=3&to=7[&modifiedOnly=1]
+ * // GET .../diff?from=3&to=7[&modifiedOnly=1][&part=shared]
  * ```
  *
  * @module api/versions-diff

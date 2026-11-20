@@ -10,6 +10,7 @@
  *
  * @module site-settings-removal.test
  */
+import { fluidValue } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
@@ -55,7 +56,7 @@ function versionedSingle(stored: Record<string, unknown>) {
       return doc;
     },
     read: (): VersionedSiteStyle => ({
-      tokens: null,
+      tokens: doc.tokens ?? null,
       fonts: null,
       classes: doc.classes ?? null,
       breakpoints: doc.breakpoints ?? null,
@@ -352,6 +353,60 @@ describe("a removal of a breakpoint a code-supplied shared style holds", () => {
       },
     });
   });
+});
+
+describe("a removal of a breakpoint a code-supplied fluid text style holds", () => {
+  // Made with "Fluid…" across the code's own range (the default, 360 to
+  // 1280px), on a site that stores another range: the site draws the code's
+  // style across its own range, so the override the strip stores must too, or
+  // the style would keep the code-range clamp and stop following the range.
+  const SIZES = { small: 16, large: 32 };
+  const SITE_RANGE = { min: 400, max: 800 };
+  const fluidCoded = {
+    id: "c-fluid",
+    slug: "fluid",
+    orderIndex: 2,
+    role: "text" as const,
+    styles: {
+      base: {
+        base: { fontSize: fluidValue(SIZES, { min: 360, max: 1280 }) },
+        tablet: { color: "#444" },
+      },
+    },
+    fluidSizes: { base: SIZES },
+  };
+
+  for (const locked of [false, true]) {
+    it(`stores its override across the site's range, still following it${locked ? ", locked" : ""}`, async () => {
+      const coded = locked ? { ...fluidCoded, locked: true } : fluidCoded;
+      const single = versionedSingle({
+        breakpoints: set(DESKTOP, TABLET),
+        classes: [],
+        tokens: { tokens: [], fluidRange: SITE_RANGE },
+      });
+      const { service } = fakeService();
+      const removal = removalOver(single, service, {
+        defaults: { classes: [coded] },
+      });
+
+      const response = await writeSiteBreakpoints(
+        post(set(DESKTOP)),
+        ctx,
+        single.nextly,
+        removal
+      );
+
+      expect(response.status).toBe(200);
+      expect(single.doc.classes).toEqual([
+        {
+          ...coded,
+          styles: {
+            base: { base: { fontSize: fluidValue(SIZES, SITE_RANGE) } },
+          },
+        },
+      ]);
+    });
+  }
 });
 
 describe("a removal's write whose outcome its error does not tell", () => {

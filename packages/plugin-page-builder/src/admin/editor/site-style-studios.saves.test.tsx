@@ -11,12 +11,18 @@
  * Variables panel's line, and in a toast for shared styles and fonts.
  */
 import { act, cleanup, render, renderHook } from "@testing-library/react";
-import type { NamedClass } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_FLUID_RANGE,
+  fluidValue,
+  type NamedClass,
+} from "@nextlyhq/blocks-engine";
 import type {
   FontsPanelProps,
   SharedStyleChange,
 } from "@nextlyhq/builder/shell";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { resolveSiteStyle } from "../../site-style";
 
 /** Each section save, and what the next one answers. */
 const saves = vi.hoisted(() => ({
@@ -73,6 +79,10 @@ const panels = vi.hoisted(() => ({
   fonts: undefined as
     | undefined
     | { onRemoveFamily: (family: unknown) => Promise<string | undefined> },
+  /** The variables write made at once the studio hands its import. */
+  storeTokensNow: undefined as
+    | undefined
+    | ((tokens: unknown) => Promise<unknown>),
 }));
 
 vi.mock("@nextlyhq/plugin-sdk/client", () => ({ useCan: () => true }));
@@ -106,8 +116,17 @@ vi.mock("../site-style-client", async () => {
   };
 });
 
-vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
-  ...(await importOriginal<typeof import("@nextlyhq/builder/shell")>()),
+vi.mock("@nextlyhq/builder/shell", async importOriginal => {
+  const actual = await importOriginal<typeof import("@nextlyhq/builder/shell")>();
+  return {
+  ...actual,
+  // The real header, with the write its import stores variables through kept.
+  useVariablesHeader: (
+    options: Parameters<typeof actual.useVariablesHeader>[0]
+  ) => {
+    panels.storeTokensNow = options.storeTokensNow;
+    return actual.useVariablesHeader(options);
+  },
   TokensPanel: (props: NonNullable<typeof panels.tokens>) => {
     panels.tokens = props;
     return null;
@@ -117,7 +136,8 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => ({
     panels.fonts = props;
     return null;
   },
-}));
+  };
+});
 
 vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
   ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
@@ -193,6 +213,7 @@ beforeEach(() => {
   toasts.warning.length = 0;
   panels.tokens = undefined;
   panels.fonts = undefined;
+  panels.storeTokensNow = undefined;
 });
 
 afterEach(cleanup);
@@ -240,6 +261,93 @@ describe("the Variables studio's saves", () => {
     expect(names(saves.calls[1]?.options?.base as never)).toEqual(
       expect.arrayContaining(["color.brand", "color.other", "color.accent"])
     );
+  });
+});
+
+describe("the Variables studio's write made at once, for an import", () => {
+  const space = {
+    name: "space.4",
+    kind: "dimension",
+    values: { light: "1rem" },
+  };
+  // The site refuses this value on its own: a dimension it can't read.
+  const refusedSpace = { ...space, values: { light: "big" } };
+
+  it("answers that it stored part, and why, once its retry of the rest is stored", async () => {
+    render(
+      <TokensStudio
+        merged={{ tokens: [brand, space] } as never}
+        supplied={undefined}
+        pending={false}
+      >
+        <VariablesTab />
+      </TokensStudio>
+    );
+    let answers = 0;
+    saves.answer = () => {
+      answers += 1;
+      return answers === 1
+        ? {
+            saved: false,
+            issues: { "tokens/space.4": "space.4: the value isn't a size." },
+          }
+        : { saved: true, issues: {} };
+    };
+    let stored: unknown;
+    await act(async () => {
+      stored = await panels.storeTokensNow?.({
+        tokens: [brand, refusedSpace, accent],
+      });
+    });
+    // The retry stored the rest: brand and accent, and space as it was.
+    expect(saves.calls).toHaveLength(2);
+    expect(names(saves.calls[1]?.value as never)).toEqual(
+      expect.arrayContaining(["color.brand", "color.accent"])
+    );
+    expect(stored).toEqual({
+      stored: "part",
+      why: expect.stringContaining("space.4"),
+    });
+  });
+
+  it("answers that it stored none when the retry is refused too", async () => {
+    render(
+      <TokensStudio
+        merged={{ tokens: [brand, space] } as never}
+        supplied={undefined}
+        pending={false}
+      >
+        <VariablesTab />
+      </TokensStudio>
+    );
+    saves.answer = () => ({
+      saved: false,
+      issues: { "tokens/space.4": "space.4: the value isn't a size." },
+    });
+    let stored: unknown;
+    await act(async () => {
+      stored = await panels.storeTokensNow?.({
+        tokens: [brand, refusedSpace, accent],
+      });
+    });
+    expect(stored).toEqual({ stored: "none" });
+  });
+
+  it("answers all for a write stored whole", async () => {
+    render(
+      <TokensStudio
+        merged={{ tokens: [brand] } as never}
+        supplied={undefined}
+        pending={false}
+      >
+        <VariablesTab />
+      </TokensStudio>
+    );
+    let stored: unknown;
+    await act(async () => {
+      stored = await panels.storeTokensNow?.({ tokens: [brand, accent] });
+    });
+    expect(stored).toEqual({ stored: "all" });
   });
 });
 
@@ -641,6 +749,107 @@ describe("a block style action's whole-list write", () => {
     expect(stored).toBe(
       'classes[0] is a built-in block style, "Text", so it can\'t be renamed.'
     );
+  });
+});
+
+describe("a text style the site's code makes fluid, on a site storing another range", () => {
+  const SIZES = { small: 16, large: 32 };
+  const NEW = { min: 400, max: 800 };
+  /** The code's text style, its Desktop size made across the code's range. */
+  const codeLead = (locked?: true): NamedClass =>
+    ({
+      id: "t-code-lead",
+      slug: "code-lead",
+      label: "Code lead",
+      orderIndex: 0,
+      role: "text",
+      styles: {
+        base: { base: { fontSize: fluidValue(SIZES, DEFAULT_FLUID_RANGE) } },
+      },
+      fluidSizes: { base: SIZES },
+      ...(locked === undefined ? {} : { locked }),
+    }) as NamedClass;
+  const card = {
+    id: "c-card",
+    slug: "card",
+    label: "Card",
+    orderIndex: 1,
+    styles: {},
+  } as NamedClass;
+  /**
+   * The surface as the editor has it: the code's classes as the config, and
+   * the read the canvas draws, the code over the stored tier holding the
+   * site's range and the site's own style.
+   */
+  const surfaceOver = (code: NamedClass) => {
+    const config = { classes: [code] };
+    const read = resolveSiteStyle(config, {
+      tokens: { tokens: [], fluidRange: NEW },
+      classes: [card],
+    });
+    return renderHook(() => useClassSurface(read, false, null, config)).result;
+  };
+  const ids = (value: unknown) =>
+    (value as readonly NamedClass[]).map(entry => entry.id);
+
+  it.each([
+    ["unlocked", undefined],
+    ["locked", true as const],
+  ])(
+    "stores no override of it (%s) when another style is created",
+    async (_name, locked) => {
+      const result = surfaceOver(codeLead(locked));
+      await act(async () => {
+        await result.current.add({
+          id: "c-new",
+          slug: "new",
+          orderIndex: 2,
+          styles: {},
+        } as NamedClass);
+      });
+      expect(saves.calls).toHaveLength(1);
+      expect(ids(saves.calls[0]?.value)).toEqual(["c-card", "c-new"]);
+      expect(ids(saves.calls[0]?.options?.base)).toEqual(["c-card"]);
+    }
+  );
+
+  it("stores no override of it when another style is renamed", async () => {
+    const result = surfaceOver(codeLead());
+    await act(async () => {
+      await result.current.rename("c-card", {
+        label: "Panel",
+        slug: "panel",
+      });
+    });
+    expect(saves.calls).toHaveLength(1);
+    expect(ids(saves.calls[0]?.value)).toEqual(["c-card"]);
+  });
+
+  it("stores no override of it from a whole-list edit of another style", async () => {
+    const result = surfaceOver(codeLead());
+    await act(async () => {
+      await result.current.edit(existing => ({
+        classes: existing.map(entry =>
+          entry.id === "c-card" ? { ...entry, hidden: true as const } : entry
+        ),
+      }));
+    });
+    expect(ids(saves.calls[0]?.value)).toEqual(["c-card"]);
+  });
+
+  it("starts an edit of it from the size the site's range gives it", async () => {
+    // The positive control: the surface does hold the style, and an edit of
+    // it stores the override made from the size drawn, not the code's clamp.
+    const result = surfaceOver(codeLead());
+    await act(async () => {
+      await result.current.writeStyles("t-code-lead", setColor("red"));
+    });
+    const stored = (saves.calls[0]?.value as NamedClass[] | undefined)?.find(
+      entry => entry.id === "t-code-lead"
+    );
+    expect(stored?.styles).toMatchObject({
+      base: { base: { fontSize: fluidValue(SIZES, NEW) } },
+    });
   });
 });
 

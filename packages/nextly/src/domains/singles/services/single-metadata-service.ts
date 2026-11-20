@@ -106,6 +106,7 @@ import {
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
+import type { SqliteTypeChange } from "../../schema/services/sqlite-nullability-rebuild";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
@@ -248,6 +249,19 @@ export interface UpdateSingleSchemaResult {
    * the fields were recorded without them; empty when they were applied or none was asked for.
    */
   refusedSettings: { field: string; setting: "required" | "unique" }[];
+  /**
+   * Where this save's migration failed past its main change (`migrationStatus` "failed", its row
+   * kept so a retry has one describing the table): why, as the admin is told it, and the migration
+   * files the writer kept, recorded applied nowhere, in run order; empty where none was kept. `next`
+   * says what to do where none was kept and saving again would not help.
+   */
+  failure?: {
+    reason: string;
+    keptFiles: string[];
+    /** Of `keptFiles`, the one a resolve checks against the database (the writer's `checked`). */
+    checked?: string | null;
+    next?: string;
+  };
 }
 
 /** One Required or Unique setting of a field leaving translation, and the SQL that undoes it. */
@@ -279,6 +293,41 @@ function withoutRefusedSettings<F extends { name: string }>(
 }
 
 /**
+ * The registry columns an update writes, as the row recorded them before it: what puts the row
+ * back when the update's change landed but its files could not be recorded applied. A column the
+ * row held no value in is written empty, so no requested value stays behind.
+ */
+function recordedRowOf(
+  input: UpdateSingleSchemaInput
+): Partial<DynamicSingleInsert> {
+  const existing = input.existing as unknown as Record<string, unknown>;
+  return Object.fromEntries(
+    [...Object.keys(input.updateData), "migrationStatus"].map(key => [
+      key,
+      existing[key] ?? null,
+    ])
+  );
+}
+
+/**
+ * A migration that failed past its main change: the writer kept its files, recorded applied
+ * nowhere, in development as outside it, and `result` names them, so the admin is told which.
+ */
+function noteKeptFiles(
+  result: UpdateSingleSchemaResult | undefined,
+  written:
+    | { files: readonly string[]; applied: boolean; checked?: string | null }
+    | undefined
+): void {
+  if (result?.failure && written?.applied === false) {
+    result.failure.keptFiles = [...written.files];
+    if (written.checked !== undefined) {
+      result.failure.checked = written.checked;
+    }
+  }
+}
+
+/**
  * The schema work an update has to do, decided before any statement runs.
  *
  * One plan covers both shapes of update. A field change renders statements; a save that only flips
@@ -294,6 +343,13 @@ interface UpdateDdlPlan {
    * applied by rebuilding the table once its statements have run, in the same transaction.
    */
   sqliteNullability?: ReadonlyMap<string, boolean>;
+  /**
+   * On SQLite, the type changes `migrationSQL` can't express (column → the type it becomes),
+   * applied by the same rebuild. The values were judged against the new type while planning.
+   */
+  sqliteTypes?: ReadonlyMap<string, SqliteTypeChange>;
+  /** The values judged again on the rebuild's own transaction, where it changes a type. */
+  sqliteTypeJudge?: (db: unknown) => Promise<void>;
   /** The field list the table holds once this plan has run. */
   fields: FieldDefinition[];
   /** The field list the table holds now. The companion reconcile diffs against it. */
@@ -1086,7 +1142,15 @@ export class SingleMetadataService {
     let migrationStatus = input.existing.migrationStatus;
     const updateData = { ...input.updateData };
     let refusedSettings: UpdateSingleSchemaResult["refusedSettings"] = [];
+    let failure: UpdateSingleSchemaResult["failure"];
     if (outcome) {
+      if (outcome.status === "failed" && outcome.reason !== undefined) {
+        failure = {
+          reason: outcome.reason,
+          keptFiles: [],
+          ...(outcome.next === undefined ? {} : { next: outcome.next }),
+        };
+      }
       const { status: applied, refused } = outcome;
       if (applied !== undefined) {
         updateData.migrationStatus = applied;
@@ -1118,7 +1182,12 @@ export class SingleMetadataService {
       this.registry.updateSingle(input.slug, updateData, { source: "ui" })
     );
 
-    return { record, migrationStatus, refusedSettings };
+    return {
+      record,
+      migrationStatus,
+      refusedSettings,
+      ...(failure === undefined ? {} : { failure }),
+    };
   }
 
   /**
@@ -1140,10 +1209,11 @@ export class SingleMetadataService {
    * the schema writes its settings-only migration, as a collection's does.
    *
    * A failure before the apply, or in its main migration, is thrown as before, with nothing
-   * written. Past the main migration the apply reports rather than throws, and so does this: where
+   * written. Past the main migration the apply reports rather than throws, and so does this. Where
    * the writer then refuses to record the files applied (the database does not stand as their
-   * snapshot says), the files are kept and the outcome is recorded as a failed migration, so the
-   * registry row is still written.
+   * snapshot says), the change has landed and its files are kept: the row is put back as it was
+   * recorded and the writer's refusal is thrown, naming the files and the steps that finish the
+   * change, the last of them a `nextly migrate` that brings the row in step with the files.
    */
   private async writeUpdate(
     deps: CollectionSaveDeps,
@@ -1192,8 +1262,13 @@ export class SingleMetadataService {
       // recorded applied nowhere, never taken as applied.
       return ran.outcome?.status === "failed" ? "partly-applied" : undefined;
     };
+    let written: Awaited<ReturnType<typeof writeEntitySave>>;
     try {
-      await writeEntitySave(deps, save, applyAndRecord);
+      // A plan that builds the whole table again (its table missing) builds what the database
+      // lacks, so the check before the push does not take the missing table for drift.
+      written = await writeEntitySave(deps, save, applyAndRecord, {
+        buildsWholeTable: plan?.describesWholeTable === true,
+      });
     } catch (error) {
       if (ran.result === undefined) throw error;
       this.logger.error(
@@ -1201,13 +1276,22 @@ export class SingleMetadataService {
           error instanceof Error ? error.message : String(error)
         }`
       );
-      return this.recordUpdate(
-        input,
-        { refused: [], ...ran.outcome, status: "failed" },
-        leaving
+      // The row the step wrote describes the requested shape, which no applied file records: it
+      // goes back to what was recorded, and the steps the refusal names bring it forward.
+      await writeRegistryRowsWith(this.adapter, () =>
+        this.registry.updateSingle(input.slug, recordedRowOf(input), {
+          source: "ui",
+        })
       );
+      // The apply registered the requested shape with the running server, which the table does
+      // not stand as: forgotten, so the next use rebuilds it from the table as it is.
+      if (this.adapter) {
+        this.retractRuntimeSchema(this.adapter, input.existing.tableName);
+      }
+      throw error;
     }
     if ("rowError" in ran) throw ran.rowError;
+    noteKeptFiles(ran.result, written);
     if (plan && leaving.length > 0 && ran.outcome?.status !== "failed") {
       const outcome = ran.outcome;
       const refused = await this.applyLeavingStep(
@@ -1381,10 +1465,45 @@ export class SingleMetadataService {
     plan: UpdateDdlPlan | null,
     save: CollectionSave
   ): Promise<UpdateSingleSchemaResult> {
-    const { writeEntitySave } = await loadEntitySave();
+    const [{ writeEntitySave }, { appliedFieldsOf }] = await Promise.all([
+      loadEntitySave(),
+      import("../../schema/builder-save/stopped-save"),
+    ]);
     // `apply` does not run where the writer runs the file itself.
     await writeEntitySave(deps, save, () => Promise.resolve(undefined), {
       runsFile: true,
+      // A file that stops part way is settled to what of it applied: the row then records the
+      // fields as far as the database holds them, and the save is thrown as the report of it.
+      onSettled: async report => {
+        const fields = appliedFieldsOf(
+          (input.existing.fields ?? []) as unknown as FieldDefinition[],
+          input.fields ?? [],
+          report
+        );
+        await this.recordUpdate(
+          {
+            ...input,
+            fields,
+            updateData: {
+              ...input.updateData,
+              fields,
+              schemaHash: calculateSchemaHash(
+                fields as unknown as FieldConfig[]
+              ),
+            },
+          },
+          { status: "applied", refused: [] }
+        );
+        // The running server's table follows the fields the row records, as after an apply.
+        if (plan) {
+          await this.registerUpdatedRuntimeSchema(
+            input,
+            { ...plan, fields },
+            deps.adapter,
+            input.isLocalized
+          );
+        }
+      },
     });
     const outcome = plan
       ? await this.applyUpdateDdl(input, plan, false, "file")
@@ -1798,6 +1917,7 @@ export class SingleMetadataService {
 
     // What SQLite can't alter in place, which the apply rebuilds the table for.
     const sqliteNullability = new Map<string, boolean>();
+    const sqliteTypes = new Map<string, SqliteTypeChange>();
     return {
       leavingSettings: deferred.leavingSettings,
       migrationSQL: schemaService.generateAlterTableMigration(
@@ -1828,13 +1948,127 @@ export class SingleMetadataService {
           ...groupMigration,
           onSqliteNullability: (column, required) =>
             sqliteNullability.set(column, required),
+          onSqliteTypeChange: (column, change) =>
+            sqliteTypes.set(column, change),
         }
       ),
       sqliteNullability,
+      sqliteTypes,
+      sqliteTypeJudge: this.typeChangeJudgeInRebuild(
+        input.slug,
+        tableName,
+        {
+          previousFields: startingFields,
+          fields,
+          wasLocalized,
+          migrationStatus: existing.migrationStatus,
+        },
+        schemaService
+      ),
       fields,
       previousFields,
       describesWholeTable: false,
       ownsMigrationStatus: true,
+    };
+  }
+
+  /**
+   * Each field whose type the save changes, judged over the value it holds (in each language, for
+   * a translated one), as every road that changes a field's type judges it, read through `db`: the
+   * app's database while the save is planned, the rebuild's own transaction where SQLite rebuilds
+   * the table (`typeChangeJudgeInRebuild`). Loaded here, as the save preconditions are, so the
+   * schema machinery stays out of the service's boot.
+   */
+  private async typeChangeRefusals(
+    db: unknown,
+    slug: string,
+    tableName: string,
+    change: {
+      previousFields: FieldDefinition[];
+      fields: FieldDefinition[];
+      wasLocalized: boolean;
+      migrationStatus: string | null | undefined;
+    },
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ) {
+    const adapter = this.adapter;
+    if (!adapter) return [];
+    const [
+      { entityLabel, fieldTypeChangeRefusals, perLanguageBefore },
+      { builtByFor },
+    ] = await Promise.all([
+      import("../../schema/value-conversion/type-change/field-type-changes"),
+      import("../../schema/pipeline/registered-collections"),
+    ]);
+    const rename = schemaService.detectFieldRename(
+      change.previousFields,
+      change.fields
+    );
+    return fieldTypeChangeRefusals(db, adapter.getCapabilities().dialect, {
+      label: entityLabel("single", slug),
+      table: tableName,
+      ...perLanguageBefore(
+        { localized: change.wasLocalized },
+        tableName,
+        change.previousFields
+      ),
+      previous: change.previousFields,
+      next: change.fields,
+      ...(rename !== null
+        ? { renamed: new Map([[rename.from.name, rename.to.name]]) }
+        : {}),
+      migrationStatus: change.migrationStatus ?? null,
+      builtBy: builtByFor("single", true),
+    });
+  }
+
+  /**
+   * The same judgement, for the SQLite rebuild that makes a type change: run on the rebuild's own
+   * transaction, before its copy, so a value written after the save was planned is judged too, and
+   * no write can come between it and the copy (SQLite's one connection runs the transaction alone).
+   * The save's statements have run by then, a rename among them, so the fields before are read
+   * under the names they now have.
+   */
+  private typeChangeJudgeInRebuild(
+    slug: string,
+    tableName: string,
+    change: {
+      previousFields: FieldDefinition[];
+      fields: FieldDefinition[];
+      wasLocalized: boolean;
+      migrationStatus: string | null | undefined;
+    },
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ): (db: unknown) => Promise<void> {
+    const rename = schemaService.detectFieldRename(
+      change.previousFields,
+      change.fields
+    );
+    const previousFields =
+      rename === null
+        ? change.previousFields
+        : change.previousFields.map(field =>
+            field.name === rename.from.name
+              ? { ...field, name: rename.to.name }
+              : field
+          );
+    return async db => {
+      const refusals = await this.typeChangeRefusals(
+        db,
+        slug,
+        tableName,
+        { ...change, previousFields },
+        schemaService
+      );
+      if (refusals.length === 0) return;
+      const { typeChangeError } = await import(
+        "../../schema/value-conversion/type-change/field-type-changes"
+      );
+      const errors = refusals.map(typeChangeError);
+      throw NextlyError.validation({
+        errors,
+        logContext: { single: slug, fields: errors.map(e => e.path) },
+      });
     };
   }
 
@@ -1873,44 +2107,15 @@ export class SingleMetadataService {
       "../../dynamic-collections/services/save-preconditions"
     );
     const dialect = adapter.getCapabilities().dialect;
-    // Each field whose type the save changes, judged over the value it holds (in each language,
-    // for a translated one), as every road that changes a field's type judges it. Loaded here, as
-    // the save preconditions are, so the schema machinery stays out of the service's boot.
-    const [
-      {
-        entityLabel,
-        fieldTypeChangeRefusals,
-        perLanguageBefore,
-        typeChangeError,
-      },
-      { builtByFor },
-    ] = await Promise.all([
-      import("../../schema/value-conversion/type-change/field-type-changes"),
-      import("../../schema/pipeline/registered-collections"),
-    ]);
-    const rename = schemaService.detectFieldRename(
-      change.previousFields,
-      change.fields
+    const { typeChangeError } = await import(
+      "../../schema/value-conversion/type-change/field-type-changes"
     );
-    const typeChanges = await fieldTypeChangeRefusals(
+    const typeChanges = await this.typeChangeRefusals(
       adapter.getDrizzle(),
-      dialect,
-      {
-        label: entityLabel("single", slug),
-        table: tableName,
-        ...perLanguageBefore(
-          { localized: change.wasLocalized },
-          tableName,
-          change.previousFields
-        ),
-        previous: change.previousFields,
-        next: change.fields,
-        ...(rename !== null
-          ? { renamed: new Map([[rename.from.name, rename.to.name]]) }
-          : {}),
-        migrationStatus: change.migrationStatus ?? null,
-        builtBy: builtByFor("single", true),
-      }
+      slug,
+      tableName,
+      change,
+      schemaService
     );
     const where = await this.whereTheValuesAre(change);
     const onMain = await refusalsForCollectionSave({
@@ -2563,7 +2768,13 @@ export class SingleMetadataService {
     plan: UpdateDdlPlan,
     undoRename: readonly string[]
   ): Promise<void> {
-    if (!plan.migrationSQL && !plan.sqliteNullability?.size) return;
+    if (
+      !plan.migrationSQL &&
+      !plan.sqliteNullability?.size &&
+      !plan.sqliteTypes?.size
+    ) {
+      return;
+    }
     try {
       await applyMigrationWhole({
         db: adapter.getDrizzle(),
@@ -2572,10 +2783,16 @@ export class SingleMetadataService {
         entity: "single",
         tolerateApplied: true,
         busyTable: this.busyTableWait(adapter),
-        sqliteNullability: plan.sqliteNullability && {
+        sqliteNullability: {
           adapter,
           tableName,
-          required: plan.sqliteNullability,
+          required: plan.sqliteNullability ?? new Map(),
+          ...(plan.sqliteTypes === undefined
+            ? {}
+            : { types: plan.sqliteTypes }),
+          ...(plan.sqliteTypeJudge === undefined
+            ? {}
+            : { judge: plan.sqliteTypeJudge }),
         },
       });
     } catch (refusal) {
@@ -2657,6 +2874,10 @@ export class SingleMetadataService {
     status: SingleMigrationStatus | undefined;
     /** The leaving settings refused, so the fields are recorded without them; else empty. */
     refused: LeavingSettingStep[];
+    /** Why a "failed" status was reached, as the admin is told it; the database's words go to the log. */
+    reason?: string;
+    /** What to do, where saving again would not clear the failure. */
+    next?: string;
   }> {
     const adapter = this.adapter;
     const tableName = input.existing.tableName;
@@ -2699,7 +2920,11 @@ export class SingleMetadataService {
         this.logger.error(
           `[Singles] Table "${tableName}" not found after migration update`
         );
-        return { status: "failed", refused: [] };
+        return {
+          status: "failed",
+          refused: [],
+          reason: "its table was not found after the change",
+        };
       }
 
       // 🔴 Past this point the MAIN table holds `plan.fields`. The companion may or may not follow,
@@ -2759,7 +2984,11 @@ export class SingleMetadataService {
               : String(companionError)
           }`
         );
-        return { status: "failed", refused: [] };
+        return {
+          status: "failed",
+          refused: [],
+          reason: "its translations table did not follow the change",
+        };
       }
 
       // The Required and Unique settings of fields leaving translation, now that their shared
@@ -2826,7 +3055,13 @@ export class SingleMetadataService {
           `[Singles] "${tableName}" is recorded as a failed migration and this save only ` +
             `describes a change to it, so its status is left as failed`
         );
-        return { status: "failed", refused: [] };
+        return {
+          status: "failed",
+          refused: [],
+          reason:
+            "an earlier change to it did not finish, and a change to some of its fields does not clear that",
+          next: "The server log holds the earlier failure: check the table against the Single's fields.",
+        };
       }
 
       return { status: "applied", refused: [] };
@@ -2856,7 +3091,11 @@ export class SingleMetadataService {
       if (plan.migrationSQL) {
         this.logger.error(`[Singles] Migration SQL was: ${plan.migrationSQL}`);
       }
-      return { status: "failed", refused: [] };
+      return {
+        status: "failed",
+        refused: [],
+        reason: "the database refused a step after the change to its table",
+      };
     }
   }
 

@@ -12,8 +12,7 @@
  */
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
-import { MIGRATION_TARGET } from "../../field-groups/migration/target";
+import { retargetName } from "../../field-groups/migration/manifest";
 import {
   namingOfRegistry,
   type FieldGroupNaming,
@@ -36,6 +35,7 @@ import {
   type SnapshotFile,
 } from "../migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
+import { resolveComponentTableName } from "../utils/resolve-table-name";
 
 /**
  * `snapshots` as a database whose field groups moved to the current names holds them: each legacy
@@ -74,21 +74,20 @@ export async function underDatabaseFieldGroupNames<
 }
 
 /**
- * The legacy names of the field-group tables a moved registry holds: `comp_<rest>` for each
- * `fg_<rest>` it names, the rename the storage migration made. A table under a name of its own
- * was never renamed, so it is not one of them.
+ * Each field-group table's current name, by its legacy one, for the groups a moved registry
+ * holds (slug to stored table), by the storage migration's own rule (`retargetName`): a group
+ * whose stored table is its slug's renamed name was `comp_<slug>`; a table under a name its
+ * author chose, `fg_` prefix or not, kept that name, and only its type column moved.
  */
 function movedGroupTables(
   stored: ReadonlyMap<string, string>
-): ReadonlySet<string> {
-  return new Set(
-    [...stored.values()]
-      .filter(table => table.startsWith(MIGRATION_TARGET.tablePrefix))
-      .map(
-        table =>
-          STORAGE_FORMAT.tablePrefix +
-          table.slice(MIGRATION_TARGET.tablePrefix.length)
-      )
+): ReadonlyMap<string, string> {
+  return new Map(
+    [...stored.entries()].map(([slug, table]) => {
+      const derived = resolveComponentTableName(slug);
+      const renamed = retargetName({ slug, tableName: derived });
+      return [renamed === table ? derived : table, table];
+    })
   );
 }
 

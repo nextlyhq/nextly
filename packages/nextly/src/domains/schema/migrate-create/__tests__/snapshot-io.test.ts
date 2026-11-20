@@ -213,6 +213,7 @@ describe("snapshot-io", () => {
           {},
           undefined,
           undefined,
+          undefined,
           "legacy"
         ),
         "utf-8"
@@ -236,6 +237,7 @@ describe("snapshot-io", () => {
           { tables: [] },
           "SELECT 1;",
           {},
+          undefined,
           undefined,
           undefined,
           "current"

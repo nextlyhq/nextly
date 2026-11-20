@@ -36,26 +36,48 @@ vi.mock("../../../../cli/commands/migrate", () => ({
   findPendingFiles: vi.fn(async () => []),
 }));
 
-// The registry holds `card` under its migrated table.
+/** What reading the registry answers: `card` under its migrated table, unless a case says. */
+const registryRead = vi.hoisted(() => ({ value: undefined as unknown }));
 vi.mock(
   "../../../field-groups/services/field-group-stored-tables",
   async importOriginal => ({
     ...(await importOriginal<
       typeof import("../../../field-groups/services/field-group-stored-tables")
     >()),
-    readStoredFieldGroupTables: vi.fn(async () => ({
-      tables: new Map([["card", "fg_card"]]),
-      usable: true,
-      naming: "current",
-    })),
+    readStoredFieldGroupTables: vi.fn(async () => registryRead.value),
   })
 );
 
 import { deployStepDeps } from "../deploy-step-deps";
 
+const READ = {
+  tables: new Map([["card", "fg_card"]]),
+  usable: true,
+  naming: "current",
+};
+
 beforeEach(() => {
   judged.tableOf = undefined;
+  registryRead.value = READ;
 });
+
+/** The step for a project with one field group, `card`. */
+const stepsFor = () =>
+  deployStepDeps({
+    adapter: {} as DrizzleAdapter,
+    db: {},
+    dialect: "postgresql",
+    migrationsDir: "/project/migrations",
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      success: () => {},
+    } as never,
+    config: { collections: [], fieldGroups: [{ slug: "card" }] } as never,
+    recordedBefore: { collections: {}, singles: {}, fieldGroups: {} } as never,
+  });
 
 describe("the translations-column check before the registry records a run", () => {
   it("looks for each field group's translations beside the table it is stored in", async () => {
@@ -84,5 +106,19 @@ describe("the translations-column check before the registry records a run", () =
     expect(judged.tableOf?.("card")).toBe("fg_card");
     // A group the registry does not hold yet takes its slug's name under the site's naming.
     expect(judged.tableOf?.("badge")).toBe("fg_badge");
+  });
+
+  // Names derived from an unreadable registry would be the legacy ones on a moved database, and
+  // the check would judge a translations table that is not there.
+  it("refuses a registry it could not read, and judges nothing", async () => {
+    registryRead.value = {
+      tables: new Map(),
+      usable: false,
+      naming: "legacy",
+      reason: "the read was refused",
+    };
+
+    await expect(stepsFor().beforeMetadata?.()).rejects.toThrow();
+    expect(judged.tableOf).toBeUndefined();
   });
 });

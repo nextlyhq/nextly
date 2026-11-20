@@ -89,7 +89,14 @@ the page's field is kept per language, each language keeps its own.
 
 Only people who may change the site's settings see the box. Anyone else sees one line on
 General, "This page adds its own code or CSS. Only people who can change site settings can
-see or edit it.", and never the CSS.
+edit it; anyone who can edit the page can read it.", and the builder doesn't show them the
+CSS.
+
+That keeps the builder simple; it isn't a lock on reading. Anyone who may edit the page can
+read its CSS, and its blocks' CSS: the draft's, the published version's and every version in
+its history, through the API and in the document the builder loads, whose canvas draws it.
+The published CSS also reaches every visitor's browser. What the permission guards is
+**changing** it, below.
 
 ## Who may change page and block CSS
 
@@ -104,11 +111,17 @@ or changes CSS, whatever the editor checked first:
 Anyone who may edit the page may still move, duplicate and delete blocks that have CSS,
 place a saved section whose blocks carry some, and detach a component the page places: that
 CSS was written, and checked, by someone permitted. Changing its text is a change, and needs
-the permission. So does anything that makes a new document holding CSS, since the server
-can't tell copied CSS from new there: duplicating a whole page, saving blocks as a section and
-turning them into a component. Each change to a document's CSS, its own or its blocks', is
-recorded in the audit log: hashes and sizes of both, before and after, and which document and
-field, never the CSS itself.
+the permission.
+
+Copying is not a change either. Someone without the permission may still duplicate a whole
+page, save blocks as a section and turn them into a component, keeping their CSS, when that
+CSS is a byte-for-byte copy of what the source holds. The server reads the source as the
+person copying before it creates the copy, so the CSS counts as copied only from a version and
+fields that person could read. An API key may copy the same way. CSS the source doesn't
+hold, or one changed on the way, is new CSS and still needs the permission.
+
+Each change to a document's CSS, its own or its blocks', is recorded in the audit log: hashes
+and sizes of both, before and after, and which document and field, never the CSS itself.
 
 ## A block's CSS starts from `selector`
 

@@ -21,6 +21,7 @@ import {
   type LeavingFieldLike,
   leavingFieldConstraints,
 } from "../../domains/i18n/migration/field-leaves-translation-rules";
+import { isProvenanceNotMoved } from "../../domains/i18n/migration/held-leaving-drops";
 import type { FieldRename } from "../../domains/i18n/migration/reconcile-companion";
 import type { FirstQuestionWatch } from "../../domains/schema/builder-save/landing-push";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
@@ -217,6 +218,9 @@ export function companionReconcileFailure(
   context: { op: string; slug: string; note?: string }
 ): unknown {
   if (isLeavingSettingsRefusal(error)) return error;
+  // A renamed field's provenance move that failed once its change landed says so itself, with the
+  // statements that finish it for the server log (`provenanceNotMoved`).
+  if (isProvenanceNotMoved(error)) return error;
   if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) {
     // The busy-table stop as it is, its code, status and report, with what it leaves said beside
     // its first line: the entity's main table has its change, and only the translations table's

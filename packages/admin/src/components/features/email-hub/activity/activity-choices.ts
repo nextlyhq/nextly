@@ -4,17 +4,17 @@
  * Named from the hub's own lists where the reader may read templates or
  * providers. A reader who may read deliveries and nothing else still filters:
  * the choices then come from the rows loaded, which already name each
- * template's slug and each provider's id and type. Whatever is chosen stays
- * offered, so a choice never vanishes from its own filter.
+ * template's slug and each provider's type. Whatever is chosen stays offered,
+ * so a choice never vanishes from its own filter.
  *
- * A delivery's provider without a stored id is a provider that is not
- * stored: one set in the app's code, or one deleted since. The log does not
- * say which, so neither is claimed.
+ * The Activity narrows by a provider's type, which takes in every provider of
+ * it, and separately by where it came from (stored, in code, deleted), so the
+ * provider filter offers types rather than single stored providers.
  *
  * @module components/features/email-hub/activity/activity-choices
  */
 
-import type { ActivityRow, ProviderChoice } from "./activity-model";
+import { templateSlugOf, type ActivityRow } from "./activity-model";
 
 /** A template the filter offers. */
 export interface TemplateOption {
@@ -22,29 +22,10 @@ export interface TemplateOption {
   label: string;
 }
 
-/** A provider the filter offers: a stored one by id, or one not stored by type. */
-export interface ProviderOption {
-  choice: ProviderChoice;
+/** A provider type the filter offers. */
+export interface ProviderTypeOption {
+  type: string;
   label: string;
-}
-
-/** How a provider with no stored id is named, in the list and its filter. */
-export function notStoredLabel(type: string): string {
-  return `${type} (not stored)`;
-}
-
-/**
- * How the filter names a choice by type. The log narrows by a provider's type
- * alone, which takes in every provider of that type, a stored one included,
- * so the choice says so rather than promising only those not stored.
- */
-function everyOfTypeLabel(type: string): string {
-  return `Every ${type} provider`;
-}
-
-/** A stored provider the reader cannot see the name of: its type and the start of its id. */
-function unnamedStoredLabel(type: string, id: string): string {
-  return `${type} · ${id.slice(0, 8)}`;
 }
 
 /**
@@ -63,7 +44,8 @@ export function templateChoices(
 ): TemplateOption[] {
   const options = new Map<string, string>();
   for (const row of rows) {
-    if (row.templateSlug) options.set(row.templateSlug, row.templateSlug);
+    const slug = templateSlugOf(row);
+    if (slug) options.set(slug, slug);
   }
   for (const template of list ?? []) {
     // A layout or a partial is part of an email, never sent on its own, so
@@ -78,60 +60,21 @@ export function templateChoices(
 }
 
 /**
- * The providers to offer: every stored one by name when the reader may read
- * them, else each stored one the loaded rows name, by type and id; then, for
- * each provider not stored that the rows name, every provider of its type;
- * the chosen one always.
+ * The provider types to offer: the type of every stored provider when the
+ * reader may read them, every type the loaded rows name, and the chosen one
+ * always. Each reads "Every <type> provider", since choosing it takes in
+ * every provider of that type, stored, in code or deleted.
  */
-export function providerChoices(
-  stored: ReadonlyArray<{ id: string; name: string }> | undefined,
+export function providerTypeChoices(
+  stored: ReadonlyArray<{ type: string }> | undefined,
   rows: readonly ActivityRow[],
-  chosen: ProviderChoice | undefined
-): ProviderOption[] {
-  const byId = storedProviderLabels(stored, rows);
-  const notStored = notStoredTypes(rows);
-  if (chosen && "id" in chosen && !byId.has(chosen.id)) {
-    byId.set(chosen.id, chosen.id);
-  }
-  if (chosen && "type" in chosen) notStored.add(chosen.type);
-  const options: ProviderOption[] = [...byId]
-    .map(([id, label]) => ({ choice: { id }, label }))
-    .sort((a, b) => a.label.localeCompare(b.label));
-  for (const type of [...notStored].sort()) {
-    options.push({ choice: { type }, label: everyOfTypeLabel(type) });
-  }
-  return options;
-}
-
-/**
- * Each stored provider's label by id: every stored one by name when the
- * reader may read them, else each one the rows name, by type and id.
- */
-function storedProviderLabels(
-  stored: ReadonlyArray<{ id: string; name: string }> | undefined,
-  rows: readonly ActivityRow[]
-): Map<string, string> {
-  if (stored)
-    return new Map(stored.map(provider => [provider.id, provider.name]));
-  const labels = new Map<string, string>();
-  for (const row of rows) {
-    if (row.source === "delivery" && row.provider.id !== null) {
-      labels.set(
-        row.provider.id,
-        unnamedStoredLabel(row.provider.type, row.provider.id)
-      );
-    }
-  }
-  return labels;
-}
-
-/** The types of the providers not stored that the rows name. */
-function notStoredTypes(rows: readonly ActivityRow[]): Set<string> {
+  chosen: string | undefined
+): ProviderTypeOption[] {
   const types = new Set<string>();
-  for (const row of rows) {
-    if (row.source === "delivery" && row.provider.id === null) {
-      types.add(row.provider.type);
-    }
-  }
-  return types;
+  for (const provider of stored ?? []) types.add(provider.type);
+  for (const row of rows) if (row.provider) types.add(row.provider.type);
+  if (chosen) types.add(chosen);
+  return [...types]
+    .sort()
+    .map(type => ({ type, label: `Every ${type} provider` }));
 }

@@ -137,3 +137,24 @@ describe("a field change's answers", () => {
     }
   });
 });
+
+// A collection the definition file does not list is read from its registry row, translation
+// included: where its values are before the save decides where a removal counts them.
+describe("a collection the definition lacks", () => {
+  it("keeps the registry's translation in the entity before the save", () => {
+    const fields = [
+      { name: "title", type: "text" },
+    ] as unknown as FieldDefinition[];
+    const { save } = saveOfSchemaChange({
+      slug: "people",
+      table: "dc_people",
+      definition,
+      row: { fields, localized: true },
+      fields,
+      localized: true,
+      answers: {},
+    });
+
+    expect(save.previous).toMatchObject({ slug: "people", localized: true });
+  });
+});

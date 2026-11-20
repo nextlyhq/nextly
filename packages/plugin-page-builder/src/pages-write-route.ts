@@ -190,13 +190,18 @@ export interface PagesWrites {
    */
   storedSlug(collection: string, slug: string): string;
   /**
-   * The document the starter page `id` gives a new page of `source`, or
+   * The document the starter page `id` gives a new page of `source`; the
+   * sentence refusing it, where the site can't hold that starter now; or
    * `undefined` where none is offered under that id.
    */
   starter(
     source: PageCollection,
     id: string
-  ): Promise<{ readonly document: unknown } | undefined>;
+  ): Promise<
+    | { readonly document: unknown }
+    | { readonly unavailable: string }
+    | undefined
+  >;
 }
 
 /**
@@ -539,13 +544,18 @@ async function startingDocument(
 ): Promise<unknown> {
   if (starter === undefined) return emptyBlockDocument(source.kinds);
   const offered = await writes.starter(source, starter);
-  if (offered === undefined) {
+  if (offered === undefined || "unavailable" in offered) {
     throw NextlyError.validation({
       errors: [
         {
           path: "starter",
           code: "INVALID",
-          message: "That starter page isn't offered here any more.",
+          // Why this site can't hold it, in the words the picker showed, or,
+          // for an id no starter has, that it isn't offered.
+          message:
+            offered === undefined
+              ? "That starter page isn't offered here any more."
+              : offered.unavailable,
         },
       ],
     });
@@ -911,12 +921,9 @@ function directPagesWrites(
       const read = slugAsStored(collection, slug);
       return "slug" in read ? read.slug : slug;
     },
-    // A copy of a starter the site offers this page now, with new ids;
-    // one it doesn't offer is refused by the create.
-    starter: async (source, id) => {
-      const document = await starters.copy(id, source.kinds);
-      return document === undefined ? undefined : { document };
-    },
+    // A copy of a starter the site offers this page now, with new ids, or
+    // why the site can't hold it; either way the create says what it gets.
+    starter: async (source, id) => starters.copy(id, source.kinds),
   };
 }
 

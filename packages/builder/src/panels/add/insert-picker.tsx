@@ -22,7 +22,7 @@ import * as React from "react";
 
 import { returnFocusToCanvas } from "../../canvas/canvas-escape";
 import { useCanvasFrame } from "../../canvas/canvas-frame-context";
-import { isHTMLElement, isIFrame } from "../../dom-kind";
+import { isHTMLElement, isIFrame } from "../../canvas/dom-kind";
 
 import type { Measurable } from "./insert-panel-summon";
 import { InsertAnnouncement } from "./insert-panel-tiles";

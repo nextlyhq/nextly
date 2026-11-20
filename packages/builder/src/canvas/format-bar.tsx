@@ -39,15 +39,14 @@
 
 import * as React from "react";
 
-import { BlockActionsContext } from "../block-actions-context";
-import { isElement, isHTMLElement } from "../dom-kind";
 import type { Rect } from "../geometry";
-import { TURN_INTO_TARGETS, type TurnIntoOffer } from "../turn-into-verb";
+import { BlockActionsContext } from "../shell/block-actions-context";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE } from "./canvas";
 import { BLOCK_TOOLBAR_CLASS } from "./canvas-chrome";
 import { watchCanvasFor } from "./canvas-geometry-watch";
 import { overlaps } from "./canvas-tab-places";
+import { isElement, isHTMLElement } from "./dom-kind";
 import {
   BLOCK_BUTTON_FACES,
   blockIsOn,
@@ -68,6 +67,7 @@ import {
   overlaySpaceOf,
   selectedWordsRect,
 } from "./geometry-dom";
+import { TURN_INTO_TARGETS, type TurnIntoOffer } from "./turn-into-verb";
 
 // The bar's words, where the tests and the bar's users have always read them.
 export { FORMAT_BAR_WORDS } from "./format-actions";

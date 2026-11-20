@@ -161,8 +161,12 @@ author adds a picture from their media library.
 
 ## Checked at start-up
 
-Every starter page is checked when the site starts, and the site does not start while one is
-refused. The message names the starter page, where it came from, and why:
+Every starter page is checked when the site starts. A starter page your site or a plugin gives
+stops the start while it is refused, so you can fix it. The page builder's own starter pages
+never stop a site from starting: whether your site can use one is asked when starter pages are
+listed (see [When a site can't use a starter page](#when-a-site-cant-use-a-starter-page)).
+
+The message names the starter page, where it came from, and why:
 
 - an id that is malformed, or that another starter page already uses;
 - no name, no description, or no blocks;
@@ -176,6 +180,40 @@ refused. The message names the starter page, where it came from, and why:
 [page-builder] The starter page "welcome" from pageBuilder({ starterPages }) uses the block "acme/hero", which this site doesn't have.
 ```
 
-A starter page that needs a block, a variable or a shared style the site no longer has (a
-colour removed in Design, say) is left out of the list rather than offered half-drawn, and
-comes back once the site has it again.
+## When a site can't use a starter page
+
+A starter page the site can't use right now is still listed, dimmed, with **Not available on
+this site** and the reason under its name. Choosing it does nothing, and a page made from it
+through the API is refused with the same words. It becomes available again as soon as the site
+can use it. A site can't use a starter page that:
+
+- uses a block, a variable or a shared style the site doesn't have, such as a colour removed in
+  Design ("Uses the Form block, which this site doesn't have.");
+- is larger than the site allows a page to be.
+
+### Page limits
+
+A page has limits, so a page that grows by accident can't slow the editor or the site down:
+
+- **Nesting:** how many levels of blocks inside blocks a page may have. A Columns block counts
+  as two (the columns, then each column), and a card inside a column is one more.
+- **Blocks:** how many blocks a page may hold.
+- **Size:** how large the page's stored content may be.
+
+The defaults are 12 levels, 5,000 blocks and 2 MB. Your site's developer can set tighter limits
+in the site config:
+
+```ts
+pageBuilder({
+  limits: { maxDepth: 6, maxNodes: 2000, maxBytes: 1024 * 1024 },
+});
+```
+
+Every one of the page builder's own starter pages fits within **6 levels, 100 blocks and
+64 KB**. A site whose limits are at least these offers all of them. Below that, the ones that
+don't fit show as unavailable ("Needs 5 levels of nesting; this site allows 4."), and the server
+log says once at start-up which ones and why:
+
+```text
+[page-builder] The starter page "Landing" isn't available on this site. Needs 5 levels of nesting; this site allows 4.
+```

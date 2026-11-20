@@ -73,6 +73,16 @@ export interface MigrationTransaction {
 export interface StatementTryBound {
   /** How long one try may wait for locks, in milliseconds. */
   readonly tryMs: number;
+  /**
+   * Run on every try before the unit's first statement, with the handle its statements run on:
+   * inside the unit's transaction where it has one, under the try's bounds (`lock_timeout` on
+   * PostgreSQL, the busy timeout on SQLite), else on the session the statements run on. What it
+   * reads or locks there is what the statements then change, with nothing between. A wait for a
+   * lock that ends here ends the try as a statement's would; any other failure is thrown as it is,
+   * before any statement ran. A try resumed after statements that committed (outside a
+   * transaction, or MySQL's schema statements, which commit on their own) does not run it again.
+   */
+  readonly before?: (db: unknown) => Promise<void>;
   /** Told the id of the connection the unit's statements run on, once it is known. */
   readonly onSession?: (session: string) => void;
   /**
@@ -834,6 +844,9 @@ async function runUnitStatements(
       withMysqlTryBackstop(tx, dialect, bound, async () => {
         await boundTransactionTry(tx, dialect, bound);
         for (const setting of settingsBefore) await tx.execute(sent(setting));
+        // Inside the transaction, before the first statement, on every try that starts there: a
+        // MySQL try resumed after statements that committed on their own skips it, as below.
+        if (from === 0) await bound?.before?.(tx.db);
         // Whether the ledger write is left outside the unit's transaction (MySQL only).
         let outside = await commitBeforeLedgerOnlyTry(
           tx,
@@ -902,6 +915,10 @@ async function runUnitStatements(
     checkpointDb: unknown
   ): Promise<void> => {
     for (const setting of settingsBefore) await execute(sent(setting));
+    // Before the first statement, on the session the statements run on, on every try that starts
+    // there. A try resumed past statements that committed as they ran skips it: what it read is
+    // already changed by them, and a refusal now would undo none of them.
+    if (from === 0) await bound?.before?.(checkpointDb);
     for (const [offset, statement] of statements.slice(from).entries()) {
       const index = from + offset;
       // Asked before the statement, outside the failure below: refused here, nothing of it ran.

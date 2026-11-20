@@ -447,6 +447,105 @@ describe("a configuration that imports a package that is not installed", () => {
       "`@acme/not-installed-plugin` is not installed in the project."
     );
   });
+
+  /** Node's own error for `specifier`, imported from the project, wrapped as the loader wraps it. */
+  function loadFailureOf(specifier: string) {
+    const probe = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import(${JSON.stringify(specifier)}).catch(e => console.log(JSON.stringify({ code: e.code, message: e.message })))`,
+      ],
+      { cwd: project, encoding: "utf8" }
+    );
+    const raised = JSON.parse(probe.stdout) as {
+      code: string;
+      message: string;
+    };
+    expect(raised.code).toBe("ERR_MODULE_NOT_FOUND");
+    return toCliError(
+      new NextlyError({
+        code: "INVALID_INPUT",
+        publicMessage: "Failed to load Nextly configuration.",
+        logMessage: "Config loader error",
+        logContext: {
+          configPath: join(project, "nextly.config.ts"),
+          reason: "load-error",
+          cause: raised.message,
+        },
+        cause: Object.assign(new Error(raised.message), { code: raised.code }),
+      })
+    );
+  }
+
+  /** An installed package with no `exports` map, holding `files`, under `within` (the project). */
+  function installPackage(
+    name: string,
+    files: readonly string[],
+    within = project
+  ) {
+    const root = join(within, "node_modules", ...name.split("/"));
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ name, version: "1.0.0" })
+    );
+    for (const file of files) {
+      writeFileSync(join(root, file), "export const value = 1;\n");
+    }
+  }
+
+  it("says an installed package's path needs its extension, not that the package is missing", () => {
+    // `next/headers` from a configuration: the package is installed, but it has no exports map,
+    // so Node's ES module loader finds no file at the bare path and suggests the extension.
+    installPackage("acme-lib", ["headers.js"]);
+    const error = loadFailureOf("acme-lib/headers");
+    expect(error.code).toBe("CONFIG_IMPORT_NOT_FOUND");
+    expect(error.why).toBe(
+      "`acme-lib` is installed, but Node can't load `acme-lib/headers` from it as written: the package doesn't export that path, so Node needs the file's extension, `acme-lib/headers.js`."
+    );
+    expect(error.next).toBe(
+      "Import `acme-lib/headers.js` instead, or move that import out of the configuration, then run the command again."
+    );
+    expect(error.why).not.toContain("not installed");
+  });
+
+  it("names a scoped package the same way", () => {
+    installPackage("@acme/scoped", ["server.js"]);
+    const error = loadFailureOf("@acme/scoped/server");
+    expect(error.why).toBe(
+      "`@acme/scoped` is installed, but Node can't load `@acme/scoped/server` from it as written: the package doesn't export that path, so Node needs the file's extension, `@acme/scoped/server.js`."
+    );
+  });
+
+  it("names the package a nested dependency's path is in, not the outer folder", () => {
+    // A plugin's own dependency, installed inside the plugin as pnpm and nested installs place
+    // it: Node names the file under the LAST `node_modules`, and the package is the one there.
+    installPackage("acme-plugin", ["index.js"]);
+    const plugin = join(project, "node_modules", "acme-plugin");
+    writeFileSync(
+      join(plugin, "index.js"),
+      'export { value } from "acme-lib/headers";\n'
+    );
+    installPackage("acme-lib", ["headers.js"], plugin);
+    const error = loadFailureOf("acme-plugin");
+    expect(error.why).toBe(
+      "`acme-lib` is installed, but Node can't load `acme-lib/headers` from it as written: the package doesn't export that path, so Node needs the file's extension, `acme-lib/headers.js`."
+    );
+  });
+
+  it("says an installed package has no such file, where Node suggests none", () => {
+    installPackage("acme-lib", ["headers.js"]);
+    const error = loadFailureOf("acme-lib/nope");
+    expect(error.code).toBe("CONFIG_IMPORT_NOT_FOUND");
+    expect(error.why).toBe(
+      "`acme-lib` is installed, but it has no file at `acme-lib/nope`."
+    );
+    expect(error.next).toBe(
+      "Correct the import's path, then run the command again."
+    );
+  });
 });
 
 describe("a --json run that fails", () => {

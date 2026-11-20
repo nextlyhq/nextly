@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   consentCovers,
+  consentToCover,
   countDeletions,
+  deletionKey,
   deprecationNotices,
   describeDeletion,
   judgeDataLoss,
@@ -561,6 +563,358 @@ describe("counting deletions", () => {
       "sqlite"
     );
     expect(counted).toEqual([table("posts"), column("posts", "x"), unnamed]);
+  });
+});
+
+describe("what naming an entity's main table covers", () => {
+  // `dc_posts` is a collection's main table; the run also drops its
+  // translation table and a junction it owns, and removes its rows in shared
+  // tables.
+  const owned = (d: Deletion): Deletion =>
+    ({ ...d, owner: "dc_posts" }) as Deletion;
+  const locales = owned(table("dc_posts_locales"));
+  const junction = owned(table("dc_posts_dc_tags_tags"));
+  const archived: Deletion = {
+    kind: "rows",
+    table: "nextly_i18n_archive",
+    owner: "dc_posts",
+    of: { kind: "collection", slug: "posts" },
+  };
+  const autosaves: Deletion = {
+    kind: "rows",
+    table: "nextly_versions",
+    owner: "dc_posts",
+    of: { kind: "collection", slug: "posts" },
+  };
+
+  it("covers every table the entity owns, and every deletion in one", () => {
+    const consent = flag("dc_posts");
+    expect(consentCovers(consent, table("dc_posts"))).toBe(true);
+    expect(consentCovers(consent, locales)).toBe(true);
+    expect(consentCovers(consent, junction)).toBe(true);
+    expect(
+      consentCovers(consent, owned(column("dc_posts_locales", "title")))
+    ).toBe(true);
+    expect(consentCovers(consent, owned(rows("dc_posts_dc_tags_tags")))).toBe(
+      true
+    );
+  });
+
+  it("covers the entity's rows in shared tables, and no other row there", () => {
+    const consent = flag("dc_posts");
+    expect(consentCovers(consent, archived)).toBe(true);
+    expect(consentCovers(consent, autosaves)).toBe(true);
+    // A file's own removal of rows in a shared table is not the entity's.
+    expect(consentCovers(consent, rows("nextly_i18n_archive"))).toBe(false);
+    expect(consentCovers(consent, table("nextly_i18n_archive"))).toBe(false);
+  });
+
+  it("covers none of it when it names another entity's main table", () => {
+    const consent = flag("dc_pages");
+    for (const d of [table("dc_posts"), locales, junction, archived]) {
+      expect(consentCovers(consent, d)).toBe(false);
+    }
+  });
+
+  it("reaches no other entity's translations table by its owner, by what it translates, or by both", () => {
+    const consent = flag("dc_posts");
+    // `dc_pages` is another collection: its translations table, by each route and by both.
+    const pagesLocales = { owner: "dc_pages", translates: "dc_pages" };
+    expect(
+      consentCovers(consent, table("dc_pages_locales", pagesLocales))
+    ).toBe(false);
+    expect(
+      consentCovers(consent, table("dc_pages_locales", { owner: "dc_pages" }))
+    ).toBe(false);
+    expect(
+      consentCovers(
+        consent,
+        table("dc_pages_locales", { translates: "dc_pages" })
+      )
+    ).toBe(false);
+    // Coverage takes one step, never a chain: a table translating the entity's
+    // own translations table is not the entity's.
+    expect(
+      consentCovers(
+        consent,
+        table("dc_posts_locales_locales", { translates: "dc_posts_locales" })
+      )
+    ).toBe(false);
+    // Its own translations table, by either route, is covered.
+    expect(
+      consentCovers(consent, table("dc_posts_locales", { owner: "dc_posts" }))
+    ).toBe(true);
+    expect(
+      consentCovers(
+        consent,
+        table("dc_posts_locales", { translates: "dc_posts" })
+      )
+    ).toBe(true);
+  });
+
+  it("covers no table the registry does not say the entity owns", () => {
+    // Named like a translation table, but no registry row says it is one.
+    expect(consentCovers(flag("dc_posts"), table("dc_posts_locales"))).toBe(
+      false
+    );
+  });
+
+  it("still covers every deletion in a shared table it names", () => {
+    const consent = flag("nextly_i18n_archive");
+    expect(consentCovers(consent, archived)).toBe(true);
+    expect(consentCovers(consent, rows("nextly_i18n_archive"))).toBe(true);
+    expect(consentCovers(consent, table("dc_posts"))).toBe(false);
+  });
+
+  it("leaves the form without targets and the earlier spellings as they were", () => {
+    for (const d of [locales, archived]) {
+      expect(consentCovers(flag(true), d)).toBe(true);
+      expect(consentCovers(NO_CONSENT, d)).toBe(false);
+    }
+  });
+
+  it("keeps an entity's rows in a shared table apart from the table's own removal", () => {
+    expect(deletionKey(archived)).not.toBe(
+      deletionKey(rows("nextly_i18n_archive"))
+    );
+    expect(deletionKey(locales)).not.toBe(
+      deletionKey(table("dc_posts_locales"))
+    );
+  });
+
+  it("names the entity's main table in the consent it asks for, never a shared table", () => {
+    expect(
+      consentToCover([table("dc_posts"), locales, junction, archived])
+    ).toBe("--accept-data-loss=dc_posts (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts)");
+    // A junction dropped while its entity stays is named itself.
+    expect(consentToCover([junction])).toBe(
+      "--accept-data-loss=dc_posts_dc_tags_tags (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts_dc_tags_tags)"
+    );
+    expect(consentToCover([archived])).toBe(
+      "--accept-data-loss=dc_posts (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts)"
+    );
+  });
+
+  it("asks for the consent without targets for an entity's rows whose main table a list cannot name", () => {
+    // Only the main table names an entity's rows in a shared table, and a list
+    // cannot spell one holding a space or read one named like a yes or a no.
+    for (const main of ["true", "dc posts"]) {
+      expect(consentToCover([{ ...archived, owner: main }])).toBe(
+        "--accept-data-loss (or NEXTLY_ACCEPT_DATA_LOSS=1)"
+      );
+    }
+    // A table the entity owns is still named itself where its owner cannot be.
+    expect(consentToCover([{ ...locales, owner: "true" } as Deletion])).toBe(
+      "--accept-data-loss=dc_posts_locales (or NEXTLY_ACCEPT_DATA_LOSS=dc_posts_locales)"
+    );
+  });
+
+  it("refuses a consent naming one entity for a run that also drops another", async () => {
+    const single = (d: Deletion): Deletion =>
+      ({ ...d, owner: "single_home" }) as Deletion;
+    const homeRows: Deletion = {
+      kind: "rows",
+      table: "nextly_version_pins",
+      owner: "single_home",
+      of: { kind: "single", slug: "home" },
+      count: 1,
+    };
+    const verdict = await judgeDataLoss({
+      deletions: [
+        table("dc_posts"),
+        locales,
+        archived,
+        table("single_home"),
+        single(table("single_home_locales")),
+        homeRows,
+      ],
+      consent: flag("dc_posts"),
+      interactive: true,
+      ask: () => Promise.resolve(true),
+      print: () => {},
+    });
+    if (verdict.kind !== "refused") throw new Error("expected a refusal");
+    expect(verdict.uncovered).toEqual([
+      table("single_home"),
+      single(table("single_home_locales")),
+      homeRows,
+    ]);
+    expect(verdict.message).toContain(
+      "--accept-data-loss=dc_posts,single_home"
+    );
+  });
+});
+
+describe("the targets a refusal asks for", () => {
+  // `dc_posts` is a collection's main table; `owned` marks a deletion of the
+  // collection's, and `posts` is its slug.
+  const owned = (d: Deletion): Deletion =>
+    ({ ...d, owner: "dc_posts" }) as Deletion;
+  const ofPosts = { kind: "collection", slug: "posts" } as const;
+  const value = (deletions: Deletion[]) =>
+    consentToCover(deletions).match(/^--accept-data-loss=(\S+) /)?.[1];
+
+  it("names a deletion no entity owns by its own table, a column as its table and column", () => {
+    expect(
+      value([table("drafts"), column("pages", "summary"), rows("nextly_seo")])
+    ).toBe("drafts,nextly_seo,pages.summary");
+  });
+
+  it("leaves out a column whose table it names", () => {
+    expect(value([column("posts", "summary"), table("posts")])).toBe("posts");
+  });
+
+  it("names an entity's other deletion by its own table while the run names no owner", () => {
+    expect(value([owned(column("dc_posts_locales", "title"))])).toBe(
+      "dc_posts_locales.title"
+    );
+  });
+
+  it("names only the owner once the run names it, wherever the run lists it", () => {
+    expect(
+      value([owned(column("dc_posts_locales", "title")), table("dc_posts")])
+    ).toBe("dc_posts");
+  });
+
+  it("names an entity's rows in a shared table by its main table, which then covers the rest", () => {
+    const archived: Deletion = {
+      kind: "rows",
+      table: "nextly_i18n_archive",
+      owner: "dc_posts",
+      of: ofPosts,
+    };
+    expect(value([owned(table("dc_posts_locales")), archived])).toBe(
+      "dc_posts"
+    );
+  });
+
+  it("names rows in a shared table by that table when no main table owns them", () => {
+    const ownerless: Deletion = {
+      kind: "rows",
+      table: "nextly_versions",
+      of: ofPosts,
+    };
+    expect(value([ownerless])).toBe("nextly_versions");
+  });
+
+  it("keeps the targets the consent named and adds the ones it left out", async () => {
+    const verdict = await judgeDataLoss({
+      deletions: [
+        table("dc_pages"),
+        column("posts", "summary"),
+        owned(table("dc_posts_locales")),
+      ],
+      consent: flag("dc_pages,posts.summary"),
+      interactive: false,
+      ask: () => Promise.resolve(false),
+      print: () => {},
+    });
+    if (verdict.kind !== "refused") throw new Error("expected a refusal");
+    expect(verdict.message).toContain(
+      "--accept-data-loss=dc_pages,dc_posts_locales,posts.summary"
+    );
+  });
+});
+
+describe("what an agreement to drop an entity's main table covers", () => {
+  const archived: Deletion = {
+    kind: "rows",
+    table: "nextly_i18n_archive",
+    owner: "dc_posts",
+    of: { kind: "collection", slug: "posts" },
+  };
+  const locales: Deletion = {
+    kind: "table",
+    table: "dc_posts_locales",
+    owner: "dc_posts",
+  };
+  const judge = (approved: Deletion[]) =>
+    judgeDataLoss({
+      deletions: [table("dc_posts"), locales, archived],
+      consent: NO_CONSENT,
+      interactive: false,
+      ask: () => Promise.resolve(false),
+      print: () => {},
+      approved,
+    });
+
+  it("covers the entity's other tables and its rows in shared tables, as naming it does", async () => {
+    expect(await judge([table("dc_posts")])).toEqual({ kind: "proceed" });
+  });
+
+  it("covers none of it when another table was agreed to", async () => {
+    const verdict = await judge([table("nextly_i18n_archive")]);
+    if (verdict.kind !== "refused") throw new Error("expected a refusal");
+    expect(verdict.uncovered).toEqual([table("dc_posts"), locales, archived]);
+  });
+});
+
+describe("listing what an entity's removal takes", () => {
+  it("counts a table the entity owns, and names its owner", () => {
+    expect(
+      describeDeletion({
+        kind: "table",
+        table: "dc_posts_locales",
+        owner: "dc_posts",
+        count: 4,
+      })
+    ).toBe("table dc_posts_locales (4 rows), belonging to dc_posts");
+  });
+
+  it("counts the entity's rows in a shared table, not the table's", () => {
+    expect(
+      describeDeletion({
+        kind: "rows",
+        table: "nextly_i18n_archive",
+        owner: "dc_posts",
+        of: { kind: "collection", slug: "posts" },
+        count: 3,
+        reason: "its archived translations",
+      })
+    ).toBe(
+      'rows of collection "posts" in nextly_i18n_archive (3 rows): its archived translations'
+    );
+    expect(
+      describeDeletion({
+        kind: "rows",
+        table: "nextly_version_pins",
+        owner: "single_home",
+        of: { kind: "single", slug: "home" },
+        count: 1,
+      })
+    ).toBe('rows of Single "home" in nextly_version_pins (1 row)');
+    expect(
+      describeDeletion({
+        kind: "rows",
+        table: "nextly_versions",
+        owner: "dc_posts",
+        of: { kind: "collection", slug: "posts" },
+      })
+    ).toBe('rows of collection "posts" in nextly_versions');
+  });
+
+  it("never counts an entity's rows as its shared table's every row", async () => {
+    const counts: string[] = [];
+    const db = {
+      all: (query: unknown) => {
+        counts.push(JSON.stringify(query));
+        return [{ count: 99 }];
+      },
+    };
+    const shared: Deletion = {
+      kind: "rows",
+      table: "nextly_versions",
+      owner: "dc_posts",
+      of: { kind: "collection", slug: "posts" },
+    };
+    const owned: Deletion = {
+      kind: "table",
+      table: "dc_posts_locales",
+      owner: "dc_posts",
+    };
+    const counted = await countDeletions([shared, owned], db, "sqlite");
+    expect(counted).toEqual([shared, { ...owned, count: 99 }]);
+    expect(counts).toHaveLength(1);
   });
 });
 

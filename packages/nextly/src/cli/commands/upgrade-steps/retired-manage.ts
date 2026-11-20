@@ -61,7 +61,7 @@ export async function convertRoles(
   // said here with the remedy, never counted as converted.
   if (kept > 0) {
     context.warn(
-      `${kept} role(s) still hold a retired manage permission: a plain read, create, update or delete permission it stands for is missing. \`nextly migrate\` seeds those before this step, so run \`nextly migrate\` again; a role still named then needs the missing permission restored.`
+      `${kept} role(s) still hold a retired manage permission: a plain read, create, update or delete permission it stands for is missing. The command seeds those before this step, so run it again; a role still named then needs the missing permission restored.`
     );
   }
   return converted;
