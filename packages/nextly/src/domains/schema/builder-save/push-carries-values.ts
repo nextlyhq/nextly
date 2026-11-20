@@ -59,6 +59,12 @@ export async function pushCarriesValues(args: {
     /** Whether the table holds its row. */
     holdsRow: () => Promise<boolean>;
   };
+  /**
+   * The fields the save moves into or out of a group (`hints.moves`), each by its path before and
+   * after. Their values move through the file's own statements, so a field arriving on the row
+   * from a group is not new to it.
+   */
+  moved?: readonly MovedField[];
 }): Promise<boolean> {
   // Translation turned off: its file puts each column back as the main table's snapshot records
   // it, Required and Unique settings included, and the main file that follows is recorded as
@@ -101,6 +107,24 @@ export async function pushCarriesValues(args: {
     after: args.newFields,
     liveTable: args.liveTable,
   });
+}
+
+/** A field the save moves, by its path before and after. */
+interface MovedField {
+  from: readonly string[];
+  to: readonly string[];
+}
+
+/**
+ * The columns of the fields a move brings onto the row, out of a group: a hint whose source is on
+ * the row too moves nothing (the planner skips it), so its field is not counted as brought there.
+ */
+function movedOntoRow(moved: readonly MovedField[] | undefined): Set<string> {
+  return new Set(
+    (moved ?? []).flatMap(m =>
+      m.from.length > 1 && m.to.length === 1 ? [toSnakeCase(m.to[0] ?? "")] : []
+    )
+  );
 }
 
 /**
@@ -163,13 +187,18 @@ async function fillsSingleRow(
   args: {
     oldFields: readonly FieldDefinition[];
     newFields: readonly FieldDefinition[];
+    moved?: readonly MovedField[];
   },
   row: NonNullable<Parameters<typeof pushCarriesValues>[0]["singleRow"]>
 ): Promise<boolean> {
+  // A field a move brings out of a group takes its values from there, not a fill.
+  const movedOn = movedOntoRow(args.moved);
   const filled = fieldsNewToSingleTable({
     oldFields: args.oldFields,
     newFields: args.newFields,
     renamedTo: row.renamedTo,
-  }).some(row.fills);
+  })
+    .filter(field => !movedOn.has(toSnakeCase(field.name)))
+    .some(row.fills);
   return filled && (await row.holdsRow());
 }
