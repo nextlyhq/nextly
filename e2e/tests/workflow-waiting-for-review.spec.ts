@@ -143,9 +143,10 @@ test("a reviewer finds the notes waiting for review from the Content panel", asy
     for (const [index, title] of titles.entries()) {
       const row = table.getByRole("row").filter({ hasText: title });
       await expect(row).toHaveCount(1);
-      // Its collection, by the collection's label.
-      await expect(row).toContainText("Reviewed note");
-      await expect(row).toContainText("In review");
+      // Its collection by the plural label, as the sidebar names it; its stage.
+      const cells = row.getByRole("cell");
+      await expect(cells.nth(1)).toHaveText("Reviewed notes");
+      await expect(cells.nth(2)).toHaveText("In review");
       await expect(row.getByRole("link", { name: title })).toHaveAttribute(
         "href",
         new RegExp(`/collections/${COLLECTION}/${ids[index]}$`)
