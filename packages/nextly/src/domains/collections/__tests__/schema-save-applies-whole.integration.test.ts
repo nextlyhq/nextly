@@ -11,6 +11,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
+import { PushSchemaPipeline } from "../../schema/pipeline/pushschema-pipeline";
 import {
   indexNameForColumn,
   uniqueIndexNameForColumn,
@@ -734,6 +735,36 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     expect(off.success, JSON.stringify(off)).toBe(true);
     // Recorded not unique, and not enforced either.
     expect((await createPost({ heading: "One" })).success).toBe(true);
+  });
+
+  it("drops the unique index Unique adopted when the same save renames the field and turns Unique off", async () => {
+    // As above, with the field renamed in the save that turns Unique off: the index follows the
+    // column to its new name, so the save is still one that stops the field being unique, and
+    // keeps the push, which drops it.
+    await postsWith([shortHeading], [{ heading: "One" }]);
+    await query(
+      `CREATE UNIQUE INDEX ${q("legacy_heading_unique")} ON ${q("dc_posts")} (${q("heading")})`
+    );
+    const on = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ ...shortHeading, unique: true }] }
+    );
+    expect(on.success, JSON.stringify(on)).toBe(true);
+    const pushed = vi.spyOn(PushSchemaPipeline.prototype, "apply");
+    try {
+      const off = await handler().updateCollection(
+        { collectionName: "posts" },
+        { fields: [{ ...shortHeading, name: "headline" }] }
+      );
+
+      expect(off.success, JSON.stringify(off)).toBe(true);
+      expect(pushed, "the push").toHaveBeenCalled();
+      expect(await registeredFields("posts")).toEqual(["headline"]);
+      // Recorded not unique, and not enforced either.
+      expect((await createPost({ headline: "One" })).success).toBe(true);
+    } finally {
+      pushed.mockRestore();
+    }
   });
 
   it("writes the unique index again into the file of a save that turns Unique back on", async () => {

@@ -1025,7 +1025,8 @@ async function applyHoldingSchemaLock(
     adapter,
     desired.collections[slug],
     oldFields,
-    fields
+    fields,
+    renamedFieldsOf(change.renameResolutions)
   );
   return result;
 }
@@ -1393,7 +1394,8 @@ export function collectionFileRoad(
       registryInFile &&
       fieldsStoppingUnique(
         (change.collection.fields ?? []) as unknown as FieldDefinition[],
-        change.fields
+        change.fields,
+        renamedFieldsOf(change.renameResolutions)
       ).length === 0 &&
       !(await pushCarriesValues()),
     registryInFile,
@@ -1582,26 +1584,36 @@ async function companionUniqueNamesHeld(
  * an earlier save took on as the field's, is the column's other uniqueness. A composite index is
  * never touched: it is not the field's.
  */
-/** The fields a change keeps by name that stop being unique. */
+/**
+ * The fields a change keeps, by name or under a rename it makes (`renames`, by column), that stop
+ * being unique: a field renamed in the same save keeps whatever unique index its column had, which
+ * follows the column to its new name.
+ */
 function fieldsStoppingUnique(
   oldFields: readonly FieldDefinition[],
-  newFields: readonly FieldDefinition[]
+  newFields: readonly FieldDefinition[],
+  renames: ReadonlyArray<{ from: string; to: string }>
 ): FieldDefinition[] {
-  return newFields.filter(
-    field =>
-      field.unique !== true &&
-      oldFields.some(old => old.name === field.name && old.unique === true)
-  );
+  return newFields.filter(field => {
+    if (field.unique === true) return false;
+    const column = toSnakeCase(field.name);
+    const from = renames.find(rename => rename.to === column)?.from ?? column;
+    return oldFields.some(
+      old => old.unique === true && toSnakeCase(old.name) === from
+    );
+  });
 }
 
 async function dropUniquenessLeftOn(
   adapter: NonNullable<ReturnType<typeof getAdapterFromDI>>,
   collection: DesiredCollection,
   oldFields: readonly FieldDefinition[],
-  newFields: readonly FieldDefinition[]
+  newFields: readonly FieldDefinition[],
+  /** The renames the change makes, by column, under which a field keeps its column's index. */
+  renames: ReadonlyArray<{ from: string; to: string }>
 ): Promise<void> {
   const { tableName } = collection;
-  const stopped = fieldsStoppingUnique(oldFields, newFields);
+  const stopped = fieldsStoppingUnique(oldFields, newFields, renames);
   if (stopped.length === 0) return;
   const db = adapter.getDrizzle();
   const dialect = adapter.dialect;
