@@ -25,13 +25,17 @@
  * @module domains/versions/part-drafts
  */
 
+import { isServicesRegistered } from "../../di/service-access";
 import { addressableFields } from "../../shared/addressable-fields";
 import { SYSTEM_TEXT_FIELD_NAMES } from "../collections/system-text-fields";
+import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../i18n/classify-fields";
 import { perLanguageFieldNames } from "../i18n/per-language-fields";
 import { perLanguageStorageEnabled } from "../i18n/per-language-storage";
 import {
   assembleSharedStructure,
+  componentStructureShape,
+  type ComponentFieldsOf,
   sameShare,
   sharedStructureShape,
   splitSharedStructure,
@@ -103,6 +107,12 @@ function isNamedPartField(
  * A repeater or group of a translated document that translates values inside
  * keeps one structure across languages, and is held by both parts
  * (`structured`): its structure by the shared part, its text by each language.
+ * So does a component field: its instances, their order and their shared
+ * values are the shared part's, their text each language's by instance id; a
+ * component holding no text at all is the shared part's alone. Its fields are
+ * read from the components registry (`components`, else the running site's),
+ * the same answer every path that stores, reads or publishes a draft gets. A
+ * component whose fields cannot be read stays whole in the language part.
  *
  * `translated: false` classifies a document whose own fields are stored on
  * its shared row alone (it keeps no translations of its own): only its
@@ -110,10 +120,22 @@ function isNamedPartField(
  */
 export async function partKeysOf(
   fields: readonly PartField[],
-  options: { translated?: boolean } = {}
+  options: {
+    translated?: boolean;
+    /** Each component's fields, by slug; the running site's registry when left out. */
+    components?: ComponentFieldsOf;
+  } = {}
 ): Promise<PartKeys> {
   const reached: readonly unknown[] = addressableFields(fields);
   const named = reached.filter(isNamedPartField);
+  const componentFields = named.filter(field => {
+    const { single, many } = extractFieldGroupReferences(field);
+    return single !== undefined || many !== undefined;
+  });
+  const componentsOf =
+    options.translated === false || componentFields.length === 0
+      ? undefined
+      : (options.components ?? (await registryComponents(componentFields)));
   const language = await perLanguageFieldNames(
     named,
     new Set(
@@ -130,12 +152,24 @@ export async function partKeysOf(
   // The same shape the storage splits the field's value by, so a held value
   // is split where its live one is stored.
   const structured = new Map<string, SharedStructureShape>();
+  // A component whose fields were read and hold no text: the shared part's alone.
+  const sharedComponents = new Set<string>();
   if (options.translated !== false) {
     for (const field of named) {
+      if (componentsOf && componentFields.includes(field)) {
+        if (!componentReadable(field, componentsOf)) continue;
+        const shape = componentStructureShape(field, componentsOf);
+        if (shape) structured.set(field.name, shape);
+        else sharedComponents.add(field.name);
+        continue;
+      }
       if (language.has(field.name)) continue;
       const shape = sharedStructureShape(field);
       if (shape) structured.set(field.name, shape);
     }
+  }
+  for (const name of [...structured.keys(), ...sharedComponents]) {
+    language.delete(name);
   }
   return {
     language,
@@ -147,6 +181,37 @@ export async function partKeysOf(
     ]),
     structured,
   };
+}
+
+/**
+ * The running site's components, by slug, for the component fields of a document: read from its
+ * registry once the site's services are up, every component they place in turn. Nothing before,
+ * as in a unit run with no site: each component then stays whole in the language part.
+ */
+async function registryComponents(
+  fields: readonly PartField[]
+): Promise<ComponentFieldsOf | undefined> {
+  if (!isServicesRegistered()) return undefined;
+  const { resolveComponentSchemas } = await import("./restore-version");
+  const schemas = await resolveComponentSchemas(
+    fields as Parameters<typeof resolveComponentSchemas>[0]
+  );
+  return slug => {
+    const schema = schemas.get(slug);
+    return schema?.resolved === false ? undefined : schema?.fields;
+  };
+}
+
+/** Whether every component `field` places has fields to read. */
+function componentReadable(
+  field: PartField,
+  componentsOf: ComponentFieldsOf
+): boolean {
+  const { single, many } = extractFieldGroupReferences(field);
+  const slugs = many ?? (single === undefined ? [] : [single]);
+  return (
+    slugs.length > 0 && slugs.every(slug => componentsOf(slug) !== undefined)
+  );
 }
 
 /** A part draft's stored values, as an object. */

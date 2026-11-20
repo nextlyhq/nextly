@@ -48,14 +48,27 @@ import {
  * share of such a field is laid over, so a publish writes back the text the
  * language holds and never another's in its place. Read on the caller's
  * transaction; `scope` is what the companion's readiness was settled on.
+ *
+ * With `components`, the Single's components are read in `locale` too, each
+ * instance with its id and type, as a held component share is laid over them.
  */
 export async function withLiveStructures(
-  tx: Pick<TransactionContext, "getDrizzle">,
+  tx: TransactionContext,
   scope: ReadinessScope,
-  row: Record<string, unknown>,
+  live: Record<string, unknown>,
   companion: CompanionSchema | null,
-  locale: string
+  locale: string,
+  components?: {
+    fieldGroupDataService?: FieldGroupDataService;
+    singleMeta: DynamicSingleRecord;
+  }
 ): Promise<Record<string, unknown>> {
+  const row = components
+    ? {
+        ...live,
+        ...(await liveComponentsIn(tx, components, String(live.id), locale)),
+      }
+    : live;
   const structured =
     companion?.localizedFields.filter(f => f.sharedStructure) ?? [];
   if (!companion || structured.length === 0) return row;
@@ -74,6 +87,40 @@ export async function withLiveStructures(
     readiness: cachedCompanionReadiness(scope, companion.companionTableName),
   });
   return { ...row, ...read };
+}
+
+/** The Single's components in `locale`, tagged as a draft holds them, read on `tx`. */
+async function liveComponentsIn(
+  tx: TransactionContext,
+  deps: {
+    fieldGroupDataService?: FieldGroupDataService;
+    singleMeta: DynamicSingleRecord;
+  },
+  entryId: string,
+  locale: string
+): Promise<Record<string, unknown>> {
+  const service = deps.fieldGroupDataService;
+  const fields = deps.singleMeta.fields;
+  const executor = tx.getDrizzle();
+  const componentFields = service
+    ? await resolveComponentFieldMap(fields, slug =>
+        service.getComponentFields(slug, executor)
+      )
+    : new Map<string, FieldConfig[]>();
+  return tagComponentTypes(
+    await readComponentSubtrees({
+      fieldGroupDataService: service,
+      tx,
+      entryId,
+      parentTable: deps.singleMeta.tableName,
+      fieldConfigs: fields,
+      locale,
+      reason: "shared-structure-live-read",
+      logContext: { single: deps.singleMeta.slug },
+    }),
+    fields,
+    slug => componentFields.get(slug)
+  );
 }
 
 /**

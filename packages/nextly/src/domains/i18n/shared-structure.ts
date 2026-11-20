@@ -27,6 +27,9 @@ import { isDeepStrictEqual } from "node:util";
 
 import { parsedValue } from "../../shared/lib/json-column-value";
 import { isPlainObject as isPlainRecord } from "../../shared/lib/plain-copy";
+import { componentRowContentEntries } from "../field-groups/storage/component-row-content";
+import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
+import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 
 import { isBlank } from "./blank-value";
 import { isFieldLocalized, neverTranslatable } from "./classify-fields";
@@ -49,7 +52,17 @@ export interface SharedStructureShape {
   kind: "repeater" | "group";
   texts: readonly string[];
   inner: Readonly<Record<string, SharedStructureShape>>;
+  /**
+   * A dynamic zone's: each component type's own shape, by its slug, read for an instance by the
+   * type it records. `texts` and `inner` are every type's together, for an instance with none.
+   */
+  byType?: Readonly<Record<string, SharedStructureShape>>;
 }
+
+/** A component's own fields, by its slug, as the document's components resolve them. */
+export type ComponentFieldsOf = (
+  slug: string
+) => readonly StructuredField[] | undefined;
 
 /** One level of an overlay: a row's (or a group's) translatable values, nested overlays by name. */
 type OverlayLevel = Record<string, unknown>;
@@ -103,11 +116,22 @@ export function hasTranslationColumn(
   );
 }
 
-/** {@link sharedStructureShape} for one level's fields. `open` stops a layout that reaches itself. */
+/** What {@link shapeOfLevel} reaches components through, and the components already open. */
+interface ComponentReach {
+  fieldsOf: ComponentFieldsOf;
+  open: ReadonlySet<string>;
+}
+
+/**
+ * {@link sharedStructureShape} for one level's fields. `open` stops a layout that reaches itself.
+ * With `components`, a component placed at the level is read through its own fields
+ * ({@link componentStructureShape}); without, it is no value of the level's.
+ */
 function shapeOfLevel(
   kind: "repeater" | "group",
   fields: readonly StructuredField[],
-  open: WeakSet<object>
+  open: WeakSet<object>,
+  components?: ComponentReach
 ): SharedStructureShape | null {
   const texts: string[] = [];
   const inner: Record<string, SharedStructureShape> = {};
@@ -122,12 +146,26 @@ function shapeOfLevel(
         }
         continue;
       }
+      if (components && componentSlugsOf(child).length > 0) {
+        const nested = componentStructureShape(
+          child,
+          components.fieldsOf,
+          components.open
+        );
+        if (nested) inner[child.name] = nested;
+        continue;
+      }
       if (isStructureContainer(child)) {
         // A container inside keeps the one structure too, whatever its own flag says: no level
         // of a shared structure has rows of its own per language.
         if (open.has(child) || neverTranslatable(child)) continue;
         open.add(child);
-        const nested = shapeOfLevel(child.type, child.fields ?? [], open);
+        const nested = shapeOfLevel(
+          child.type,
+          child.fields ?? [],
+          open,
+          components
+        );
         open.delete(child);
         if (nested) inner[child.name] = nested;
         continue;
@@ -141,6 +179,69 @@ function shapeOfLevel(
   visit(fields);
   if (texts.length === 0 && Object.keys(inner).length === 0) return null;
   return { kind, texts, inner };
+}
+
+/** The components a field places: one, or a dynamic zone's several; none for any other field. */
+function componentSlugsOf(field: StructuredField): string[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  return many ?? (single === undefined ? [] : [single]);
+}
+
+/**
+ * The shape of what a component field translates inside, or `null` where it translates nothing:
+ * its instances (one, or a list for a repeatable component or a dynamic zone, each with its id)
+ * keep one structure across languages, as a group's or a repeater's rows do, and the text inside
+ * is each language's. Read through each component's own fields (`fieldsOf`), every component it
+ * places in turn; a component that reaches itself stops there.
+ */
+export function componentStructureShape(
+  field: StructuredField,
+  fieldsOf: ComponentFieldsOf,
+  open: ReadonlySet<string> = new Set()
+): SharedStructureShape | null {
+  const slugs = componentSlugsOf(field);
+  if (slugs.length === 0) return null;
+  const { many } = extractFieldGroupReferences(field);
+  const kind =
+    many !== undefined ||
+    (field as { repeatable?: unknown }).repeatable === true
+      ? "repeater"
+      : "group";
+  const byType: Record<string, SharedStructureShape> = {};
+  for (const slug of slugs) {
+    const fields = open.has(slug) ? undefined : fieldsOf(slug);
+    if (!fields) continue;
+    const shape = shapeOfLevel(kind, fields, new WeakSet(), {
+      fieldsOf,
+      open: new Set([...open, slug]),
+    });
+    if (shape) byType[slug] = shape;
+  }
+  const shapes = Object.values(byType);
+  if (shapes.length === 0) return null;
+  const texts = [...new Set(shapes.flatMap(shape => shape.texts))];
+  const inner: Record<string, SharedStructureShape> = {};
+  for (const shape of shapes) {
+    for (const [name, nested] of Object.entries(shape.inner)) {
+      inner[name] ??= nested;
+    }
+  }
+  return {
+    kind,
+    texts,
+    inner,
+    ...(slugs.length > 1 ? { byType } : {}),
+  };
+}
+
+/** The shape a row (or an instance) is read by: its component type's, in a dynamic zone. */
+function shapeOfRow(
+  row: Record<string, unknown>,
+  shape: SharedStructureShape
+): SharedStructureShape {
+  if (!shape.byType) return shape;
+  const type = readFieldGroupType(row);
+  return (type !== undefined && shape.byType[type]) || shape;
 }
 
 /** A repeater row's id, where it has one: a non-empty string. */
@@ -181,7 +282,7 @@ export function splitSharedStructure(
     if (!isPlainRecord(row)) return row;
     const id = idOf(row);
     if (id === undefined) return row;
-    const split = splitLevel(row, shape);
+    const split = splitLevel(row, shapeOfRow(row, shape));
     if (Object.keys(split.overlay).length > 0) overlay[id] = split.overlay;
     return split.structure;
   });
@@ -240,7 +341,7 @@ export function assembleSharedStructure(
       const entry = level[id];
       return isPlainRecord(entry) ? entry : {};
     });
-    return assembleLevel(row, rowLevels, shape);
+    return assembleLevel(row, rowLevels, shapeOfRow(row, shape));
   });
 }
 
@@ -305,7 +406,7 @@ export function pruneOverlay(
       changed = true;
       continue;
     }
-    const pruned = pruneLevel(entry, row, shape);
+    const pruned = pruneLevel(entry, row, shapeOfRow(row, shape));
     out[id] = pruned.overlay;
     changed ||= pruned.changed;
   }
@@ -375,7 +476,8 @@ function withoutBlanks(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withoutBlanks);
   if (!isPlainRecord(value)) return isBlank(value) ? undefined : value;
   const out: Record<string, unknown> = {};
-  for (const [key, inner] of Object.entries(value)) {
+  // A component instance's own row timestamps are no content of it (`component-row-content`).
+  for (const [key, inner] of componentRowContentEntries(value)) {
     const kept = withoutBlanks(inner);
     if (kept !== undefined) out[key] = kept;
   }

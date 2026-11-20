@@ -33,6 +33,7 @@ import {
   sameShare,
   splitSharedStructure,
   type SharedStructureShape,
+  type StructuredField,
 } from "../../../domains/i18n/shared-structure";
 import { introspectLiveColumns } from "../../../domains/schema/pipeline/diff/introspect-live";
 import { SHARED_PART_ALONE } from "../../../domains/versions/changed-parts";
@@ -119,7 +120,15 @@ async function documentsToSplit(
   // An earlier release's version history is split only once it is laid out as this one keeps it.
   await assertVersionHistoryReady(context);
   if (!(await versionHistoryReady(context))) return found;
-  for (const entity of await siteEntities(context)) {
+  const entities = await siteEntities(context);
+  // The site's components, by slug: a component field is split by part as the running site
+  // splits it, its instances to the shared draft and their text to the language's.
+  const components = new Map(
+    entities
+      .filter(entity => entity.kind === "component")
+      .map(entity => [entity.slug, entity.fields as readonly StructuredField[]])
+  );
+  for (const entity of entities) {
     // Only collection entries and Singles keep pending changes; a component's are its parent's.
     if (entity.kind === "component") continue;
     const drafts = await adapter.select<VersionRow>(VERSIONS_TABLE, {
@@ -137,6 +146,7 @@ async function documentsToSplit(
     // per language, so a pending text edit belongs to a language's draft.
     const keys = await partKeysOf(entity.fields, {
       translated: storesPerLanguage(entity),
+      components: slug => components.get(slug),
     });
     const byEntry = new Map<string, VersionRow[]>();
     for (const draft of drafts) {

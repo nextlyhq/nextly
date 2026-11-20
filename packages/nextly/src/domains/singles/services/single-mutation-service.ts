@@ -4485,7 +4485,12 @@ export class SingleMutationService extends BaseService {
                               this.adapter,
                               existingDoc,
                               companion,
-                              singleDraftLocale
+                              singleDraftLocale,
+                              {
+                                fieldGroupDataService:
+                                  this.fieldGroupDataService,
+                                singleMeta,
+                              }
                             )
                           : existingDoc,
                     }),

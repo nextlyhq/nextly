@@ -2180,7 +2180,7 @@ export class SinglePublishAllService extends BaseService {
     // writer's. A language with nothing pending goes live as it is stored,
     // judged when it was saved as a draft and never as published, so it is
     // judged as a promotion of an empty change in the same outcome.
-    const stored = await this.pendingChanges(tx, plan);
+    const stored = await this.pendingChanges(tx, plan, tx);
     // Derived from the stored changes, which carry the same languages as the
     // merged ones below: merging shared values replaces a change's values,
     // never a change or its language.
@@ -3000,23 +3000,34 @@ export class SinglePublishAllService extends BaseService {
    */
   private async pendingChanges(
     tx: TransactionContext | DrizzleAdapter,
-    plan: PublishPlan
+    plan: PublishPlan,
+    /**
+     * The publish's transaction, where the changes' values are read to be written: a language's
+     * held text inside a repeater, group or component is then laid on the Single's live
+     * structure in that language. Left out by a caller that reads only which languages are
+     * pending.
+     */
+    valuesOn?: TransactionContext
   ): Promise<PendingChange[]> {
     if (!plan.draftsEligible) return [];
     const { parts } = plan;
-    // A language's held text inside a repeater or group is laid on the Single's live structure in
-    // that language, read only where a change needs it.
-    const structure: PendingStructure = {
-      keys: await partKeysOf(plan.fieldConfigs),
-      liveIn: locale =>
-        withLiveStructures(
-          tx,
-          this.adapter,
-          plan.existingDoc,
-          plan.companion,
-          locale
-        ),
-    };
+    const structure: PendingStructure | null = valuesOn
+      ? {
+          keys: await partKeysOf(plan.fieldConfigs),
+          liveIn: locale =>
+            withLiveStructures(
+              valuesOn,
+              this.adapter,
+              plan.existingDoc,
+              plan.companion,
+              locale,
+              {
+                fieldGroupDataService: this.fieldGroupDataService,
+                singleMeta: plan.singleMeta,
+              }
+            ),
+        }
+      : null;
     if (parts === undefined) {
       return pendingChangesInSaveOrder(
         tx,
@@ -3193,7 +3204,7 @@ export class SinglePublishAllService extends BaseService {
       (await tx.selectOne<Record<string, unknown>>(plan.singleMeta.tableName, {
         where: this.whereEq("id", plan.existingDoc.id),
       })) ?? plan.existingDoc;
-    const stored = await this.pendingChanges(tx, plan);
+    const stored = await this.pendingChanges(tx, plan, tx);
     const document =
       stored.length > 0 ? await this.liveSharedDocument(tx, plan) : null;
     const reader = this.fieldNameReader(plan, caller);
