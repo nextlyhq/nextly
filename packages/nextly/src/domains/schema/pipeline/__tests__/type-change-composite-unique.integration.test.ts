@@ -142,6 +142,28 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("refuses values two changed columns of the index would hold twice together, and changes nothing", async () => {
+      // Each column alone holds no repeat: "1" and " 1" differ under " 2" and "2". Both become
+      // numbers in the one rebuild, and both rows become (1, 2).
+      await tools.createTable(TABLE, [TITLE, CODE]);
+      const indexed = await sync([TITLE, CODE]);
+      expect(indexed.error).toBeUndefined();
+      clearCachedSnapshot();
+      await tools.insert(TABLE, [
+        { id: "p1", title: " 2", code: "1" },
+        { id: "p2", title: "2", code: " 1" },
+      ]);
+      const before = await state();
+
+      const result = await sync(
+        [f({ name: "title", type: "number" }), CODE_NUMBER],
+        [TITLE, CODE]
+      );
+
+      expect(result.success).toBe(false);
+      expect(await state()).toEqual(before);
+    });
+
     // Only SQLite reads the index's other columns before the apply: the per-value judgement is
     // asked there alone.
     it.skipIf(dialect !== "sqlite")(

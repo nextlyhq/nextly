@@ -425,6 +425,21 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
     ]);
   });
 
+  it("blocks values to be cleared that the rebuild keeps as one number under a unique index of several columns", async () => {
+    // Both are refused by the field's maximum and consented to be cleared, but the rebuild keeps
+    // "100" and " 100" as the integer 100 and makes the index before the consent clears either.
+    await create({ type: "text" }, { r1: "100", r2: " 100" });
+    const change = await judged({ type: "number", max: 50 }, { type: "text" }, [
+      { fields: ["value", "title"], unique: true },
+    ]);
+    expect(change.judgement.class).toBe("blocked");
+    expect(rowsOf(change)).toContainEqual([
+      "repeated",
+      "blocked",
+      ["r1", "r2"],
+    ]);
+  });
+
   it("lets values one number under different titles through a unique index of both columns", async () => {
     await create({ type: "text" }, { r1: "1", r2: " 1" });
     sqlite.prepare(`UPDATE "${TABLE}" SET title = 'U' WHERE id = 'r2'`).run();
