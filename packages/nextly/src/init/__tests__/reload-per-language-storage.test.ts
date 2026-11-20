@@ -14,6 +14,10 @@ import {
 } from "../../domains/i18n/per-language-storage";
 import { consoleLogger } from "../../shared/types";
 import { reloadNextlyConfig } from "../reload-config";
+import { perLanguageStorageSuite } from "../../__tests__/storage-layout";
+
+// Written for per-language storage as every installation runs it (`storage-layout`).
+perLanguageStorageSuite();
 
 const loadConfig = vi.hoisted(() => vi.fn());
 vi.mock("../../cli/utils/config-loader", () => ({

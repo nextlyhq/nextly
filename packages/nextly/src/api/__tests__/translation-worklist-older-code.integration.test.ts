@@ -29,6 +29,10 @@ vi.mock("../../auth/middleware", async importActual => {
 import { userWhoMay } from "../../__tests__/fixtures/permission-holders";
 import { defineCollection, text } from "../../config";
 import { createTestNextly, type TestNextly } from "../../plugins/test-nextly";
+import { perLanguageStorageSuite } from "../../__tests__/storage-layout";
+
+// Written for per-language storage as every installation runs it (`storage-layout`).
+perLanguageStorageSuite();
 
 let current: TestNextly | undefined;
 afterEach(async () => {

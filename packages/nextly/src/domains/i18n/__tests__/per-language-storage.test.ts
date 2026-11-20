@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -8,6 +11,10 @@ import {
   storesPerLanguage,
   warnPerLanguageStorageSetting,
 } from "../per-language-storage";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+
+// Written for per-language storage as every installation runs it (`storage-layout`).
+perLanguageStorageSuite();
 
 afterEach(() => _resetPerLanguageStorage());
 
@@ -81,5 +88,58 @@ describe("per-language storage", () => {
     );
     expect(publishesPerLanguage({ status: true })).toBe(false);
     expect(publishesPerLanguage(undefined)).toBe(false);
+  });
+});
+
+// The suites run the earlier layout through a test-only hook (`__tests__/storage-layout`), so these
+// two guard what that default could otherwise hide: what production runs, and that nothing but a
+// test reaches the hook.
+describe("the per-language storage a production process runs", () => {
+  it("keeps every translatable field per language in a process no test hook has touched", async () => {
+    const fresh = await freshProcess();
+    expect(fresh.perLanguageStorageEnabled()).toBe(true);
+    expect(fresh.storesPerLanguage({ localized: false })).toBe(true);
+  });
+
+  it("is moved only by tests: no product source calls the hook, and the module reads no environment", () => {
+    const root = join(__dirname, "..", "..", "..");
+    const callers: string[] = [];
+    const visit = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== "__tests__" && entry.name !== "node_modules") {
+            visit(path);
+          }
+          continue;
+        }
+        if (
+          !/\.(ts|tsx)$/.test(entry.name) ||
+          /\.test(-d)?\.tsx?$/.test(entry.name)
+        ) {
+          continue;
+        }
+        const text = readFileSync(path, "utf8");
+        if (/\b(setPerLanguageStorage|_resetPerLanguageStorage)\(/.test(text)) {
+          callers.push(path.slice(root.length + 1));
+        }
+      }
+    };
+    visit(root);
+    // The control: the scan reaches the hook's own module, which defines both.
+    expect(callers).toContain(
+      join("domains", "i18n", "per-language-storage.ts")
+    );
+    expect(
+      callers.filter(
+        path => path !== join("domains", "i18n", "per-language-storage.ts")
+      )
+    ).toEqual([]);
+    expect(
+      readFileSync(
+        join(root, "domains", "i18n", "per-language-storage.ts"),
+        "utf8"
+      )
+    ).not.toMatch(/process\.env/);
   });
 });

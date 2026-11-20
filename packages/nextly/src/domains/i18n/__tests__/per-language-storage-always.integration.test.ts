@@ -17,6 +17,10 @@ import {
 } from "../../../plugins/test-nextly";
 import type { Logger } from "../../../services/shared";
 import { _resetPerLanguageStorage } from "../per-language-storage";
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
+
+// Written for per-language storage as every installation runs it (`storage-layout`).
+perLanguageStorageSuite();
 
 describeEachDialect("per-language storage for every installation", dialect => {
   let t: TestNextly | undefined;

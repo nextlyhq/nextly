@@ -1,8 +1,9 @@
-import { beforeAll, afterAll, afterEach, expect } from "vitest";
+import { beforeAll, afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 
 import { loadDialectTables } from "../database/dialect-tables";
 import { describeAbortedTransactions } from "../plugins/aborted-transaction-sightings";
 
+import { layoutForBoot, startTest, startTestFile } from "./storage-layout";
 import {
   describeTransactionEscapes,
   installTransactionEscapeObserver,
@@ -16,6 +17,28 @@ import {
   pointAtWorkerDatabases,
   releaseWorker,
 } from "./worker-database-guard";
+
+// The storage layout the suites run on (`./storage-layout`): the earlier layout, through the
+// test-only hook, unless a file opts into per-language storage or a boot of an older suite asks
+// for it with `perLanguageStorage: true`. Put in force before the file's suites load, and again
+// before each test, so a test that moved the hook never decides the next one's layout.
+startTestFile();
+beforeEach(() => startTest());
+vi.mock("../plugins/test-nextly", async importActual => {
+  const actual = await importActual<typeof import("../plugins/test-nextly")>();
+  return {
+    ...actual,
+    createTestNextly: (
+      ...args: Parameters<typeof actual.createTestNextly>
+    ): ReturnType<typeof actual.createTestNextly> => {
+      layoutForBoot(
+        (args[0] as { perLanguageStorage?: unknown } | undefined)
+          ?.perLanguageStorage
+      );
+      return actual.createTestNextly(...args);
+    },
+  };
+});
 
 // On PostgreSQL or MySQL with more than one worker, this file's suites connect
 // to its worker's own database, which the run's global setup created. Pointing
