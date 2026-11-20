@@ -43,11 +43,40 @@ vi.mock("@admin/services/workflowApi", () => api);
 vi.mock("@admin/hooks/queries/useAuthSession", () => ({
   useAuthSession: () => ({ data: { isAuthenticated: true } }),
 }));
+// The role and people lists the pickers choose from: each answers, or fails, per case.
+const candidates = vi.hoisted(() => ({
+  rolesError: null as Error | null,
+  usersError: null as Error | null,
+  refetchRoles: vi.fn(),
+  refetchUsers: vi.fn(),
+}));
 vi.mock("@admin/hooks/queries/useRoles", () => ({
-  useRoles: () => ({ data: { items: ROLES } }),
+  useRoles: () =>
+    candidates.rolesError
+      ? {
+          data: undefined,
+          error: candidates.rolesError,
+          refetch: candidates.refetchRoles,
+        }
+      : {
+          data: { items: ROLES },
+          error: null,
+          refetch: candidates.refetchRoles,
+        },
 }));
 vi.mock("@admin/hooks/queries/useUsers", () => ({
-  useUsers: () => ({ data: { items: USERS } }),
+  useUsers: () =>
+    candidates.usersError
+      ? {
+          data: undefined,
+          error: candidates.usersError,
+          refetch: candidates.refetchUsers,
+        }
+      : {
+          data: { items: USERS },
+          error: null,
+          refetch: candidates.refetchUsers,
+        },
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({
@@ -91,6 +120,8 @@ const section = (name: string) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  candidates.rolesError = null;
+  candidates.usersError = null;
 });
 
 describe("a workflow in Settings", () => {
@@ -437,6 +468,63 @@ describe("a workflow in Settings", () => {
         screen.queryByRole("button", { name: "Save email for Approved" })
       ).toBeNull()
     );
+  });
+
+  it("says the roles could not be loaded, with Retry, instead of offering an empty choice of them", async () => {
+    const user = userEvent.setup();
+    candidates.rolesError = apiError(500, "INTERNAL_ERROR");
+    candidates.rolesError.message = "The roles service is down.";
+    await open();
+
+    // Neither who takes a step nor a default reviewer is offered from a list that did not load.
+    expect(
+      screen.queryAllByRole("button", { name: /Change who takes/ })
+    ).toEqual([]);
+    expect(
+      screen.queryAllByRole("combobox", { name: /Default reviewer for/ })
+    ).toEqual([]);
+    const alerts = screen
+      .getAllByRole("alert")
+      .filter(each => each.textContent?.includes("roles could not be loaded"));
+    expect(alerts).toHaveLength(2);
+    expect(alerts[0]?.textContent).toContain("The roles service is down.");
+
+    await user.click(
+      within(alerts[0] as HTMLElement).getByRole("button", {
+        name: "Retry loading roles",
+      })
+    );
+    expect(candidates.refetchRoles).toHaveBeenCalled();
+  });
+
+  it("says the people could not be loaded, with Retry, and still offers the roles", async () => {
+    const user = userEvent.setup();
+    candidates.usersError = apiError(500, "INTERNAL_ERROR");
+    candidates.usersError.message = "The people service is down.";
+    await open();
+
+    const select = screen.getByRole("combobox", {
+      name: "Default reviewer for Legal check",
+    });
+    expect(
+      within(select)
+        .getAllByRole("option")
+        .map(option => option.textContent)
+    ).toEqual([
+      "No default reviewer",
+      "Super admin (the whole role)",
+      "Lawyers (the whole role)",
+    ]);
+    const alert = screen
+      .getAllByRole("alert")
+      .find(each => each.textContent?.includes("people could not be loaded"));
+    expect(alert?.textContent).toContain("The people service is down.");
+    await user.click(
+      within(alert as HTMLElement).getByRole("button", {
+        name: "Retry loading people",
+      })
+    );
+    expect(candidates.refetchUsers).toHaveBeenCalled();
   });
 
   it("alerts when no role holds a step's permission", async () => {

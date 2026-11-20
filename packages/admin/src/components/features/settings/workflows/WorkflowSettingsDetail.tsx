@@ -33,6 +33,7 @@ import type {
   WorkflowStepSummary,
 } from "@admin/types/workflows";
 
+import { CandidateLoadError } from "./CandidateLoadError";
 import { DefaultReviewerSection } from "./DefaultReviewerSection";
 import { GrantRolesDialog } from "./GrantRolesDialog";
 import { StageLabelsSection } from "./StageLabelsSection";
@@ -299,11 +300,19 @@ export function WorkflowSettingsDetail({
               </p>
             )
           )}
+          {access.grants && roles.error ? (
+            <CandidateLoadError
+              what="roles"
+              error={roles.error}
+              onRetry={() => void roles.refetch()}
+            />
+          ) : null}
           <StepGrantsTable
             workflow={workflow}
             settings={settings}
             roleName={roleName}
-            canChange={access.grants}
+            // Never a choice of roles drawn from a list that did not load.
+            canChange={access.grants && !roles.error}
             saving={saving?.startsWith("grants.") ?? false}
             errors={errors}
             onChange={step => setGranting(step)}
@@ -315,6 +324,21 @@ export function WorkflowSettingsDetail({
           title="Default reviewer"
           description="Assigned when a document enters the stage."
         >
+          {access.reviewers && roles.error ? (
+            <CandidateLoadError
+              what="roles"
+              error={roles.error}
+              onRetry={() => void roles.refetch()}
+            />
+          ) : null}
+          {/* People who failed to load are said so; the roles are still offered. */}
+          {access.reviewers && users.error ? (
+            <CandidateLoadError
+              what="people"
+              error={users.error}
+              onRetry={() => void users.refetch()}
+            />
+          ) : null}
           <DefaultReviewerSection
             workflow={workflow}
             settings={settings}
@@ -322,7 +346,7 @@ export function WorkflowSettingsDetail({
               reviewerOptions(settings, roleItems, userItems, stage)
             }
             nameOf={nameOf}
-            canChange={access.reviewers}
+            canChange={access.reviewers && !roles.error}
             saving={saving}
             errors={errors}
             onSave={(stage, reviewer) =>
