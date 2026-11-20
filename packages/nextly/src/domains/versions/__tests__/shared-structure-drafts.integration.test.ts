@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import {
+  defineCollection,
   defineFieldGroup,
   defineSingle,
   fieldGroup,
@@ -30,6 +31,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 // Written for per-language storage, as every installation now runs it.
@@ -38,6 +40,8 @@ perLanguageStorageSuite();
 const SLUG = "slidesite";
 /** A Single holding a repeatable component, whose instances keep one structure too. */
 const DECK = "decksite";
+/** A collection holding the same repeatable component, held through the collection's own path. */
+const DECKS = "decks";
 const CARD = "deckcard";
 
 /** Booting a site per test takes most of the default timeout on MySQL alone. */
@@ -75,6 +79,19 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
       }),
       defineSingle({
         slug: DECK,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true },
+        fields: [
+          text({ name: "title" }),
+          fieldGroup({ name: "cards", component: CARD, repeatable: true }),
+        ],
+      }),
+    ],
+    collections: [
+      defineCollection({
+        slug: DECKS,
         localized: true,
         status: true,
         versions: { drafts: true },
@@ -472,6 +489,94 @@ describe.each(getConfiguredTestDialects())(
           "second",
           "first 2",
         ]);
+      },
+      BOOT_TIMEOUT
+    );
+
+    it(
+      "holds a reorder of a collection entry's component instances in the shared draft",
+      async () => {
+        await boot(dialect);
+        const nextly = current!.nextly;
+        const created = await nextly.create({
+          collection: DECKS,
+          locale: "en",
+          data: {
+            title: "en deck",
+            cards: [
+              { label: "first", weight: 1 },
+              { label: "second", weight: 2 },
+            ],
+            status: "published",
+          },
+        });
+        const id = (created.item as { id: string }).id;
+        // Read as the editor reads it, through the entry service.
+        const entries = (
+          current!.getService("collectionsHandler") as CollectionsHandler
+        ).getEntryService();
+        const cardsIn = async (locale: string, editor = false) => {
+          const read = await entries.getEntry({
+            collectionName: DECKS,
+            entryId: id,
+            overrideAccess: true,
+            locale,
+            ...(editor
+              ? { includeWorkingDraft: true, status: "all" as const }
+              : {}),
+          });
+          expect(read.success, JSON.stringify(read)).toBe(true);
+          return (read.data as { cards: Card[] }).cards;
+        };
+        const [first, second] = await cardsIn("en");
+        await nextly.update({
+          collection: DECKS,
+          id,
+          locale: "es",
+          data: {
+            cards: [
+              { id: first!.id, label: "primero", weight: 1 },
+              { id: second!.id, label: "segundo", weight: 2 },
+            ],
+            status: "published",
+            _overwrite: true,
+          },
+        });
+
+        // Held in Spanish: a reorder, its captions unchanged.
+        await nextly.update({
+          collection: DECKS,
+          id,
+          locale: "es",
+          data: {
+            cards: [
+              { id: second!.id, label: "segundo", weight: 2 },
+              { id: first!.id, label: "primero", weight: 1 },
+            ],
+            _overwrite: true,
+          },
+        });
+
+        const rows = await current!.adapter.select<{
+          locale: string | null;
+          snapshot: unknown;
+        }>("nextly_versions", {
+          where: {
+            and: [
+              { column: "scopeSlug", op: "=", value: DECKS },
+              { column: "entryId", op: "=", value: id },
+              { column: "isAutosave", op: "=", value: false },
+              { column: "versionNo", op: "IS NULL" },
+              { column: "status", op: "=", value: "draft" },
+            ],
+          },
+        });
+        expect(rows.map(row => row.locale ?? "shared")).toEqual(["shared"]);
+        expect(JSON.stringify(rows[0]!.snapshot)).not.toMatch(
+          /segundo|primero/
+        );
+        // English's editor sees the held order, each card in English.
+        expect(labels(await cardsIn("en", true))).toEqual(["second", "first"]);
       },
       BOOT_TIMEOUT
     );
