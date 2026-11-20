@@ -315,12 +315,15 @@ async function settledOutcome(
   record: LeftSave,
   notes: string[]
 ): Promise<SettledOutcome> {
-  if (record.applies === false) {
+  if (record.applies !== true) {
     // Made outside development, the save left its files for `nextly migrate`: its tables stand
     // where it started whether or not it finished, so they cannot say how far it got, and removing
-    // its files would take a deploy's migration away. Nothing of it is touched; the record stays.
+    // its files would take a deploy's migration away. A record that does not say (one from before
+    // it was kept) may be such a save. Nothing of it is touched; the record stays.
     deps.logger.warn(
-      `A Builder save of the ${described(record)} was made outside development, its migration files left for \`nextly migrate\`. It is not settled here; its record stays.`
+      record.applies === false
+        ? `A Builder save of the ${described(record)} was made outside development, its migration files left for \`nextly migrate\`. It is not settled here; its record stays.`
+        : `A Builder save of the ${described(record)} was left part-way, and its record does not say whether it applied its own files or left them for \`nextly migrate\`. It is not settled here; its record stays.`
     );
     return "left";
   }

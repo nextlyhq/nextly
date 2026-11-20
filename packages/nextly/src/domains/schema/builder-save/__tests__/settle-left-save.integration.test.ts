@@ -612,6 +612,35 @@ describe.each(getConfiguredTestDialects())(
       expect(await recordRow(t), "the record stays").toBeDefined();
     }, 300_000);
 
+    // A record from before it said whether the save applied its own files may be one made
+    // outside development, whose files a deploy's `nextly migrate` applies: nothing of it is
+    // withdrawn, and the record stays.
+    it("keeps the files of an older save whose record does not say whether it applied them", async () => {
+      const t = await boot();
+      await created(t);
+      const filesBefore = sqlFiles();
+      await stopSave(
+        t,
+        [text("heading"), text("alpha")],
+        point =>
+          point.startsWith(`file:${HISTORY_DIR()}`) && point.endsWith(".sql")
+      );
+      const written = sqlFiles().filter(f => !filesBefore.includes(f));
+      expect(written.length).toBeGreaterThan(0);
+      const { applies: _said, ...older } = (await recordRow(t)) as {
+        applies?: boolean;
+      } & Record<string, unknown>;
+      await new MetaService(t.adapter, consoleLogger).set(RECORD_KEY, older);
+
+      const settled = await settle(t);
+
+      expect(settled.map(s => s.outcome)).toEqual(["left"]);
+      expect(await recordRow(t), "the record stays").toBeDefined();
+      expect(sqlFiles(), "the save's files stay").toEqual(
+        [...filesBefore, ...written].sort()
+      );
+    }, 300_000);
+
     it("leaves a definition edited after the stop as it is, and names it", async () => {
       const t = await boot();
       await created(t);

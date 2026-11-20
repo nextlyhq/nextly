@@ -247,7 +247,7 @@ async function settleThenMigrate(
   const again = await settleLeftSavesAtStart(label, settled.pending);
   if (again.pending.length > 0) {
     consoleLogger.warn(
-      `${label} A Builder save stopped between its migration files, and the rest of them did not run at this start, so its record stays. Run \`nextly migrate\` from the project the save was made in.`
+      `${label} A Builder save stopped between its migration files, and the rest of them did not run at this start, so its record stays. Run \`nextly migrate\` from the project's base path, then start again.`
     );
     markStartIncomplete();
   }
