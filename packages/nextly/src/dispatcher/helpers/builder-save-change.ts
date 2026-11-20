@@ -21,6 +21,7 @@ import type {
   CollectionSaveDeps,
   CollectionSavePreview,
 } from "../../domains/schema/builder-save/collection-save";
+import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import { partWayPush } from "../../domains/schema/builder-save/landing-push";
 import {
   saveOfSchemaChange,
@@ -169,20 +170,7 @@ export async function writeBuilderSchemaChange(
   // against the live table; only where the answer is used, a save the writer runs.
   const runsFile =
     deps.applies && fileRoad !== undefined && !(await pushesNow());
-  const save = withMoves(
-    saveOfSchemaChange({
-      ...change,
-      row: {
-        labels: change.stored.labels,
-        fields: change.stored.fields as unknown as FieldDefinition[],
-      },
-      definition: await loadUiSchema({
-        projectRoot: deps.projectRoot,
-        uiSchemaFile: deps.config.db.uiSchemaFile,
-      }),
-    }).save,
-    change.moves
-  );
+  const save = await entitySaveOf(deps, change);
   // Outside development the push runs after the files are written (`appliedAfter`) and asks only of
   // the main table's columns, while the translations table's and the link tables' drops follow it:
   // the questions are asked there too, before anything is written, as the collection's road asks.
@@ -252,6 +240,59 @@ export async function entityPushReason(
   return (await pushes()) ? "carries-values" : null;
 }
 
+/** The entity's save as the definition file and its stored row describe it, with its moves. */
+async function entitySaveOf(
+  deps: CollectionSaveDeps,
+  change: Parameters<typeof writeBuilderSchemaChange>[2]
+): Promise<CollectionSave> {
+  const definition = await loadUiSchema({
+    projectRoot: deps.projectRoot,
+    uiSchemaFile: deps.config.db.uiSchemaFile,
+  });
+  const row = {
+    labels: change.stored.labels,
+    fields: change.stored.fields as unknown as FieldDefinition[],
+  };
+  return withMoves(
+    saveOfSchemaChange({ ...change, row, definition }).save,
+    change.moves
+  );
+}
+
+/**
+ * A Single's or a field group's dialog questions, as its file road asks them before anything is
+ * written (`refuseUnansweredDialogQuestions`), told the columns the save's planned moves carry
+ * into a group, which are not drops. One builder for both dialogs.
+ */
+export function entityDialogQuestions(
+  args: Omit<
+    Parameters<typeof refuseUnansweredDialogQuestions>[0],
+    "renameResolutions" | "eventResolutions" | "legacy" | "moved"
+  > & {
+    renameResolutions:
+      | Parameters<
+          typeof refuseUnansweredDialogQuestions
+        >[0]["renameResolutions"]
+      | undefined;
+    eventResolutions:
+      | Parameters<
+          typeof refuseUnansweredDialogQuestions
+        >[0]["eventResolutions"]
+      | undefined;
+    legacy: Parameters<typeof refuseUnansweredDialogQuestions>[0]["legacy"];
+  }
+): (moved: readonly string[]) => Promise<void> {
+  const { legacy, ...rest } = args;
+  return moved =>
+    refuseUnansweredDialogQuestions({
+      ...rest,
+      renameResolutions: args.renameResolutions ?? [],
+      eventResolutions: args.eventResolutions ?? [],
+      ...(legacy === undefined ? {} : { legacy }),
+      moved,
+    });
+}
+
 /** The save with the fields it moves, whose statements its file carries; as it was without any. */
 function withMoves(
   save: CollectionSave,
@@ -272,20 +313,7 @@ export async function reviewBuilderSchemaChange(
   change: Parameters<typeof writeBuilderSchemaChange>[2]
 ): Promise<BuilderSaveReview> {
   if (deps === undefined) return NOTHING_TO_REVIEW;
-  const save = withMoves(
-    saveOfSchemaChange({
-      ...change,
-      row: {
-        labels: change.stored.labels,
-        fields: change.stored.fields as unknown as FieldDefinition[],
-      },
-      definition: await loadUiSchema({
-        projectRoot: deps.projectRoot,
-        uiSchemaFile: deps.config.db.uiSchemaFile,
-      }),
-    }).save,
-    change.moves
-  );
+  const save = await entitySaveOf(deps, change);
   const { previewCollectionSave } = await loadCollectionSave();
   return reviewOf(await previewCollectionSave(deps, save));
 }

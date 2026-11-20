@@ -45,7 +45,6 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
-import { refuseUnansweredDialogQuestions } from "../../domains/schema/builder-save/dialog-questions";
 import {
   FirstQuestionWatch,
   landingPush,
@@ -90,6 +89,7 @@ import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
+  entityDialogQuestions,
   entityPushReason,
   reviewBuilderSchemaChange,
   writeBuilderSchemaChange,
@@ -1077,26 +1077,22 @@ export const COMPONENTS_METHODS: Record<
               // The push's questions, asked of the file before anything is written: a rename the
               // request does not answer, or a drop it does not confirm, refuses the save as the
               // push refuses it.
-              questions: moved =>
-                refuseUnansweredDialogQuestions({
-                  desired,
-                  db,
-                  dialect,
-                  tableName,
-                  // The builder that made the table, which the offered rename is judged by.
-                  builtBy: "fieldGroup",
-                  oldFields: (component.fields ??
-                    []) as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  wasLocalized,
-                  isLocalized,
-                  renameResolutions: renameResolutions ?? [],
-                  eventResolutions: eventResolutions ?? [],
-                  ...(legacyBundle === undefined
-                    ? {}
-                    : { legacy: legacyBundle }),
-                  moved,
-                }),
+              questions: entityDialogQuestions({
+                desired,
+                db,
+                dialect,
+                tableName,
+                // The builder that made the table, which the offered rename is judged by.
+                builtBy: "fieldGroup",
+                oldFields: (component.fields ??
+                  []) as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                wasLocalized,
+                isLocalized,
+                renameResolutions,
+                eventResolutions,
+                legacy: legacyBundle,
+              }),
               // On the file road the row is written in the file's own transaction, so a failed
               // write leaves the save as it was and is answered as the failure it is. Not where the
               // translations table is reconciled after the file: the row would then record the

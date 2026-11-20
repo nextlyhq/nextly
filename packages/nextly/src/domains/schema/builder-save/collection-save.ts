@@ -91,6 +91,7 @@ import {
   companionTableExists,
   liveColumnsOf,
 } from "../../i18n/runtime/companion-io";
+import type { VersionsWhereCondition } from "../../versions/db-api";
 import { snapshotRecord } from "../../versions/shared-publish-base";
 import { WORKING_DRAFT_SHAPE } from "../../versions/versions-repository";
 import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
@@ -3243,31 +3244,14 @@ async function refuseMovesUnderWorkingDrafts(
   save: CollectionSave
 ): Promise<void> {
   if (save.moves === undefined || save.moves.length === 0) return;
-  // A collection's and a Single's drafts are their own; a field group's values sit in the drafts
-  // of every entity that uses it, under a path this save does not know, so every working draft is
-  // read and the moved path looked for at any depth: refused where it may be held, not missed.
-  const fieldGroup = save.kind === "fieldGroup";
+  const scope = draftScopeOf(save);
   const drafts = await deps.adapter.select<{
     entryId: string;
     snapshot: unknown;
   }>(VERSIONS_TABLE, {
-    where: {
-      and: [
-        ...(fieldGroup
-          ? []
-          : [
-              {
-                column: "scopeKind",
-                op: "=" as const,
-                value: save.kind === "single" ? "single" : "collection",
-              },
-              { column: "scopeSlug", op: "=" as const, value: save.slug },
-            ]),
-        ...WORKING_DRAFT_SHAPE,
-      ],
-    },
+    where: { and: [...scope.where, ...WORKING_DRAFT_SHAPE] },
   });
-  const holds = fieldGroup ? holdsValueAtPathAnywhere : holdsValueAtPath;
+  const { holds } = scope;
   for (const move of save.moves) {
     const entries = new Set(
       drafts
@@ -3292,6 +3276,32 @@ async function refuseMovesUnderWorkingDrafts(
       },
     });
   }
+}
+
+/**
+ * Where a save's working drafts are, and how a moved path is looked for in one. A collection's and
+ * a Single's drafts are their own; a field group's values sit in the drafts of every entity that
+ * uses it, under a path this save does not know, so every working draft is read and the moved path
+ * looked for at any depth: refused where it may be held, not missed.
+ */
+function draftScopeOf(save: CollectionSave): {
+  where: VersionsWhereCondition[];
+  holds: (values: Record<string, unknown>, path: readonly string[]) => boolean;
+} {
+  if (save.kind === "fieldGroup") {
+    return { where: [], holds: holdsValueAtPathAnywhere };
+  }
+  return {
+    where: [
+      {
+        column: "scopeKind",
+        op: "=",
+        value: save.kind === "single" ? "single" : "collection",
+      },
+      { column: "scopeSlug", op: "=", value: save.slug },
+    ],
+    holds: holdsValueAtPath,
+  };
 }
 
 /** Whether a document's values hold something other than null at `path`, at any depth. */
@@ -3375,7 +3385,10 @@ function plannedMovesOf(
       ? {}
       : {
           mediaUses: {
-            kind: save.kind === "single" ? ("single" as const) : ("collection" as const),
+            kind:
+              save.kind === "single"
+                ? ("single" as const)
+                : ("collection" as const),
             slug: save.slug,
           },
         }),

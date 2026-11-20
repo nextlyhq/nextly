@@ -123,7 +123,9 @@ async function saveSingle(
   t: TestNextly,
   slug: string,
   fields: Field[],
-  moves: Move[]
+  moves: Move[],
+  /** The dialog's other answers, such as a drop it confirms (`resolutions`). */
+  answers: Record<string, unknown> = {}
 ): Promise<void> {
   const single = await t
     .getService("singleRegistryService")
@@ -136,6 +138,7 @@ async function saveSingle(
       confirmed: true,
       schemaVersion: single?.schemaVersion ?? 1,
       hints: { moves },
+      ...answers,
     }
   );
   clearRegistryRowCache();
@@ -544,11 +547,13 @@ describe.each(getConfiguredTestDialects())(
         }
       };
       // An optional field leaving translation goes by the file, which carries the move with it.
+      // The dialog confirms what leaving translation drops from the translations table, as here.
       await saveSingle(
         t,
         "sgm_doc",
         [notes(false), box([shared("note"), shared("summary")])],
-        [{ from: ["summary"], to: ["box", "summary"] }]
+        [{ from: ["summary"], to: ["box", "summary"] }],
+        { resolutions: { notes: { action: "confirm_drop" } } }
       );
       const read = await readSingle(t, "sgm_doc", "en");
       expect((read.box as { summary?: unknown } | undefined)?.summary).toBe(
