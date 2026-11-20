@@ -26,7 +26,7 @@ import { resolveComponentSchemas } from "../versions/restore-version";
 
 import { workflowAttachmentsOf, type WorkflowTarget } from "./attachments";
 import { workflowDefinitionHash } from "./hash";
-import type { Workflow } from "./types";
+import type { Workflow, WorkflowStepKind } from "./types";
 
 /**
  * A workflow as the install registered it.
@@ -267,17 +267,37 @@ export function workflowAttachedTo(
 
 /**
  * The workflow a collection or Single is attached to, as its schema read names
- * it: slug and label, or `null` where none is attached. The editor reads it to
- * know, before a document exists, that it cannot be created as published.
+ * it: slug, label, its stages by name and label, and its steps by name, label
+ * and kind, or `null` where none is attached. A list filters by its stages. The editor reads it to know, before a document exists, that it
+ * cannot be created as published; a list reads its steps to take the
+ * workflow's one step of a kind over several documents (never an approval).
  *
  * @experimental
  */
 export function attachedWorkflowSummary(
   kind: "collection" | "single",
   slug: string
-): { slug: string; label: string } | null {
+): {
+  slug: string;
+  label: string;
+  /** Its stages in order, by name and the label the code gives them: what a list filters by. */
+  stages: { name: string; label: string }[];
+  steps: { name: string; label: string; kind: WorkflowStepKind }[];
+} | null {
   const attached = workflowAttachedTo(kind, slug);
   return attached === undefined
     ? null
-    : { slug: attached.workflow.slug, label: attached.workflow.label };
+    : {
+        slug: attached.workflow.slug,
+        label: attached.workflow.label,
+        stages: attached.workflow.stages.map(stage => ({
+          name: stage.name,
+          label: stage.label,
+        })),
+        steps: attached.workflow.steps.map(step => ({
+          name: step.name,
+          label: step.label,
+          kind: step.kind,
+        })),
+      };
 }

@@ -213,7 +213,7 @@ function takesAsPerson(
 
 /**
  * Who each of `parts` waits for, in order, for a document of the collection or Single `slug` under
- * `registered`'s workflow.
+ * `registered`'s workflow: {@link nameWaits} of each part's decided answer.
  *
  * @experimental
  */
@@ -223,25 +223,46 @@ export async function partsWaitingFor(
   slug: string,
   parts: readonly WaitingPartInput[]
 ): Promise<(PartWaitingFor | null)[]> {
+  // Whether every assignee and default reviewer holds the step is read at once, then each part
+  // is decided and named.
   const decider = partWaitsDecider(adapter, registered.workflow, slug);
   await decider.prime(parts);
+  const decided: { slug: string; waits: PartWaits }[] = [];
+  for (const part of parts) {
+    decided.push({ slug, waits: await decider.decide(part) });
+  }
+  return nameWaits(adapter, decided);
+}
+
+/**
+ * Each decided answer named, in order, as a part's read names whom it waits for: a person or role
+ * by name, or everyone who may take the step, by the roles holding it in that collection or Single.
+ * The holders are found once per collection or Single and action, and every name is read in one
+ * statement per kind, however many answers: the read of one document and the waiting list's page
+ * both name through it.
+ *
+ * @experimental
+ */
+export async function nameWaits(
+  adapter: DrizzleAdapter,
+  decided: readonly { slug: string; waits: PartWaits }[]
+): Promise<(PartWaitingFor | null)[]> {
   const byAction = new Map<string, string[]>();
-  /** Everyone who may take a step needing `action`, by the roles that may. */
-  const holders = async (action: string): Promise<Waiting> => {
-    let ids = byAction.get(action);
+  /** Everyone who may take a step needing `action` in `slug`, by the roles that may. */
+  const holders = async (slug: string, action: string): Promise<Waiting> => {
+    const key = `${slug}:${action}`;
+    let ids = byAction.get(key);
     if (ids === undefined) {
       ids = await rolesHolding(adapter, action, slug);
-      byAction.set(action, ids);
+      byAction.set(key, ids);
     }
     return { kind: "roles", ids };
   };
-
   const waiting: Waiting[] = [];
-  for (const part of parts) {
-    const decided = await decider.decide(part);
-    if (decided === null) waiting.push(null);
-    else if (decided.kind === "one") waiting.push(decided.who);
-    else waiting.push(await holders(decided.action));
+  for (const { slug, waits } of decided) {
+    if (waits === null) waiting.push(null);
+    else if (waits.kind === "one") waiting.push(waits.who);
+    else waiting.push(await holders(slug, waits.action));
   }
   return named(adapter, waiting);
 }

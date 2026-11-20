@@ -41,6 +41,11 @@ const BEFORE: Field[] = [
   { name: "heading", type: "text" },
   { name: "body", type: "text" },
 ];
+/** This road's answer that `heading` leaving and `headline` arriving is a rename. */
+const HEADING_TO_HEADLINE = [
+  { from: "heading", to: "headline", choice: "rename" },
+];
+
 const RENAMED: Field[] = [
   { name: "headline", type: "text" },
   { name: "body", type: "text" },
@@ -201,7 +206,7 @@ describeEachDialect(
           {} as ServiceContainer,
           "updateCollection",
           { collectionName: "posts" },
-          { fields: RENAMED }
+          { fields: RENAMED, renames: HEADING_TO_HEADLINE }
         )
       );
 
@@ -490,7 +495,7 @@ describeEachDialect(
           {} as ServiceContainer,
           "updateCollection",
           { collectionName: "posts" },
-          { fields: RENAMED }
+          { fields: RENAMED, renames: HEADING_TO_HEADLINE }
         )
       );
 
@@ -526,7 +531,7 @@ describeEachDialect(
             {} as ServiceContainer,
             "updateCollection",
             { collectionName: "posts" },
-            { fields: RENAMED }
+            { fields: RENAMED, renames: HEADING_TO_HEADLINE }
           )
         );
 

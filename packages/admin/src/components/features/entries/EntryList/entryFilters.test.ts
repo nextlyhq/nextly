@@ -177,4 +177,25 @@ describe("buildEntryWhereFilter", () => {
       and: [{ title: { equals: "A" } }, { status: { equals: "draft" } }],
     });
   });
+  it("sends a chosen filter's top-level keys at the top level, beside the list's own", () => {
+    // The review filters' keys (`_stage`, `_waitingForMe`) are read only at the top level: inside
+    // the `and` the status filter joins, the server refuses them.
+    const where = buildEntryWhereFilter({
+      status: "draft",
+      pluginWheres: [{ _stage: "legal" }, { _waitingForMe: true }],
+    });
+    expect(where).toEqual({
+      status: { equals: "draft" },
+      _stage: "legal",
+      _waitingForMe: true,
+    });
+  });
+
+  it("keeps a chosen filter's language key to the same rule as a link's", () => {
+    const where = buildEntryWhereFilter({
+      pluginWheres: [{ _translated: { locale: "fr", state: "missing" } }],
+      readsTranslationState: false,
+    });
+    expect(where).toBeUndefined();
+  });
 });

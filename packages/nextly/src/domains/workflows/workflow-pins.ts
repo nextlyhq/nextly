@@ -21,12 +21,20 @@ import { registerVersionPinHolder } from "../versions/version-pins";
 import type { VersionRef } from "../versions/versions-repository";
 
 /**
+ * The name workflows' pins are recorded under: the one spelling the holder registers with and a
+ * list filter reading the pins table matches.
+ *
+ * @experimental
+ */
+export const WORKFLOW_PIN_HOLDER = "workflows";
+
+/**
  * The workflows holder: the one handle its slots are pinned, moved and released through.
  *
  * @experimental
  */
 export const workflowPins = registerVersionPinHolder({
-  name: "workflows",
+  name: WORKFLOW_PIN_HOLDER,
   label: "Workflows",
 });
 

@@ -85,7 +85,8 @@ export interface OfferedCompanionRenameArgs {
 
 /**
  * The companion rename this change offers, as the schema dialog's candidate and by field name: the
- * field the main table's rule (`detectFieldRename`) finds renamed, offered on its companion
+ * field the main table's rule finds renamed, whatever the change answered about it
+ * (`fieldRenameCandidate`): an offer is a question, and the answer is the caller's to read, offered on its companion
  * (`companionRenameCandidate`). One answer for the preview that offers it and the apply that takes
  * the admin's reply, so the apply accepts only what was offered.
  */
@@ -98,7 +99,7 @@ export async function offeredCompanionRename(
   const detected = new DynamicCollectionSchemaService(
     undefined,
     at.dialect
-  ).detectFieldRename(
+  ).fieldRenameCandidate(
     at.oldFields as unknown as FieldDefinition[],
     at.newFields as unknown as FieldDefinition[]
   );
