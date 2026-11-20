@@ -55,6 +55,7 @@ import { registerWebhooksPruneCommand } from "./commands/webhooks-prune.command"
 import { registerWorkflowStrandedCommands } from "./commands/workflow-stranded.command";
 import { createContext, type CommandContext } from "./context";
 import { CLI_MODES, setModeLineWriter } from "./environment";
+import { declareFirstLine, OWN_LINE, printFirstLine } from "./first-line";
 import { addExitCodesHelp } from "./exit-codes";
 import { refuseHelpForUnknownCommands } from "./unknown-command-help";
 
@@ -203,6 +204,9 @@ ${pc.bold("Documentation:")}
         ? undefined
         : line => process.stderr.write(`${line}\n`)
     );
+    // The command's first line, before any of its code is imported: loading it takes
+    // seconds, and the run should say at once what it is doing.
+    printFirstLine(actionCommand);
     currentCommand = thisCommand.name();
     // A telemetry command handles its own init, and its dry run must open no
     // consent store at all.
@@ -352,15 +356,18 @@ function notImplemented(commandName: string, context: CommandContext): void {
 // registerGenerateTypesCommand is imported from ./commands/generate-types.js
 
 function registerGenerateSchemaCommand(program: Command): void {
-  program
-    .command("generate:schema")
-    .description("Generate Drizzle ORM schema files from collections")
-    .option("-o, --output <path>", "Output directory path")
-    .action((_cmdOptions: Record<string, unknown>, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      notImplemented("generate:schema", context);
-    });
+  declareFirstLine(
+    program
+      .command("generate:schema")
+      .description("Generate Drizzle ORM schema files from collections")
+      .option("-o, --output <path>", "Output directory path")
+      .action((_cmdOptions: Record<string, unknown>, cmd: Command) => {
+        const globalOpts = cmd.optsWithGlobals();
+        const context = createContext(globalOpts);
+        notImplemented("generate:schema", context);
+      }),
+    OWN_LINE
+  );
 }
 
 // ============================================================================

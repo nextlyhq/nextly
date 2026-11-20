@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 
 import { withDryRun } from "../dry-run";
+import { declareFirstLine, OWN_LINE } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -17,32 +18,48 @@ export function registerTelemetryCommand(program: Command): void {
     .command("telemetry")
     .description("Manage anonymous CLI telemetry");
 
-  cmd
-    .command("status")
-    .description("Show whether telemetry is enabled and why")
-    .action(
-      lazyAction(
-        async () => (await import("./telemetry")).telemetryStatusAction
-      )
-    );
-
-  withDryRun(
-    cmd.command("enable").description("Enable telemetry for this user")
-  ).action(
-    lazyAction(async () => (await import("./telemetry")).telemetryEnableAction)
-  );
-
-  withDryRun(
-    cmd.command("disable").description("Disable telemetry for this user")
-  ).action(
-    lazyAction(async () => (await import("./telemetry")).telemetryDisableAction)
-  );
-
-  withDryRun(
+  declareFirstLine(
     cmd
-      .command("reset")
-      .description("Reset the anonymous ID and re-show the first-run notice")
-  ).action(
-    lazyAction(async () => (await import("./telemetry")).telemetryResetAction)
+      .command("status")
+      .description("Show whether telemetry is enabled and why")
+      .action(
+        lazyAction(
+          async () => (await import("./telemetry")).telemetryStatusAction
+        )
+      ),
+    OWN_LINE
+  );
+
+  declareFirstLine(
+    withDryRun(
+      cmd.command("enable").description("Enable telemetry for this user")
+    ).action(
+      lazyAction(
+        async () => (await import("./telemetry")).telemetryEnableAction
+      )
+    ),
+    OWN_LINE
+  );
+
+  declareFirstLine(
+    withDryRun(
+      cmd.command("disable").description("Disable telemetry for this user")
+    ).action(
+      lazyAction(
+        async () => (await import("./telemetry")).telemetryDisableAction
+      )
+    ),
+    OWN_LINE
+  );
+
+  declareFirstLine(
+    withDryRun(
+      cmd
+        .command("reset")
+        .description("Reset the anonymous ID and re-show the first-run notice")
+    ).action(
+      lazyAction(async () => (await import("./telemetry")).telemetryResetAction)
+    ),
+    OWN_LINE
   );
 }

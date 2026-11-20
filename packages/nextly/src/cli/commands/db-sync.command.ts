@@ -10,6 +10,7 @@ import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-co
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/typescript-config-defaults";
 import { withBusyTableBounds } from "../busy-table-options";
 import { withDryRun } from "../dry-run";
+import { DATABASE_LINE, declareFirstLine } from "../first-line";
 import { lazyAction } from "../lazy-action";
 
 /**
@@ -87,4 +88,5 @@ export function registerDbSyncCommand(program: Command): void {
   withBusyTableBounds(withDryRun(command, { conflicts: ["watch"] })).action(
     lazyAction(async () => (await import("./db-sync")).dbSyncAction)
   );
+  declareFirstLine(command, DATABASE_LINE);
 }
