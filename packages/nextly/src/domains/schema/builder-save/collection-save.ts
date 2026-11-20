@@ -4308,7 +4308,8 @@ function comparedThenApplied<T>(
     deps.adapter,
     save.slug,
     deletionHoldOfSave(deps, save, table),
-    apply
+    apply,
+    deps.logger
   );
 }
 
@@ -4327,7 +4328,9 @@ export async function countedThroughApply<T>(
   adapter: DrizzleAdapter,
   slug: string,
   hold: DeletionHold | undefined,
-  apply: () => Promise<T>
+  apply: () => Promise<T>,
+  /** Told a release that failed, which changes nothing of what `apply` did. */
+  logger: { warn(message: string): void }
 ): Promise<T> {
   if (hold === undefined) return apply();
   const compare = () => hold.compare(adapter.getDrizzle());
@@ -4337,17 +4340,18 @@ export async function countedThroughApply<T>(
   }
   return adapter.withSession(async session => {
     const { release } = await holdCollectionOnSession(adapter, session, slug);
-    let failed = false;
     try {
       await compare();
       return await apply();
-    } catch (error) {
-      failed = true;
-      throw error;
     } finally {
-      // After a failure, the failure is what the caller sees.
-      if (failed) await release().catch(() => undefined);
-      else await release();
+      // A release that fails is told and passed over: what `apply` did, or how it failed, is
+      // what the caller sees, and the session's connection is closed once this ends, which lets
+      // its named locks go.
+      await release().catch((error: unknown) => {
+        logger.warn(
+          `Collection '${slug}': its hold for the save could not be let go on its own connection (${error instanceof Error ? error.message : String(error)}); closing that connection lets it go.`
+        );
+      });
     }
   });
 }

@@ -22,6 +22,7 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
@@ -116,9 +117,16 @@ vi.mock("../builder-save/push-carries-values", async importOriginal => {
   };
 });
 
+// The push road's hold runs on a session of its own (`withSession`): what each case counts of it,
+// and a switch that refuses its release once the release has really run (`sessionsOf`).
+const releaseFails = { on: false, holds: 0, refused: 0 };
+
 let instance: TestNextly | undefined;
 afterEach(async () => {
   pushRoad.forced = false;
+  releaseFails.on = false;
+  releaseFails.holds = 0;
+  releaseFails.refused = 0;
   fileStart.armed = false;
   afterCount.armed = false;
   // A save a failed case left at a gate goes on, so its transaction ends before the app does.
@@ -298,6 +306,32 @@ describe.each(getConfiguredTestDialects())(
             : { confirmedDeletions: [{ field: "note", count: confirmed }] }),
           ...(resolutions === undefined ? {} : { resolutions }),
         }
+      );
+    }
+
+    /**
+     * `t`'s sessions watched: each statement taking a named lock counted as a hold, and with
+     * `releaseFails.on` each that lets one go refused after it ran.
+     */
+    function sessionsOf(t: TestNextly): void {
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      const real = adapter.withSession.bind(adapter);
+      vi.spyOn(adapter, "withSession").mockImplementation((work, options) =>
+        real(
+          session =>
+            work({
+              execute: async (statement, params) => {
+                if (statement.includes("GET_LOCK")) releaseFails.holds += 1;
+                const rows = await session.execute(statement, params);
+                if (releaseFails.on && statement.includes("RELEASE_LOCK")) {
+                  releaseFails.refused += 1;
+                  throw new Error("the release was refused");
+                }
+                return rows;
+              },
+            } as typeof session),
+          options
+        )
       );
     }
 
@@ -511,6 +545,7 @@ describe.each(getConfiguredTestDialects())(
       "keeps an entry write sent between the count and the push waiting on MySQL, then writes it to the new shape",
       async () => {
         const t = await boot();
+        sessionsOf(t);
         for (const note of ["a", "b", "c"]) await insert(t, note);
         // The save the other cases make, sent down the push road.
         pushRoad.forced = true;
@@ -546,9 +581,108 @@ describe.each(getConfiguredTestDialects())(
 
         release();
         expect(await applying).toBe("applied");
+        // The push road's hold, on MySQL alone.
+        expect(releaseFails.holds).toBe(dialect === "mysql" ? 1 : 0);
         await writing;
         expect(landed).toBe(true);
         expect(await hasNoteColumn(t)).toBe(false);
+      },
+      60_000
+    );
+
+    // An entry write holds the collection's registry row for share until it commits. One that
+    // read the row and wrote before a save the push applies counted, and has not committed, is
+    // waited for and counted: the push road's hold reads the row for update, which waits for the
+    // write's share of it, on a connection outside any transaction as inside one.
+    it.runIf(dialect === "mysql")(
+      "counts an entry write under way when a save the push applies counts",
+      async () => {
+        const t = await boot();
+        sessionsOf(t);
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        expect(await reviewed()).toBe(3);
+        clearRegistryRowCache();
+
+        // Another session's entry write: its hold taken (`holdEntityForWrite`), a value written
+        // to the field, not yet committed.
+        let commit: () => void = () => undefined;
+        const committed = new Promise<void>(resolve => {
+          commit = resolve;
+        });
+        let wrote: () => void = () => undefined;
+        const hasWritten = new Promise<void>(resolve => {
+          wrote = resolve;
+        });
+        const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+        const writer = t.adapter.transaction(async tx => {
+          await holdEntityForWrite(tx, SLUG, registry, dialect);
+          await tx.execute(insertStatement("in flight"));
+          wrote();
+          await committed;
+        });
+        await hasWritten;
+        pushRoad.forced = true;
+        const applying = apply(t, 3, REMAINING, {
+          note: { action: "confirm_drop" },
+        }).then(
+          () => "applied",
+          (error: unknown) => error
+        );
+        // The write commits while the save waits for it.
+        await new Promise(resolve => setTimeout(resolve, 500));
+        commit();
+        await writer;
+
+        expect(await applying).toMatchObject(refusedWith(4));
+        // Counted under the push road's hold.
+        expect(releaseFails.holds).toBe(1);
+        expect(await hasNoteColumn(t)).toBe(true);
+        expect(await notesHeld(t)).toBe(4);
+      },
+      60_000
+    );
+
+    // A release that fails once the push applied the change changes nothing of what it did: the
+    // save is applied, its files are kept and recorded, and its registry row is written.
+    it.runIf(dialect === "mysql")(
+      "reports a save the push applied as applied when its hold cannot be let go",
+      async () => {
+        const t = await boot();
+        sessionsOf(t);
+        for (const note of ["a", "b", "c"]) await insert(t, note);
+        const filesBefore = historyFiles(t);
+        const appliedFiles = async () =>
+          Number(
+            (
+              await sql<{ n: number | string }>(
+                t,
+                `SELECT COUNT(*) AS n FROM ${q("nextly_schema_events")} WHERE ${q("event_type")} = 'file_apply' AND ${q("status")} = 'applied'`
+              )
+            )[0]?.n
+          );
+        const recordedBefore = await appliedFiles();
+        pushRoad.forced = true;
+        releaseFails.on = true;
+
+        await expect(
+          apply(t, 3, REMAINING, { note: { action: "confirm_drop" } })
+        ).resolves.toBeDefined();
+
+        // The push road's hold was taken, and its release refused.
+        expect(releaseFails.refused).toBe(1);
+        expect(await hasNoteColumn(t)).toBe(false);
+        // Its files kept, and recorded applied.
+        expect(historyFiles(t).length).toBeGreaterThan(filesBefore.length);
+        expect(await appliedFiles()).toBeGreaterThan(recordedBefore);
+        // Its registry row written: the field is gone from it.
+        const [row] = await sql<{ fields: unknown }>(
+          t,
+          `SELECT ${q("fields")} AS fields FROM ${q("dynamic_collections")} WHERE ${q("slug")} = '${SLUG}'`
+        );
+        const stored = (
+          typeof row?.fields === "string" ? JSON.parse(row.fields) : row?.fields
+        ) as Array<{ name: string }>;
+        expect(stored.map(field => field.name)).toEqual(["label"]);
       },
       60_000
     );

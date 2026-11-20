@@ -446,7 +446,13 @@ async function pipelinePushCounted<T>(args: {
     renamed: renamedFieldsOf(args.renames ?? []),
     confirmed: args.confirmed,
   });
-  return countedThroughApply(args.adapter, args.slug, hold, args.push);
+  return countedThroughApply(
+    args.adapter,
+    args.slug,
+    hold,
+    args.push,
+    consoleLogger
+  );
 }
 
 function parseTogetherParam(value: string | undefined): string[] {

@@ -1056,7 +1056,9 @@ function rowsOnSession(session: StatementSession): RowsOn {
  * the connection `rowsOn` runs on: its named locks first, then its registry row `FOR UPDATE`, which
  * waits for every entry write that already read the row for share to commit. An entry write that
  * starts after waits at the named locks until `release`, which must run on the same connection. A
- * take that fails releases what it got before it throws.
+ * take that fails releases what it got before it throws. On a connection outside a transaction the
+ * read is its own statement's transaction: it waits for those writes' locks as any locking read
+ * does, and holds the row only until it ends.
  */
 async function holdCollectionWith(
   adapter: object,
