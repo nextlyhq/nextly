@@ -18,6 +18,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../../database/index";
+import { clearCachedSnapshot } from "../../../../init/schema-snapshot-cache";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 import { freshPushSchema } from "../fresh-push";
@@ -37,6 +38,12 @@ import { lockWorld, sleep, type LockWorld } from "./helpers/schema-lock-world";
 
 const P = "sqlwhole"; // per-file table prefix
 const TABLE = `dc_${P}_posts`;
+
+// The pipeline skips a push whose desired schema equals the last one applied in this process, and
+// several cases here apply the same desired schema to a fresh database: each starts with none.
+beforeEach(() => {
+  clearCachedSnapshot();
+});
 
 /** The system tables, and the collection's table as the production generator writes it, with one row. */
 async function seedPosts(

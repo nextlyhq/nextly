@@ -2181,58 +2181,15 @@ export class PushSchemaPipeline {
         let statementsExecuted: number;
 
         if (isSqlite) {
-          // SQLite: the apply under SQLite's schema-change contract, the same
-          // one a migration runs under (`sqliteSchemaTransaction`): foreign
-          // keys off for the whole apply, switched before its transaction
-          // opens (SQLite ignores the pragma inside one), so a table rebuild
-          // cannot cascade into the rows of tables that reference it; then
-          // `PRAGMA foreign_key_check` once every statement has run, inside
-          // the transaction, and the previous setting restored after it. The
-          // transaction is the adapter's own, queued behind every other flow's
-          // on the one connection and begun IMMEDIATE: a failure, or a refusal
-          // of the references it would leave dangling, rolls it back whole.
-          //
-          // An apply with nothing resolved to change opens no transaction, so a
-          // start that finds the tables as declared runs the statements it did.
-          const dangling = (count: number, pairs: string) =>
-            `This schema change would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`;
+          // A SQLite apply with anything to change runs whole, in one transaction: a try that
+          // ended waiting, or failed, took back everything it ran (`keptSoFar`).
           sqliteTryWhole = resolvedOps.length > 0;
-          const adapter = this.deps.adapter;
-          const session = sqliteSessionOf(db);
-          const checked = (run: () => Promise<number>) =>
-            refusingNewDanglingReferences(session, run, dangling);
-          // A precondition, before anything runs: no transaction of this flow already open on the
-          // adapter, which the apply's would join.
-          if (sqliteTryWhole && adapter !== undefined) {
-            assertNoOpenTransaction(adapter, "A SQLite schema push");
-          }
-          try {
-            statementsExecuted = !sqliteTryWhole
-              ? await withSqliteForeignKeysOff(session, () =>
-                  checked(() => runApply(db))
-                )
-              : adapter !== undefined
-                ? await sqliteSchemaTransaction(
-                    adapter,
-                    ctx => runApply(ctx.getDrizzle()),
-                    { subject: "this schema change", dangling }
-                  )
-                : await withSqliteForeignKeysOff(session, () =>
-                    withinSqliteTransaction(session, () =>
-                      checked(() => runApply(db))
-                    )
-                  );
-          } catch (err) {
-            // Only the reference check's own refusal is re-classified;
-            // anything `runApply` threw keeps the type it was thrown with.
-            if (
-              err instanceof NextlyError &&
-              err.code === "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION"
-            ) {
-              throw new DdlExecutionError(err.message, err);
-            }
-            throw err;
-          }
+          statementsExecuted = await applySqlite(
+            this.deps.adapter,
+            db,
+            sqliteTryWhole,
+            runApply
+          );
         } else {
           // PG / MySQL: db.transaction() for atomicity (PG only; MySQL DDL
           // is auto-committed regardless. F15 adds MySQL pre-flight).
@@ -2780,6 +2737,67 @@ function toRenameResolutions(
 }
 
 export { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable };
+
+/**
+ * A SQLite push's apply, and the number of statements it ran. `whole` (anything resolved to change)
+ * runs it in one transaction; `adapter`, where the builder states one, is whose transaction that
+ * is. `undefined` is a bare database handle, whose transaction is begun on the handle itself.
+ */
+async function applySqlite(
+  adapter: DrizzleAdapter | undefined,
+  db: unknown,
+  whole: boolean,
+  runApply: (tx: unknown) => Promise<number>
+): Promise<number> {
+  // SQLite: the apply under SQLite's schema-change contract, the same
+  // one a migration runs under (`sqliteSchemaTransaction`): foreign
+  // keys off for the whole apply, switched before its transaction
+  // opens (SQLite ignores the pragma inside one), so a table rebuild
+  // cannot cascade into the rows of tables that reference it; then
+  // `PRAGMA foreign_key_check` once every statement has run, inside
+  // the transaction, and the previous setting restored after it. The
+  // transaction is the adapter's own, queued behind every other flow's
+  // on the one connection and begun IMMEDIATE: a failure, or a refusal
+  // of the references it would leave dangling, rolls it back whole.
+  //
+  // An apply with nothing resolved to change opens no transaction, so a
+  // start that finds the tables as declared runs the statements it did.
+  const dangling = (count: number, pairs: string) =>
+    `This schema change would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`;
+  const session = sqliteSessionOf(db);
+  const checked = (run: () => Promise<number>) =>
+    refusingNewDanglingReferences(session, run, dangling);
+  // A precondition, before anything runs: no transaction of this flow already open on the
+  // adapter, which the apply's would join.
+  if (whole && adapter !== undefined) {
+    assertNoOpenTransaction(adapter, "A SQLite schema push");
+  }
+  try {
+    return !whole
+      ? await withSqliteForeignKeysOff(session, () =>
+          checked(() => runApply(db))
+        )
+      : adapter !== undefined
+        ? await sqliteSchemaTransaction(
+            adapter,
+            ctx => runApply(ctx.getDrizzle()),
+            { subject: "this schema change", dangling }
+          )
+        : await withSqliteForeignKeysOff(session, () =>
+            withinSqliteTransaction(session, () => checked(() => runApply(db)))
+          );
+  } catch (err) {
+    // Only the reference check's own refusal is re-classified;
+    // anything `runApply` threw keeps the type it was thrown with.
+    if (
+      err instanceof NextlyError &&
+      err.code === "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION"
+    ) {
+      throw new DdlExecutionError(err.message, err);
+    }
+    throw err;
+  }
+}
 
 /**
  * The dev-push SQLite handle as the schema-change contract reads it. The

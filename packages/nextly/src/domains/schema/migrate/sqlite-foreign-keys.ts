@@ -31,7 +31,7 @@ export interface SqliteForeignKeySession {
 }
 
 /** Whether enforcement is on for the session's connection right now. */
-export async function sqliteForeignKeysOn(
+async function sqliteForeignKeysOn(
   session: Pick<SqliteForeignKeySession, "read">
 ): Promise<boolean> {
   const [row] = await session.read<{ foreign_keys: number }>(
