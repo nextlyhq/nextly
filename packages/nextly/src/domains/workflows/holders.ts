@@ -27,6 +27,10 @@ import {
   RETIRED_MANAGE_PLAIN_ACTIONS,
   isRetiredManage,
 } from "../../auth/access/retired-manage-permissions";
+import {
+  comparesIdsWithoutCase,
+  rowsByRequestedId,
+} from "../../database/rows-by-requested-id";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors";
 import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
@@ -73,39 +77,28 @@ function chunks(ids: readonly string[]): string[][] {
   return runs;
 }
 
-/**
- * Whether the database compares ids without regard to case: MySQL does, under its case-insensitive
- * collation; PostgreSQL and SQLite compare them exactly.
- */
-function comparesIdsWithoutCase(adapter: DrizzleAdapter): boolean {
-  return adapter.dialect === "mysql";
+/** Whether `adapter`'s database matches an id in another case to the stored one. */
+function foldsIdCase(adapter: DrizzleAdapter): boolean {
+  return comparesIdsWithoutCase(adapter.dialect);
 }
 
 /**
- * Each of `requested` that names a row, mapped to that row, by the spelling asked, as the database
- * matched it: the row of that exact id, and, where the database compares ids without regard to case
- * (`foldsCase`), the one row whose id differs from it only in case, so every spelling MySQL matches
- * to a row answers as that row, however many of them one batch asks. Where it compares exactly, a
- * spelling in another case names no row, as the database answered it.
+ * Each of `requested` that names a row, mapped to that row, as the database matched the id (see
+ * {@link rowsByRequestedId}).
  */
 function byRequestedId<Row extends { id: string }>(
   requested: readonly string[],
   rows: readonly Row[],
   foldsCase: boolean
 ): Map<string, Row> {
-  const exact = new Map(rows.map(row => [row.id, row]));
-  const folded = new Map<string, Row | null>();
-  if (foldsCase) {
-    for (const row of rows) {
-      const key = row.id.toLowerCase();
-      // Two rows differing only in case match no other spelling unambiguously.
-      folded.set(key, folded.has(key) ? null : row);
-    }
-  }
   const found = new Map<string, Row>();
-  for (const id of requested) {
-    const row = exact.get(id) ?? folded.get(id.toLowerCase());
-    if (row) found.set(id, row);
+  for (const [id, own] of rowsByRequestedId(
+    requested,
+    rows,
+    row => row.id,
+    foldsCase
+  )) {
+    found.set(id, own[0]);
   }
   return found;
 }
@@ -137,7 +130,7 @@ async function readPersons(
       });
     }
   }
-  return byRequestedId(userIds, rows, comparesIdsWithoutCase(adapter));
+  return byRequestedId(userIds, rows, foldsIdCase(adapter));
 }
 
 /**
@@ -298,9 +291,10 @@ async function existingRoleIds(
     for (const row of found) rows.push({ id: String(row.id) });
   }
   return new Map(
-    [...byRequestedId(roleIds, rows, comparesIdsWithoutCase(adapter))].map(
-      ([id, row]) => [id, row.id]
-    )
+    [...byRequestedId(roleIds, rows, foldsIdCase(adapter))].map(([id, row]) => [
+      id,
+      row.id,
+    ])
   );
 }
 
