@@ -1850,6 +1850,77 @@ describe("reloadNextlyConfig", () => {
     expect(options.keepPriorFor?.has("settings")).toBe(true);
   });
 
+  it("refuses a start whose held collection's row it cannot write back, keeping what the start found", async () => {
+    const { holdRecordedAtStart, takeRecordedAtStart } = await import(
+      "../../domains/schema/pipeline/recorded-fields"
+    );
+    takeRecordedAtStart();
+    // The rows the start read before its registry sync replaced them.
+    const startRows = {
+      collections: [
+        { slug: "posts", fields: [{ name: "active", type: "text" }] },
+      ],
+      singles: [],
+      components: [],
+    };
+    holdRecordedAtStart(startRows);
+    heldBackSpy.mockResolvedValueOnce([
+      { kind: "collection", slug: "posts", reasons: ["held."] },
+    ]);
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "posts",
+            tableName: "dc_posts",
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+          // Another collection's change, which the apply would otherwise run.
+          {
+            slug: "notes",
+            tableName: "dc_notes",
+            fields: [{ name: "body", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_posts",
+          columns: [
+            ...reservedColumns("dc_posts"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "dc_notes", columns: reservedColumns("dc_notes") },
+      ])
+    );
+    // The write back of `posts`' row is reported as not written.
+    const resolver = buildResolver({
+      collectionSyncResult: {
+        created: [],
+        updated: [],
+        unchanged: [],
+        errors: [{ slug: "posts", error: "write failed" }],
+      },
+    });
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver, atStart: true });
+
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(
+      errorSpy.mock.calls
+        .map(c => String(c[0]))
+        .find(line =>
+          line.includes("Could not keep the registry row of collection 'posts'")
+        )
+    ).toBeDefined();
+    // What the start found is held again, for the next reload to judge from.
+    expect(takeRecordedAtStart()).toEqual(startRows);
+  });
+
   it("holds back an entity whose type change the judgement holds back, saying why", async () => {
     heldBackSpy.mockResolvedValueOnce([
       {

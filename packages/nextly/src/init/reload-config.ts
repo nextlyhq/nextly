@@ -2976,7 +2976,26 @@ async function applyReloadHolding(
   // entity's row already records its new fields: written back to the fields the start found, so
   // the next start or reload judges the same change again over the same values.
   if (heldWhole.size > 0 && held.atStart !== undefined) {
-    await restoreHeldRows(heldWhole, held.atStart, newConfig, resolve, logger);
+    // Fail closed: a row not written back would record the new fields, and the next start would
+    // then find no change to judge. The reload applies nothing, and keeps what the start found for
+    // the next reload to judge from.
+    const unrestored = await restoreHeldRows(
+      heldWhole,
+      held.atStart,
+      newConfig,
+      resolve
+    );
+    if (unrestored.length > 0) {
+      logger?.error(
+        `[Nextly HMR] Could not keep the registry row of ${unrestored.join(", ")} as the start found it, ` +
+          `so its held type change could not be judged again: no code-first schema changes were ` +
+          `applied this cycle. Until the row is written back (a later reload in this process ` +
+          `retries it), revert the field's type in the configuration before the next start.`
+      );
+      holdRecordedAtStart(held.atStart);
+      undoOptimisticReloadWork();
+      return;
+    }
   }
   // Held whole: left out of the apply, which then never names its tables, so nothing of it changes
   // (the drop guard keeps a table outside the desired schema as it is), and out of the registry
@@ -4011,8 +4030,8 @@ async function recordRegistryHistory(args: {
 /**
  * Writes each held entity's registry row back to the fields a development start found in it
  * (`held.atStart`), through the same code-first syncs, so the row keeps describing its table until
- * the held change lands. A row that cannot be written back is reported: the next start would then
- * find the new fields recorded and no change to judge.
+ * the held change lands. Returns each held entity, as `<kind> '<slug>'`, whose row a sync did not
+ * write (or every one, where a sync threw): the caller refuses the reload over any.
  */
 async function restoreHeldRows(
   heldWhole: ReadonlySet<string>,
@@ -4022,9 +4041,8 @@ async function restoreHeldRows(
     singles?: SingleDef[];
     fieldGroups?: ComponentDef[];
   },
-  resolve: ServiceResolver,
-  logger: LoggerLike | undefined
-): Promise<void> {
+  resolve: ServiceResolver
+): Promise<string[]> {
   const startFields = (
     rows: readonly { slug?: unknown; fields?: unknown }[],
     slug: string | undefined
@@ -4040,28 +4058,35 @@ async function restoreHeldRows(
         ? [{ ...def, fields }]
         : [];
     });
+  const named = (kind: string, slug: string) =>
+    `${kind === "fieldGroup" ? "component" : kind} '${slug}'`;
   try {
+    const failed: string[] = [];
     const collections = restored(
       "collection",
       newConfig.collections,
       atStart.collections
     );
     if (collections.length > 0) {
-      await (
+      const result = await (
         (await resolve(
           "collectionRegistryService"
         )) as CollectionRegistrySurface
       ).syncCodeFirstCollections(buildCollectionSyncPayload(collections), {
         seedPermissions: false,
       });
+      failed.push(
+        ...unwrittenSlugs(result).map(slug => named("collection", slug))
+      );
     }
     const singles = restored("single", newConfig.singles, atStart.singles);
     if (singles.length > 0) {
-      await (
+      const result = await (
         (await resolve("singleRegistryService")) as SingleRegistrySurface
       ).syncCodeFirstSingles(buildSingleSyncPayload(singles), {
         seedPermissions: false,
       });
+      failed.push(...unwrittenSlugs(result).map(slug => named("single", slug)));
     }
     const groups = restored(
       "fieldGroup",
@@ -4069,16 +4094,19 @@ async function restoreHeldRows(
       atStart.components
     );
     if (groups.length > 0) {
-      await (
+      const result = await (
         (await resolve("fieldGroupRegistryService")) as ComponentRegistrySurface
       ).syncCodeFirstComponents(buildComponentSyncPayload(groups));
+      failed.push(
+        ...unwrittenSlugs(result).map(slug => named("fieldGroup", slug))
+      );
     }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger?.error(
-      `[Nextly HMR] Could not keep the registry row of a held change as the start found it: ${msg}. ` +
-        `The next start may not find the change to judge again.`
-    );
+    return failed;
+  } catch {
+    return [...heldWhole].map(key => {
+      const [kind, slug] = key.split(":") as [string, string];
+      return named(kind, slug);
+    });
   }
 }
 
