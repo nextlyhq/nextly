@@ -768,6 +768,11 @@ describe.each(getConfiguredTestDialects())(
         manager
       );
       expect(cancelled.status).toBe(200);
+      // It answers what the cancel did, not the state before it.
+      expect(await cancelled.json()).toMatchObject({
+        message: "Email cancelled.",
+        item: { id: waiting.id, state: "cancelled" },
+      });
       expect((await queued(t, waiting.id)).state).toBe("cancelled");
 
       // A refusal says why, as a conflict.

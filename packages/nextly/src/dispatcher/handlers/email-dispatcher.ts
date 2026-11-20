@@ -882,14 +882,24 @@ const EMAIL_DELIVERY_ACTIONS: Record<
   },
   cancelQueuedEmail: {
     grant: SYSTEM_WRITE_POLICY.emailDeliveries.cancel,
-    act: async (service, id, actor) =>
-      respondMutation(
-        "Email cancelled.",
-        await service.cancelQueued(id, {
-          userId: actor.type === "user" ? (actor.id ?? null) : null,
-          actor,
-        })
-      ),
+    act: async (service, id, actor) => {
+      // The service answers the state the email stood in before; the route
+      // answers what the cancel did: cancelled, or, for one whose attempt is
+      // with the provider, a request that takes effect only if it fails.
+      const before = await service.cancelQueued(id, {
+        userId: actor.type === "user" ? (actor.id ?? null) : null,
+        actor,
+      });
+      return before.state === "sending"
+        ? respondMutation(
+            "Cancel requested. It takes effect if the attempt being sent now fails.",
+            { id: before.id, state: "sending" }
+          )
+        : respondMutation("Email cancelled.", {
+            id: before.id,
+            state: "cancelled",
+          });
+    },
   },
 };
 
