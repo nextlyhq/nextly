@@ -1004,17 +1004,30 @@ function pageAfter(
   last: Pick<ReleaseMemberRow, "entryId" | "id">,
   skipDocument: boolean
 ): ReleasesWhere {
-  const later = { column: "entryId", op: ">" as const, value: last.entryId };
-  if (skipDocument) return { and: [later] };
+  const later = after("entryId", last.entryId);
+  if (skipDocument) return later;
   return {
     or: [
       later,
       {
         and: [
           { column: "entryId", op: "=" as const, value: last.entryId },
-          { column: "id", op: ">" as const, value: last.id },
+          after("id", last.id),
         ],
       },
+    ],
+  };
+}
+
+/**
+ * `column` strictly after `value`, spelled as at-or-after and not equal: the port's conditions
+ * have no strict greater-than.
+ */
+function after(column: string, value: string): ReleasesWhere {
+  return {
+    and: [
+      { column, op: ">=" as const, value },
+      { column, op: "!=" as const, value },
     ],
   };
 }
