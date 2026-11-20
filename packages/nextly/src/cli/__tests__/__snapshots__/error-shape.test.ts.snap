@@ -1083,6 +1083,13 @@ exports[`each code, as a command ends with it > MIGRATION_NOT_PROVEN 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/migration-not-proven  (MIGRATION_NOT_PROVEN)"
 `;
 
+exports[`each code, as a command ends with it > MIGRATION_NOT_WRITTEN 1`] = `
+"✗ The migration was not written: moving 20261020_120000_001_create_localization_posts.sql into place failed (EACCES).
+  Why:  The files already placed were removed; the folder is as it was.
+  Next: Check that the migrations folder can be written to and has room, then run \`migrate:create\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-not-written  (MIGRATION_NOT_WRITTEN)"
+`;
+
 exports[`each code, as a command ends with it > MIGRATION_SQL_UNCHECKABLE 1`] = `
 "✗ A migration contains SQL whose drops cannot be read, so which owner's tables it drops cannot be checked.
   Why:  A statement in \`@acme/seo/20261020_120000_add_redirects\` could not be read: unterminated block comment. It has been refused.

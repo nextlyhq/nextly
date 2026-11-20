@@ -933,18 +933,119 @@ export async function writeWhole(path: string, text: string): Promise<void> {
  */
 function leftInPlaceError(
   command: string,
-  files: readonly string[]
+  files: readonly string[],
+  /** Where a move failed too: the migration files that never got to their names. */
+  unfinished?: { notPlaced: readonly string[]; cause: unknown }
 ): NextlyError {
   const named = files.map(file => basename(file)).join(", ");
+  const missing = (unfinished?.notPlaced ?? []).map(file => basename(file));
   return NextlyError.serviceUnavailable({
     publicMessage:
       `\`${command}\` lost its hold on this project's migration files as it wrote ${named}. ` +
       "It stopped for longer than its lease, so another run may have written a migration " +
       "from the same snapshot. What it wrote was left in place, since a migration file may " +
-      "already be applied. Run it again once the newest migrations are compared: where two " +
+      "already be applied." +
+      (missing.length === 0
+        ? ""
+        : ` It could not put ${missing.join(", ")} in place, so what it left is part of a migration.`) +
+      " Run it again once the newest migrations are compared: where two " +
       "make the same change, delete the one `nextly migrate:status` does not show applied.",
-    logContext: { reason: WRITER_HOLD_LOST_REASON, command, left: files },
+    ...(unfinished?.cause instanceof Error ? { cause: unfinished.cause } : {}),
+    logContext: {
+      reason: WRITER_HOLD_LOST_REASON,
+      command,
+      left: files,
+      ...(missing.length === 0 ? {} : { notPlaced: missing }),
+    },
   });
+}
+
+/** What a writer says of a migration file it could not put in place. */
+export const WRITER_NOT_WRITTEN_REASON =
+  "migration file could not be put in place";
+
+/**
+ * The refusal of a writer one of whose files could not be moved to its name
+ * once others were in place, and which took those back out (`publishHeld`).
+ * `left` names any it could not take back. A command is told the file and
+ * what to run, in three parts (`logContext.parts`, which the CLI prints); a
+ * Builder change is told to save again, the file and the system's code kept
+ * for the log.
+ */
+export function notWrittenError(args: {
+  command: string;
+  whenHeld?: WhenHeld;
+  failed: string;
+  left: readonly string[];
+  cause: unknown;
+}): NextlyError {
+  const code = (args.cause as { code?: unknown } | null)?.code;
+  const failed = basename(args.failed);
+  const left = args.left.map(file => basename(file));
+  const parts = {
+    what:
+      `The migration was not written: moving ${failed} into place failed` +
+      `${typeof code === "string" ? ` (${code})` : ""}.`,
+    why:
+      left.length === 0
+        ? "The files already placed were removed; the folder is as it was."
+        : `These were already placed and could not be removed: ${left.join(", ")}. ` +
+          "They are part of a migration that was not finished, so delete them.",
+    next: `Check that the migrations folder can be written to and has room, then run \`${args.command}\` again.`,
+  };
+  const logContext = {
+    reason: WRITER_NOT_WRITTEN_REASON,
+    command: args.command,
+    failed,
+    left,
+    parts,
+  };
+  const cause = args.cause instanceof Error ? { cause: args.cause } : {};
+  if (args.whenHeld === "refuse") {
+    return NextlyError.serviceUnavailable({
+      publicMessage:
+        "This change was not saved: a migration file could not be put in place. Save it again.",
+      logMessage: `${args.command} refused: ${parts.what} ${parts.why}`,
+      ...cause,
+      logContext,
+    });
+  }
+  return NextlyError.serviceUnavailable({
+    publicMessage: `${parts.what} ${parts.why} ${parts.next}`,
+    ...cause,
+    logContext,
+  });
+}
+
+/**
+ * Removes each of `files` waiting aside, as far as it can: one that cannot
+ * be removed stops neither the rest nor the report of what failed before.
+ */
+async function discardAll(files: readonly PreparedFile[]): Promise<void> {
+  for (const file of files) {
+    try {
+      await file.discard();
+    } catch {
+      // Left waiting under its temporary name, which no reader counts.
+    }
+  }
+}
+
+/**
+ * Each of `steps`' files written aside, in turn. Where one cannot be, those
+ * before it are removed: nothing is left waiting for a move that will not come.
+ */
+export async function prepareAll(
+  steps: ReadonlyArray<() => Promise<PreparedFile>>
+): Promise<PreparedFile[]> {
+  const prepared: PreparedFile[] = [];
+  try {
+    for (const step of steps) prepared.push(await step());
+  } catch (error) {
+    await discardAll(prepared);
+    throw error;
+  }
+  return prepared;
 }
 
 /**
@@ -952,56 +1053,121 @@ function leftInPlaceError(
  *
  * `prepare` writes each file in full under another name. The hold is checked
  * before that, and again with `stillCurrent` (the caller's own last check)
- * immediately before the files are put in place, in the order given, with
- * `alongside` (files written straight to their names, which it answers)
- * right after: a writer overtaken at any point before that puts nothing in
- * place.
+ * immediately before the files are put in place, in the order given, a
+ * snapshot just before its migration file: a writer overtaken at any point
+ * before that puts nothing in place.
+ *
+ * A file that cannot be moved to its name once others are there would leave
+ * part of a migration, which the next run reads as a whole one and never
+ * completes. The writer takes back what it placed in this step, and only
+ * that, while the folder is still its own (`notWrittenError`): the one case
+ * in which a writer removes a migration file, moments after placing it and
+ * with no other writer able to have built on it. The last placed goes first,
+ * so a migration file leaves before its snapshot and is never there without
+ * it; one that cannot be removed keeps its snapshot, and both are named.
+ *
+ * A snapshot whose migration file was not placed counts for nothing and would
+ * describe a migration that does not exist, so it goes in every case.
  *
  * What is left is a writer stopped past its lease between that last check
- * and its files. The hold is checked once more after them, and a writer
- * overtaken by then stops and names what it wrote (`leftInPlaceError`). It
- * removes none of it: a migration file in the folder may already be applied
- * and recorded, and a writer never deletes one.
- *
- * Only a snapshot whose migration file then failed to follow it is
- * withdrawn: no reader counts it, and left it would describe a migration
- * that does not exist.
+ * and its files. The hold is checked once more after them, or after a move
+ * that failed, and a writer overtaken by then, or unable to tell, stops and
+ * names what it wrote (`leftInPlaceError`). It removes no migration file: one
+ * in the folder may already be built on, applied and recorded.
  */
 export async function publishHeld(
   migrationsDir: string,
   prepare: () => Promise<readonly PreparedFile[]>,
   options: {
     stillCurrent?: () => Promise<void>;
-    alongside?: () => readonly string[];
   } = {}
 ): Promise<void> {
   await assertWriterHold(migrationsDir);
   const files = await prepare();
   const placed: string[] = [];
+  const running = () => scope.getStore();
+  const command = () => running()?.command ?? "migrate:create";
+  const isMigration = (path: string) => path.endsWith(".sql");
+  const placedMigrations = () => placed.filter(isMigration);
+  let moving: string | undefined;
   try {
     await assertWriterHold(migrationsDir);
     await options.stillCurrent?.();
     for (const file of files) {
+      moving = file.path;
       await file.place();
       placed.push(file.path);
     }
-    placed.push(...(options.alongside?.() ?? []));
   } catch (error) {
-    for (const file of files) await file.discard();
-    // A snapshot whose migration file did not follow it. Once that file is
-    // in place nothing is removed, the snapshot beside it included.
-    if (!placed.some(path => path.endsWith(".sql"))) {
-      for (const path of placed) await rm(path, { force: true });
-    }
+    await discardAll(files);
+    await takeBack(error);
     throw error;
   }
   try {
     await assertWriterHold(migrationsDir);
   } catch (error) {
     if (!isWriterHoldLost(error)) throw error;
-    throw leftInPlaceError(
-      scope.getStore()?.command ?? "migrate:create",
-      placed.filter(path => path.endsWith(".sql"))
-    );
+    throw leftInPlaceError(command(), placedMigrations());
+  }
+
+  /**
+   * The migration file a snapshot at `path` belongs to: the one it is put
+   * in place just before.
+   */
+  function migrationOf(path: string): string | undefined {
+    const at = files.findIndex(file => file.path === path);
+    return files.slice(at + 1).find(file => isMigration(file.path))?.path;
+  }
+
+  /**
+   * Removes what this step placed, after `error` stopped it, and throws what
+   * the writer is told where a migration file was among them.
+   */
+  async function takeBack(error: unknown): Promise<void> {
+    const migrationPlaced = placedMigrations().length > 0;
+    // A migration file is taken back only from a folder known to be this
+    // writer's still. Where it is not, only the snapshots it placed without
+    // their files go.
+    const stillHeld = () =>
+      assertWriterHold(migrationsDir).then(
+        () => true,
+        () => false
+      );
+    if (migrationPlaced && !(await stillHeld())) {
+      for (const path of placed) {
+        const own = migrationOf(path);
+        if (isMigration(path) || (own !== undefined && placed.includes(own)))
+          continue;
+        await rm(path, { force: true }).catch(() => undefined);
+      }
+      throw leftInPlaceError(command(), placedMigrations(), {
+        notPlaced: files
+          .map(file => file.path)
+          .filter(path => isMigration(path) && !placed.includes(path)),
+        cause: error,
+      });
+    }
+    const left: string[] = [];
+    for (const path of [...placed].reverse()) {
+      // The snapshot of a migration file that stays, stays with it.
+      const own = isMigration(path) ? undefined : migrationOf(path);
+      if (own !== undefined && left.includes(own)) {
+        left.push(path);
+        continue;
+      }
+      try {
+        await rm(path, { force: true });
+      } catch {
+        left.push(path);
+      }
+    }
+    if (!migrationPlaced || moving === undefined) return;
+    throw notWrittenError({
+      command: command(),
+      whenHeld: running()?.whenHeld,
+      failed: moving,
+      left,
+      cause: error,
+    });
   }
 }

@@ -1,0 +1,27 @@
+---
+title: MIGRATION_NOT_WRITTEN
+description: "A migration file could not be moved into place once others of the same migration were there, so the command removed the files it had placed and wrote no migration."
+---
+
+## Cause
+
+A migration file could not be moved into place once others of the same migration were there, so the command removed the files it had placed and wrote no migration.
+
+A command that writes a migration writes every file of it in full under a temporary name first: the migration, its snapshot, and the file of each translations table it changes. It then moves them to their names one after another. A move can still fail, for example where the folder stopped being writable in between. Left as they were, the files already moved would be part of a migration, and the next `migrate:create` would read it as a whole one and never write the rest.
+
+So the command removes the files it had just placed, and only those, and stops. It does this only while it still holds the project's migration files (see [`MIGRATIONS_WRITER_BUSY`](/docs/cli/errors/migrations-writer-busy)); a run another overtook removes nothing and ends with [`MIGRATIONS_WRITER_OVERTAKEN`](/docs/cli/errors/migrations-writer-overtaken).
+
+## Fix
+
+- Check that the migrations folder and its `meta` folder can be written to and that the disk has room, then run the command again. It writes the whole migration.
+- Where the message names files it could not remove, delete them yourself before running the command again: they are part of the migration that was not finished.
+- Where `nextly migrate` ran at the same moment and now reports one of the removed files as missing, run the command again and apply the migration it writes.
+
+## Example
+
+```text
+✗ The migration was not written: moving 20261020_120000_001_create_localization_posts.sql into place failed (EACCES).
+  Why:  The files already placed were removed; the folder is as it was.
+  Next: Check that the migrations folder can be written to and has room, then run `migrate:create` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/migration-not-written  (MIGRATION_NOT_WRITTEN)
+```

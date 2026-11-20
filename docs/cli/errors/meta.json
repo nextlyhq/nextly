@@ -81,6 +81,7 @@
     "migration-missing",
     "migration-name-required",
     "migration-not-proven",
+    "migration-not-written",
     "migrate-backup-declined",
     "migrate-backup-not-confirmed",
     "migrate-events-table-taken",
