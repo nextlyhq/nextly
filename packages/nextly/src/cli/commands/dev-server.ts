@@ -64,6 +64,7 @@ import {
   mergeRegisteredCollectionsSafely,
   mergeRegisteredSafely,
   withoutHandedToBuilder,
+  type RegisteredCollectionRow,
 } from "../../domains/schema/pipeline/registered-collections";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type {
@@ -556,13 +557,17 @@ export async function desiredSchemaForSync(
     drizzleAdapter,
     registryLogger
   );
+  // The registry's collections, read once: this filter and the merge below must see the same rows,
+  // or a read that failed only for the merge would leave a handed-over collection out of both.
+  const registeredCollections: Promise<RegisteredCollectionRow[]> =
+    registriesPresent ? registry.getAllCollections() : Promise.resolve([]);
   // A collection a demote handed to the Schema Builder, while its entry is still in the
   // configuration, is built from the Builder's registry row (merged in below), not from that entry.
   // A registry that cannot be read leaves every entry in: the merge below reports it and falls back
   // to the configuration alone, as before.
   const configured = withoutHandedToBuilder(
     config.collections,
-    registriesPresent ? await registry.getAllCollections().catch(() => []) : [],
+    await registeredCollections.catch(() => []),
     pluginCollectionSources(config.plugins ?? [])
   );
   for (const collection of configured) {
@@ -667,12 +672,10 @@ export async function desiredSchemaForSync(
     collections: await mergeRegisteredCollectionsSafely(
       desiredCollections,
       async () =>
-        registriesPresent
-          ? withoutRemovedFromCode(
-              await registry.getAllCollections(),
-              declaredCollections
-            )
-          : [],
+        withoutRemovedFromCode(
+          await registeredCollections,
+          declaredCollections
+        ),
       logger
     ),
     singles: await mergeRegisteredSafely(
@@ -872,6 +875,9 @@ export async function performAutoSync(
   // pipeline code recomputed `dc_<slug>` here unconditionally, which
   // ignored `dbName` overrides. Now we honor them.
   for (const collection of config.collections) {
+    // An entry the desired schema left out is a collection a demote handed to the Schema Builder
+    // (`withoutHandedToBuilder`): its record is the Builder's, and the entry names no table of it.
+    if (desiredCollections[collection.slug] === undefined) continue;
     try {
       const tableName =
         desiredCollections[collection.slug]?.tableName ??

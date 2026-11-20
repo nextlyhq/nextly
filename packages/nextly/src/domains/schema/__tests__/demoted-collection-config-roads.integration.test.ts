@@ -201,6 +201,7 @@ for (const dialect of getConfiguredTestDialects()) {
   describe(`a demoted collection still declared in code — configuration reload, ${dialect}`, () => {
     let database: CaseDatabase;
     let projectRoot: string;
+    let app: Awaited<ReturnType<typeof createTestNextly>>;
 
     /** A reload of `collection`, as a saved edit triggers it. */
     async function reload(
@@ -224,7 +225,7 @@ for (const dialect of getConfiguredTestDialects()) {
       database = await openDatabase(dialect);
       clearServices();
       loaded.config = defineConfig({ collections: [POSTS] });
-      await createTestNextly({
+      app = await createTestNextly({
         adapter: database.adapter as never,
         collections: [POSTS],
       });
@@ -262,6 +263,18 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(columns).toContain("subtitle");
       expect(columns).not.toContain("extra");
       expect(await recordFields(database.adapter)).toContain("subtitle");
+
+      // Entries are read and written through the Builder's definition too: the runtime table the
+      // reload registers is the record's, with its column, not the entry's.
+      const { item: created } = await app.nextly.create({
+        collection: POSTS.slug as never,
+        data: { headline: "Kept", subtitle: "From the Builder" } as never,
+      });
+      const read = (await app.nextly.findByID({
+        collection: POSTS.slug as never,
+        id: String((created as { id: unknown }).id),
+      })) as Record<string, unknown>;
+      expect(read.subtitle).toBe("From the Builder");
     });
   });
 }

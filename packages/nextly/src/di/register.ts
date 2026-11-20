@@ -134,6 +134,7 @@ import {
   holdRecordedAtStart,
   registryRows,
 } from "../domains/schema/pipeline/recorded-fields";
+import { withoutHandedToBuilder } from "../domains/schema/pipeline/registered-collections";
 import type {
   DesiredCollection,
   DesiredSchema,
@@ -4346,8 +4347,25 @@ export async function registerConfigTablesInResolver(
     "./register-runtime-tables"
   );
 
+  // A collection a demote handed to the Schema Builder keeps the runtime table the registry pass
+  // registered from its record: its entry, while still in the configuration, describes columns the
+  // table no longer follows (`withoutHandedToBuilder`). A registry that cannot be read leaves every
+  // entry in, as before.
+  const { CollectionRegistryService: RegistryService } = await import(
+    "../domains/collections/services/collection-registry-service"
+  );
+  const quiet = { info() {}, warn() {}, error() {}, debug() {} };
+  const registered = await new RegistryService(adapter, quiet)
+    .getAllCollections()
+    .catch(() => []);
+  const collections = withoutHandedToBuilder(
+    (config.collections ?? []) as readonly { slug?: string | null }[],
+    registered,
+    pluginCollectionSources(config.plugins ?? [])
+  );
+
   // Collections: table name convention is `dc_<slug-with-underscores>`.
-  for (const collection of config.collections ?? []) {
+  for (const collection of collections) {
     try {
       const slug = (collection as { slug: string }).slug;
       const dbName = (collection as { dbName?: string }).dbName;

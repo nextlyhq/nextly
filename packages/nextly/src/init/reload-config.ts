@@ -2437,18 +2437,24 @@ async function applyReloadHolding(
     localized?: boolean;
     indexes?: DesiredCollection["indexes"];
   }> = [];
+  // The registry's collections, read once: this filter and the merge below must see the same rows,
+  // or a read that failed only for the merge would leave a handed-over collection out of both.
+  // A registry that cannot be resolved or read rejects it, which the merge reports as before.
+  const registeredCollections = Promise.resolve()
+    .then(() => resolve("collectionRegistryService"))
+    .then(resolved => {
+      const registry = resolved as CollectionRegistrySurface | undefined;
+      return typeof registry?.getAllCollections === "function"
+        ? registry.getAllCollections()
+        : [];
+    });
   // A collection a demote handed to the Schema Builder, while its entry is still in the
   // configuration, is built from the Builder's registry row (merged in below), not from that entry.
   // A registry that cannot be read leaves every entry in: the merge below reports it and falls back
   // to the configuration alone, as before.
-  const registryForTargets = (await resolve("collectionRegistryService")) as
-    | CollectionRegistrySurface
-    | undefined;
   const configuredCollections = withoutHandedToBuilder(
     newConfig.collections ?? [],
-    typeof registryForTargets?.getAllCollections === "function"
-      ? await registryForTargets.getAllCollections().catch(() => [])
-      : [],
+    await registeredCollections.catch(() => []),
     pluginCollectionSources(newConfig.plugins ?? [])
   );
   for (const c of configuredCollections) {
@@ -3232,17 +3238,11 @@ async function applyReloadHolding(
     desiredCollections,
     await mergeRegisteredCollectionsSafely(
       desiredCollections,
-      async () => {
-        const collectionRegistry = (await resolve(
-          "collectionRegistryService"
-        )) as CollectionRegistrySurface;
-        return typeof collectionRegistry?.getAllCollections === "function"
-          ? withoutRemovedFromCode(
-              await collectionRegistry.getAllCollections(),
-              declaredCollections
-            )
-          : [];
-      },
+      async () =>
+        withoutRemovedFromCode(
+          await registeredCollections,
+          declaredCollections
+        ),
       logger
         ? { warn: (m: string) => logger.warn(`[Nextly HMR] ${m}`) }
         : undefined
