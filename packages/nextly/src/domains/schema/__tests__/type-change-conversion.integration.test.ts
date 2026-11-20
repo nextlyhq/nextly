@@ -293,6 +293,31 @@ describe.each(getConfiguredTestDialects())(
       expect(await read(t, "v", "es")).toEqual({ a: "hola" });
     });
 
+    // The file the save writes deploys to every database, so a translations column that keeps its
+    // type here but not on another (a checkbox's integer on SQLite, boolean or tinyint elsewhere)
+    // is refused on every one, SQLite included.
+    it("refuses a translated checkbox becoming a number on every database, as its column changes on some", async () => {
+      const t = await boot(
+        [
+          { name: "v", type: "checkbox", localized: true },
+          { name: "w", type: "text", localized: true },
+        ],
+        { localized: true }
+      );
+      await write(t, "a", { w: "x" }, "en");
+
+      expect(
+        await save(
+          t,
+          [
+            { name: "v", type: "number", localized: true },
+            { name: "w", type: "text", localized: true },
+          ],
+          { localized: true }
+        )
+      ).toMatchObject(refusedAs("TYPE_CHANGE_BLOCKED", "kept per language"));
+    });
+
     // A save that stops translating the whole collection moves each language's value out of the
     // translations table as it is stored, before the entity's own table takes the new type, which
     // PostgreSQL refuses part-way: refused with the two saves that make it, not as kept per language.

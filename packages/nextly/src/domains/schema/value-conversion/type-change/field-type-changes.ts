@@ -242,8 +242,7 @@ function translationsTableFlags(
 > {
   if (args.translatedAfter === undefined) return {};
   if (args.translatedAfter.has(change.to.name)) {
-    return translationsColumnType(change.from, args) !==
-      translationsColumnType(change.to, args)
+    return translationsColumnChanges(change.from, change.to, args.builtBy)
       ? { changesTranslationsColumn: true }
       : {};
   }
@@ -254,6 +253,32 @@ function translationsTableFlags(
  * A translated field's column type in the entity's translations table, as that table's creator
  * types it (`fieldToLocalizedColumnSpec`); null for a field it gives no column.
  */
+/** Every database the translations table is made on: a migration file deploys to any of them. */
+const DEPLOYED_DIALECTS: readonly SupportedDialect[] = [
+  "sqlite",
+  "postgresql",
+  "mysql",
+];
+
+/**
+ * Whether a translated field's column in the entity's translations table takes another type, on
+ * any database its migration deploys to, not only the one the save runs on: a checkbox becoming a
+ * number keeps SQLite's integer column but not PostgreSQL's boolean or MySQL's tinyint, so the
+ * file a SQLite save writes would leave those in the old type. A long text becoming code keeps its
+ * column on all three.
+ */
+export function translationsColumnChanges(
+  from: FieldDefinition,
+  to: FieldDefinition,
+  builtBy: ColumnOrigin
+): boolean {
+  return DEPLOYED_DIALECTS.some(
+    dialect =>
+      translationsColumnType(from, { dialect, builtBy }) !==
+      translationsColumnType(to, { dialect, builtBy })
+  );
+}
+
 function translationsColumnType(
   field: FieldDefinition,
   args: { dialect: SupportedDialect; builtBy: ColumnOrigin }
