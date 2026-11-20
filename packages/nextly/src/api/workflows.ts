@@ -484,11 +484,14 @@ async function readableBy(
  * language, per Single and language), never a read per document. A part in no language is
  * readable where the document is in any language its history is kept in, or, kept in none, as it
  * is: what `assertReadable` asks of it.
+ *
+ * `degraded` where a registry could not be listed: the check then knows no kind for that
+ * registry's documents and reads them as unreadable, so what it found is a floor, not the answer.
  */
 async function readableAmong(
   asker: NonNullable<WorkflowAsker>,
   items: readonly WaitingReadable[]
-): Promise<boolean[]> {
+): Promise<{ readable: boolean[]; degraded: boolean }> {
   const kept = new Map<string, readonly (string | null)[]>();
   const keptIn = async (document: ReviewDocument) => {
     const key = `${document.scopeKind}:${document.scopeSlug}`;
@@ -518,6 +521,7 @@ async function readableAmong(
       });
     }
   }
+  const scope = await resolveDocumentVisibilityScope();
   const visible = await visibleDocuments(
     refs,
     each => each.ref,
@@ -525,11 +529,11 @@ async function readableAmong(
       user: asker.user,
       ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
     },
-    await resolveDocumentVisibilityScope()
+    scope
   );
   const readable = items.map(() => false);
   for (const each of visible) readable[each.index] = true;
-  return readable;
+  return { readable, degraded: scope.degraded };
 }
 
 const adapter = () => container.get<DrizzleAdapter>("adapter");
@@ -738,6 +742,7 @@ export const workflowOperations = {
           : { authenticatedScope: asker.scope }),
       })
     );
+    let degraded = false;
     const { items, total, totalCapped, next } = await waitingFor(adapter(), {
       caller: asker.caller,
       limit: query.limit,
@@ -748,8 +753,15 @@ export const workflowOperations = {
       readsEntity: (_kind, slug) => Promise.resolve(readable.has(slug)),
       // Each item in the language its part names: an item about a language the caller may not
       // read the document in is left out, as a read of that language would be refused.
-      readable: items => readableAmong(asker, items),
+      readable: async items => {
+        const asked = await readableAmong(asker, items);
+        degraded ||= asked.degraded;
+        return asked.readable;
+      },
     });
+    // A read check made while a registry could not be listed may have left out work the caller
+    // may read: the total is then a floor, never an exact count.
+    const floor = degraded ? { totalCapped: true as const } : {};
     // Where the next page starts, for a client that walks by cursor rather than page number.
     const nextBefore =
       next === null ? {} : { nextBefore: encodeWaitingCursor(next) };
@@ -764,6 +776,7 @@ export const workflowOperations = {
           totalPages: 1,
           hasNext: next !== null,
           hasPrev: true,
+          ...floor,
           ...nextBefore,
         },
       };
@@ -780,7 +793,7 @@ export const workflowOperations = {
         hasNext: query.page < totalPages || totalCapped,
         hasPrev: query.page > 1,
         // More may wait than the list read: its total is a floor ("1000+"), as a capped count's is.
-        ...(totalCapped ? { totalCapped: true as const } : {}),
+        ...(totalCapped ? { totalCapped: true as const } : floor),
         ...nextBefore,
       },
     };

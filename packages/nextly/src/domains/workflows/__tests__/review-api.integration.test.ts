@@ -45,6 +45,7 @@ import { apiKeyScope } from "../../../auth/authenticated-scope";
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import { statementsOf } from "../../../database/__tests__/integration/helpers/count-statements";
+import { container } from "../../../di/container";
 import { permissionSlug } from "../../../schemas/_zod/rbac";
 import {
   getConfiguredTestDialects,
@@ -1920,6 +1921,43 @@ describe.each(getConfiguredTestDialects())(
             door.waiting(SAM, { page: 2, limit: 1, before: cursor })
           )
         ).toEqual({ status: 400, code: "VALIDATION_ERROR" });
+      });
+
+      it("marks the total a floor when a registry cannot be listed", async () => {
+        // The Singles registry cannot be listed: a read check then knows no kind for a Single's
+        // documents and reads them as unreadable. The list shows what it can, but its total is a
+        // floor, never an exact count; listed again once it answers, the total is exact.
+        current = await bootSteps(dialect);
+        await people();
+        await person(app(), "sam", [
+          ["read", PAGES],
+          ["sign-off", PAGES],
+        ]);
+        for (let n = 0; n < 2; n += 1) {
+          await seedState(
+            app(),
+            partOf(PAGES, await entry(app(), PAGES), null),
+            "legal",
+            { definitionHash: HASH, assignee: { kind: "user", id: "sam" } }
+          );
+        }
+        const SAM: Who = { kind: "person", id: "sam" };
+        const singles = container.get<{ getAllSlugs: () => Promise<string[]> }>(
+          "singleRegistryService"
+        );
+        const down = vi
+          .spyOn(singles, "getAllSlugs")
+          .mockRejectedValue(new Error("the Singles registry is unreachable"));
+        try {
+          const page = await door.waiting(SAM, { page: 1, limit: 10 });
+          expect(page.items).toHaveLength(2);
+          expect(page.meta).toMatchObject({ total: 2, totalCapped: true });
+        } finally {
+          down.mockRestore();
+        }
+        const again = await door.waiting(SAM, { page: 1, limit: 10 });
+        expect(again.meta).toMatchObject({ total: 2 });
+        expect(again.meta.totalCapped).toBeUndefined();
       });
 
       it("reaches every page of work past what one request reads", async () => {
