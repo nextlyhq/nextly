@@ -457,6 +457,42 @@ describeEachDialect(
       ).toBe("FIELD_RENAME_UNANSWERED");
     });
 
+    it("keeps a shared field's values when the request renames it beside a translated field added", async () => {
+      // The whole list pairs nothing (two fields arrive); the shared table's own change is
+      // `heading` leaving and `headline` arriving, which the request answers as a rename.
+      await posts([
+        { name: "heading", type: "text", localized: false },
+        { name: "body", type: "text", localized: true },
+      ]);
+      await current.nextly.create({
+        collection: "posts",
+        data: { heading: "Kept", body: "Hello" },
+      });
+
+      expect(
+        await codeOf(
+          change(
+            [
+              { name: "headline", type: "text", localized: false },
+              { name: "body", type: "text", localized: true },
+              { name: "summary", type: "text", localized: true },
+            ],
+            [{ from: "heading", to: "headline", choice: "rename" }]
+          )
+        )
+      ).toBeUndefined();
+      const rows = await (
+        current.adapter as unknown as {
+          executeQuery<R>(statement: string): Promise<R[]>;
+        }
+      ).executeQuery<{ v: unknown }>(
+        dialect === "mysql"
+          ? "SELECT `headline` AS v FROM `dc_posts`"
+          : 'SELECT "headline" AS v FROM "dc_posts"'
+      );
+      expect(rows.map(row => row.v)).toEqual(["Kept"]);
+    });
+
     it("asks nothing of a text field translated by default replaced beside another translated field added", async () => {
       // `heading` and `headline` carry no flag, so the collection's default translates them: the
       // companion sees one removal and two additions, which pair nothing to ask about. What is
