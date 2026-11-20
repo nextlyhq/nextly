@@ -504,6 +504,7 @@ export function EmailTemplateForm({
         <WorkbenchDialogs
           template={template}
           acts={acts}
+          source={derived.previewSource}
           onDiscardEdits={() => form.reset(templateToFormValues(template))}
         />
       ) : null}

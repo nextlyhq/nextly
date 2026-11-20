@@ -265,7 +265,10 @@ class AnsweringDispatcher implements PromptDispatcher {
  */
 export function leftoverColumns(
   ownTable: string,
-  args: Pick<Parameters<PromptDispatcher["dispatch"]>[0], "candidates" | "events">,
+  args: Pick<
+    Parameters<PromptDispatcher["dispatch"]>[0],
+    "candidates" | "events"
+  >,
   result: Awaited<ReturnType<PromptDispatcher["dispatch"]>>,
   resolutions: readonly BrowserRenameResolution[]
 ): string[] {

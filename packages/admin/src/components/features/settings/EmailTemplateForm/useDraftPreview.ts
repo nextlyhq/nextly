@@ -59,6 +59,8 @@ export interface DraftPreviewState {
   isPreviewPending: boolean;
   /** The render was refused or unreachable; the pane says so rather than lying. */
   previewError: string | null;
+  /** A written draft's code, as converting it would store it; none for code. */
+  previewSource: string | undefined;
 }
 
 /**
@@ -117,6 +119,7 @@ export function useDraftPreview(
       hasPreview: shown !== null,
       isPreviewPending: isPending && shown === null,
       previewError: error ? error.message : null,
+      previewSource: shown?.source?.html,
     }),
     [shown, isPending, error]
   );

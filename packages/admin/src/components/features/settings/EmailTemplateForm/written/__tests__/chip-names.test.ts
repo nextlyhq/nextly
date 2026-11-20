@@ -5,7 +5,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { TemplateFormVariable } from "../../schema";
-import { chipNamer, itemPaths, listPaths } from "../chip-names";
+import {
+  addressPaths,
+  chipNamer,
+  itemPaths,
+  listPaths,
+  variablePaths,
+} from "../chip-names";
 
 const variables: TemplateFormVariable[] = [
   {
@@ -141,6 +147,107 @@ describe("a chip's friendly name", () => {
       "order",
       "item",
       "resetUrl",
+    ]);
+  });
+
+  it("offers every declared path for a link or a condition, the item's first inside a list", () => {
+    const everywhere = [
+      "customer",
+      "customer.firstName",
+      "customer.email",
+      "order",
+      // A list field is offered itself, not what its items hold.
+      "order.lines",
+      "item",
+      "resetUrl",
+    ];
+    expect(variablePaths(variables)).toEqual(everywhere);
+    expect(variablePaths(variables, "order.lines")).toEqual([
+      // The item itself, which a condition can ask about, then its fields.
+      "item",
+      "item.title",
+      "item.qty",
+      // The variable declared as `item` is out of reach inside the list,
+      // where `item` is the loop's: it is offered once, as the loop's.
+      ...everywhere.filter(path => path !== "item"),
+    ]);
+  });
+
+  it("offers a link only values, never the objects and lists a condition may ask about", () => {
+    // `customer` and `order` are objects, `order.lines` a list: none is an
+    // address. Their value fields are, and so are `item` (declared with no
+    // fields, a plain value) and `resetUrl`.
+    expect(addressPaths(variables)).toEqual([
+      "customer.firstName",
+      "customer.email",
+      "item",
+      "resetUrl",
+    ]);
+    // Inside a list its item's values come first; the declared `item` is the
+    // loop's there, out of reach.
+    expect(addressPaths(variables, "order.lines")).toEqual([
+      "item.title",
+      "item.qty",
+      "customer.firstName",
+      "customer.email",
+      "resetUrl",
+    ]);
+  });
+
+  it("offers only paths a written email can store", () => {
+    const named: TemplateFormVariable[] = [
+      {
+        name: "customer",
+        description: "",
+        required: true,
+        presentation: {
+          fields: [{ name: "first-name" }, { name: "last_name" }],
+        },
+      },
+      {
+        name: "lines",
+        description: "",
+        required: true,
+        presentation: {
+          type: "list",
+          fields: [{ name: "unit price" }, { name: "qty" }],
+        },
+      },
+    ];
+    expect(variablePaths(named)).toEqual([
+      "customer",
+      "customer.last_name",
+      "lines",
+    ]);
+    expect(itemPaths(named, "lines")).toEqual(["item.qty"]);
+  });
+
+  it("offers an item's containers inside a list, its nested lists included", () => {
+    const shop: TemplateFormVariable[] = [
+      {
+        name: "lines",
+        description: "",
+        required: true,
+        presentation: {
+          type: "list",
+          fields: [
+            {
+              name: "product",
+              type: "object",
+              fields: [{ name: "title" }],
+            },
+            { name: "discounts", type: "list", fields: [{ name: "code" }] },
+          ],
+        },
+      },
+    ];
+    expect(variablePaths(shop, "lines").slice(0, 5)).toEqual([
+      "item",
+      "item.product",
+      "item.product.title",
+      // A condition can ask whether the item's own list has entries.
+      "item.discounts",
+      "lines",
     ]);
   });
 });
