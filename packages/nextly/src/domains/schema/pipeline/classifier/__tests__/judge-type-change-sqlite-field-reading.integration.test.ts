@@ -410,6 +410,21 @@ describe("db:sync's judgement of a column type change on SQLite", () => {
     ]);
   });
 
+  it("blocks two values to be cleared that a unique index of several columns would hold twice", async () => {
+    // The rebuild copies both "maybe" values into the new column, and builds the index, before
+    // the consent clears either.
+    await create({ type: "text" }, { r1: "maybe", r2: "maybe" });
+    const change = await judged({ type: "checkbox" }, { type: "text" }, [
+      { fields: ["value", "title"], unique: true },
+    ]);
+    expect(change.judgement.class).toBe("blocked");
+    expect(rowsOf(change)).toContainEqual([
+      "repeated",
+      "blocked",
+      ["r1", "r2"],
+    ]);
+  });
+
   it("lets values one number under different titles through a unique index of both columns", async () => {
     await create({ type: "text" }, { r1: "1", r2: " 1" });
     sqlite.prepare(`UPDATE "${TABLE}" SET title = 'U' WHERE id = 'r2'`).run();

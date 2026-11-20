@@ -11,8 +11,9 @@
 // finds a "maybe" kept in a checkbox's column and 1.5 in a whole number's. There the push also asks
 // what the new field reads from each value, by the judge a Schema Builder save asks
 // (`value-conversion/type-change`), with the field the registry recorded before the apply and the
-// field the configuration declares now, and takes the worse of the two. Never a rule of its own:
-// a Builder save and a push name the same class for one change.
+// field the configuration declares now, and takes the worse of the two. Never a rule of its own,
+// with one difference a push alone has: a code-first field's own `validate` function is not asked
+// of stored values (`withoutOwnValidate`), since it is written for a whole entry and its request.
 //
 // @module domains/schema/pipeline/classifier/judge-type-change
 
@@ -403,7 +404,9 @@ function blockedForRepeats(
  *
  * SQLite's rebuild copies every value and makes the index after, so such a pair ends the apply
  * with the column already converted. It is refused before any statement, naming the rows. A row
- * with no value in one of the index's columns repeats nothing, as the index itself holds.
+ * with no value in one of the index's columns repeats nothing, as the index itself holds. A value
+ * to be cleared is still copied and indexed first, as it is stored: it is compared so, and only
+ * with other values to be cleared, as `withRepeatsToClear` compares them for one column.
  *
  * @param read each row's value as the new type reads it, by the row's key
  */
@@ -415,13 +418,34 @@ async function withRepeatsAcrossColumns(
   readings: FieldReadings,
   read: ReadonlyMap<string, { key: RowKey; readsAs: string }>
 ): Promise<ColumnVerdict> {
+  const others = readings.uniqueWith ?? [];
+  if (others.length === 0) return verdict;
+  // Each row in the index's comparison, with this column's value tagged by how the rebuild keeps
+  // it: read as the new type, or stored as it is until the consent clears it.
+  const rows = new Map<string, { key: RowKey; first: string[] }>(
+    [...read].map(([row, { key, readsAs }]) => [
+      row,
+      { key, first: ["read", readsAs] },
+    ])
+  );
+  const toClear = new Set(verdict.cleared.map(rowKeyText));
+  if (toClear.size > 1) {
+    for await (const value of readStoredValues(db, dialect, {
+      ...at,
+      toJson: false,
+    })) {
+      const row = rowKeyText(value.key);
+      if (value.text === null || !toClear.has(row)) continue;
+      rows.set(row, { key: value.key, first: ["stored", value.text] });
+    }
+  }
   const repeated = new Map<string, RowKey>();
-  for (const others of readings.uniqueWith ?? []) {
+  for (const columns of others) {
     // Each row's values in the index, this column's first; null once any of them is no value.
     const held = new Map<string, string[] | null>(
-      [...read].map(([row, { readsAs }]) => [row, [readsAs]])
+      [...rows].map(([row, { first }]) => [row, [...first]])
     );
-    for (const column of others) {
+    for (const column of columns) {
       for await (const value of readStoredValues(db, dialect, {
         ...at,
         column,
@@ -430,15 +454,18 @@ async function withRepeatsAcrossColumns(
         const row = rowKeyText(value.key);
         const values = held.get(row);
         if (values === undefined || values === null) continue;
-        held.set(row, value.text === null ? null : [...values, value.text]);
+        if (value.text === null) held.set(row, null);
+        else values.push(value.text);
       }
     }
     const holders = new Map<string, RowKey[]>();
     for (const [row, values] of held) {
-      const key = read.get(row)?.key;
+      const key = rows.get(row)?.key;
       if (values === null || key === undefined) continue;
       const set = JSON.stringify(values);
-      holders.set(set, [...(holders.get(set) ?? []), key]);
+      const holding = holders.get(set);
+      if (holding === undefined) holders.set(set, [key]);
+      else holding.push(key);
     }
     for (const keys of holders.values()) {
       if (keys.length > 1) keys.forEach(k => repeated.set(rowKeyText(k), k));
@@ -479,11 +506,18 @@ async function withRepeatsToClear(
 }
 
 /**
- * The other columns of each unique index of several columns that `column` of `table` is one of.
- * An index over part of the table's rows is left out: which rows it holds is the database's to say.
+ * The other columns of each unique index of several columns that `column` of `table` is one of,
+ * as the live table names them. An index over part of the table's rows is left out: which rows it
+ * holds is the database's to say. So is one naming a column the live table does not have yet:
+ * the apply adds it holding no value in any row, and a row with no value repeats nothing.
  */
-function indexedWith(table: TableSpec, column: string): string[][] {
+function indexedWith(
+  table: TableSpec,
+  live: TableSpec,
+  column: string
+): string[][] {
   const same = (name: string) => name.toLowerCase() === column.toLowerCase();
+  const liveName = (name: string) => byName(live.columns, name)?.name;
   return (table.indexes ?? [])
     .filter(
       index =>
@@ -492,7 +526,10 @@ function indexedWith(table: TableSpec, column: string): string[][] {
         index.columns.length > 1 &&
         index.columns.some(same)
     )
-    .map(index => index.columns.filter(name => !same(name)));
+    .map(index => index.columns.filter(name => !same(name)).map(liveName))
+    .filter((names): names is string[] =>
+      names.every(name => name !== undefined)
+    );
 }
 
 /**
@@ -534,7 +571,7 @@ export function typeChangeJudge(args: {
       field,
       args.dialect,
       isUnique(op.tableName, op.columnName),
-      indexedWith(expectedTable, expected.name)
+      indexedWith(expectedTable, liveTable, expected.name)
     );
     const { judgement, cleared } = await judgeOfferedTypeChange(
       args.db,
