@@ -7,6 +7,8 @@
  * @experimental
  */
 
+import type { BulkMoveAnswer } from "@admin/types/workflows";
+
 /** A workflow move over several documents. */
 export type BulkWorkflowMove = "submit" | "assign" | "sendBack";
 
@@ -69,4 +71,28 @@ export function bulkMoveSteps(steps: readonly BulkMoveStepCandidate[]): {
     ...(submit === undefined ? {} : { submit }),
     ...(sendBack === undefined ? {} : { sendBack }),
   };
+}
+
+/** Documents one move request takes at most (`POST /workflows/steps/bulk`). */
+export const DOCUMENTS_PER_MOVE = 200;
+/** Assignments one request takes at most (`POST /workflows/assignments/bulk`). */
+export const ASSIGNMENTS_PER_REQUEST = 500;
+
+/**
+ * `items` sent in requests of `size` at most, one after another, their answers joined: a
+ * selection carried across pages may hold more than one request takes, and each document is
+ * still moved or refused on its own.
+ */
+export async function inBatches<T>(
+  items: readonly T[],
+  size: number,
+  send: (batch: T[]) => Promise<BulkMoveAnswer>
+): Promise<BulkMoveAnswer> {
+  const joined: BulkMoveAnswer = { items: [], errors: [] };
+  for (let at = 0; at < items.length; at += size) {
+    const answer = await send(items.slice(at, at + size));
+    joined.items.push(...answer.items);
+    joined.errors.push(...answer.errors);
+  }
+  return joined;
 }

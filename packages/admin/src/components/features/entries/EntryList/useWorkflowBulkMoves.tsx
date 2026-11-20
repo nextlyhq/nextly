@@ -40,8 +40,11 @@ import type {
 import { StepCommentDialog } from "../review/StepCommentDialog";
 
 import {
+  ASSIGNMENTS_PER_REQUEST,
   bulkMoveSteps,
   bulkMoveSummary,
+  DOCUMENTS_PER_MOVE,
+  inBatches,
   type BulkWorkflowMove,
 } from "./bulk-workflow-moves";
 import type { CollectionForColumns } from "./EntryTableColumns";
@@ -166,10 +169,9 @@ export function useWorkflowBulkMoves(args: {
         ? {
             submit: () =>
               void run("submit", () =>
-                stepManyWorkflowDocuments({
-                  step: submitStep,
-                  documents: documentsOf(ids),
-                })
+                inBatches(documentsOf(ids), DOCUMENTS_PER_MOVE, documents =>
+                  stepManyWorkflowDocuments({ step: submitStep, documents })
+                )
               ),
           }
         : {}),
@@ -194,7 +196,7 @@ export function useWorkflowBulkMoves(args: {
 
   const assignTo = (ids: readonly string[], assignee: ReviewAssignee | null) =>
     void run("assign", () =>
-      assignManyWorkflowParts(
+      inBatches(
         ids.flatMap(id =>
           rowReviewParts(rowOf(id) ?? {})
             .filter(part => part.stage !== null)
@@ -204,7 +206,9 @@ export function useWorkflowBulkMoves(args: {
               revision: part.revision,
               assignee,
             }))
-        )
+        ),
+        ASSIGNMENTS_PER_REQUEST,
+        assignManyWorkflowParts
       )
     );
 
@@ -224,11 +228,13 @@ export function useWorkflowBulkMoves(args: {
           onSend={comment => {
             const ids = sendingBack ?? [];
             void run("sendBack", () =>
-              stepManyWorkflowDocuments({
-                step: sendBackStep,
-                comment,
-                documents: documentsOf(ids),
-              })
+              inBatches(documentsOf(ids), DOCUMENTS_PER_MOVE, documents =>
+                stepManyWorkflowDocuments({
+                  step: sendBackStep,
+                  comment,
+                  documents,
+                })
+              )
             );
           }}
         />
