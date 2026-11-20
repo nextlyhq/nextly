@@ -1056,21 +1056,30 @@ function rowsOnSession(session: StatementSession): RowsOn {
  * the connection `rowsOn` runs on: its named locks first, then its registry row `FOR UPDATE`, which
  * waits for every entry write that already read the row for share to commit. An entry write that
  * starts after waits at the named locks until `release`, which must run on the same connection. A
- * take that fails releases what it got before it throws. On a connection outside a transaction the
- * read is its own statement's transaction: it waits for those writes' locks as any locking read
- * does, and holds the row only until it ends.
+ * take that fails releases what it got before it throws.
+ *
+ * MySQL documents a locking read's row locks for a read inside a transaction. So on a connection
+ * outside any transaction (`rowRead: "own-transaction"`) the read runs in a transaction of its
+ * own, committed once it has the lock, which makes that guarantee explicit rather than resting on
+ * how a read under autocommit takes its locks; the row's lock then ends and the named locks stay.
+ * Inside the caller's transaction (`"in-transaction"`) the read runs there.
  */
 async function holdCollectionWith(
   adapter: object,
   rowsOn: RowsOn,
-  slug: string
+  slug: string,
+  rowRead: "in-transaction" | "own-transaction"
 ): Promise<{ release: () => Promise<void> }> {
   const named = await takeNamedCollectionLocks(adapter, rowsOn, [slug]);
+  const own = rowRead === "own-transaction";
   try {
+    if (own) await rowsOn(sql`START TRANSACTION`);
     await rowsOn(
       sql`SELECT ${sql.identifier("id")} FROM ${sql.identifier("dynamic_collections")} WHERE ${sql.identifier("slug")} = ${slug} FOR UPDATE`
     );
+    if (own) await rowsOn(sql`COMMIT`);
   } catch (error) {
+    if (own) await rowsOn(sql`ROLLBACK`).catch(() => undefined);
     await named.release();
     throw error;
   }
@@ -1089,7 +1098,12 @@ export function holdCollectionOnSession(
   session: StatementSession,
   slug: string
 ): Promise<{ release: () => Promise<void> }> {
-  return holdCollectionWith(adapter, rowsOnSession(session), slug);
+  return holdCollectionWith(
+    adapter,
+    rowsOnSession(session),
+    slug,
+    "own-transaction"
+  );
 }
 
 /**
@@ -1105,5 +1119,11 @@ export function holdCollectionOnConnection(
   db: unknown,
   slug: string
 ): Promise<{ release: () => Promise<void> }> {
-  return holdCollectionWith(adapter, rowsOnConnection(db), slug);
+  // The migration try's transaction, which the runner opens before `before` runs.
+  return holdCollectionWith(
+    adapter,
+    rowsOnConnection(db),
+    slug,
+    "in-transaction"
+  );
 }
