@@ -166,22 +166,38 @@ describe.each(getConfiguredTestDialects())(
         expect(await matched("roles", spelled.role)).toBe(true);
       }
 
-      const answers = await holderAnswers(
-        app.adapter,
-        [
-          { kind: "user", id: spelled.user },
-          { kind: "role", id: spelled.role },
-        ],
-        "sign-off",
-        "posts"
-      );
-      expect({
-        user: answers.get(holderKey({ kind: "user", id: spelled.user })),
-        role: answers.get(holderKey({ kind: "role", id: spelled.role })),
-      }).toEqual({
+      // Asked alone, and in one batch beside the stored spelling: each spelling answers as the
+      // database matched it either way, so a batch naming both never loses one of them.
+      const holders = [
+        { kind: "user" as const, id: spelled.user },
+        { kind: "role" as const, id: spelled.role },
+      ];
+      const stored = [
+        { kind: "user" as const, id: "casey" },
+        { kind: "role" as const, id: clearers },
+      ];
+      const expected = {
         user: (await matched("users", spelled.user)) ? "holds" : "not-found",
         role: (await matched("roles", spelled.role)) ? "holds" : "not-found",
-      });
+        storedUser: "holds",
+        storedRole: "holds",
+      };
+      for (const asked of [holders, [...stored, ...holders]]) {
+        const answers = await holderAnswers(
+          app.adapter,
+          asked,
+          "sign-off",
+          "posts"
+        );
+        expect({
+          user: answers.get(holderKey(holders[0])),
+          role: answers.get(holderKey(holders[1])),
+          storedUser:
+            asked.length > 2 ? answers.get(holderKey(stored[0])) : "holds",
+          storedRole:
+            asked.length > 2 ? answers.get(holderKey(stored[1])) : "holds",
+        }).toEqual(expected);
+      }
     });
 
     it("names a missing person and a deactivated one, who hold nothing", async () => {

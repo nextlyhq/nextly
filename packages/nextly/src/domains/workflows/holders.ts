@@ -74,24 +74,33 @@ function chunks(ids: readonly string[]): string[][] {
 }
 
 /**
- * Each of `requested` that names a row, mapped to that row, by the spelling asked: the row of that
- * exact id, else the one row whose id differs from it only in case. MySQL compares ids under a
- * case-insensitive collation, so it answers an id in another case with the row as stored;
- * PostgreSQL and SQLite compare exactly and return no such row. A row some request names exactly
- * is that request's alone, so a spelling the database would not match never borrows it.
+ * Whether the database compares ids without regard to case: MySQL does, under its case-insensitive
+ * collation; PostgreSQL and SQLite compare them exactly.
+ */
+function comparesIdsWithoutCase(adapter: DrizzleAdapter): boolean {
+  return adapter.dialect === "mysql";
+}
+
+/**
+ * Each of `requested` that names a row, mapped to that row, by the spelling asked, as the database
+ * matched it: the row of that exact id, and, where the database compares ids without regard to case
+ * (`foldsCase`), the one row whose id differs from it only in case, so every spelling MySQL matches
+ * to a row answers as that row, however many of them one batch asks. Where it compares exactly, a
+ * spelling in another case names no row, as the database answered it.
  */
 function byRequestedId<Row extends { id: string }>(
   requested: readonly string[],
-  rows: readonly Row[]
+  rows: readonly Row[],
+  foldsCase: boolean
 ): Map<string, Row> {
   const exact = new Map(rows.map(row => [row.id, row]));
-  const askedExactly = new Set(requested.filter(id => exact.has(id)));
   const folded = new Map<string, Row | null>();
-  for (const row of rows) {
-    if (askedExactly.has(row.id)) continue;
-    const key = row.id.toLowerCase();
-    // Two rows differing only in case match no other spelling unambiguously.
-    folded.set(key, folded.has(key) ? null : row);
+  if (foldsCase) {
+    for (const row of rows) {
+      const key = row.id.toLowerCase();
+      // Two rows differing only in case match no other spelling unambiguously.
+      folded.set(key, folded.has(key) ? null : row);
+    }
   }
   const found = new Map<string, Row>();
   for (const id of requested) {
@@ -128,7 +137,7 @@ export async function readPersons(
       });
     }
   }
-  return byRequestedId(userIds, rows);
+  return byRequestedId(userIds, rows, comparesIdsWithoutCase(adapter));
 }
 
 /**
@@ -268,7 +277,9 @@ async function existingRoleIds(
     for (const row of found) rows.push({ id: String(row.id) });
   }
   return new Map(
-    [...byRequestedId(roleIds, rows)].map(([id, row]) => [id, row.id])
+    [...byRequestedId(roleIds, rows, comparesIdsWithoutCase(adapter))].map(
+      ([id, row]) => [id, row.id]
+    )
   );
 }
 
