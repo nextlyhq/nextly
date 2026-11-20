@@ -7,9 +7,10 @@
 // field reads its values, and the rows keyed as the live table keys them. Never a second rule:
 // a repair and a push name the same class, reason and rows for one column.
 //
-// On SQLite that rule is not enough: no conversion runs there and a column keeps any value, so it
-// finds a "maybe" kept in a checkbox's column and 1.5 in a whole number's. There the push also asks
-// what the new field reads from each value, by the judge a Schema Builder save asks
+// That rule judges the column, not the field: on SQLite no conversion runs and a column keeps any
+// value, so it finds a "maybe" kept in a checkbox's column and 1.5 in a whole number's, and on
+// MySQL it keeps two texts a unique column's collation holds as one. So on every database the push
+// also asks what the new field reads from each value, by the judge a Schema Builder save asks
 // (`value-conversion/type-change`), with the field the registry recorded before the apply and the
 // field the configuration declares now, and takes the worse of the two. Never a rule of its own:
 // a Builder save and a push name the same class for one change.
@@ -31,15 +32,15 @@ import {
   reasonClass,
 } from "../../value-conversion/judge-column";
 import {
-  fieldTypeChangesOf,
-  judgeFieldTypeChanges,
-} from "../../value-conversion/type-change/field-type-changes";
-import {
   judgeStoredColumn,
   keyedByOf,
   readStoredValues,
   type KeyedBy,
 } from "../../value-conversion/read-values";
+import {
+  fieldTypeChangesOf,
+  judgeFieldTypeChanges,
+} from "../../value-conversion/type-change/field-type-changes";
 import type {
   ColumnConversion,
   ColumnType,
@@ -150,18 +151,17 @@ function fieldOf(
 }
 
 /**
- * What the per-value judge is asked with for `field`'s column: only on SQLite, and only where the
+ * What the per-value judge is asked with for `field`'s column, on every database: only where the
  * registry recorded the entity's fields before the apply. Without that record nothing says what
- * the column's values were written as, so the column rule judges alone, as on the other databases.
+ * the column's values were written as, so the column rule judges alone.
  */
 function fieldReadingsOf(
   schema: DesiredSchema,
   table: string,
   field: FieldDefinition | undefined,
-  dialect: SupportedDialect,
   unique: boolean
 ): FieldReadings | undefined {
-  if (dialect !== "sqlite" || field === undefined) return undefined;
+  if (field === undefined) return undefined;
   const owner = ownerOf(schema, table);
   const previous = owner?.e.recordedFields;
   if (owner === undefined || previous === undefined) return undefined;
@@ -334,7 +334,8 @@ export async function judgeOfferedTypeChange(
  * SQLite clears a consented value only once its table's rebuild has succeeded, and the rebuild
  * copies every value into the new column first. Two equal values copied into a unique column end
  * the rebuild part-way, before either is cleared, so the change is refused before any statement
- * runs, naming the rows. Values that all differ are copied and then cleared.
+ * runs, naming the rows. Values that all differ are copied and then cleared. PostgreSQL and MySQL
+ * clear the consented values before the column converts, so two of them never meet in it there.
  */
 async function withRepeatsToClear(
   db: unknown,
@@ -343,7 +344,13 @@ async function withRepeatsToClear(
   verdict: ColumnVerdict,
   readings: FieldReadings
 ): Promise<ColumnVerdict> {
-  if (readings.unique !== true || verdict.cleared.length < 2) return verdict;
+  if (
+    dialect !== "sqlite" ||
+    readings.unique !== true ||
+    verdict.cleared.length < 2
+  ) {
+    return verdict;
+  }
   const toClear = new Set(verdict.cleared.map(rowKeyText));
   const holders = new Map<string, RowKey[]>();
   for await (const value of readStoredValues(db, dialect, {
@@ -411,7 +418,6 @@ export function typeChangeJudge(args: {
       args.schema,
       op.tableName,
       field,
-      args.dialect,
       isUnique(op.tableName, op.columnName)
     );
     const { judgement, cleared } = await judgeOfferedTypeChange(

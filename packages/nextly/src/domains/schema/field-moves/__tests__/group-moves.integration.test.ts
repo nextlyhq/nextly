@@ -465,6 +465,27 @@ describe.each(getConfiguredTestDialects())(
       expect((await columnsOf(t)).sort()).toEqual(columns);
     });
 
+    it("asks no rename of a moved column onto a field the same save adds", async () => {
+      const t = await boot(dialect);
+      const summary: Field = { name: "summary", type: "text" };
+      const extra: Field = { name: "extra", type: "text" };
+      await createPosts(t, SLUG, { fields: [summary, group("meta", [NOTE])] });
+      await t.nextly.create({
+        collection: SLUG,
+        data: { title: "One", slug: "one", summary: "First" },
+      });
+      // `summary` leaves the row as `extra` arrives: a pair the push would offer as a rename, which
+      // a move is not, since the file carries `summary`'s values into the group.
+      await save(
+        t,
+        [extra, group("meta", [NOTE, summary])],
+        [{ from: ["summary"], to: ["meta", "summary"] }]
+      );
+      const read = (await readAll(t)).get("one");
+      expect((read?.meta as { summary?: unknown })?.summary).toBe("First");
+      expect(read?.extra ?? null).toBeNull();
+    });
+
     it("asks the drop of a removed field a hint names but no move carries, with only the moved column exempt", async () => {
       const t = await boot(dialect);
       const summary: Field = { name: "summary", type: "text" };

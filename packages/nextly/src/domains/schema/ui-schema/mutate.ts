@@ -70,7 +70,8 @@ export function mutateManifest(
     // Structurally-partial entities (missing slug/fields) are already
     // rejected by the Zod re-validation below (NEXTLY_UI_SCHEMA_INVALID).
     // The manifest is this road's record of the entity, so a pair of sibling fields its stored
-    // entry already holds keeps working and only a pair this write creates is refused.
+    // entry already holds keeps working and only a pair this write creates is refused, except a
+    // pair sharing a stored value, which is refused held or not.
     assertNoNewSiblingClashes(
       { kind: SIBLING_KIND[mutation.kind], slug: slug ?? "" },
       (mutation.entity as { fields?: unknown }).fields ?? [],

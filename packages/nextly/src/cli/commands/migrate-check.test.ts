@@ -787,7 +787,9 @@ describe("runChecks (F11 PR 4)", () => {
       expect(logger.success).not.toHaveBeenCalled();
     });
 
-    it("passes a pair the latest snapshot records, warning exactly once per pair", async () => {
+    // Two fields reading and writing one column or key are refused, however long the snapshot has
+    // recorded them, naming the value they share.
+    it("fails a pair the latest snapshot records that shares a column or a key", async () => {
       const fields = [
         text("fooBar"),
         text("foo_bar"),
@@ -797,11 +799,30 @@ describe("runChecks (F11 PR 4)", () => {
 
       const logger = await check(fields);
 
+      expect(logger.error.mock.calls.map(([line]) => line)).toEqual([
+        "Collection 'posts': fields 'fooBar' and 'foo_bar' at the top level share the column 'foo_bar'. Rename one of them so each has its own column.",
+        "Collection 'posts': fields 'headline' and 'headline' in group 'seo' share the key 'headline'. Rename one of them so each has its own key.",
+      ]);
+      expect(printed).toHaveBeenCalledWith(
+        expect.stringContaining("(CONFIG_INVALID)")
+      );
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.success).not.toHaveBeenCalled();
+    });
+
+    // Two names that differ only in case inside a group are two keys of its value: recorded, they
+    // keep working, and the check warns once.
+    it("passes a recorded pair sharing no stored value, warning exactly once", async () => {
+      const fields = [text("title"), seo(["Ab", "aB"])];
+      await seedRecording(fields);
+
+      const logger = await check(fields);
+
       expect(exitSpy).not.toHaveBeenCalled();
       expect(logger.error).not.toHaveBeenCalled();
       expect(logger.warn.mock.calls.map(([line]) => line)).toEqual([
-        "Collection 'posts': fields 'fooBar' and 'foo_bar' at the top level already share the column 'foo_bar'. They keep working; rename one of them so each keeps its own value.",
-        "Collection 'posts': fields 'headline' and 'headline' in group 'seo' already share the key 'headline'. They keep working; rename one of them so each keeps its own value.",
+        "Collection 'posts': fields 'Ab' and 'aB' in group 'seo' differ only in letter case. They keep working; rename one of them.",
       ]);
       expect(logger.success).toHaveBeenCalledWith(
         expect.stringContaining("migrate:check OK")
