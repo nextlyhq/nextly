@@ -9,6 +9,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import { randomUUID } from "node:crypto";
 
 import { sql, type SQL } from "drizzle-orm";
@@ -24,6 +25,9 @@ import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import type { ReleaseVisibility } from "../../releases/release-visibility";
 import { entityOf } from "../../workflows/implicit-stage";
 import { readPartIsLive } from "../part-liveness";
+
+// Written for per-language storage, as every installation runs it (`storage-layout`).
+perLanguageStorageSuite();
 
 let t: TestNextly | undefined;
 

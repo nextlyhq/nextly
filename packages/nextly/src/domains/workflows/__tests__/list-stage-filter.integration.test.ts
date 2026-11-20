@@ -10,6 +10,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
@@ -30,6 +31,9 @@ import {
   publishedPastReview,
   seedState,
 } from "./helpers/step-harness";
+
+// Written for per-language storage, as every installation runs it (`storage-layout`).
+perLanguageStorageSuite();
 
 /** Draft → Legal → Approved, where each next draft starts On hold after a publish. */
 const desk = defineWorkflow({

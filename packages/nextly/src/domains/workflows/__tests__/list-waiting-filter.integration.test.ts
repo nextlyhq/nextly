@@ -10,6 +10,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { perLanguageStorageSuite } from "../../../__tests__/storage-layout";
 import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -36,6 +37,9 @@ import {
   seedState,
 } from "./helpers/step-harness";
 import { editorial } from "./helpers/step-workflows";
+
+// Written for per-language storage, as every installation runs it (`storage-layout`).
+perLanguageStorageSuite();
 
 const HASH = workflowDefinitionHash(editorial);
 const WAITING = { _waitingForMe: true };
