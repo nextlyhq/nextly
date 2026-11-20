@@ -374,6 +374,8 @@ export async function recordSaveStarted(args: {
     ...(args.filesAt === undefined ? {} : { filesAt: args.filesAt }),
     ...(args.applies === undefined ? {} : { applies: args.applies }),
   };
+  // Before anything of the save is written: another entity's save left part-way refuses it.
+  await refuseBesideLeftSaves(args, made);
   const meta = new MetaService(args.adapter, consoleLogger);
   const key = saveInProgressKey(args.kind, args.slug);
   // Read before anything of the save: its registry write, once it commits, moves the count.
@@ -426,6 +428,63 @@ export async function recordSaveStarted(args: {
 }
 
 /**
+ * Refuse a save while a save of another entity stands left part-way: one this host's settle, run
+ * before the save, could not settle; one whose record cannot be read; or another host's that
+ * applied its own files, and may have changed this database part-way. This save would otherwise
+ * write its files and snapshot over a state no file finishes describing. A save made outside
+ * development changed no table, its files left for `nextly migrate`, so a save goes on beside it,
+ * with a notice. The entity's own record is the gate's further on (`beside`), where the same save
+ * again goes on to finish it; a record this save's own scope made is its own.
+ *
+ * @throws NextlyError `CONFLICT` naming each save left and the step that settles it
+ */
+async function refuseBesideLeftSaves(
+  args: {
+    adapter: DrizzleAdapter;
+    kind: SaveInProgressKind;
+    slug: string;
+    notify: (line: string) => void;
+  },
+  made: readonly MadeRecord[]
+): Promise<void> {
+  const own = saveInProgressKey(args.kind, args.slug);
+  const ours = new Set(made.map(entry => entry.record.id));
+  const here = hostname();
+  const left: string[] = [];
+  for (const row of await readSavesInProgress(args.adapter)) {
+    if (row.key === own) continue;
+    if (!("record" in row)) {
+      left.push(
+        `the record ${row.key}, which could not be read (${unreadableRecordStep(row.key)})`
+      );
+      continue;
+    }
+    const { record } = row;
+    if (ours.has(record.id)) continue;
+    if (record.applies === false) {
+      args.notify(
+        `${described(record)} was made outside development and is recorded as left part-way; this save goes on beside it.`
+      );
+      continue;
+    }
+    left.push(
+      record.host === here
+        ? described(record)
+        : `${described(record)}, which a development start on ${record.host} settles`
+    );
+  }
+  if (left.length === 0) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    message: `An earlier Builder save was left part-way and is not settled, so this save was not started: ${left.join("; ")}. To settle it, ${SETTLES}.`,
+    logContext: {
+      reason: "builder-save-left-elsewhere",
+      saves: left,
+    },
+  });
+}
+
+/**
  * Add `names` to the record's files: the row, only while it is still this record (a row another
  * process moved is left to that process), then the marker, replaced whole. A stop between the two
  * leaves the row ahead of the marker, which the commands with no database read only for the save
@@ -446,21 +505,22 @@ async function beside(
     kept: true,
   });
   // One of this host's that its settle, which ran before this save, could not settle: a save of
-  // the entity over it would write past a state nothing has finished. Another host's is settled
-  // by that host's start, and this save goes on beside it.
-  // The same save again (its definition the one the left save was writing) goes on: it is the
-  // way that save is finished, and the settle after it (`withSchemaChangeExcluded`) judges the
-  // record then. Any other save of the entity is refused.
+  // the entity over it would write past a state nothing has finished. Another host's may have
+  // changed this database part-way, and only that host's start, which has its files, settles it.
+  // The same save again on this host (its definition the one the left save was writing) goes on:
+  // it is the way that save is finished, and the settle after it (`withSchemaChangeExcluded`)
+  // judges the record then. Any other save of the entity is refused.
+  const here = stood.host === hostname();
   const finishing =
+    here &&
     args.definitionAfter !== undefined &&
     stood.definitionAfter === args.definitionAfter;
   // A record of a save that applied nothing (outside development, its files left for
-  // `nextly migrate`) is not one a settle judges: a save goes on beside it, as beside another
-  // host's.
-  if (stood.host === hostname() && stood.applies !== false && !finishing) {
+  // `nextly migrate`) is not one a settle judges, and changed no table: a save goes on beside it.
+  if (stood.applies !== false && !finishing) {
     throw NextlyError.conflict({
       reason: "state",
-      message: `${described(stood).replace(/^a /, "A ")} was left part-way and could not be settled, so this save was not started. ${clearByHand(args.projectRoot, stood)}`,
+      message: `${described(stood).replace(/^a /, "A ")} was left part-way and could not be settled, so this save was not started. ${here ? clearByHand(args.projectRoot, stood) : `A development start on ${stood.host} settles it.`}`,
       logContext: {
         reason: "builder-save-left-unsettled",
         key,

@@ -59,7 +59,7 @@ import {
   type SettledSave,
 } from "../settle-left-save";
 import { recordSaveStarted, withSaveRecords } from "../save-in-progress";
-import { settleRegistryReader, settleRegistryWriter } from "../settle-registry";
+import { settleRegistryWriter } from "../settle-registry";
 
 /** Where the save is stopped, and how to let it go. Shared with the module mocks below. */
 const kill = vi.hoisted(() => ({
@@ -412,7 +412,6 @@ function settle(t: TestNextly): Promise<SettledSave[]> {
     migrationsDir: HISTORY_DIR(),
     logger: { info: () => undefined, warn: () => undefined },
     writeRegistry: settleRegistryWriter(t.adapter),
-    registryHolds: settleRegistryReader(t.adapter),
   });
 }
 
@@ -1922,16 +1921,14 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       const posts = "settle_posts";
       const key = `builder-save-in-progress:collection:${posts}`;
-      await t
-        .getService("collectionService")
-        .createCollection(
-          {
-            name: posts,
-            label: posts,
-            fields: [text("heading")],
-          } as Parameters<CollectionService["createCollection"]>[0],
-          {}
-        );
+      await t.getService("collectionService").createCollection(
+        {
+          name: posts,
+          label: posts,
+          fields: [text("heading")],
+        } as Parameters<CollectionService["createCollection"]>[0],
+        {}
+      );
       const rowOf = async () => {
         const [row] = await t.adapter.select<{
           fields: unknown;
