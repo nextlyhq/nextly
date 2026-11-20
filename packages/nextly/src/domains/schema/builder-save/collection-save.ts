@@ -100,10 +100,11 @@ import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import type { FieldMoveRequest } from "../field-moves/check-move";
+import { movesFileFacts, planMovingEntity } from "../field-moves/entity-moves";
 import { keptValuesOf, type KeptValues } from "../field-moves/kept-values";
 import { heldValueAt, holdsValueAt } from "../field-moves/move-statements";
 import { movedColumnSentences } from "../field-moves/moved-column-facts";
-import { planEntityMoves, type EntityMoves } from "../field-moves/plan-moves";
+import type { EntityMoves } from "../field-moves/plan-moves";
 import { checksumOf } from "../migrate/applied-checksums";
 import { migrationDriftError, type DriftItem } from "../migrate/drift-error";
 import {
@@ -3184,21 +3185,8 @@ async function movesOf(
   const sentences = await moveSentencesOf(deps, moves);
   return {
     appended: addedStatements(deps, save, table, moves),
-    valueMoves: moves.movedColumns.map(moved => ({
-      table: moved.table,
-      column: moved.column,
-      reason:
-        sentences.get(moved.column) ??
-        `moved into the group ${moved.into}; its values are copied there first`,
-    })),
-    refilledColumns: moves.refilledColumns,
-    valuesMovedIn: carriesValues(moves) ? [table] : [],
+    ...movesFileFacts(moves, table, sentences),
   };
-}
-
-/** Whether a save's planned moves carry any values, so its file changes the table's rows. */
-function carriesValues(moves: EntityMoves): boolean {
-  return moves.up.first.length + moves.up.last.length > 0;
 }
 
 /**
@@ -3363,40 +3351,32 @@ function plannedMovesOf(
   ) {
     return NO_MOVES;
   }
-  const planned = planEntityMoves({
-    before: (save.previous.fields ?? []) as FieldDefinition[],
-    after: (save.entity.fields ?? []) as FieldDefinition[],
-    moves: save.moves,
-    // Where the values are stored, not whether the entity is translated: under per-language
-    // storage a shared entity keeps its translatable fields in the language table too.
-    localized: storesPerLanguage(save.entity),
-    renames: save.renamedFields ?? [],
-    table,
-    dialect: deps.adapter.getCapabilities().dialect,
-    // A field group's table is made by its own generator; a Single's by the collection's.
-    builtBy: save.kind === "fieldGroup" ? "fieldGroup" : "collection",
-    // The settings the save's definition keeps, which may name a field the save moves.
-    ...(save.entity.admin === undefined ? {} : { admin: save.entity.admin }),
-    // The hooks it stores, whose settings name top-level fields as the admin settings do.
-    ...(save.entity.hooks === undefined ? {} : { hooks: save.entity.hooks }),
-    // The media library records each use by the field's path under its collection or Single; a
-    // field group's uses are recorded under each entity that uses it, so none are moved here.
-    ...(save.kind === "fieldGroup"
-      ? {}
-      : {
-          mediaUses: {
-            kind:
-              save.kind === "single"
-                ? ("single" as const)
-                : ("collection" as const),
-            slug: save.slug,
-          },
-        }),
-    // A fill answer writes every entry's value before the copy, so it needs no stop.
-    filledColumns: (save.resolutions ?? [])
-      .filter(resolution => resolution.kind === "fill")
-      .map(resolution => toSnakeCase(resolution.column)),
-  });
+  const planned = planMovingEntity(
+    {
+      // A collection when the save names no kind.
+      kind: save.kind ?? "collection",
+      slug: save.slug,
+      before: (save.previous.fields ?? []) as FieldDefinition[],
+      after: (save.entity.fields ?? []) as FieldDefinition[],
+      moves: save.moves,
+      // Where the values are stored, not whether the entity is translated: under per-language
+      // storage a shared entity keeps its translatable fields in the language table too.
+      localized: storesPerLanguage(save.entity),
+      renames: save.renamedFields ?? [],
+      table,
+      // A field group's table is made by its own generator; a Single's by the collection's.
+      builtBy: save.kind === "fieldGroup" ? "fieldGroup" : "collection",
+      // The settings the save's definition keeps, which may name a field the save moves.
+      ...(save.entity.admin === undefined ? {} : { admin: save.entity.admin }),
+      // The hooks it stores, whose settings name top-level fields as the admin settings do.
+      ...(save.entity.hooks === undefined ? {} : { hooks: save.entity.hooks }),
+      // A fill answer writes every entry's value before the copy, so it needs no stop.
+      filledColumns: (save.resolutions ?? [])
+        .filter(resolution => resolution.kind === "fill")
+        .map(resolution => toSnakeCase(resolution.column)),
+    },
+    deps.adapter.getCapabilities().dialect
+  );
   refuseDeletesBeforeRefill(save, planned);
   return planned;
 }
