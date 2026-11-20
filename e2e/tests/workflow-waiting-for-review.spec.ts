@@ -143,7 +143,8 @@ test("a reviewer finds the notes waiting for review from the Content panel", asy
     for (const [index, title] of titles.entries()) {
       const row = table.getByRole("row").filter({ hasText: title });
       await expect(row).toHaveCount(1);
-      await expect(row).toContainText("Reviewed notes");
+      // Its collection, by the collection's label.
+      await expect(row).toContainText("Reviewed note");
       await expect(row).toContainText("In review");
       await expect(row.getByRole("link", { name: title })).toHaveAttribute(
         "href",
