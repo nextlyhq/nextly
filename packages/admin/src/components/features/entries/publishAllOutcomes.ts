@@ -19,9 +19,10 @@ export type LanguageLabel = (code: string) => string;
 
 /**
  * Fields as a sentence names them: those the caller may read by name, then a
- * count of those it may not, which the server withholds by name.
+ * count of those it may not, which the server withholds by name. Shared with the choice of what
+ * goes live, which names the same fields the same way.
  */
-function fieldList(fields: readonly string[], hiddenCount = 0): string {
+export function fieldList(fields: readonly string[], hiddenCount = 0): string {
   const hidden =
     hiddenCount > 0
       ? `${hiddenCount} field${hiddenCount === 1 ? "" : "s"} you can't see`
