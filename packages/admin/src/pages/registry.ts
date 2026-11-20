@@ -161,6 +161,9 @@ const WorkflowsPage = lazyRoute(
 const WorkflowDetailPage = lazyRoute(
   () => import("./dashboard/settings/workflows/[slug]")
 );
+const LanguagesPage = lazyRoute(
+  () => import("./dashboard/settings/languages/index")
+);
 const SingleAPIPlaygroundPage = lazyRoute(
   () => import("./dashboard/singles/[slug]/api")
 );
@@ -828,6 +831,15 @@ export const routeConfig: Record<string, RouteConfig> = {
     screenName: settingsScreen(ROUTES.SETTINGS_WORKFLOWS),
     type: "private",
     requiredPermission: [...WORKFLOW_SETTINGS_READ],
+    section: overridableBy("settings"),
+  },
+  // Read by whoever may read settings, as the languages route is; changing
+  // them is decided on the page.
+  [ROUTES.SETTINGS_LANGUAGES]: {
+    component: LanguagesPage,
+    screenName: settingsScreen(ROUTES.SETTINGS_LANGUAGES),
+    type: "private",
+    requiredPermission: READ_SETTINGS,
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_WEBHOOKS]: {

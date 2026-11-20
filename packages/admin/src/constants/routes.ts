@@ -157,6 +157,9 @@ export const ROUTES = {
   // emails) on its own page.
   SETTINGS_WORKFLOWS: "/admin/settings/workflows",
   SETTINGS_WORKFLOW_DETAIL: "/admin/settings/workflows/[slug]",
+  // Languages: the languages content is written in, their order and the
+  // default, changed here unless the configuration declares them.
+  SETTINGS_LANGUAGES: "/admin/settings/languages",
 
   // Plugin routes
   PLUGINS: "/admin/plugins",
