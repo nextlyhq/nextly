@@ -79,9 +79,11 @@ import {
   archiveCollectionFieldsLeavingTranslation,
   checkCollectionTranslationChange,
   collectionChangeCarriesValues,
+  dropCollectionUniquenessLeftOn,
   fieldsAsStored,
   reconcileCollectionCompanionAfterFile,
   recordedFieldsOf,
+  refuseCollectionIndexNamesTaken,
   refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
@@ -1414,6 +1416,9 @@ const COLLECTIONS_METHODS: Record<
                 isLocalized,
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
+                // A column of its own table that no field describes is refused as the push
+                // refuses it.
+                collection: { slug: p.collectionName },
                 ...dialogConfirmations(
                   tableName,
                   resolutions,
@@ -1429,22 +1434,31 @@ const COLLECTIONS_METHODS: Record<
             // A field leaving translation archived before the file runs, and the translations
             // table brought in step with the main table the file left.
             fileRoad: {
-              judge: async () =>
-                archiveCollectionFieldsLeavingTranslation(
+              // The preconditions the push asks before it changes anything: an index name the
+              // change declares that another index holds, and a field leaving translation's.
+              judge: async () => {
+                await refuseCollectionIndexNamesTaken(change);
+                await archiveCollectionFieldsLeavingTranslation(
                   change,
                   await companionRename(),
                   { judgeOnly: true }
-                ),
+                );
+              },
               before: async () =>
                 archiveCollectionFieldsLeavingTranslation(
                   change,
                   await companionRename()
                 ),
-              after: async () =>
-                reconcileCollectionCompanionAfterFile(
+              // What the file does not reach, as the push does it once it has run: the
+              // translations table brought in step, and a unique index a field that stops being
+              // unique still has under a name the file did not drop.
+              after: async () => {
+                await reconcileCollectionCompanionAfterFile(
                   change,
                   await companionRename()
-                ),
+                );
+                await dropCollectionUniquenessLeftOn(change);
+              },
             },
             slug: p.collectionName,
             collection: writerRowOf(collection),

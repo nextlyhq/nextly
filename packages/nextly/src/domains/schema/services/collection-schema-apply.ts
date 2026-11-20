@@ -300,8 +300,21 @@ function refuseLeftoverColumns(
     }
   }
   if (leftover.size === 0) return;
-  throw NextlyError.validation({
-    errors: [...leftover].map(column => ({
+  throw columnsNotDescribed(slug, ownTable, [...leftover]);
+}
+
+/**
+ * The refusal of a save over columns of the collection's own table that no field describes:
+ * saving would remove each with its data, so the person drops it by hand or describes it with a
+ * field first. One wording, given by the push and by a save that runs its own file alike.
+ */
+export function columnsNotDescribed(
+  slug: string,
+  tableName: string,
+  columns: readonly string[]
+): NextlyError {
+  return NextlyError.validation({
+    errors: columns.map(column => ({
       path: `columns.${column}`,
       code: "COLUMN_NOT_DESCRIBED",
       message:
@@ -309,7 +322,7 @@ function refuseLeftoverColumns(
         `saving would remove it with its data. Drop the column by hand, or add a field that ` +
         `describes it, then save again.`,
     })),
-    logContext: { slug, tableName: ownTable, columns: [...leftover] },
+    logContext: { slug, tableName, columns: [...columns] },
   });
 }
 
@@ -1272,6 +1285,58 @@ function expectedCollectionColumns(
         new Set(table.columns.map(column => column.name)),
       ] as const;
     })
+  );
+}
+
+/**
+ * This collection as a change that runs its own migration file leaves it, as the push states it
+ * for its own checks (`desired.collections[slug]`): its fields as the file writes them, its
+ * Draft/Published state and its translation.
+ */
+function collectionAsFileLeavesIt(
+  change: CollectionSchemaChange
+): DesiredCollection {
+  const { isLocalized } = storedPerLanguage(change);
+  return {
+    slug: change.slug,
+    tableName: change.collection.tableName,
+    fields: change.fields as DesiredCollection["fields"],
+    status: change.status,
+    localized: isLocalized,
+    // Authored in the Schema Builder.
+    builderOwned: true,
+    recordedFields: recordedFieldsOf(change.collection),
+  };
+}
+
+/**
+ * The push's index-name precondition (`refuseIndexNamesTaken`), asked of a change that runs its
+ * own migration file before anything is written: the file's `CREATE ... INDEX IF NOT EXISTS` skips
+ * a name another index already holds, so the field would be recorded unique, or indexed, while
+ * nothing enforces it.
+ */
+export async function refuseCollectionIndexNamesTaken(
+  change: CollectionSchemaChange
+): Promise<void> {
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  await refuseIndexNamesTaken(adapter, collectionAsFileLeavesIt(change));
+}
+
+/**
+ * What the push does once it has run (`dropUniquenessLeftOn`), done once a change's own migration
+ * file has run: the unique index a field that stops being unique still has under a name the file
+ * did not drop is dropped, so the column is no longer held unique while the change records it is
+ * not. Done on this database only, as the push does it; the file does not carry it.
+ */
+export async function dropCollectionUniquenessLeftOn(
+  change: CollectionSchemaChange
+): Promise<void> {
+  const { adapter } = requireSchemaChangeDeps(change.slug);
+  await dropUniquenessLeftOn(
+    adapter,
+    collectionAsFileLeavesIt(change),
+    (change.collection.fields ?? []) as unknown as FieldDefinition[],
+    change.fields
   );
 }
 
