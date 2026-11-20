@@ -139,3 +139,24 @@ export function leftoverUniqueNotice(dropped: LeftoverUniqueIndex): string {
     `Nextly did not name it, so it may be one you made. It is dropped only where it exists.`
   );
 }
+
+/**
+ * The file's statements for `leftoverUniqueDrops`, with each index they drop named to the run and
+ * an unreadable table said, both through `onWarning` where the run listens. Kept here so the
+ * generator gains one call, not the branches of saying what it drops.
+ */
+export async function leftoverUniqueStatements(args: {
+  operations: readonly Operation[];
+  desired: readonly TableSpec[];
+  dialect: SupportedDialect;
+  read: LiveUniqueIndexes | undefined;
+  onWarning: ((message: string) => void) | undefined;
+}): Promise<string[]> {
+  const say = args.onWarning ?? (() => {});
+  const { statements, dropped } = await leftoverUniqueDrops({
+    ...args,
+    warn: say,
+  });
+  for (const index of dropped) say(leftoverUniqueNotice(index));
+  return statements;
+}

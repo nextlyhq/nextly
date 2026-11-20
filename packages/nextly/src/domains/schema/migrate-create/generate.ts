@@ -173,8 +173,7 @@ import {
 } from "./format-file";
 import { withIndexesLiftedForTextWidenings } from "./indexed-text-widening";
 import {
-  leftoverUniqueDrops,
-  leftoverUniqueNotice,
+  leftoverUniqueStatements,
   type LiveUniqueIndexes,
 } from "./leftover-unique-indexes";
 import {
@@ -1205,17 +1204,15 @@ export async function generateMigration(
   //     every database the file runs on ends with the column no longer unique. Named to the run,
   //     since it may be one the user made. Nothing goes back on the way down: Nextly's own index
   //     makes the column unique again.
-  const leftovers = await leftoverUniqueDrops({
-    operations,
-    desired: desiredSnapshot.tables,
-    dialect: args.dialect,
-    read: args.liveUniqueIndexes,
-    warn: args.onWarning ?? (() => {}),
-  });
-  sqlStatements.push(...leftovers.statements);
-  for (const dropped of leftovers.dropped) {
-    args.onWarning?.(leftoverUniqueNotice(dropped));
-  }
+  sqlStatements.push(
+    ...(await leftoverUniqueStatements({
+      operations,
+      desired: desiredSnapshot.tables,
+      dialect: args.dialect,
+      read: args.liveUniqueIndexes,
+      onWarning: args.onWarning,
+    }))
+  );
 
   // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
   // Inverting the resolved ops — not re-diffing — keeps a forward rename as a
