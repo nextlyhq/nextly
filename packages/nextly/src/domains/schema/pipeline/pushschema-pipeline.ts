@@ -442,6 +442,20 @@ function withoutSqliteDropsLeftToRebuild(
 }
 
 /**
+ * Refuses a SQLite apply called inside a transaction this flow already has open on `adapter`: the
+ * apply runs in the adapter's own transaction, which would join that one. Nothing to ask of another
+ * dialect, or of a bare database handle with no adapter.
+ */
+function refuseSqliteApplyInTransaction(
+  dialect: SupportedDialect,
+  adapter: DrizzleAdapter | undefined
+): void {
+  if (dialect === "sqlite" && adapter !== undefined) {
+    assertNoOpenTransaction(adapter, "A SQLite schema push");
+  }
+}
+
+/**
  * The apply's own failure in `err`'s cause chain, `err` itself first: the first `PushSchemaError`
  * or `DdlExecutionError` found, or undefined. Bounded, so a chain that loops back ends the search.
  */
@@ -908,9 +922,13 @@ export class PushSchemaPipeline {
     }
 
     // How this apply waits for a busy table, read before anything is recorded or changed: a bound
-    // outside its range refuses the apply here, with nothing changed.
+    // outside its range refuses the apply here, with nothing changed. Before it, a precondition: a
+    // SQLite apply runs in the adapter's own transaction, so one called inside a transaction this
+    // flow already has open, which the apply's would join, is refused before the journal or the
+    // element owners are written.
     let busyTable: PipelineBusyTable | undefined;
     try {
+      refuseSqliteApplyInTransaction(dialect, this.deps.adapter);
       busyTable = this.busyTableFor(args);
     } catch (err) {
       if (!(err instanceof NextlyError)) throw err;
@@ -2793,11 +2811,6 @@ async function applySqlite(
   const session = sqliteSessionOf(db);
   const checked = (run: () => Promise<number>) =>
     refusingNewDanglingReferences(session, run, dangling);
-  // A precondition, before anything runs: no transaction of this flow already open on the
-  // adapter, which the apply's would join.
-  if (whole && adapter !== undefined) {
-    assertNoOpenTransaction(adapter, "A SQLite schema push");
-  }
   try {
     return !whole
       ? await withSqliteForeignKeysOff(session, () =>

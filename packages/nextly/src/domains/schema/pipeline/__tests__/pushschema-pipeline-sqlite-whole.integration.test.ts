@@ -25,7 +25,11 @@ import { DynamicCollectionSchemaService } from "../../../dynamic-collections/ser
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
 import { freshPushSchema } from "../fresh-push";
 import { PushSchemaPipeline } from "../pushschema-pipeline";
-import { readSchemaLockState, withSchemaLock } from "../schema-lock";
+import {
+  assertSchemaLockHeld,
+  readSchemaLockState,
+  withSchemaLock,
+} from "../schema-lock";
 import {
   noopClassifier,
   noopMigrationJournal,
@@ -486,6 +490,60 @@ describe("PushSchemaPipeline — a SQLite push and another flow's transaction", 
       )
     ).toEqual([{ heading: "Hello" }, { heading: "Meanwhile" }]);
   }, 60_000);
+
+  // A SQLite apply runs in the adapter's own transaction, so one called inside a transaction this
+  // flow already has open is refused, and refused before it writes anything: no journal row, no
+  // element owners, no column.
+  it("refuses an apply inside an open transaction before it records anything", async () => {
+    const db = adapter.getDrizzle();
+    let journalStarts = 0;
+    const journal = {
+      ...noopMigrationJournal,
+      recordStart: (
+        ...args: Parameters<typeof noopMigrationJournal.recordStart>
+      ) => {
+        journalStarts += 1;
+        return noopMigrationJournal.recordStart(...args);
+      },
+    };
+    const owners = () =>
+      adapter.executeQuery(`SELECT * FROM "nextly_schema_owners"`);
+    const ownersBefore = await owners();
+
+    const applied = await adapter.transaction(() =>
+      new PushSchemaPipeline({
+        executor: new DrizzleStatementExecutor("sqlite", db),
+        renameDetector: noopRenameDetector,
+        classifier: noopClassifier,
+        promptDispatcher: noopPromptDispatcher,
+        preRenameExecutor: noopPreRenameExecutor,
+        preCleanupExecutor: noopPreCleanupExecutor,
+        migrationJournal: journal,
+        notifier: noopNotifier,
+        adapter,
+      }).apply({
+        desired: desiredWith([
+          { name: "heading", type: "text" },
+          { name: "alpha", type: "text" },
+        ]),
+        db,
+        dialect: "sqlite",
+        source: "code",
+        promptChannel: "terminal",
+      })
+    );
+
+    expect(applied.success, "an apply inside a transaction ran").toBe(false);
+    expect(applied.statementsKept).toBe(0);
+    expect(journalStarts, "the journal was written before the refusal").toBe(0);
+    expect(await owners()).toEqual(ownersBefore);
+    const columns = (
+      await adapter.executeQuery<{ name: string }>(
+        `PRAGMA table_info("${TABLE}")`
+      )
+    ).map(column => column.name);
+    expect(columns).not.toContain("alpha");
+  }, 60_000);
 });
 
 // A push under the schema lock whose transaction runs longer than the lock's lease: the lock's
@@ -594,5 +652,105 @@ describe("PushSchemaPipeline — a SQLite push longer than the schema lock's lea
       lapsesIn,
       "the schema lock's lease once the push committed"
     ).toBeGreaterThan(1);
+  }, 60_000);
+
+  // A confirmation of the hold made inside the push's transaction extends the lease there, and a
+  // transaction that rolls back takes that extension with it. The confirmation goes too, so the
+  // next check asks the database again, and finds another run's claim where one took the row.
+  it("asks the database again once a confirmation made inside a rolled-back push is gone", async () => {
+    const db = adapter.getDrizzle();
+    // Every adapter transaction whose work starts once the push has stalled (the lock's renewals,
+    // queued behind it) is refused, so none confirms the hold in the database meanwhile.
+    const real = adapter.transaction.bind(adapter);
+    let holdingRenewals = false;
+    adapter.transaction = ((
+      work: Parameters<DrizzleAdapter["transaction"]>[0],
+      options?: Parameters<DrizzleAdapter["transaction"]>[1]
+    ) =>
+      real(ctx => {
+        if (holdingRenewals) {
+          return Promise.reject(new Error("held for the case"));
+        }
+        return work(ctx);
+      }, options)) as DrizzleAdapter["transaction"];
+    // A stall past the 2 s lease after `alpha`; then, before `beta`'s statement, the hold is
+    // confirmed again as the executor confirms it before each one, inside the push's transaction,
+    // and `beta`'s statement fails, rolling the push back.
+    let confirmedInside = false;
+    class StallThenFail extends DrizzleStatementExecutor {
+      override async executeStatements(
+        tx: unknown,
+        statements: string[]
+      ): Promise<void> {
+        for (const statement of statements) {
+          if (/beta/.test(statement)) {
+            await assertSchemaLockHeld();
+            confirmedInside = true;
+            throw new Error(`injected failure: ${statement}`);
+          }
+          await super.executeStatements(tx, [statement]);
+          if (/alpha/.test(statement)) {
+            holdingRenewals = true;
+            await sleep(2_600);
+          }
+        }
+      }
+    }
+
+    let applied: { success: boolean } | undefined;
+    let check: unknown;
+    await withSchemaLock(
+      {
+        adapter,
+        command: "nextly db:sync",
+        whenHeld: "refuse",
+        leaseSeconds: 2,
+        logger: { warn: () => {}, info: () => {} },
+      },
+      async () => {
+        applied = await new PushSchemaPipeline({
+          executor: new StallThenFail("sqlite", db),
+          renameDetector: noopRenameDetector,
+          classifier: noopClassifier,
+          promptDispatcher: noopPromptDispatcher,
+          preRenameExecutor: noopPreRenameExecutor,
+          preCleanupExecutor: noopPreCleanupExecutor,
+          migrationJournal: noopMigrationJournal,
+          notifier: noopNotifier,
+          adapter,
+        }).apply({
+          desired: desiredWith([
+            { name: "heading", type: "text" },
+            { name: "alpha", type: "text" },
+            { name: "beta", type: "text" },
+          ]),
+          db,
+          dialect: "sqlite",
+          source: "code",
+          promptChannel: "terminal",
+        });
+        // Another run takes the row, as it may once the lease the rollback took back has lapsed.
+        await adapter.executeQuery(
+          "UPDATE nextly_schema_lock SET owner = 'another run' WHERE id = 1"
+        );
+        check = await assertSchemaLockHeld().then(
+          () => "held",
+          (error: unknown) => error
+        );
+        holdingRenewals = false;
+      }
+    ).catch(() => undefined);
+
+    expect(
+      confirmedInside,
+      "the hold was never confirmed inside the push"
+    ).toBe(true);
+    expect(applied?.success, "the failing push was reported applied").toBe(
+      false
+    );
+    expect(
+      check,
+      "the hold was taken as confirmed after the rollback"
+    ).toMatchObject({ logContext: { reason: "schema lock lost while held" } });
   }, 60_000);
 });
