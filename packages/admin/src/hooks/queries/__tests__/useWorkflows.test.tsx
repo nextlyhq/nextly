@@ -1,8 +1,10 @@
 /**
  * A saved stage label or colour is shown wherever the stage is: the save marks
  * the workflows list and every document's review state stale, so the list, the
- * editor's review card and its status line read the stage again. A change that
- * names no label (an email switch) leaves them as they are.
+ * editor's review card and its status line read the stage again. A saved
+ * default reviewer or grant changes who a part waits for and which steps a
+ * reader may take, so it marks every review state stale too. A change naming
+ * none of these (an email switch) leaves them as they are.
  *
  * The plausible broken save: one that only replaces the settings it answered,
  * leaving the list and the editor showing the label from before.
@@ -72,7 +74,26 @@ describe("saving a workflow's settings", () => {
     }
   });
 
-  it("leaves them as they are for a change that names no label", async () => {
+  it("marks every review state stale once a default reviewer or who takes a step is saved, the list kept", async () => {
+    // Who a part waits for and which steps a reader may take are part of each review state; the
+    // list shows neither.
+    for (const change of [
+      { defaultReviewers: { inReview: { kind: "role" as const, id: "r1" } } },
+      { grants: { approve: ["r1"] } },
+    ]) {
+      const client = clientWithReads();
+      const { result } = renderHook(() => useUpdateWorkflowSettings("review"), {
+        wrapper: wrapperFor(client),
+      });
+
+      await result.current.mutateAsync({ revision: 1, ...change });
+
+      await waitFor(() => expect(stale(client, REVIEW)).toBe(true));
+      expect(stale(client, LIST)).toBe(false);
+    }
+  });
+
+  it("leaves them as they are for a change that names no label, reviewer or grant", async () => {
     const client = clientWithReads();
     const { result } = renderHook(() => useUpdateWorkflowSettings("review"), {
       wrapper: wrapperFor(client),
