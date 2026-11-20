@@ -161,8 +161,38 @@ describe("a chip's friendly name", () => {
       "item",
       "item.title",
       "item.qty",
-      ...everywhere,
+      // The variable declared as `item` is out of reach inside the list,
+      // where `item` is the loop's: it is offered once, as the loop's.
+      ...everywhere.filter(path => path !== "item"),
     ]);
+  });
+
+  it("offers only paths a written email can store", () => {
+    const named: TemplateFormVariable[] = [
+      {
+        name: "customer",
+        description: "",
+        required: true,
+        presentation: {
+          fields: [{ name: "first-name" }, { name: "last_name" }],
+        },
+      },
+      {
+        name: "lines",
+        description: "",
+        required: true,
+        presentation: {
+          type: "list",
+          fields: [{ name: "unit price" }, { name: "qty" }],
+        },
+      },
+    ];
+    expect(variablePaths(named)).toEqual([
+      "customer",
+      "customer.last_name",
+      "lines",
+    ]);
+    expect(itemPaths(named, "lines")).toEqual(["item.qty"]);
   });
 
   it("offers an item's containers inside a list, its nested lists included", () => {

@@ -124,14 +124,14 @@ export function listPaths(
   const declared = variables.filter(variable => variable.name);
   const isList = (variable: TemplateFormVariable) =>
     variable.presentation?.type === "list";
-  return [
+  return storable([
     ...declared.flatMap(variable =>
       isList(variable)
         ? [variable.name]
         : lists(variable.presentation?.fields ?? [], variable.name)
     ),
     ...declared.filter(v => !isList(v)).map(v => v.name),
-  ];
+  ]);
 }
 
 /**
@@ -177,15 +177,38 @@ export function variablePaths(
     list === undefined
       ? []
       : ["item", ...inside(partAt(variables, list)?.fields ?? [], "item")];
-  return [
+  // A declared list is offered itself, as a list field is: what its items
+  // hold is only reachable inside a list block repeating over it.
+  const declared = variables.flatMap(variable => {
+    if (!variable.name) return [];
+    if (variable.presentation?.type === "list") return [variable.name];
+    return [
+      variable.name,
+      ...inside(variable.presentation?.fields ?? [], variable.name),
+    ];
+  });
+  return storable([
     ...item,
-    ...variables
-      .filter(variable => variable.name)
-      .flatMap(variable => [
-        variable.name,
-        ...inside(variable.presentation?.fields ?? [], variable.name),
-      ]),
-  ];
+    // Inside a list, `item` is the loop's: a variable declared as `item` is
+    // out of reach there, so it is not offered.
+    ...(list === undefined ? declared : declared.filter(p => !inItem(p))),
+  ]);
+}
+
+/** Whether `path` is `item` or a path under it. */
+function inItem(path: string): boolean {
+  return path === "item" || path.startsWith("item.");
+}
+
+/** A path as a written email stores one: names of letters, digits and _. */
+const STORABLE = /^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$/;
+
+/**
+ * The paths a written email can store, as its document's schema allows: a
+ * declaration may name a field `first-name`, which no block can refer to.
+ */
+function storable(paths: readonly string[]): string[] {
+  return paths.filter(path => STORABLE.test(path));
 }
 
 /**
@@ -197,5 +220,5 @@ export function itemPaths(
   list: string
 ): string[] {
   const fields = partAt(variables, list)?.fields ?? [];
-  return fields.length > 0 ? fieldPaths(fields, "item") : ["item"];
+  return fields.length > 0 ? storable(fieldPaths(fields, "item")) : ["item"];
 }

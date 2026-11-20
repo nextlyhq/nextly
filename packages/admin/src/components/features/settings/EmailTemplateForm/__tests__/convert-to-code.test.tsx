@@ -4,20 +4,29 @@
  * sent as the new format alone, so the server writes the code from the blocks
  * it has saved.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+} from "@tanstack/react-query";
+import {
+  act,
   cleanup,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { emailTemplateKeys } from "@admin/hooks/queries/useEmailTemplates";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
 import { EmailTemplateForm } from "../EmailTemplateForm";
+import { useConvertToCode } from "../useConvertToCode";
 import { ConvertToCodeDialog } from "../written/ConvertToCodeDialog";
 
 const api = vi.hoisted(() => ({
@@ -104,6 +113,51 @@ async function openMenu() {
     key: "Enter",
   });
 }
+
+describe("converting, until the coded email arrives", () => {
+  it("keeps the dialog open and locked until the email is fetched again", async () => {
+    api.updateTemplate.mockResolvedValue(template({ format: "code" }));
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    // The edit page's query of the email: the first fetch answers at once,
+    // the refetch after converting waits until released.
+    let fetches = 0;
+    let release: () => void = () => {};
+    const released = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(
+      () => {
+        useQuery({
+          queryKey: emailTemplateKeys.detail("t1"),
+          queryFn: async () => {
+            fetches += 1;
+            if (fetches > 1) await released;
+            return fetches;
+          },
+        });
+        return useConvertToCode(template({}), true);
+      },
+      { wrapper }
+    );
+    await waitFor(() => expect(fetches).toBe(1));
+    act(() => result.current.setOpen(true));
+    act(() => result.current.convert());
+
+    // The server has answered and the email is being fetched again.
+    await waitFor(() => expect(fetches).toBeGreaterThan(1));
+    expect(result.current.open).toBe(true);
+    expect(result.current.isPending).toBe(true);
+
+    act(() => release());
+    await waitFor(() => expect(result.current.open).toBe(false));
+    expect(result.current.isPending).toBe(false);
+  });
+});
 
 describe("Convert to code", () => {
   it("sends only the new format, so the server writes the code from the saved blocks", async () => {

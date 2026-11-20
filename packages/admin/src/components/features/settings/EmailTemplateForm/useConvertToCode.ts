@@ -6,10 +6,14 @@
  *
  * @module components/features/settings/EmailTemplateForm/useConvertToCode
  */
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { toast } from "@admin/components/ui";
-import { useUpdateEmailTemplate } from "@admin/hooks/queries/useEmailTemplates";
+import {
+  emailTemplateKeys,
+  useUpdateEmailTemplate,
+} from "@admin/hooks/queries/useEmailTemplates";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 
@@ -34,6 +38,9 @@ export function useConvertToCode(
   owns: boolean
 ): ConvertToCode {
   const [open, setOpen] = useState(false);
+  // Between the server's answer and the coded email reaching the workbench.
+  const [refreshing, setRefreshing] = useState(false);
+  const queryClient = useQueryClient();
   const { mutate, isPending } = useUpdateEmailTemplate();
   const id = template?.id;
   const convertible = Boolean(id) && owns && template?.format === "written";
@@ -43,10 +50,19 @@ export function useConvertToCode(
       { id, data: { format: "code" } },
       {
         onSuccess: () => {
-          setOpen(false);
-          toast.success("Converted to code", {
-            description: "The email now opens in the code editor.",
-          });
+          // The dialog stays open, and locked, until the coded email is
+          // fetched: closed sooner, the editor would still hold the blocks,
+          // and edits made to them would vanish when the coded email lands.
+          setRefreshing(true);
+          void queryClient
+            .invalidateQueries({ queryKey: emailTemplateKeys.detail(id) })
+            .finally(() => {
+              setRefreshing(false);
+              setOpen(false);
+              toast.success("Converted to code", {
+                description: "The email now opens in the code editor.",
+              });
+            });
         },
         onError: (error: Error) => {
           toast.error("Couldn't convert the email", {
@@ -62,7 +78,7 @@ export function useConvertToCode(
   return {
     open,
     setOpen,
-    isPending,
+    isPending: isPending || refreshing,
     convert,
     menu: base =>
       convertible ? { ...base, onConvert: () => setOpen(true) } : base,
