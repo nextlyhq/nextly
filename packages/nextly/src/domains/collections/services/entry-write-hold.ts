@@ -18,7 +18,8 @@
  *
  * A write that waited while the collection was deleted, or deleted and made again under its slug,
  * is refused rather than written into what took its place: the hold compares the registry row it
- * holds with the one read before the write's transaction opened (`expectedRegistryIdOf`).
+ * holds with the one read before the write's transaction opened (`expectedRegistryRowOf`), a slug
+ * that held none then included.
  *
  * @module domains/collections/services/entry-write-hold
  */
@@ -40,6 +41,12 @@ export type CollectionHolder = Pick<
 const heldIn = new WeakMap<TransactionContext, Set<string>>();
 
 /**
+ * The registry row an entry write is made for, read before its transaction opened
+ * (`expectedRegistryRowOf`): its id, or `"absent"` where no row held the slug.
+ */
+export type ExpectedRegistryRow = { readonly id: string } | "absent";
+
+/**
  * Holds collection `slug` for an entry write in `tx`, before the write's first row statement: on
  * MySQL the share side of the collection's hold, once per transaction; elsewhere nothing, since a
  * deleting save's own transaction keeps writes off the table there. Refused, with nothing written,
@@ -50,8 +57,8 @@ export async function holdEntityForWrite(
   slug: string,
   holder: CollectionHolder,
   dialect: SupportedDialect,
-  /** The registry row the write is made for (`expectedRegistryIdOf`); absent, not compared. */
-  expected?: string
+  /** The registry row the write is made for (`expectedRegistryRowOf`); undefined, not compared. */
+  expected?: ExpectedRegistryRow
 ): Promise<void> {
   if (dialect !== "mysql") return;
   const held = heldIn.get(tx);
@@ -63,19 +70,21 @@ export async function holdEntityForWrite(
 }
 
 /**
- * The id of collection `slug`'s registry row, for an entry write about to open its transaction, on
- * MySQL: read before it opens, so the write's transaction takes its view of the database only once
- * it holds the collection (a view taken before would meet a table a deleting save has since
- * changed). While a delete holds the collection it has not committed, so this is the row the write
- * is made for. Undefined elsewhere, where no hold is taken, inside a transaction already open in the
- * flow (whose connection a pool of one has no second for), and where no row holds the slug.
+ * Collection `slug`'s registry row, for an entry write about to open its transaction, on MySQL: its
+ * id, or `"absent"` where no row holds the slug. Read before the transaction opens, so the write's
+ * transaction takes its view of the database only once it holds the collection (a view taken
+ * before would meet a table a deleting save has since changed). While a delete holds the collection
+ * it has not committed, so this is the row the write is made for; a delete that committed first
+ * leaves the slug absent, and a row the hold then finds under it was made since. Undefined
+ * elsewhere, where no hold is taken, inside a transaction already open in the flow (whose
+ * connection a pool of one has no second for), and where the row read carries no id.
  */
-export async function expectedRegistryIdOf(
+export async function expectedRegistryRowOf(
   holder: CollectionHolder,
   slug: string,
   adapter: { transactionOpenInFlow(): boolean },
   dialect: SupportedDialect
-): Promise<string | undefined> {
+): Promise<ExpectedRegistryRow | undefined> {
   if (dialect !== "mysql" || adapter.transactionOpenInFlow()) return undefined;
   let row: { id?: unknown } | null | undefined;
   try {
@@ -84,34 +93,44 @@ export async function expectedRegistryIdOf(
       | null
       | undefined;
   } catch (error) {
-    if (NextlyError.isCode(error, "NOT_FOUND")) return undefined;
+    if (NextlyError.isCode(error, "NOT_FOUND")) return "absent";
     throw error;
   }
   const id = row?.id;
   return typeof id === "string" || typeof id === "number"
-    ? String(id)
+    ? { id: String(id) }
     : undefined;
 }
 
 /**
  * Refuses a write whose collection's registry row is not the one read before its transaction opened
  * (`expected`): gone, or another row under the same slug, made while the write waited for a
- * delete. Nothing of the write has run.
+ * delete, or a row under a slug that held none then. Nothing of the write has run. A slug absent
+ * both times is left to the write, as before.
  */
 function refuseReplaced(
   slug: string,
-  expected: string,
+  expected: ExpectedRegistryRow,
   existing: readonly string[],
   ids: ReadonlyMap<string, string>
 ): void {
+  if (expected === "absent") {
+    if (existing.includes(slug)) throw replacedWhileHeld(slug);
+    return;
+  }
   if (!existing.includes(slug)) {
     throw NextlyError.notFound({
       message: "Collection not found.",
       logContext: { reason: "collection-deleted-while-held", slug },
     });
   }
-  if (ids.get(slug) === expected) return;
-  throw new NextlyError({
+  if (ids.get(slug) === expected.id) return;
+  throw replacedWhileHeld(slug);
+}
+
+/** The refusal of a write whose collection was made again under its slug while it waited. */
+function replacedWhileHeld(slug: string): NextlyError {
+  return new NextlyError({
     code: "COLLECTION_BEING_CHANGED",
     publicMessage:
       "This collection is being changed elsewhere. Try again in a moment.",

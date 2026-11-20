@@ -14,7 +14,8 @@
  *   that connection does not hold changes nothing: the connection ids differ, and the lock stays
  *   taken.
  *
- * Each case runs for a unit in a transaction and for one outside, the runner's two paths.
+ * Each case runs for a unit in a transaction and for one outside, the runner's two paths, on MySQL;
+ * every other configured dialect registers them skipped.
  */
 import { randomBytes } from "node:crypto";
 
@@ -58,9 +59,13 @@ interface TryHold {
   releasedOn?: string;
 }
 
-describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
+describe.each(getConfiguredTestDialects())(
   "a unit's settled, after each of its tries (%s)",
   dialect => {
+    // MySQL's named locks are what `settled` lets go; registered on every configured dialect, so
+    // the file finds its cases wherever it runs, and run on MySQL only.
+    const onMysql = it.runIf(dialect === "mysql");
+
     async function boot(): Promise<TestNextly> {
       const t = await createTestNextly({ dialect });
       instance = t;
@@ -127,78 +132,88 @@ describe.each(getConfiguredTestDialects().filter(d => d === "mysql"))(
       };
       const path = transaction ? "in a transaction" : "outside a transaction";
 
-      it(`releases it on the try's connection when every statement ran (${path})`, async () => {
-        const t = await boot();
-        const tries: TryHold[] = [];
+      onMysql(
+        `releases it on the try's connection when every statement ran (${path})`,
+        async () => {
+          const t = await boot();
+          const tries: TryHold[] = [];
 
-        await runUnitInTries(
-          t.adapter,
-          [`UPDATE ${TABLE} SET n = n + 1 WHERE id = 1`],
-          unit,
-          async () => undefined,
-          holdingRun(tries)
-        );
-
-        expect(tries).toHaveLength(1);
-        await expectEveryTryReleased(t, tries);
-      });
-
-      it(`releases it on the try's connection when a statement fails (${path})`, async () => {
-        const t = await boot();
-        const tries: TryHold[] = [];
-
-        // The row's key is taken, so the insert fails.
-        await expect(
-          runUnitInTries(
+          await runUnitInTries(
             t.adapter,
-            [`INSERT INTO ${TABLE} (id, n) VALUES (1, 5)`],
+            [`UPDATE ${TABLE} SET n = n + 1 WHERE id = 1`],
             unit,
             async () => undefined,
             holdingRun(tries)
-          )
-        ).rejects.toBeDefined();
+          );
 
-        expect(tries).toHaveLength(1);
-        await expectEveryTryReleased(t, tries);
-      });
+          expect(tries).toHaveLength(1);
+          await expectEveryTryReleased(t, tries);
+        }
+      );
 
-      it(`releases it on the try's connection when a try ends waiting, before the next try (${path})`, async () => {
-        const t = await boot();
-        // Another session holds the row past one try's one-second bound, so the first try's
-        // UPDATE ends waiting and the unit is tried again.
-        let release: () => void = () => undefined;
-        const released = new Promise<void>(resolve => {
-          release = resolve;
-        });
-        let held: () => void = () => undefined;
-        const isHeld = new Promise<void>(resolve => {
-          held = resolve;
-        });
-        const holding = t.adapter.transaction(async tx => {
-          await tx.execute(`SELECT n FROM ${TABLE} WHERE id = 1 FOR UPDATE`);
-          held();
-          await released;
-        });
-        await isHeld;
-        const freed = new Promise(resolve => setTimeout(resolve, 1_500)).then(
-          () => release()
-        );
-        const tries: TryHold[] = [];
+      onMysql(
+        `releases it on the try's connection when a statement fails (${path})`,
+        async () => {
+          const t = await boot();
+          const tries: TryHold[] = [];
 
-        await runUnitInTries(
-          t.adapter,
-          [`UPDATE ${TABLE} SET n = n + 1 WHERE id = 1`],
-          unit,
-          async () => undefined,
-          holdingRun(tries)
-        );
-        await freed;
-        await holding;
+          // The row's key is taken, so the insert fails.
+          await expect(
+            runUnitInTries(
+              t.adapter,
+              [`INSERT INTO ${TABLE} (id, n) VALUES (1, 5)`],
+              unit,
+              async () => undefined,
+              holdingRun(tries)
+            )
+          ).rejects.toBeDefined();
 
-        // At least one try ended waiting; each next try found the lock free.
-        expect(tries.length).toBeGreaterThanOrEqual(2);
-        await expectEveryTryReleased(t, tries);
-      }, 30_000);
+          expect(tries).toHaveLength(1);
+          await expectEveryTryReleased(t, tries);
+        }
+      );
+
+      onMysql(
+        `releases it on the try's connection when a try ends waiting, before the next try (${path})`,
+        async () => {
+          const t = await boot();
+          // Another session holds the row past one try's one-second bound, so the first try's
+          // UPDATE ends waiting and the unit is tried again.
+          let release: () => void = () => undefined;
+          const released = new Promise<void>(resolve => {
+            release = resolve;
+          });
+          let held: () => void = () => undefined;
+          const isHeld = new Promise<void>(resolve => {
+            held = resolve;
+          });
+          const holding = t.adapter.transaction(async tx => {
+            await tx.execute(`SELECT n FROM ${TABLE} WHERE id = 1 FOR UPDATE`);
+            held();
+            await released;
+          });
+          await isHeld;
+          const freed = new Promise(resolve => setTimeout(resolve, 1_500)).then(
+            () => release()
+          );
+          const tries: TryHold[] = [];
+
+          await runUnitInTries(
+            t.adapter,
+            [`UPDATE ${TABLE} SET n = n + 1 WHERE id = 1`],
+            unit,
+            async () => undefined,
+            holdingRun(tries)
+          );
+          await freed;
+          await holding;
+
+          // At least one try ended waiting; each next try found the lock free.
+          expect(tries.length).toBeGreaterThanOrEqual(2);
+          await expectEveryTryReleased(t, tries);
+        },
+        30_000
+      );
     }
   }
 );

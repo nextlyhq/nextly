@@ -551,7 +551,11 @@ import {
   entryStillReferenced,
   referrersHolding,
 } from "./entry-still-referenced";
-import { expectedRegistryIdOf, holdEntityForWrite } from "./entry-write-hold";
+import {
+  type ExpectedRegistryRow,
+  expectedRegistryRowOf,
+  holdEntityForWrite,
+} from "./entry-write-hold";
 import { publishCallerOf, publishGate, type PublishPart } from "./publish-gate";
 import { type PartsState, publishValueIssues } from "./publish-parts";
 import { requiresEveryLanguage } from "./require-every-language";
@@ -22881,8 +22885,8 @@ export class CollectionMutationService extends BaseService {
     options?: TransactionOptions
   ): Promise<T> {
     // The registry row the write is made for, read before its transaction opens, so the hold can
-    // refuse a write whose collection was replaced while it waited (`expectedRegistryIdOf`).
-    const expected = await expectedRegistryIdOf(
+    // refuse a write whose collection was replaced while it waited (`expectedRegistryRowOf`).
+    const expected = await expectedRegistryRowOf(
       this.collectionService,
       collectionName,
       this.adapter,
@@ -22901,8 +22905,8 @@ export class CollectionMutationService extends BaseService {
   private holdForEntryWrite(
     tx: TransactionContext,
     collectionName: string,
-    /** The registry row the write is made for, where it was read (`expectedRegistryIdOf`). */
-    expected?: string
+    /** The registry row the write is made for, where it was read (`expectedRegistryRowOf`). */
+    expected?: ExpectedRegistryRow
   ): Promise<void> {
     return holdEntityForWrite(
       tx,

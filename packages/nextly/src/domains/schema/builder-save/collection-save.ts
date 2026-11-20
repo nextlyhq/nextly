@@ -3851,7 +3851,9 @@ async function runWritten(
       // push that failed part way says it.
       // A count that changed, or the collection held elsewhere, is refused before the file's first
       // statement, inside its run, and the file's runner reports it as the file failing: given
-      // back as the refusal it is.
+      // back as the refusal it is. On a try resumed past statements of the file that committed
+      // (MySQL), statements stayed: the part-way failure is given back, naming them, so the file
+      // is kept rather than withdrawn.
       const refusal = holdRefusalOf(error) ?? error;
       if (applied.length > 0) {
         const kept = ordered.slice(applied.length);
@@ -3861,7 +3863,7 @@ async function runWritten(
           await checkedFileOf(deps, kept)
         );
       }
-      throw refusal;
+      throw firstFileFailure(error, refusal);
     }
     applied.push(filename);
   }
@@ -4488,6 +4490,15 @@ export async function countedThroughApply<T>(
       });
     }
   });
+}
+
+/**
+ * The failure a save gives back when its first file fails: the part-way failure itself where
+ * statements of the file stayed (`partlyApplied`), so the file is kept for the operator to finish,
+ * else `refusal`, the hold's refusal it carries or the failure as it is.
+ */
+function firstFileFailure(error: unknown, refusal: unknown): unknown {
+  return partlyApplied(error) ? error : refusal;
 }
 
 /**

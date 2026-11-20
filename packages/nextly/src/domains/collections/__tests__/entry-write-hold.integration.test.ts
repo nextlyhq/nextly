@@ -24,7 +24,12 @@ import {
 import type { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { consoleLogger } from "../../../shared/types";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
+import {
+  expectedRegistryRowOf,
+  holdEntityForWrite,
+} from "../services/entry-write-hold";
 
 const SLUG = "ewh_notes";
 
@@ -280,6 +285,53 @@ describe.each(getConfiguredTestDialects())(
           code: "COLLECTION_BEING_CHANGED",
         });
         expect(await notes(t)).toEqual([]);
+      },
+      30_000
+    );
+
+    // A delete that committed before the write looked its collection up leaves the slug absent;
+    // a collection made again under it before the write holds it is not the one the write was
+    // made for, so the write is refused, not written into it.
+    onMysql(
+      "refuses a write whose collection was gone when it looked and made again before it held it",
+      async () => {
+        const t = await boot();
+        const registry = new DynamicCollectionService(t.adapter, consoleLogger);
+        // The delete, committed: no registry row holds the slug.
+        await t.adapter.executeQuery(
+          `UPDATE dynamic_collections SET slug = 'ewh_gone' WHERE slug = '${SLUG}'`
+        );
+        clearRegistryRowCache();
+        const expected = await expectedRegistryRowOf(
+          registry,
+          SLUG,
+          t.adapter,
+          dialect
+        );
+
+        // The collection made again under the slug, by a session holding it, as a create holds it.
+        const hold = await holdForUpdate(t, tx =>
+          tx
+            .execute(
+              `UPDATE dynamic_collections SET slug = '${SLUG}', id = 'made-again-${SLUG}' WHERE slug = 'ewh_gone'`
+            )
+            .then(() => undefined)
+        );
+        // The write's hold, as its transaction takes it: it waits for the session, then finds
+        // the row made since.
+        const { landed, write } = await landsWhileHeld(
+          t.adapter.transaction(tx =>
+            holdEntityForWrite(tx, SLUG, registry, dialect, expected)
+          )
+        );
+        expect(landed).toBe(false);
+
+        await hold.release();
+        await expect(write).rejects.toMatchObject({
+          code: "COLLECTION_BEING_CHANGED",
+        });
+        // Told apart from a write that read no row at all.
+        expect(expected).toBe("absent");
       },
       30_000
     );

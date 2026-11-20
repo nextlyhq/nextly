@@ -68,9 +68,9 @@ vi.mock("../migrate/required-column-guard", async importOriginal => {
 // release then runs on too. `refused` counts the releases refused.
 const tryRelease = vi.hoisted(() => ({ fails: false, refused: 0 }));
 
-// A switch that puts a statement on a table of its own before each migration file's statements,
-// so a MySQL file commits a statement before the one that deletes, and a try that ends waiting at
-// that one resumes past it.
+// A switch that puts two statements before each migration file's own: a column added to the
+// collection's table, which commits on MySQL, then a write to a row the case holds, which the
+// first try waits at and ends on. The next try resumes past the column, with the delete ahead.
 const resumable = vi.hoisted(() => ({ on: false }));
 vi.mock("../migrate/split-sql", async importOriginal => {
   const real = await importOriginal<typeof import("../migrate/split-sql")>();
@@ -82,7 +82,8 @@ vi.mock("../migrate/split-sql", async importOriginal => {
       const statements = real.splitSqlStatements(...args);
       return resumable.on
         ? [
-            "CREATE TABLE IF NOT EXISTS dh_resumed_past (id integer)",
+            "ALTER TABLE `dc_dh_notes` ADD COLUMN `resumed_past` integer",
+            "UPDATE `dh_waited_at` SET `n` = `n` + 1 WHERE `id` = 1",
             ...statements,
           ]
         : statements;
@@ -782,10 +783,33 @@ describe.each(getConfiguredTestDialects())(
       async () => {
         const t = await boot();
         for (const note of ["a", "b", "c"]) await insert(t, note);
-        // One try waits a second; the first statement commits, and the delete waits past it.
+        // One try waits a second: the column commits, the write to the held row waits past it.
         vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
         vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "30");
+        // A row the case holds, which the first try's write to it waits at.
+        await sql(
+          t,
+          "CREATE TABLE `dh_waited_at` (`id` integer PRIMARY KEY, `n` integer NOT NULL)"
+        );
+        await sql(t, "INSERT INTO `dh_waited_at` (`id`, `n`) VALUES (1, 0)");
+        let letGo: () => void = () => undefined;
+        const goes = new Promise<void>(resolve => {
+          letGo = resolve;
+        });
+        let holding: () => void = () => undefined;
+        const isHolding = new Promise<void>(resolve => {
+          holding = resolve;
+        });
+        const holder = t.adapter.transaction(async tx => {
+          await tx.execute(
+            "SELECT `n` FROM `dh_waited_at` WHERE `id` = 1 FOR UPDATE"
+          );
+          holding();
+          await goes;
+        });
+        await isHolding;
         resumable.on = true;
+        const filesBefore = historyFiles(t);
         const { paused, release } = gated(afterCount);
         const applying = apply(t, 3).then(
           () => "applied",
@@ -797,22 +821,6 @@ describe.each(getConfiguredTestDialects())(
         ]);
         expect(reached || (await applying)).toBe(true);
 
-        // Another session reading the table, which keeps its definition from changing: the first
-        // try's delete waits for it and the try ends.
-        let letGo: () => void = () => undefined;
-        const goes = new Promise<void>(resolve => {
-          letGo = resolve;
-        });
-        let reading: () => void = () => undefined;
-        const isReading = new Promise<void>(resolve => {
-          reading = resolve;
-        });
-        const reader = t.adapter.transaction(async tx => {
-          await tx.execute(`SELECT 1 FROM ${q(TABLE)} LIMIT 1`);
-          reading();
-          await goes;
-        });
-        await isReading;
         // An entry write, sent while the first try holds the collection: it goes ahead once that
         // try has let go, between the tries.
         const between = t.nextly.create({
@@ -821,14 +829,17 @@ describe.each(getConfiguredTestDialects())(
         });
         release();
         await between;
-        // The table is free once the write is in.
+        // The row is free once the write is in.
         letGo();
-        await reader;
+        await holder;
 
         const outcome = await applying;
         expect(JSON.stringify(outcome)).toContain("DELETION_COUNT_CHANGED");
         expect(await hasNoteColumn(t)).toBe(true);
         expect(await notesHeld(t)).toBe(4);
+        // The file's first statement stayed applied, so the file is kept, for the operator to
+        // finish, rather than withdrawn as if nothing of it ran.
+        expect(historyFiles(t).length).toBeGreaterThan(filesBefore.length);
       },
       60_000
     );

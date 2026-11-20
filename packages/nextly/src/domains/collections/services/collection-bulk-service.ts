@@ -2588,7 +2588,9 @@ export class CollectionBulkService extends BaseService {
    * with one generic error per index (the public contract maps errors to
    * input indices, and the raw operational detail stays in the log); a
    * stopOnError abort clears the provisional successes and annotates the
-   * first recorded error with how many were rolled back.
+   * first recorded error with how many were rolled back. An abort before any
+   * item recorded anything (the collection's hold refused, say) reports every
+   * requested item as failed with the abort's code, whatever stopOnError says.
    */
   private rewriteCreateUpdateRollback(
     state: LegacyBatchState,
@@ -2629,7 +2631,7 @@ export class CollectionBulkService extends BaseService {
       // carries the abort's code.
       const { code } = failureFieldsOf(error);
       state.errors = items.map((_, index) => ({ index, error: message, code }));
-    } else if (stopOnError) {
+    } else if (stopOnError && itemRecorded(state)) {
       if (state.successful > 0) {
         this.logger.warn(`${operationLabel} rolled back due to stopOnError`, {
           collectionName,
@@ -2932,4 +2934,9 @@ function everyItemRefused(
     })),
     ids: [],
   };
+}
+
+/** Whether an item of the batch recorded anything before its transaction rolled back. */
+function itemRecorded(state: LegacyBatchState): boolean {
+  return state.successful > 0 || state.failed > 0 || state.errors.length > 0;
 }
