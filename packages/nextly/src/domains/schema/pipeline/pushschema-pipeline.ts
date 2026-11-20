@@ -442,6 +442,26 @@ function withoutSqliteDropsLeftToRebuild(
 }
 
 /**
+ * The apply's own failure in `err`'s cause chain, `err` itself first: the first `PushSchemaError`
+ * or `DdlExecutionError` found, or undefined. Bounded, so a chain that loops back ends the search.
+ */
+function applyFailureIn(
+  err: unknown
+): PushSchemaError | DdlExecutionError | undefined {
+  let current: unknown = err;
+  for (let depth = 0; depth < 10 && current !== undefined; depth++) {
+    if (
+      current instanceof PushSchemaError ||
+      current instanceof DdlExecutionError
+    ) {
+      return current;
+    }
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return undefined;
+}
+
+/**
  * A pre-cleanup refusal or failure, as the apply reports it. An abort is not a
  * DDL failure: it keeps its own type so the outer mapper classifies it as
  * CONFIRMATION_DECLINED.
@@ -2676,8 +2696,14 @@ export class PushSchemaPipeline {
     if (NextlyError.isCode(err, "NEXTLY_TABLE_BUSY")) return err.code;
     // Before the DDL branch: nothing ran, and saying so is the whole value of the distinction.
     if (NextlyError.isValidation(err)) return "PRECONDITION_FAILED";
-    if (err instanceof PushSchemaError) return "PUSHSCHEMA_FAILED";
-    if (err instanceof DdlExecutionError) return "DDL_EXECUTION_FAILED";
+    // Read through the cause chain: a SQLite apply runs in the adapter's transaction, which wraps
+    // what its work threw (unless branded as the application's, as the checks above are) in an
+    // error of its own. The thrown error itself is left as it is, busy-table detection reads it.
+    const applyFailure = applyFailureIn(err);
+    if (applyFailure instanceof PushSchemaError) return "PUSHSCHEMA_FAILED";
+    if (applyFailure instanceof DdlExecutionError) {
+      return "DDL_EXECUTION_FAILED";
+    }
     // PromptDispatcher signals - distinguish "user said no" from "no TTY
     // available" so callers (HMR loop, UI handler) can render the right
     // user-facing message instead of a generic INTERNAL_ERROR.

@@ -521,23 +521,31 @@ for (const dialect of getConfiguredTestDialects()) {
         const filesBefore = Object.keys(filesIn(migrationsDir(), ".sql"));
         const tableBefore = await definitionOf();
         // The first statement handed to the executor fails: what ran before it is the
-        // pre-resolution phase's alone.
+        // pre-resolution phase's alone. The rows are read there first, on SQLite's one connection,
+        // inside the push's transaction, so the rewrite is seen to have run before the failure.
+        let rowsAtFailure: unknown[] | undefined;
         const failing = vi
           .spyOn(DrizzleStatementExecutor.prototype, "executeStatements")
-          .mockRejectedValue(new Error("the first schema statement failed"));
+          .mockImplementation(async () => {
+            rowsAtFailure ??= await rows();
+            throw new Error("the first schema statement failed");
+          });
 
         const failure = await save(SWITCHED).then(
           () => undefined,
           (error: unknown) => error
         );
+        const calls = failing.mock.calls.length;
         failing.mockRestore();
 
-        // The rewritten values were taken back with the statement that failed, and the shape
-        // never changed.
-        expect(
-          failure,
-          "the failed push was reported as applied"
-        ).toBeDefined();
+        expect(calls, "the push never reached its first schema statement").toBe(
+          1
+        );
+        expect(String(failure)).toMatch(/the first schema statement failed/);
+        // The values had been rewritten inside the push's transaction when it failed...
+        expect(rowsAtFailure).toBeDefined();
+        expect(rowsAtFailure).not.toEqual(rowsBefore);
+        // ...and were taken back with the statement that failed, and the shape never changed.
         expect(await rows()).toEqual(rowsBefore);
         expect(await definitionOf()).toEqual(tableBefore);
         expect(

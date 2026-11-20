@@ -12,8 +12,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import Database from "better-sqlite3";
+import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -90,8 +92,11 @@ describe("PushSchemaPipeline — a SQLite push is all or nothing", () => {
   /** Every statement the connection ran, in order, once recording starts. */
   let sent: string[];
   let recording = false;
+  /** The table's columns on the apply's connection as the injected failure was thrown. */
+  let columnsAtFailure: string[] | undefined;
 
   beforeEach(async () => {
+    columnsAtFailure = undefined;
     sqlite = new Database(":memory:");
     // Recorded at the driver as each prepared statement runs, so the pipeline's own statements and
     // the executor's are seen alike, and a statement prepared more than once counts once per run.
@@ -131,6 +136,7 @@ describe("PushSchemaPipeline — a SQLite push is all or nothing", () => {
       ): Promise<void> {
         for (const statement of statements) {
           if (fails?.test(statement) === true) {
+            columnsAtFailure = columns();
             throw new Error(`injected failure: ${statement}`);
           }
           await super.executeStatements(tx, [statement]);
@@ -191,11 +197,14 @@ describe("PushSchemaPipeline — a SQLite push is all or nothing", () => {
     expect(result.success, "the failed apply was reported as applied").toBe(
       false
     );
-    // `alpha`'s statement ran before `beta`'s failed, and was taken back with it.
+    // It failed at `beta`'s statement, the injected failure, and not earlier.
+    expect(JSON.stringify(result.error)).toMatch(/injected failure/);
+    // `alpha` was added on the apply's connection before `beta`'s statement failed, and was taken
+    // back with it.
     expect(
-      sent.some(statement => /alpha/.test(statement)),
-      "no statement adding `alpha` ran before `beta`'s"
-    ).toBe(true);
+      columnsAtFailure,
+      "`alpha` was not on the table when `beta`'s statement failed"
+    ).toContain("alpha");
     expect(columns()).toEqual(before);
     // The row is as it was.
     expect(sqlite.prepare(`SELECT "heading" FROM "${TABLE}"`).all()).toEqual([
@@ -354,42 +363,53 @@ describe("PushSchemaPipeline — a SQLite push and another flow's transaction", 
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("lets another flow's transaction wait for the apply's, then commit", async () => {
+  /**
+   * Applies two added columns and, once the apply's first column is added and its transaction
+   * open, starts `otherFlow`. The apply goes on only once the other flow has asked for its
+   * transaction, so that request is made while the apply's is open. The other flow is started from
+   * the case's own context, so its transaction is another flow's: one started from inside the
+   * apply's work would join the apply's transaction instead. `failsAt` fails the first statement it
+   * matches.
+   */
+  async function applyWhileAnotherFlowStarts(
+    otherFlow: () => Promise<unknown>,
+    options: { failsAt?: RegExp } = {}
+  ) {
     const db = adapter.getDrizzle();
-    // The other flow is set up here, in the case's own context, so its transaction is another
-    // flow's: one started from inside the apply's work would join the apply's transaction instead.
     let reach: () => void = () => undefined;
     const reached = new Promise<void>(resolve => {
       reach = resolve;
     });
+    let submit: () => void = () => undefined;
+    const submitted = new Promise<void>(resolve => {
+      submit = resolve;
+    });
     let started = false;
     const other = reached
-      .then(() =>
-        adapter.transaction(ctx =>
-          ctx.execute(
-            `INSERT INTO "${TABLE}" ("id", "title", "slug", "heading") VALUES ('2', 'Two', 'two', 'Meanwhile')`
-          )
-        )
-      )
+      .then(() => {
+        const running = otherFlow();
+        submit();
+        return running;
+      })
       .then(
         () => "committed",
         (error: unknown) => error
       );
-    // Once the apply's first column is added, its transaction open, the other flow starts its
-    // transaction; the apply goes on a moment later.
     class OtherFlowMeanwhile extends DrizzleStatementExecutor {
       override async executeStatements(
         tx: unknown,
         statements: string[]
       ): Promise<void> {
-        await super.executeStatements(tx, statements);
-        if (
-          !started &&
-          statements.some(statement => /\bADD\b/i.test(statement))
-        ) {
-          started = true;
-          reach();
-          await new Promise(resolve => setTimeout(resolve, 200));
+        for (const statement of statements) {
+          if (options.failsAt?.test(statement) === true) {
+            throw new Error(`injected failure: ${statement}`);
+          }
+          await super.executeStatements(tx, [statement]);
+          if (!started && /\bADD\b/i.test(statement)) {
+            started = true;
+            reach();
+            await submitted;
+          }
         }
       }
     }
@@ -414,10 +434,52 @@ describe("PushSchemaPipeline — a SQLite push and another flow's transaction", 
       source: "code",
       promptChannel: "terminal",
     });
-
     expect(started, "no other flow's transaction was started").toBe(true);
-    expect(applied.success, JSON.stringify(applied.error)).toBe(true);
+    return { applied, other };
+  }
+
+  /** The collection table's columns, read on the connection the adapter hands `ctx`. */
+  const columnsOn = async (ctx: TransactionContext) =>
+    (
+      await ctx.queryStatement<{ name: string }>(
+        sql.raw(`PRAGMA table_info("${TABLE}")`)
+      )
+    ).map(column => column.name);
+
+  // The apply fails after its first column, so it rolls back. A transaction that had joined it
+  // would have seen that column and been rolled back with it; one that waited its turn begins
+  // after the rollback, sees no such column, and commits on its own.
+  it("lets another flow's transaction wait for the apply's, then commit on its own", async () => {
+    let seen: string[] | undefined;
+    const { applied, other } = await applyWhileAnotherFlowStarts(
+      () =>
+        adapter.transaction(async ctx => {
+          seen = await columnsOn(ctx);
+          await ctx.execute(
+            `INSERT INTO "${TABLE}" ("id", "title", "slug", "heading") VALUES ('2', 'Two', 'two', 'Meanwhile')`
+          );
+        }),
+      { failsAt: /ADD\s+(COLUMN\s+)?[`"]?beta[`"]?/i }
+    );
+
+    expect(applied.success, "the failing apply was reported applied").toBe(
+      false
+    );
+    expect(JSON.stringify(applied.error)).toMatch(/injected failure/);
+    // A failed statement, as on a bare handle, though the adapter's transaction wrapped it.
+    expect(applied.error?.code).toBe("DDL_EXECUTION_FAILED");
     expect(await other, "the other flow's transaction").toBe("committed");
+    expect(seen, "the other flow's transaction never ran").toBeDefined();
+    expect(
+      seen,
+      "the other flow's transaction ran inside the apply's"
+    ).not.toContain("alpha");
+    const columns = (
+      await adapter.executeQuery<{ name: string }>(
+        `PRAGMA table_info("${TABLE}")`
+      )
+    ).map(column => column.name);
+    expect(columns).not.toContain("alpha");
     expect(
       await adapter.executeQuery<{ heading: string }>(
         `SELECT "heading" FROM "${TABLE}" ORDER BY "id"`
