@@ -80,7 +80,13 @@ import {
   type BlockKind,
   type BlockPath,
 } from "./block-model";
-import { chipNamer, itemPaths, listPaths, variablePaths } from "./chip-names";
+import {
+  addressPaths,
+  chipNamer,
+  itemPaths,
+  listPaths,
+  variablePaths,
+} from "./chip-names";
 import { chipShowsBlank } from "./chip-values";
 import { ChipButton, ChipViewContext, type ChipView } from "./ChipLabel";
 import { RunEditor } from "./RunEditor";
@@ -134,6 +140,7 @@ function chipView(edit: Edit, list?: string): ChipView {
       edit.sampleData !== null &&
       chipShowsBlank(chip, edit.sampleData, list, address),
     paths: variablePaths(edit.variables, list),
+    addressPaths: addressPaths(edit.variables, list),
   };
 }
 
@@ -501,14 +508,16 @@ function BlockCondition({
   return (
     <>
       {shown ? (
-        <p className="flex w-fit items-center gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-          {shown}
+        // Within the card at any width: a long label wraps, even mid-word,
+        // and the remove button keeps its size beside it.
+        <p className="flex w-fit max-w-full items-start gap-1 rounded-md border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+          <span className="min-w-0 [overflow-wrap:anywhere]">{shown}</span>
           {edit.readOnly ? null : (
             <button
               type="button"
               aria-label="Remove the condition"
               title="Remove the condition"
-              className="rounded-sm hover:text-foreground"
+              className="mt-px shrink-0 rounded-sm hover:text-foreground"
               onClick={() => set(undefined)}
             >
               <X aria-hidden className="size-3" />

@@ -5,7 +5,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { TemplateFormVariable } from "../../schema";
-import { chipNamer, itemPaths, listPaths, variablePaths } from "../chip-names";
+import {
+  addressPaths,
+  chipNamer,
+  itemPaths,
+  listPaths,
+  variablePaths,
+} from "../chip-names";
 
 const variables: TemplateFormVariable[] = [
   {
@@ -164,6 +170,27 @@ describe("a chip's friendly name", () => {
       // The variable declared as `item` is out of reach inside the list,
       // where `item` is the loop's: it is offered once, as the loop's.
       ...everywhere.filter(path => path !== "item"),
+    ]);
+  });
+
+  it("offers a link only values, never the objects and lists a condition may ask about", () => {
+    // `customer` and `order` are objects, `order.lines` a list: none is an
+    // address. Their value fields are, and so are `item` (declared with no
+    // fields, a plain value) and `resetUrl`.
+    expect(addressPaths(variables)).toEqual([
+      "customer.firstName",
+      "customer.email",
+      "item",
+      "resetUrl",
+    ]);
+    // Inside a list its item's values come first; the declared `item` is the
+    // loop's there, out of reach.
+    expect(addressPaths(variables, "order.lines")).toEqual([
+      "item.title",
+      "item.qty",
+      "customer.firstName",
+      "customer.email",
+      "resetUrl",
     ]);
   });
 

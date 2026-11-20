@@ -27,8 +27,10 @@ export interface ChipView {
     chip: { variable: string; fallback?: string },
     address?: AddressKind
   ) => boolean;
-  /** The variable paths offered here, such as for a link's address. */
+  /** The paths a condition may ask about here, containers included. */
   paths: readonly string[];
+  /** The paths a link's address may come from here: values, not containers. */
+  addressPaths: readonly string[];
 }
 
 /** Without a provider, a chip shows its variable's path and is never marked. */
@@ -36,6 +38,7 @@ export const ChipViewContext = createContext<ChipView>({
   name: variable => variable,
   blank: () => false,
   paths: [],
+  addressPaths: [],
 });
 
 interface ChipProps {

@@ -195,6 +195,30 @@ export function variablePaths(
   ]);
 }
 
+/**
+ * The paths a link's address can come from: values that are text, not the
+ * objects and lists a condition may ask about. Inside a list the item's
+ * fields come first, or `item` itself for a list of plain values, then each
+ * declared variable's own value fields.
+ */
+export function addressPaths(
+  variables: readonly TemplateFormVariable[],
+  list?: string
+): string[] {
+  const declared = variables.flatMap(variable => {
+    if (!variable.name || variable.presentation?.type === "list") return [];
+    const fields = variable.presentation?.fields ?? [];
+    return fields.length > 0
+      ? fieldPaths(fields, variable.name)
+      : [variable.name];
+  });
+  return storable([
+    ...(list === undefined ? [] : itemPaths(variables, list)),
+    // Inside a list, `item` is the loop's, as for every other choice.
+    ...(list === undefined ? declared : declared.filter(p => !inItem(p))),
+  ]);
+}
+
 /** Whether `path` is `item` or a path under it. */
 function inItem(path: string): boolean {
   return path === "item" || path.startsWith("item.");
