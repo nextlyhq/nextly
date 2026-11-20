@@ -8,6 +8,8 @@
  * - A repair that fails stops the run before the registry changes, in a run that drops an entity
  *   too, and hands the registries' repair back to the next start; the next run repairs, labels
  *   and only then removes the dropped entity's row.
+ * - A repair that fails while the archive holds rows it would hand back to the labelling (rows an
+ *   earlier labelling settled unresolved by a date in milliseconds) stops the run as well.
  * - A repair that fails where nothing would be labelled (no archived translation of unknown kind,
  *   or inside a registry write the caller holds open) warns, hands the repair back to the next
  *   start and carries on.
@@ -230,14 +232,19 @@ describe("nextly migrate's registry phase on SQLite, with a registry row in mill
         `SELECT entity_kind FROM "nextly_i18n_archive" WHERE collection = '${slug}'`
       )
     ).map(row => row.entity_kind);
-  /** The dropped collection's registry row, still there: the registry write removes it. */
-  const registerDropped = () =>
-    adapter.executeQuery(
-      buildCollectionMetadataUpsert(
-        { ...declared, slug: DROPPED } as never,
-        "sqlite"
-      )
+  /**
+   * The dropped collection's registry row, still there: the registry write removes it. Written in
+   * seconds, or in milliseconds as the migration file of an earlier release wrote it.
+   */
+  const registerDropped = ({ inMilliseconds = false } = {}) => {
+    const upsert = buildCollectionMetadataUpsert(
+      { ...declared, slug: DROPPED } as never,
+      "sqlite"
     );
+    return adapter.executeQuery(
+      inMilliseconds ? asAnOlderFileWroteIt(upsert) : upsert
+    );
+  };
   /** A start that already marked both repairs done. */
   const markBothRepairsDone = () =>
     adapter.executeQuery(
@@ -365,5 +372,31 @@ describe("nextly migrate's registry phase on SQLite, with a registry row in mill
     );
     await migrate();
     expect(await kinds()).toEqual(["collection"]);
+  });
+
+  it("a repair that fails while rows it would hand back to the labelling are unresolved stops the run too", async () => {
+    // An earlier labelling read the dropped collection's creation date in milliseconds and
+    // settled its row unresolved: only the repair hands it back, and only while that registry row
+    // is there to label it by.
+    await registerDropped({ inMilliseconds: true });
+    await adapter.executeQuery(
+      `INSERT INTO "nextly_i18n_archive" ("collection", "entity_kind", "entry_id", "locale", "field", "value", "archived_at") VALUES ('${DROPPED}', 'unresolved', 'd1', 'fr', 'title', 'Salut', unixepoch() + 3600)`
+    );
+    repair.fails = true;
+
+    const outcome = await migrate().then(
+      () => "completed",
+      (error: unknown) => error
+    );
+    expect(await registered()).toEqual([DROPPED, SLUG].sort());
+    expect(await kindOf(DROPPED)).toEqual(["unresolved"]);
+    expect(outcome).toBeInstanceOf(Error);
+
+    // The next run, its repair working, hands the row back, labels it while the dropped row is
+    // there, then removes that row and, with what the collection left, the labelled row.
+    repair.fails = false;
+    await migrate();
+    expect(await registered()).toEqual([SLUG]);
+    expect(await kindOf(DROPPED)).toEqual([]);
   });
 });

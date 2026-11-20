@@ -349,13 +349,49 @@ export async function reopenUnresolvedArchiveRows(
     await db
       .update(archive)
       .set({ entityKind: UNKNOWN_ARCHIVE_KIND })
-      .where(
-        and(
-          eq(archive.entityKind, UNRESOLVED_ARCHIVE_KIND),
-          inArray(archive.collection, slugs.slice(i, i + SLUGS_PER_READ))
-        )
-      );
+      .where(unresolvedOf(archive, slugs.slice(i, i + SLUGS_PER_READ)));
   }
+}
+
+/** The unresolved rows of `slugs`: what `reopenUnresolvedArchiveRows` hands back. */
+function unresolvedOf(
+  archive: ReturnType<typeof nextlyI18nArchiveTables>["nextlyI18nArchive"],
+  slugs: readonly string[]
+): SQL | undefined {
+  return and(
+    eq(archive.entityKind, UNRESOLVED_ARCHIVE_KIND),
+    inArray(archive.collection, [...slugs])
+  );
+}
+
+/**
+ * Whether the archive holds a row `reopenUnresolvedArchiveRows` would hand back for `slugs`: an
+ * unresolved row of one of them. False where the database has no archive.
+ */
+export async function holdsUnresolvedArchiveRowsOf(
+  adapter: Pick<LabelArchiveAdapter, "dialect" | "tableExists" | "getDrizzle">,
+  slugs: readonly string[]
+): Promise<boolean> {
+  const { nextlyI18nArchive: archive } = nextlyI18nArchiveTables(
+    adapter.dialect
+  );
+  if (
+    slugs.length === 0 ||
+    !(await adapter.tableExists(getTableName(archive)))
+  ) {
+    return false;
+  }
+  const db = adapter.getDrizzle<LabelDb>();
+  for (let i = 0; i < slugs.length; i += SLUGS_PER_READ) {
+    const [row] = (await db
+      .select({ n: count() })
+      .from(archive)
+      .where(unresolvedOf(archive, slugs.slice(i, i + SLUGS_PER_READ)))) as {
+      n: number | string;
+    }[];
+    if (Number(row?.n ?? 0) > 0) return true;
+  }
+  return false;
 }
 
 /**

@@ -115,6 +115,46 @@ async function rewriteAsSeconds(
   }
 }
 
+/** The registries' rows holding milliseconds: by registry, and the addresses whose creation date does. */
+interface MillisecondRows {
+  found: Array<{ table: string; slugs: string[] }>;
+  rows: number;
+  createdInMilliseconds: string[];
+}
+
+/** Reads, writing nothing, every registry row holding milliseconds (`millisecondRows`). */
+async function registryRowsInMilliseconds(
+  adapter: DrizzleAdapter
+): Promise<MillisecondRows> {
+  const db = adapter.getDrizzle<RepairDb>();
+  const read: MillisecondRows = {
+    found: [],
+    rows: 0,
+    createdInMilliseconds: [],
+  };
+  for (const table of await registryTables(adapter)) {
+    const rows = await millisecondRows(db, table);
+    if (rows.length === 0) continue;
+    read.found.push({ table, slugs: rows.map(row => row.slug) });
+    read.rows += rows.length;
+    read.createdInMilliseconds.push(
+      ...rows.filter(row => row.created).map(row => row.slug)
+    );
+  }
+  return read;
+}
+
+/**
+ * The addresses whose archived translations the repair would hand back to the labelling: those
+ * whose registry row's creation date is still in milliseconds. Read only, as the repair reads
+ * them.
+ */
+export async function addressesCreatedInMilliseconds(
+  adapter: DrizzleAdapter
+): Promise<string[]> {
+  return (await registryRowsInMilliseconds(adapter)).createdInMilliseconds;
+}
+
 /**
  * Rewrite the registries' millisecond timestamps as seconds, and hand the archived translations
  * of each address whose creation date was wrong back to the labelling: marked unresolved while
@@ -132,17 +172,12 @@ export async function repairSqliteRegistryTimestamps(
   adapter: DrizzleAdapter
 ): Promise<RegistryTimestampRepair> {
   const db = adapter.getDrizzle<RepairDb>();
-  const result: RegistryTimestampRepair = { repaired: 0, createdCorrected: [] };
-  const found: Array<{ table: string; slugs: string[] }> = [];
-  for (const table of await registryTables(adapter)) {
-    const rows = await millisecondRows(db, table);
-    if (rows.length === 0) continue;
-    found.push({ table, slugs: rows.map(row => row.slug) });
-    result.repaired += rows.length;
-    result.createdCorrected.push(
-      ...rows.filter(row => row.created).map(row => row.slug)
-    );
-  }
+  const { found, rows, createdInMilliseconds } =
+    await registryRowsInMilliseconds(adapter);
+  const result: RegistryTimestampRepair = {
+    repaired: rows,
+    createdCorrected: createdInMilliseconds,
+  };
   if (result.createdCorrected.length > 0) {
     await reopenUnresolvedArchiveRows(adapter, result.createdCorrected);
   }

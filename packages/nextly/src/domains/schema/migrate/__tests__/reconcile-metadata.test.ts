@@ -13,6 +13,7 @@ import { reconcileMigrationMetadata } from "../reconcile-metadata";
 // adapter does not have; that repair has suites of its own, so here it finds nothing to repair.
 vi.mock("../../../../database/repair-sqlite-registry-timestamps", () => ({
   repairSqliteRegistryTimestamps: vi.fn(async () => ({ repaired: 0 })),
+  addressesCreatedInMilliseconds: vi.fn(async () => []),
 }));
 
 const silent = {

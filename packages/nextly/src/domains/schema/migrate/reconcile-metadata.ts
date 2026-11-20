@@ -46,7 +46,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { DeclaredNames } from "../../../cli/utils/migration-discovery";
-import { repairSqliteRegistryTimestamps } from "../../../database/repair-sqlite-registry-timestamps";
+import {
+  addressesCreatedInMilliseconds,
+  repairSqliteRegistryTimestamps,
+} from "../../../database/repair-sqlite-registry-timestamps";
 import { rearmRegistryTimestampRepair } from "../../../database/repair-sqlite-timestamps";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import type { Logger } from "../../../shared/types";
@@ -57,6 +60,7 @@ import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { ARCHIVE_TABLE } from "../../i18n/migration/entity-translation-rows";
 import {
   holdsUnknownArchiveRows,
+  holdsUnresolvedArchiveRowsOf,
   labelLegacyArchiveRows,
 } from "../../i18n/migration/label-legacy-archive-rows";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
@@ -542,15 +546,24 @@ async function repairRegistryTimestampsFirst(
 }
 
 /**
- * Whether this pass would label archived translations: outside a registry write a caller holds
- * open (where `labelArchiveWhileRegistered` never labels), with rows of unknown kind in the
- * archive. An archive that cannot be read is taken to hold them, so a failed repair stops the
- * pass rather than let the registry write go ahead of rows still to label.
+ * Whether this pass, its repair working, would label archived translations: outside a registry
+ * write a caller holds open (where `labelArchiveWhileRegistered` never labels), with rows of
+ * unknown kind in the archive, or unresolved rows the repair would hand back to the labelling
+ * (those of an address whose creation date is still in milliseconds). An archive or a registry
+ * that cannot be read is taken to hold them, so a failed repair stops the pass rather than let
+ * the registry write go ahead of rows still to label.
  */
 async function labellingOwed(deps: ReconcileMetadataDeps): Promise<boolean> {
   if (registryWriteOpen()) return false;
+  const { adapter } = deps;
   try {
-    return await holdsUnknownArchiveRows(deps.adapter);
+    return (
+      (await holdsUnknownArchiveRows(adapter)) ||
+      (await holdsUnresolvedArchiveRowsOf(
+        adapter,
+        await addressesCreatedInMilliseconds(adapter)
+      ))
+    );
   } catch (error) {
     if (endsTheRun(error)) throw error;
     return true;
