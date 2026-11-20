@@ -1649,8 +1649,17 @@ export class SingleMetadataService {
       input,
       input.fields
     );
-    refuseUnansweredRename(`The Single "${input.slug}"`, candidates, field =>
-      schema.columnNameOf(field)
+    refuseUnansweredRename(
+      `The Single "${input.slug}"`,
+      candidates,
+      field => schema.columnNameOf(field),
+      {
+        // A stored field without a name names nothing an answer could refer to.
+        before: (input.existing.fields ?? []).flatMap(f =>
+          typeof f.name === "string" ? [f.name] : []
+        ),
+        after: input.fields.map(f => f.name),
+      }
     );
   }
 

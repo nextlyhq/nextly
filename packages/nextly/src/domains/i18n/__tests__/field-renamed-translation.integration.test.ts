@@ -42,15 +42,18 @@ const RENAMED = [
 /**
  * A Single's schema save says whether `heading` leaving and a field arriving in its place is a
  * rename, as that road requires. The seeds hold `heading` and `views`: where the fields sent
- * drop `heading` and add exactly one field, that pair is answered as a rename.
+ * drop `heading` and add exactly one field, a text field as `heading` is, that pair is answered as
+ * a rename. A field of another type is no rename the change could make, so nothing answers it.
  */
 function renamesFor(fields: unknown[]): { renames: unknown[] } {
-  const names = fields.map(field => (field as { name?: string }).name);
-  const added = names.filter(name => name !== "heading" && name !== "views");
+  const sent = fields as { name?: string; type?: string }[];
+  const added = sent.filter(f => f.name !== "heading" && f.name !== "views");
   return {
     renames:
-      !names.includes("heading") && added.length === 1
-        ? [{ from: "heading", to: added[0], choice: "rename" }]
+      !sent.some(f => f.name === "heading") &&
+      added.length === 1 &&
+      added[0]!.type === "text"
+        ? [{ from: "heading", to: added[0]!.name, choice: "rename" }]
         : [],
   };
 }
@@ -438,14 +441,22 @@ describeEachDialect("a translated field that is renamed", dialect => {
         { name: "title2", type: "text" },
         { name: "count2", type: "number" },
       ],
+      // `views` leaving beside `count2`, both shared numbers, is a pair the shared table would
+      // rename: a road that takes answers refuses it as unanswered before any field is moved.
+      sharedPair: true,
     },
-    { shape: "a translated field renamed beside a new one", fields: TWO_ADDED },
+    {
+      shape: "a translated field renamed beside a new one",
+      fields: TWO_ADDED,
+      sharedPair: false,
+    },
     {
       shape: "a translated field renamed to another type",
       fields: [
         { name: "title2", type: "number" },
         { name: "views", type: "number" },
       ],
+      sharedPair: false,
     },
   ];
 
@@ -453,6 +464,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
   const UNANSWERED_SAVES = [
     {
       path: "the builder saves the collection",
+      takesAnswers: false,
       table: "dc_posts",
       seed: seedCollection,
       save: async (fields: unknown[]) => {
@@ -465,6 +477,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "the collection's schema dialog applies it",
+      takesAnswers: false,
       table: "dc_posts",
       seed: seedCollection,
       save: async (fields: unknown[]) =>
@@ -486,6 +499,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a Single's schema is saved",
+      takesAnswers: true,
       table: "single_hero",
       seed: seedSingle,
       save: async (fields: unknown[]) =>
@@ -497,6 +511,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a Single's schema dialog applies it",
+      takesAnswers: false,
       table: "single_hero",
       seed: seedSingle,
       save: async (fields: unknown[]) =>
@@ -514,6 +529,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
     {
       path: "a field group's schema dialog applies it",
+      takesAnswers: false,
       table: "comp_banner",
       seed: seedFieldGroup,
       save: async (fields: unknown[]) =>
@@ -540,7 +556,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
     )
   )(
     "refuses $shape in one change when $path, keeping every language",
-    async ({ table, seed, save, fields }) => {
+    async ({ table, seed, save, fields, sharedPair, takesAnswers }) => {
       const id = await seed();
 
       const refusal = await save(fields).then(
@@ -548,10 +564,15 @@ describeEachDialect("a translated field that is renamed", dialect => {
         (error: unknown) => error
       );
 
-      expect(reported(refusal)).toMatch(
-        /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
-      );
-      expect(reported(refusal)).toMatch(/heading/);
+      if (sharedPair && takesAnswers) {
+        expect(reported(refusal)).toMatch(/FIELD_RENAME_UNANSWERED/);
+        expect(reported(refusal)).toMatch(/views[\s\S]*count2/);
+      } else {
+        expect(reported(refusal)).toMatch(
+          /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
+        );
+        expect(reported(refusal)).toMatch(/heading/);
+      }
       expect(await companionValues(table, "heading", id)).toEqual({
         en: "Hello",
         es: "Hola",

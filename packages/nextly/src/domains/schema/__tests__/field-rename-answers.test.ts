@@ -28,8 +28,11 @@ async function refusedWith(
   to: string
 ): Promise<string | undefined> {
   const run = async () =>
-    refuseUnansweredRename('The collection "posts"', [pair(from, to)], field =>
-      toSnakeCase(field.name)
+    refuseUnansweredRename(
+      'The collection "posts"',
+      [pair(from, to)],
+      field => toSnakeCase(field.name),
+      { before: [from, "body"], after: [to, "copy"] }
     );
   try {
     await (answers ? withFieldRenameAnswers(answers, run) : run());
@@ -46,7 +49,8 @@ describe("a pair whose fields have no column", () => {
       refuseUnansweredRename(
         'The collection "posts"',
         [pair("fooBar", "foo_bar")],
-        () => undefined
+        () => undefined,
+        { before: ["fooBar"], after: ["foo_bar"] }
       );
     await expect(
       withFieldRenameAnswers(
@@ -117,6 +121,19 @@ describe("refuseUnansweredRename", () => {
         [
           { from: "heading", to: "headline", choice: "rename" },
           { from: "body", to: "copy", choice: "drop_and_add" },
+        ],
+        "heading",
+        "headline"
+      )
+    ).toBeUndefined();
+  });
+
+  it("leaves aside a rename answer naming a field the change doesn't remove or add, as a retry's does", async () => {
+    expect(
+      await refusedWith(
+        [
+          { from: "heading", to: "headline", choice: "rename" },
+          { from: "summary", to: "copy", choice: "rename" },
         ],
         "heading",
         "headline"

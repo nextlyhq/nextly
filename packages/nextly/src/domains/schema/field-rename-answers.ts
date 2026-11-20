@@ -108,21 +108,29 @@ export function declinedRename(pair: FieldPair): boolean {
  * `entity` names it: `The collection "posts"`, say. A pair answered `drop_and_add` whose two
  * names are one column (`columnOf`, none for a field with no column), as `fooBar` and `foo_bar` are, is refused too: the
  * column cannot be dropped and added again in one change, only renamed. A `rename` answer for a
- * pair that isn't among them is refused as well, as when a change replaces two fields at once,
- * which no candidate pairs: left aside, its fields would be dropped and added with their values
- * lost though the request asked to keep them. A `drop_and_add` answer for such a pair asks for
- * what the change does anyway, so it is left aside. Off such a road nothing is refused.
+ * field the change removes and one it adds (`names`) that isn't among them is refused as well, as
+ * when a change replaces two fields at once, which no candidate pairs: left aside, its fields would
+ * be dropped and added with their values lost though the request asked to keep them. An answer
+ * naming a field the change doesn't remove or add, as a retry of a rename already recorded does,
+ * is about nothing in it, and a `drop_and_add` answer asks for what the change does anyway: both
+ * are left aside. Off such a road nothing is refused.
  */
 export function refuseUnansweredRename<F extends { name?: string }>(
   entity: string,
   pairs: readonly FieldPair<F>[],
-  columnOf: (field: F) => string | undefined
+  columnOf: (field: F) => string | undefined,
+  /** The entity's field names before the change and after it. */
+  names: { before: readonly string[]; after: readonly string[] }
 ): void {
   const sent = answersScope.getStore();
   if (sent === undefined) return;
+  const removed = names.before.filter(name => !names.after.includes(name));
+  const added = names.after.filter(name => !names.before.includes(name));
   const unoffered = sent.find(
     a =>
       a.choice === "rename" &&
+      removed.includes(a.from) &&
+      added.includes(a.to) &&
       !pairs.some(pair => pair.from.name === a.from && pair.to.name === a.to)
   );
   if (unoffered) {
