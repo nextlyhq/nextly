@@ -428,22 +428,48 @@ describeEachDialect(
       ).toBe("TRANSLATED_FIELD_REMOVED_BESIDE_ADDED");
     });
 
-    it("still asks about a translated field removed beside one added when the request answered only a shared pair", async () => {
-      // `views` to `count` is the only pair, answered drop_and_add; `heading` leaving beside
-      // `summary` of another type is no pair, so its translations are not the request's to drop.
-      await posts([
+    // `views` to `count` is the only pair, answered drop_and_add; `heading` leaving beside
+    // `summary` of another type is no pair, so its translations are not the request's to drop.
+    const ANSWERED_SHARED = {
+      before: [
         { name: "views", type: "number", localized: false },
         { name: "heading", type: "text", localized: true },
-      ]);
+      ],
+      after: [
+        { name: "count", type: "number", localized: false },
+        { name: "summary", type: "richText", localized: true },
+      ],
+      renames: [{ from: "views", to: "count", choice: "drop_and_add" }],
+    };
+
+    it("still asks about a translated field removed beside one added when the request answered only a shared pair", async () => {
+      // The collection's apply asks this again on its own, without the answers; the Single's
+      // save asks it once, so the case below is the one an answer's wider consent would reach.
+      await posts(ANSWERED_SHARED.before);
+
+      expect(
+        await codeOf(change(ANSWERED_SHARED.after, ANSWERED_SHARED.renames))
+      ).toBe("TRANSLATED_FIELD_REMOVED_BESIDE_ADDED");
+    });
+
+    it("still asks about it on the Single schema PATCH, keeping every language", async () => {
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "hero",
+          label: "Hero",
+          localized: true,
+          fields: ANSWERED_SHARED.before,
+        }
+      );
 
       expect(
         await codeOf(
-          change(
-            [
-              { name: "count", type: "number", localized: false },
-              { name: "summary", type: "richText", localized: true },
-            ],
-            [{ from: "views", to: "count", choice: "drop_and_add" }]
+          dispatchSingles(
+            "updateSingleSchema",
+            { slug: "hero" },
+            { fields: ANSWERED_SHARED.after, renames: ANSWERED_SHARED.renames }
           )
         )
       ).toBe("TRANSLATED_FIELD_REMOVED_BESIDE_ADDED");
