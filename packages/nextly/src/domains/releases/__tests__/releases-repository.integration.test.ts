@@ -190,6 +190,83 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 180_000);
 
+    it("counts each due release holding a document once toward the bound, however many of its languages it holds", async () => {
+      // Three releases, each holding the document in two languages: six rows, three releases,
+      // within a bound of five.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      for (let i = 0; i < 3; i += 1) {
+        const release = await repo.createRelease({ title: `R${i}` });
+        for (const locale of ["en", "es"]) {
+          await repo.addMember(
+            {
+              releaseId: release.id,
+              action: "publish",
+              ...ref("bridge", locale),
+            },
+            ANY_EDITABLE_STATE
+          );
+        }
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
+      }
+
+      const held = await repo.dueHoldersOf(
+        [{ scopeKind: "collection", scopeSlug: "posts", entryId: "bridge" }],
+        new Date(),
+        5
+      );
+
+      expect(held.overflow).toEqual([]);
+      expect(held.holding).toHaveLength(3);
+      expect(held.holding.flatMap(({ members }) => members)).toHaveLength(6);
+    });
+
+    it("reads a document past the bound no further than the bound plus one, wherever its page starts", async () => {
+      // `a` comes first and takes a row of the first page, so `bridge`'s count is one short of
+      // the bound when that page ends; the next page needs one row of it, not a full page.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      const holding = async (entryId: string) => {
+        const release = await repo.createRelease({ title: entryId });
+        await repo.addMember(
+          { releaseId: release.id, action: "publish", ...ref(entryId) },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
+      };
+      await holding("a");
+      for (let i = 0; i < 12; i += 1) await holding("bridge");
+      const select = vi.spyOn(app.adapter, "select");
+
+      const held = await repo.dueHoldersOf(
+        ["a", "bridge"].map(entryId => ({
+          scopeKind: "collection" as const,
+          scopeSlug: "posts",
+          entryId,
+        })),
+        new Date(),
+        5
+      );
+
+      expect(held.overflow.map(document => document.entryId)).toEqual([
+        "bridge",
+      ]);
+      const bridgeRows = (
+        await Promise.all(
+          select.mock.calls.map(async ([table], index) =>
+            table === RELEASE_MEMBERS_TABLE
+              ? ((await select.mock.results[index]?.value) as {
+                  entryId: string;
+                }[])
+              : []
+          )
+        )
+      )
+        .flat()
+        .filter(row => row.entryId === "bridge");
+      expect(bridgeRows.length).toBeLessThanOrEqual(6);
+    });
+
     it("keeps an unscheduled draft out of BOTH ends of the timeline", async () => {
       // A null instant orders differently per dialect and the direction flips
       // which end it lands on, so this is asserted in both. A draft is not the

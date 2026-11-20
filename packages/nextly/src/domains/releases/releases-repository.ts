@@ -2699,8 +2699,12 @@ export class ReleasesRepository {
     // Each release looked up once: the row while it is scheduled and due, null otherwise.
     const due = new Map<string, ReleaseRow | null>();
     for (const where of memberIndexConditions(documents)) {
-      const counts = new Map<string, number>();
+      // Each document's due releases counted so far, a release once however many of the
+      // document's languages it holds: the bound is on releases, not member rows.
+      const counted = new Map<string, Set<string>>();
+      const countOf = (entryId: string) => counted.get(entryId)?.size ?? 0;
       let after: ReleasesWhere | null = null;
+      let size = limit + 1;
       for (;;) {
         const page = await this.db.select<ReleaseMemberRow>(MEMBERS, {
           columns: [...MEMBER_COLUMNS],
@@ -2709,15 +2713,16 @@ export class ReleasesRepository {
             { column: "entryId", direction: "asc" },
             { column: "id", direction: "asc" },
           ],
-          limit: limit + 1,
+          limit: size,
         });
         await this.lookUpDue(page, due, now);
         for (const member of page) {
           const release = due.get(member.releaseId);
-          const count = counts.get(member.entryId) ?? 0;
-          if (!release || count > limit) continue;
-          counts.set(member.entryId, count + 1);
-          if (count + 1 > limit) {
+          if (!release || countOf(member.entryId) > limit) continue;
+          const releases = counted.get(member.entryId) ?? new Set<string>();
+          releases.add(release.id);
+          counted.set(member.entryId, releases);
+          if (releases.size > limit) {
             overflow.push({
               scopeKind: member.scopeKind,
               scopeSlug: member.scopeSlug,
@@ -2730,8 +2735,15 @@ export class ReleasesRepository {
           holding.set(release.id, held);
         }
         const last = page[page.length - 1];
-        if (page.length <= limit || last === undefined) break;
-        after = pageAfter(last, (counts.get(last.entryId) ?? 0) > limit);
+        if (page.length < size || last === undefined) break;
+        const pastBound = countOf(last.entryId) > limit;
+        after = pageAfter(last, pastBound);
+        // A page continuing within `last`'s document reads only what that document may still
+        // need, the bound plus one less the releases counted for it, so no more than the bound
+        // plus one of its due holders is read. Past the bound, the next page starts at another
+        // document and is a full one. Releases not due take a row without counting, so a
+        // document mostly held by them is read in smaller pages near its bound.
+        size = pastBound ? limit + 1 : limit + 1 - countOf(last.entryId);
       }
     }
     return { holding: [...holding.values()], overflow };
