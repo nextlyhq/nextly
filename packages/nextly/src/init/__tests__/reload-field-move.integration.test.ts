@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig } from "../../config";
+import { getService } from "../../di/service-access";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -107,13 +108,39 @@ describe.each(getConfiguredTestDialects())(
       return rows.map(row => row.name);
     }
 
+    /** What the reload's own logger said, where it names what it held back. */
+    let logged: string[] = [];
+
     const told = () =>
-      said.flatMap(spy => spy.mock.calls.flat().map(String)).join("\n");
+      [
+        ...logged,
+        ...said.flatMap(spy => spy.mock.calls.flat().map(String)),
+      ].join("\n");
+
+    /** A reload whose logger is captured, as the development server's is printed. */
+    async function reload(): Promise<void> {
+      logged = [];
+      const note = (line: unknown) => {
+        logged.push(String(line));
+      };
+      const logger = {
+        warn: note,
+        error: note,
+        info: () => {},
+        debug: () => {},
+      };
+      await reloadNextlyConfig({
+        resolver: name =>
+          name === "logger"
+            ? logger
+            : getService(name as Parameters<typeof getService>[0]),
+      });
+    }
 
     it("refuses a field moved into a group, keeping its column and every value", async () => {
       await startWith("row");
       loaded.config = configWith("grouped");
-      await reloadNextlyConfig();
+      await reload();
 
       expect(told()).toMatch(/subtitle/);
       expect(told()).toMatch(/migrate:create/);
@@ -127,7 +154,7 @@ describe.each(getConfiguredTestDialects())(
     it("refuses a field moved out of a group, adding no empty column", async () => {
       await startWith("grouped");
       loaded.config = configWith("row");
-      await reloadNextlyConfig();
+      await reload();
 
       expect(told()).toMatch(/subtitle/);
       expect(told()).toMatch(/migrate:create/);
@@ -156,7 +183,7 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
-      await reloadNextlyConfig();
+      await reload();
 
       expect(await columnsOf(TABLE)).not.toContain("subtitle");
     });
