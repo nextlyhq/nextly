@@ -25,11 +25,10 @@ import { sql, type SQL } from "drizzle-orm";
 import { NextlyError } from "../../../../errors";
 import { clearingStatements, rowKeyText } from "../../repair-columns/clearing";
 import { toSnakeCase } from "../../services/field-column-descriptor";
-import { reasonClass } from "../../value-conversion/judge-column";
-import { judgeStoredColumn } from "../../value-conversion/read-values";
 import type { RowKey } from "../../value-conversion/types";
 import { runStatement } from "../_internal/run-statement";
 import { countRowsBreakingNotNull } from "../classifier/count-helpers";
+import { judgeOfferedTypeChange } from "../classifier/judge-type-change";
 import type {
   AddColumnOp,
   NextlySchemaSnapshot,
@@ -319,8 +318,11 @@ function clearedTypeChanges(args: {
  * only values the new type holds. The column is judged again first, by the same conversion, on the
  * rows as they are now (inside the apply's transaction where there is one), and only a row the
  * consent named that still gives a reason to clear is cleared, by its key: a row corrected since
- * keeps its value, and a value written since is never cleared under a consent given for others
- * (the conversion then refuses it, naming the column).
+ * keeps its value, and a value written since is never cleared under a consent given for others.
+ * On PostgreSQL and MySQL the conversion then refuses such a value, naming the column. SQLite's
+ * rebuild refuses nothing and has already run, so there the consented rows are cleared and the
+ * apply then ends with an error naming the rows written since: the column was converted, and they
+ * hold a value the new field cannot read, which no later run would look at again.
  */
 export async function clearConsentedValues(args: {
   tx: unknown;
@@ -332,23 +334,22 @@ export async function clearConsentedValues(args: {
 }): Promise<void> {
   for (const event of clearedTypeChanges(args)) {
     const consented = new Set(event.lossy.cleared.map(rowKeyText));
-    const still: RowKey[] = [];
-    await judgeStoredColumn(
+    // The one judgement the classifier asked, asked again: the same rules name the same rows.
+    const again = await judgeOfferedTypeChange(
       args.tx,
-      event.lossy.conversion,
+      args.dialect,
       {
         table: event.tableName,
         column: event.columnName,
         keyedBy: event.lossy.keyedBy,
       },
-      {
-        noteRow: (kind, key) => {
-          if (reasonClass(kind) === "lossy" && consented.has(rowKeyText(key))) {
-            still.push(key);
-          }
-        },
-      }
+      event.lossy.conversion,
+      event.lossy.fieldReadings
     );
+    const still: RowKey[] = again.cleared.filter(key =>
+      consented.has(rowKeyText(key))
+    );
+    const late = lateRows(again, consented, still);
     for (const statement of clearingStatements({
       table: event.tableName,
       column: event.columnName,
@@ -357,7 +358,70 @@ export async function clearConsentedValues(args: {
     })) {
       await runRecorded(args, statement, false);
     }
+    if (args.dialect === "sqlite" && late.length > 0) {
+      throw lateValuesLeft(event, late);
+    }
   }
+}
+
+/**
+ * The rows the second judgement names that this run leaves holding their value: each one a value
+ * written since the column was judged, which the new type clears or cannot take. A row the
+ * consent did not name is one. So is a row it did name whose value now blocks the change (a text
+ * a checkbox would read only once rewritten): the consent was to clear what the row held then,
+ * the judgement no longer clears it, and nothing rewrites it.
+ */
+function lateRows(
+  again: Awaited<ReturnType<typeof judgeOfferedTypeChange>>,
+  consented: ReadonlySet<string>,
+  cleared: readonly RowKey[]
+): RowKey[] {
+  const clearedNow = new Set(cleared.map(rowKeyText));
+  const named = new Map<string, RowKey>();
+  const note = (key: RowKey, blocks: boolean) => {
+    const text = rowKeyText(key);
+    if (clearedNow.has(text)) return;
+    if (blocks || !consented.has(text)) named.set(text, key);
+  };
+  again.cleared.forEach(key => note(key, false));
+  for (const reason of again.judgement.reasons) {
+    if (reason.class === "safe") continue;
+    for (const key of reason.rows?.first ?? []) {
+      note(key, reason.class === "blocked");
+    }
+  }
+  return [...named.values()];
+}
+
+/** A row as a message names it: its id, or the entry and language of a translation's row. */
+const rowName = (key: RowKey) =>
+  "id" in key ? String(key.id) : `${String(key.parent)} (${key.locale})`;
+
+/**
+ * The failure of a SQLite apply that converted a column and then found values written after the
+ * column was judged. It says what landed, since nothing can be undone there: the column has its
+ * new type, the consented values were cleared, and the named rows still hold what they held.
+ */
+function lateValuesLeft(
+  event: {
+    tableName: string;
+    columnName: string;
+    fromType: string;
+    toType: string;
+  },
+  late: readonly RowKey[]
+): NextlyError {
+  const column = `${event.tableName}.${event.columnName}`;
+  return NextlyError.validation({
+    errors: [
+      {
+        path: `schema.${column}`,
+        code: "CONVERSION_LEFT_A_LATER_VALUE",
+        message: `${column}: ${event.fromType} -> ${event.toType} was made, and the values consented to were cleared. ${late.length === 1 ? "One row holds" : `${String(late.length)} rows hold`} a value written after the column was checked, which the new field cannot read: ${late.map(rowName).join(", ")}. Correct or clear ${late.length === 1 ? "that value" : "those values"}.`,
+      },
+    ],
+    logContext: { column, late: late.map(rowKeyText) },
+  });
 }
 
 /**
