@@ -53,7 +53,12 @@ export async function runComponentMapCheck(
   const cwd = options.cwd ?? process.cwd();
   let found: ComponentMapAgreement;
   try {
-    const loaded = await loadConfig({ configPath: options.config, cwd });
+    // Reads the app's entities: with no configuration file it refuses rather than act on none.
+    const loaded = await loadConfig({
+      configPath: options.config,
+      cwd,
+      missing: "refuse",
+    });
     const typesFile = generatedTypesFile(
       cwd,
       loaded.config.typescript.outputFile

@@ -22,7 +22,8 @@
  * A save whose statements fail where nothing of them applied leaves no file
  * and puts the definition back; one that failed part-way (MySQL, which
  * commits each statement) keeps its files for `nextly migrate:resolve`, and
- * says so. The registry row is the caller's, written once this returns.
+ * says so. The registry row is the caller's: written once this returns, or,
+ * passed as `inLastTransaction`, in the transaction that records the files.
  *
  * @module domains/schema/builder-save/collection-save
  */
@@ -409,7 +410,7 @@ export async function writeCollectionSave(
      * partly run, and recorded applied nowhere, so the next `nextly migrate`
      * names them rather than the database holding a change no file records.
      */
-    appliedBy?: () => Promise<void | "partly-applied">;
+    appliedBy?: () => Promise<void | "partly-applied" | "unchanged">;
     /**
      * Outside development, the change made here once its files are written,
      * as a field group's or a Single's own DDL makes it (a collection's
@@ -419,12 +420,17 @@ export async function writeCollectionSave(
      */
     appliedAfter?: () => Promise<void | "partly-applied">;
     /**
-     * In development, where the file runs, work done inside the last file's own transaction, after
-     * its ledger row: a caller's registry write, so the change, its ledger row and the registry row
-     * commit or roll back together, and a failed write is withdrawn as a failed statement is
-     * (`undoUnapplied`). It joins that transaction through the adapter, as `nextly migrate`'s
-     * registry rows do (`writesInFileTransaction`); a file run outside a transaction has none to
-     * join, and the work then runs on its own after the file.
+     * In development, work done inside the transaction that records the save's files applied,
+     * after their ledger rows: a caller's registry write, so the ledger rows and the registry row
+     * commit or roll back together. It joins that transaction through the adapter, as
+     * `nextly migrate`'s registry rows do (`writesInFileTransaction`).
+     *
+     * Where the file runs, that is the last file's own transaction, so the change commits with
+     * them too, and a failed write is withdrawn as a failed statement is (`undoUnapplied`); a file
+     * run outside a transaction has none to join, and the work then runs on its own after the
+     * file. Where a push applies the change (`appliedBy`), it is the transaction that records the
+     * pushed files (`recordWhatWasPushed`): the push has committed by then, so a failure there
+     * keeps the files, recorded applied nowhere, and is thrown as a change that failed part way.
      */
     inLastTransaction?: () => Promise<void>;
     /**
@@ -441,6 +447,13 @@ export async function writeCollectionSave(
      * is not, or the stop cannot be judged, its files are kept as before.
      */
     onSettled?: (report: readonly StoppedChange[]) => Promise<void>;
+    /**
+     * The caller's work that writes ahead of the save's own writes (a field leaving translation's
+     * archive): run once every check the save makes before anything is written has passed (its
+     * history, its plan, its type changes, the translations table's drift), and before the first
+     * write, so a save refused by any of them has written nothing.
+     */
+    beforeWrite?: () => Promise<void>;
   } = {}
 ): Promise<CollectionSaveResult> {
   // A drift refusal leaves the save's files withdrawn, so it is told with the Builder's way on.
@@ -485,11 +498,18 @@ async function writeCollectionSaveOnce(
           deps.adapter.getDrizzle()
         );
         const applied = await options.appliedBy();
-        pushed = true;
+        // `"unchanged"`: nothing was pushed (an update of settings alone), so a failure recording
+        // the files leaves nothing applied, and they are withdrawn as before any change.
+        pushed = applied !== "unchanged";
         if (applied === "partly-applied") {
           return await afterPartWayPush(deps, save, written, options.onSettled);
         }
-        await recordWhatWasPushed(deps, written.files, written.table);
+        await recordWhatWasPushed(
+          deps,
+          written,
+          options.inLastTransaction,
+          pushed
+        );
       } else if (deps.applies) {
         // A translated entity's file archives the languages it takes out of translation into
         // `nextly_i18n_archive`, which a database `nextly migrate` has not prepared lacks. Made
@@ -1102,6 +1122,8 @@ async function writeSave(
     pushes?: boolean;
     /** The push builds the whole table again, its translations table with it (`buildsWholeTable`). */
     buildsWholeTable?: boolean;
+    /** Run once the checks below have passed, before the first write (`writeCollectionSave`). */
+    beforeWrite?: () => Promise<void>;
   }
 ): Promise<{
   files: SaveFiles;
@@ -1128,6 +1150,8 @@ async function writeSave(
       buildsWholeTable: options.buildsWholeTable === true,
     });
   }
+  // Every check before the first write has passed: what the caller writes ahead of the save.
+  await options.beforeWrite?.();
 
   const definitionPath = resolve(deps.projectRoot, deps.config.db.uiSchemaFile);
   const before = await readIfPresent(definitionPath);
@@ -3658,20 +3682,36 @@ function withoutKeptTranslatedColumns(
  * a snapshot where the collection's table stands as that snapshot says, and a
  * companion, which describes what the push itself did to the translation
  * tables. Where the table does not, the save is refused naming the file, and
- * nothing is recorded for it or after it.
+ * nothing is recorded for it or after it. The ledger rows are written in one
+ * transaction with the caller's `inLastTransaction` after them.
  */
 async function recordWhatWasPushed(
   deps: CollectionSaveDeps,
-  files: SaveFiles,
-  table: string
+  written: WrittenSave,
+  inLastTransaction: (() => Promise<void>) | undefined,
+  /** Whether the push changed the database; false for one that pushed nothing. */
+  changed: boolean
 ): Promise<void> {
-  await recordUnits(
-    await verifiedUnits(deps, files, table),
-    new SchemaEventsRepository(
-      deps.adapter.getDrizzle(),
-      deps.adapter.getCapabilities().dialect
-    )
-  );
+  const units = await verifiedUnits(deps, written.files, written.table);
+  const dialect = deps.adapter.getCapabilities().dialect;
+  try {
+    // The ledger rows and the caller's work commit or roll back together.
+    await deps.adapter.transaction(async ctx => {
+      await recordUnits(
+        units,
+        new SchemaEventsRepository(ctx.getDrizzle(), dialect)
+      );
+      await inLastTransaction?.();
+    });
+  } catch (error) {
+    // Nothing was pushed: the caller withdraws the files, as for a failure before any change.
+    if (!changed) throw error;
+    // The push committed before this: the database holds the change, and nothing records it, so
+    // the files stay, named with the steps that finish it.
+    written.started.left();
+    const kept = await keptResult(deps, written);
+    throw partlyAppliedChange(error, kept.files, kept.checked);
+  }
 }
 
 /** A written file, read for recording, with the snapshot beside it. */

@@ -1583,7 +1583,13 @@ export async function runMigrateDown(
     env: process.env,
   });
 
-  const opened = await openMigrationCommand(options, logger);
+  // The app's own rollback reads its entities (its names, the registry and permissions it
+  // restores), so with no configuration file it refuses; a plugin's (`--plugin`) reads none.
+  const opened = await openMigrationCommand(
+    options,
+    logger,
+    options.plugin === undefined ? "refuse" : "defaults"
+  );
   // A dry run whose database is not there has said so, and ends here.
   if (opened === undefined) return;
   const { dbValidation, configResult, migrationsDir, adapter } = opened;
