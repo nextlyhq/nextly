@@ -237,6 +237,7 @@ import {
   withoutAdoptedIndexes,
 } from "../../domains/schema/migrate/unique-column-guard";
 import { refuseUnresolvedAttempts } from "../../domains/schema/migrate/unresolved-attempt";
+import { refuseDropsOfUsedEntities } from "../../domains/schema/migrate/used-entity-drops";
 import {
   coreTableNames,
   mergeContributions,
@@ -2621,6 +2622,104 @@ function assertPluginTablesAreMigratable(
  * and interleaving them with the migrate flow made both harder to follow than
  * either is alone.
  */
+/**
+ * `deps.refuseUnwrittenChanges`, which refuses a configuration holding a change no migration
+ * records. Where it refuses, a retirement a stopped run left is finished first, under the lock, and
+ * then the refusal ends the run: a configuration declaring a retired entity again must not keep the
+ * run from removing what the retired one left, or the entity declared again would find it as its
+ * own. Finishing is Phase 3 as every run takes it, from the migrations recorded applied; a failure
+ * there is warned of, and the refusal still ends the run.
+ */
+async function refuseUnwrittenChangesOnceRetired(
+  deps: MigrateCoreDeps
+): Promise<void> {
+  if (deps.refuseUnwrittenChanges === undefined) return;
+  try {
+    await deps.refuseUnwrittenChanges();
+  } catch (refusal) {
+    await finishRetirements(deps).catch((error: unknown) => {
+      deps.logger.warn(
+        `What a deleted entity left was not finished before the refusal below: ${
+          error instanceof Error ? error.message : String(error)
+        }.`
+      );
+    });
+    throw refusal;
+  }
+}
+
+/** Phase 3 under the lock: the registry and what retired entities left, from the applied migrations. */
+async function finishRetirements(deps: MigrateCoreDeps): Promise<void> {
+  await (deps.withLock ?? withMigrateLock)(
+    deps.adapter as unknown as DrizzleAdapter,
+    deps.dialect,
+    async () => {
+      await (deps.reconcileMetadataFn ?? reconcileMigrationMetadata)(
+        metadataArgsOf(deps, [])
+      );
+    },
+    lockOptionsOf(deps)
+  );
+}
+
+/**
+ * Phase 3's arguments: the registry rows the applied migrations record, and what deleted entities
+ * left, for `deps`' run, with the translations tables its judgement covered (`judgedLeftovers`).
+ */
+function metadataArgsOf(
+  deps: MigrateCoreDeps,
+  judgedLeftovers: readonly string[]
+): Parameters<typeof reconcileMigrationMetadata>[0] {
+  return {
+    adapter: deps.adapter as unknown as DrizzleAdapter,
+    dialect: deps.dialect,
+    migrationsDir: deps.migrationsDir,
+    ...(deps.declared === undefined ? {} : { declared: deps.declared }),
+    ...(deps.registryRows === undefined
+      ? {}
+      : { registryRows: deps.registryRows }),
+    ...(deps.collectionSources === undefined
+      ? {}
+      : { collectionSources: deps.collectionSources }),
+    ...(deps.prepareLeftoverTables === undefined
+      ? {}
+      : { prepareLeftoverTables: deps.prepareLeftoverTables }),
+    ...(judgedLeftovers.length === 0
+      ? {}
+      : { dropLeftoverTranslations: new Set(judgedLeftovers) }),
+    logger: {
+      info: (m: string) => deps.logger.debug(m),
+      warn: (m: string) => deps.logger.warn(m),
+      debug: (m: string) => deps.logger.debug(m),
+    },
+  };
+}
+
+/** The schema lock a run takes, as `nextly migrate` and the boot take it. */
+function lockOptionsOf(
+  deps: MigrateCoreDeps
+): Parameters<typeof withMigrateLock>[3] {
+  return {
+    command: deps.lockCommand ?? "nextly migrate",
+    mode: deps.lockMode ?? "wait",
+    ttlSeconds: deps.ttlSeconds,
+    waitMs: deps.lockWaitMs,
+    // Off unless the caller asks: a boot, production or development, runs inside a server whose
+    // shutdown may let the migration run on, and the lock must not be freed under it.
+    releaseOnInterrupt: deps.lockReleaseOnInterrupt === true,
+    isSettled: deps.isSettled,
+    logger: {
+      warn: m => deps.logger.warn(m),
+      info: m => deps.logger.info(m),
+    },
+    // The run's own bounds, its flags among them, for a busy SQLite database met while the
+    // lock is taken.
+    ...(deps.busyTable === undefined
+      ? {}
+      : { busyBounds: deps.busyTable.bounds }),
+  };
+}
+
 function reportMetadataOutcome(
   metadata: MigrateCoreResult["metadata"],
   logger: CommandContext["logger"]
@@ -2920,7 +3019,7 @@ export async function migrateCore(
   // its migrations is refused, naming each change, before the lock or any
   // write. Asked once, since what it compares is the configuration and the
   // folder, which no other run changes.
-  await deps.refuseUnwrittenChanges?.();
+  await refuseUnwrittenChangesOnceRetired(deps);
   // And a database that lacks what its applied migrations made, read-only;
   // asked again under the lock, below.
   await refuseDatabaseBehindLedger(deps);
@@ -2967,31 +3066,7 @@ export async function migrateCore(
    * behind. Failing here would report a migration that worked as broken,
    * and the next invocation repairs the row because this runs every time.
    */
-  const metadataArgs = (): Parameters<
-    typeof reconcileMigrationMetadata
-  >[0] => ({
-    adapter: deps.adapter as unknown as DrizzleAdapter,
-    dialect: deps.dialect,
-    migrationsDir: deps.migrationsDir,
-    ...(deps.declared === undefined ? {} : { declared: deps.declared }),
-    ...(deps.registryRows === undefined
-      ? {}
-      : { registryRows: deps.registryRows }),
-    ...(deps.collectionSources === undefined
-      ? {}
-      : { collectionSources: deps.collectionSources }),
-    ...(deps.prepareLeftoverTables === undefined
-      ? {}
-      : { prepareLeftoverTables: deps.prepareLeftoverTables }),
-    ...(judgedLeftovers.length === 0
-      ? {}
-      : { dropLeftoverTranslations: new Set(judgedLeftovers) }),
-    logger: {
-      info: (m: string) => deps.logger.debug(m),
-      warn: (m: string) => deps.logger.warn(m),
-      debug: (m: string) => deps.logger.debug(m),
-    },
-  });
+  const metadataArgs = () => metadataArgsOf(deps, judgedLeftovers);
   /**
    * The registry rows of the files that applied before one failed with `error`, except after a
    * test's stop at a point (`stop-points.ts`), which ends the run where it stands.
@@ -3401,25 +3476,7 @@ export async function migrateCore(
       // A first run's commit above has done it already (`firstRunSteps`).
       await firstRun.seedAccess();
     },
-    {
-      command: deps.lockCommand ?? "nextly migrate",
-      mode: deps.lockMode ?? "wait",
-      ttlSeconds: deps.ttlSeconds,
-      waitMs: deps.lockWaitMs,
-      // Off unless the caller asks: a boot, production or development, runs inside a server whose
-      // shutdown may let the migration run on, and the lock must not be freed under it.
-      releaseOnInterrupt: deps.lockReleaseOnInterrupt === true,
-      isSettled: deps.isSettled,
-      logger: {
-        warn: m => deps.logger.warn(m),
-        info: m => deps.logger.info(m),
-      },
-      // The run's own bounds, its flags among them, for a busy SQLite database met while the
-      // lock is taken.
-      ...(deps.busyTable === undefined
-        ? {}
-        : { busyBounds: deps.busyTable.bounds }),
-    }
+    lockOptionsOf(deps)
   );
 
   return {
@@ -3835,6 +3892,17 @@ async function judgeFileDeletions(
     deps.db,
     deps.dialect
   );
+  // A file dropping a collection or Single something still uses is refused here too, before any
+  // statement and before the attempt is recorded, as the Schema Builder refuses its delete
+  // (`used-entity-drops.ts`).
+  await refuseDropsOfUsedEntities({
+    adapter: deps.adapter as unknown as DrizzleAdapter,
+    db: deps.db,
+    dialect: deps.dialect,
+    units: fileUnits,
+    // The extension schema the run compiled, as the command and the boot hand it.
+    extensionSchema: () => Promise.resolve(deps.extensionSchema ?? null),
+  });
   // A file turning translation on or off whose move would lose a column's comment, character set
   // or collation is refused here too, before any statement (`refuseMigrationFilesLosingDefinition`).
   await refuseMigrationFilesLosingDefinition(

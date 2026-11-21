@@ -34,6 +34,7 @@ import {
 
 import { commitsOnMysql } from "./mysql-implicit-commit";
 import { requiredColumnCheckpoint } from "./required-column-guard";
+import { captureRetiredDocuments } from "./retired-documents";
 import { leadingWords } from "./split-sql";
 import {
   refusingNewDanglingReferences,
@@ -848,6 +849,9 @@ async function runUnitStatements(
         // Inside the transaction, before the first statement, on every try that starts there: a
         // MySQL try resumed after statements that committed on their own skips it, as below.
         if (from === 0) await bound?.before?.(tx.db);
+        // The documents of each entity whose main table the unit drops, named before the drop and
+        // committed or rolled back with it (`retired-documents.ts`).
+        await captureRetiredDocuments(tx.db, dialect, unit, statements, from);
         // Whether the ledger write is left outside the unit's transaction (MySQL only).
         let outside = await commitBeforeLedgerOnlyTry(
           tx,
@@ -922,6 +926,13 @@ async function runUnitStatements(
     // there. A try resumed past statements that committed as they ran skips it: what it read is
     // already changed by them, and a refusal now would undo none of them.
     if (from === 0) await bound?.before?.(checkpointDb);
+    await captureRetiredDocuments(
+      checkpointDb,
+      dialect,
+      unit,
+      statements,
+      from
+    );
     for (const [offset, statement] of statements.slice(from).entries()) {
       const index = from + offset;
       // Asked before the statement, outside the failure below: refused here, nothing of it ran.
