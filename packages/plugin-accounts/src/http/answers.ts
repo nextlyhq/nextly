@@ -4,6 +4,7 @@ import { accountsError, type AccountsErrorCode } from "../errors";
 
 /** The code each flow's refusal is answered with. */
 const REFUSALS: Record<string, AccountsErrorCode> = {
+  "sign-up-closed": "ACCOUNTS_SIGN_UP_CLOSED",
   "invalid-name": "ACCOUNTS_INVALID_INPUT",
   "invalid-address": "ACCOUNTS_INVALID_INPUT",
   "too-short": "ACCOUNTS_INVALID_INPUT",

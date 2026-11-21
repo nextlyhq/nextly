@@ -44,6 +44,8 @@ export function flowDeps(
     events: { emit: (name, payload) => void emitted.push({ name, payload }) },
     // Core's own record of the plugin's people, as a site's flows report to.
     principals: accountPrincipals(ctx),
+    // Core's own audit writer, as the started plugin records with.
+    ...(ctx.audit === undefined ? {} : { audit: ctx.audit }),
     pacer: {
       verify: (password, hash) => {
         pacing.checks += 1;

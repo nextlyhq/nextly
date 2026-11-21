@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { ACCOUNT_PRINCIPAL, accountsRoutes } from "./routes";
+import { ACCOUNT_PRINCIPAL } from "./principal";
+import { accountsRoutes } from "./routes";
 
 /** The routes only a signed-in holder may reach. */
 const HOLDER_ROUTES = [

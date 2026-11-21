@@ -35,6 +35,7 @@ describe("resolveAccountsSettings", () => {
         confirmAddress: "/account/address",
         cancelAddressChange: "/account/address/cancel",
       },
+      signUp: "open",
       verificationRequired: true,
       session: { idleHours: 336, absoluteDays: 30, perAccount: 20 },
       unverifiedKeptDays: 7,
@@ -118,6 +119,15 @@ describe("resolveAccountsSettings", () => {
       code: "ACCOUNTS_INVALID_OPTIONS",
       paths: [path],
     });
+  });
+
+  it("keeps sign-up open unless the site closes it, and takes no other word for it", () => {
+    expect(resolveAccountsSettings({ origin, signUp: "closed" }).signUp).toBe(
+      "closed"
+    );
+    for (const signUp of ["off", false, "Closed"]) {
+      expect(refusalOf({ origin, signUp })?.paths).toEqual(["signUp"]);
+    }
   });
 
   it("refuses a fractional number rather than rounding it", () => {
