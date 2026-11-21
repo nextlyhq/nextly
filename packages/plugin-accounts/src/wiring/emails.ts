@@ -113,6 +113,23 @@ const TEMPLATES: Record<Kind, Template> = {
     subject: "Your password changed",
     html: `<p>Your account's password changed. If you didn't do this, reset it now.</p>`,
   },
+  invitation: {
+    name: "An invitation",
+    description:
+      "Sent when the site invites an address that has no account, with the link that makes one.",
+    sentBy: ["The site invites someone to make an account"],
+    carriesSecret: true,
+    subject: "You're invited to make an account",
+    html: `<p>You're invited to make an account with this address. <a href="{{link}}">Choose a password</a> to start.</p><p>If you weren't expecting this, you can ignore this email.</p>`,
+  },
+  "invitation-has-account": {
+    name: "An invitation to an address that has an account",
+    description:
+      "Sent when the site invites an address that already has an account, which signs in instead.",
+    sentBy: ["The site invites someone whose address already has an account"],
+    subject: "You're invited to sign in",
+    html: `<p>You're invited to use your account here, and this address already has one. <a href="{{signInLink}}">Sign in</a>, or <a href="{{resetLink}}">reset your password</a> if you've forgotten it. If your account was closed, contact us.</p>`,
+  },
 };
 
 /**

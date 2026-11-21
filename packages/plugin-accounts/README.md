@@ -13,8 +13,11 @@ one for every action a visitor takes: `signUp`, `verifyAddress`,
 `resendVerification`, `removeUnverifiedAccount`, `signIn`, `signOut`,
 `signOutEverywhere`, `requestPasswordReset`, `resetPassword`,
 `changePassword`, `changeAddress`, `confirmAddressChange`,
-`cancelAddressChange`, `deleteAccount` and `currentAccount`. Another plugin
-reaches the same functions with `accountsServices(ctx)`.
+`cancelAddressChange`, `deleteAccount`, `acceptInvitation` and
+`currentAccount`; and, for the site's own code alone, `invite`,
+`withdrawInvitation`, `endAccountSessions`, `deactivateAccount` and
+`reactivateAccount`. Another plugin reaches the same functions with
+`accountsServices(ctx)`.
 
 Each takes the visitor, read from a request with `visitorFrom`, and answers
 the cookie changes for the caller to write with `cookieWrite`; a refusal is
@@ -38,6 +41,70 @@ plugin's service alike. The refusal comes before anything the visitor sent is
 read, so a free address and one that has an account are answered the same,
 and nothing is counted, hashed or emailed. Accounts made before sign-up
 closed keep signing in.
+
+## Invite-only sites
+
+A site where only the people it chooses have accounts, such as a staff
+portal or a client area, closes sign-up and invites people from its own
+server code:
+
+```ts
+accounts({ origin: "https://example.com", signUp: "closed" });
+```
+
+```ts
+const server = await accountsServer();
+const { link, expiresAt } = await server.invite({
+  address: "dana@example.com",
+  name: "Dana Reyes",
+  data: { personId: "p-17" },
+});
+```
+
+`invite` works whether sign-up is open or closed, and is for the site's
+code only: no endpoint or action offers it to a visitor.
+
+- **The plugin sends the email** with its `accounts-invitation` template,
+  which the site edits in the admin like its other emails. The link lands on
+  `pages.acceptInvitation` (`/account/invitation` by default). Pass
+  `sendEmail: false` to send the returned `link` or `token` some other way.
+- **The link** is a one-purpose link kept by core only as a hash, for that
+  address alone. It lasts `invitationLinkDays` (7 by default, 1 to 30) and is
+  spent once. Inviting the same address again replaces the earlier link, and
+  `withdrawInvitation({ address })` withdraws it.
+- **It says nothing about who has an account.** An address that already has
+  one gets the same answer as any other. Its email, `accounts-invitation-has-account`,
+  asks them to sign in instead, and its link is refused when used
+  (`ACCOUNTS_LINK_REFUSED`, `data.reason` `"has-account"`).
+- **Limits.** Invitations to one address are counted as every email the
+  plugin sends to an address is: 3 in 15 minutes, 10 a day. Pass the
+  `visitor` when a visitor's request asked for the invitation, so their
+  client's limit applies too.
+- **`data`** is a flat record of short strings, numbers, booleans and nulls,
+  for the site to tie the new account to a record of its own.
+
+The invitation page shows a password form and accepts with
+`acceptInvitationAction` (fields `token`, `password`, optional `next`), the
+REST endpoint `POST /invitation/accept`, or the server function:
+
+```ts
+const accepted = await server.acceptInvitation({ visitor, token, password });
+// accepted.account.id, accepted.data, and accepted.cookies to write
+```
+
+Accepting creates the account for the invited address, with the name the
+site gave and the password chosen. The password is held to every rule a new
+password is, including the breached-password check where the site turns it
+on, and a refused password leaves the link usable. The address counts as
+verified, the visitor is signed in, and the link is spent. If the same link
+is used twice at the same moment, exactly one use makes the account. With
+`address`, a use that names another address is refused (`data.reason`
+`"other-address"`), and nothing is spent.
+
+Only the server function answers the account and `data`. The action and
+the endpoint answer the browser with the message and cookies alone. Other
+plugins hear `nextlyhq-plugin-accounts.invitation.accepted`, with the
+account's id and `data`.
 
 ## Ending someone's access
 

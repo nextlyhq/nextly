@@ -34,6 +34,7 @@ describe("resolveAccountsSettings", () => {
         reset: "/account/reset",
         confirmAddress: "/account/address",
         cancelAddressChange: "/account/address/cancel",
+        acceptInvitation: "/account/invitation",
       },
       signUp: "open",
       verificationRequired: true,
@@ -46,6 +47,7 @@ describe("resolveAccountsSettings", () => {
         codeTries: 5,
       },
       resetLinkMinutes: 60,
+      invitationLinkDays: 7,
       failuresBeforeReset: 100,
       knownBrowsers: { days: 90, perAccount: 10 },
       passwordMinLength: 8,
@@ -97,6 +99,16 @@ describe("resolveAccountsSettings", () => {
       { verification: { codeTries: 6 } },
     ],
     ["resetLinkMinutes", { resetLinkMinutes: 15 }, { resetLinkMinutes: 14 }],
+    [
+      "invitationLinkDays",
+      { invitationLinkDays: 1 },
+      { invitationLinkDays: 0 },
+    ],
+    [
+      "invitationLinkDays",
+      { invitationLinkDays: 30 },
+      { invitationLinkDays: 31 },
+    ],
     [
       "failuresBeforeReset",
       { failuresBeforeReset: 10 },

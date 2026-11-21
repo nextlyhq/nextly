@@ -9,6 +9,7 @@ import type { AccountsCore } from "../core/ports";
 import type { AccountsSettings } from "../settings";
 import type { SessionLimits } from "../storage/sessions";
 
+import type { InvitationData } from "./invitations";
 import type { AccountsMail } from "./mail";
 import type { PasswordPacer } from "./pacer";
 
@@ -48,6 +49,14 @@ export interface AccountsEventPayloads {
   "nextlyhq-plugin-accounts.account.deactivated": { accountId: string };
   /** Staff, or the site's own code, reactivated a deactivated account. */
   "nextlyhq-plugin-accounts.account.reactivated": { accountId: string };
+  /**
+   * An invitation was accepted and its account made: the site's own code
+   * ties the account to its records by the data it invited with.
+   */
+  "nextlyhq-plugin-accounts.invitation.accepted": {
+    accountId: string;
+    data: InvitationData | null;
+  };
 }
 
 /** The events the plugin declares, one per name it emits. */
@@ -55,10 +64,12 @@ export const ACCOUNTS_EVENTS: readonly [
   "nextlyhq-plugin-accounts.account.deleted",
   "nextlyhq-plugin-accounts.account.deactivated",
   "nextlyhq-plugin-accounts.account.reactivated",
+  "nextlyhq-plugin-accounts.invitation.accepted",
 ] = [
   "nextlyhq-plugin-accounts.account.deleted",
   "nextlyhq-plugin-accounts.account.deactivated",
   "nextlyhq-plugin-accounts.account.reactivated",
+  "nextlyhq-plugin-accounts.invitation.accepted",
 ] as const satisfies ReadonlyArray<keyof AccountsEventPayloads>;
 
 export interface AccountsEvents {
