@@ -22,6 +22,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   DETAIL_GUESSES,
+  isSaveStamp,
   STRUCTURED_DATA_TYPE_KEYS,
   structuredDataTypesFor,
   type StructuredDataDetail,
@@ -890,5 +891,128 @@ describe("the type a page is described as", () => {
       "review",
       "localBusiness",
     ]);
+  });
+});
+
+describe("a detail read from one of the entry's own dates", () => {
+  // `posts` declares no date: its published date is the day each was created.
+  const fromCreated = rules({
+    posts: {
+      type: "article",
+      details: { article: { datePublished: "createdAt", author: "writer" } },
+    },
+  });
+  const { publishedAt: _declared, ...undated } = POST;
+
+  it("reads the date from the entry, as the row holds it", async () => {
+    const { nodes, problems } = await buildStructuredData(
+      context(),
+      postInput({ ...undated, createdAt: "2026-09-03T09:14:20.705Z" }),
+      ANSWER,
+      fromCreated
+    );
+    expect(problems).toEqual([]);
+    expect(nodeOf(nodes, "Article")?.datePublished).toBe(
+      "2026-09-03T09:14:20.705Z"
+    );
+  });
+
+  it("says when the date is set, not what to type, where the entry has none yet", async () => {
+    // A page never saved has no created date: nothing a person fills in.
+    const { nodes, problems } = await buildStructuredData(
+      context(),
+      postInput(undated),
+      ANSWER,
+      fromCreated
+    );
+    expect(nodeOf(nodes, "Article")).toBeUndefined();
+    expect(problems).toEqual([
+      {
+        type: "article",
+        detail: "datePublished",
+        message: "The date published is set when the page is first saved.",
+        fix: "save",
+        field: "createdAt",
+      },
+    ]);
+  });
+
+  it("says the first publication sets it, for the date a page was first published", async () => {
+    const { problems } = await buildStructuredData(
+      context(),
+      postInput(undated),
+      ANSWER,
+      rules({
+        posts: {
+          type: "article",
+          details: {
+            article: { datePublished: "firstPublishedAt", author: "writer" },
+          },
+        },
+      })
+    );
+    expect(problems).toEqual([
+      expect.objectContaining({
+        message: "The date published is set when the page is first published.",
+        fix: "save",
+        field: "firstPublishedAt",
+      }),
+    ]);
+  });
+});
+
+describe("a detail that is not a date, mapped to one of the entry's own dates", () => {
+  // A price can never come from a date, so neither saving nor publishing fixes it: the mapping is
+  // what is wrong, whether or not the entry has the date yet.
+  const priced = rules({
+    posts: {
+      type: "product",
+      details: {
+        product: { price: "createdAt", availability: { value: "InStock" } },
+      },
+    },
+  });
+
+  it("sends a saved page to its mapping, not to saving it", async () => {
+    const { problems } = await buildStructuredData(
+      context(),
+      postInput({ ...POST, createdAt: "2026-09-03T09:14:20.705Z" }),
+      ANSWER,
+      priced
+    );
+    expect(problems).toEqual([
+      expect.objectContaining({
+        detail: "price",
+        message: "Missing: price.",
+        fix: "mapping",
+        field: "createdAt",
+      }),
+    ]);
+  });
+
+  it("sends a page not saved yet to its mapping too", async () => {
+    const { problems } = await buildStructuredData(
+      context(),
+      postInput(POST),
+      ANSWER,
+      priced
+    );
+    expect(problems).toEqual([
+      expect.objectContaining({
+        detail: "price",
+        message: "Missing: price.",
+        fix: "mapping",
+      }),
+    ]);
+  });
+});
+
+describe("the row's save stamp", () => {
+  it("is the row's own `updatedAt`, in either spelling, and never a field inside a group", () => {
+    expect(isSaveStamp("updatedAt")).toBe(true);
+    expect(isSaveStamp("updated_at")).toBe(true);
+    // A group's field is the page's own value, whatever it is called.
+    expect(isSaveStamp("updated.at")).toBe(false);
+    expect(isSaveStamp("meta.updatedAt")).toBe(false);
   });
 });

@@ -13,6 +13,7 @@
  */
 import {
   addressOfRequest,
+  entryDateFieldNames,
   languageAddressOf,
   type PageMetadataAnswer,
   type PageMetadataImage,
@@ -31,6 +32,8 @@ import { TITLE_FIELDS } from "../settings/patterns";
 
 import {
   DETAIL_LABELS,
+  ENTRY_DATE_DETAILS,
+  isSaveStamp,
   isStructuredDataTypeKey,
   REVIEWED_ITEM_TYPES,
   STRUCTURED_DATA_TYPES,
@@ -84,10 +87,11 @@ export interface StructuredDataProblem {
    * Where it is fixed: on the page (`content`, the field is empty), in the
    * content type's mapping (`mapping`, no field holds it), by the route
    * (`route`, it reads the relationship holding it without the entry it
-   * names, as at `depth: 0`), or in the SEO settings (`settings`, the site's
-   * address).
+   * names, as at `depth: 0`), in the SEO settings (`settings`, the site's
+   * address), or by saving or publishing the page (`save`, the field is one
+   * of the entry's own dates, which Nextly sets and nobody types).
    */
-  fix: "content" | "mapping" | "route" | "settings";
+  fix: "content" | "mapping" | "route" | "settings" | "save";
   /** The page's field the detail is read from, where one is. */
   field?: string;
 }
@@ -528,7 +532,38 @@ async function fixFor(
 ): Promise<StructuredDataProblem["fix"]> {
   if (read.field === undefined)
     return detail === "image" ? "content" : "mapping";
+  // One of the entry's own dates: saving or publishing fills it, but only a detail such a date
+  // stands for is then supplied; any other detail mapped to one is a mapping to change.
+  if (isEntryDate(facts.input, read.field)) {
+    const unset = read.value === undefined || read.value === null;
+    return unset && ENTRY_DATE_DETAILS.has(detail) ? "save" : "mapping";
+  }
   return (await heldUnread(facts.ctx, facts.input, read)) ? "route" : "content";
+}
+
+/**
+ * Whether `field` is one of the dates an entry holds by itself, which core
+ * names (`entryDateFieldNames`): set by Nextly when the page is saved or
+ * published, so an empty one is filled by doing that, not by typing.
+ */
+function isEntryDate(input: PageMetadataInput, field: string): boolean {
+  const entity = input.source.kind === "entry" ? "collection" : "single";
+  return entryDateFieldNames(entity, { statusLifecycle: true }).includes(field);
+}
+
+/**
+ * What a problem says of a missing detail: that it is missing, or, for one
+ * of the entry's own dates, when Nextly sets it, since nothing on the page
+ * can be filled in.
+ */
+function missingMessage(
+  detail: StructuredDataDetail,
+  fix: StructuredDataProblem["fix"],
+  field: string | undefined
+): string {
+  if (fix !== "save") return `Missing: ${DETAIL_LABELS[detail]}.`;
+  const when = field === "firstPublishedAt" ? "first published" : "first saved";
+  return `The ${DETAIL_LABELS[detail]} is set when the page is ${when}.`;
 }
 
 /** The details a type is described with, and the ones it is missing. */
@@ -551,23 +586,16 @@ async function detailsOf(
       continue;
     }
     if (!needs.includes(detail)) continue;
+    const fix = await fixFor(facts, detail, read);
     missing.push({
       type,
       detail,
-      message: `Missing: ${DETAIL_LABELS[detail]}.`,
-      fix: await fixFor(facts, detail, read),
+      message: missingMessage(detail, fix, read.field),
+      fix,
       ...(read.field === undefined ? {} : { field: read.field }),
     });
   }
   return { values, missing };
-}
-
-/**
- * Whether `field` is the row's own save stamp, which every save moves, an
- * SEO-only one included: not a date a page's content changed.
- */
-function isSaveStamp(field: string): boolean {
-  return field.toLowerCase().replace(/[^a-z0-9]/g, "") === "updatedat";
 }
 
 /**
