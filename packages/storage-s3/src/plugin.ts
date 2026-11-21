@@ -67,6 +67,7 @@ import type {
 } from "nextly/storage";
 
 import { S3StorageAdapter } from "./adapter";
+import { generateStorageKey } from "./storage-key";
 import type { S3StorageConfig } from "./types";
 
 // ============================================================
@@ -140,8 +141,9 @@ export function s3Storage(config: S3StorageConfig): StoragePlugin {
           ? collectionConfig.prefix
           : undefined;
 
-      // Generate storage key matching adapter's format
-      // Format: {prefix}{year}/{month}/{uuid}-{sanitized-filename}
+      // The key a server upload under this prefix would get, from the same
+      // function: {prefix}/{year}/{month}/{uuid}-{sanitized-filename}, with
+      // one slash after the prefix however it is written.
       const key = generateStorageKey(filename, prefix);
 
       // Get pre-signed upload URL from adapter
@@ -173,46 +175,4 @@ export function s3Storage(config: S3StorageConfig): StoragePlugin {
   };
 
   return plugin;
-}
-
-// ============================================================
-// Helper Functions
-// ============================================================
-
-/**
- * Generate a unique storage key with date-based prefix.
- *
- * Creates keys in format: {prefix}{year}/{month}/{uuid}-{sanitized-filename}
- * This matches the format used by S3StorageAdapter for consistency.
- *
- * @param filename - Original filename (will be sanitized)
- * @param prefix - Optional folder/prefix for organizing uploads
- * @returns Generated storage key
- */
-function generateStorageKey(filename: string, prefix?: string): string {
-  const sanitized = sanitizeFilename(filename);
-  const uuid = crypto.randomUUID();
-  const date = new Date();
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-
-  const keyPrefix = prefix ? `${prefix}${year}/${month}` : `${year}/${month}`;
-
-  return `${keyPrefix}/${uuid}-${sanitized}`;
-}
-
-/**
- * Sanitize filename to prevent directory traversal and S3 key issues.
- *
- * Removes path separators and replaces unsafe characters with hyphens.
- * Keeps only: a-z, A-Z, 0-9, dot, underscore, hyphen
- *
- * @param filename - Original filename
- * @returns Sanitized filename safe for S3 keys
- */
-function sanitizeFilename(filename: string): string {
-  // Extract basename (remove any path components)
-  const basename = filename.split(/[/\\]/).pop() || filename;
-  // Replace unsafe characters with hyphens
-  return basename.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
