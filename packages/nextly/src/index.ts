@@ -352,6 +352,7 @@ export type {
   QueuedEmail,
   QueuedEmailState,
   CancelQueuedEmailArgs,
+  RetryQueuedEmailArgs,
   // The Email hub's Activity reads, `nextly.emailDeliveries.*`
   // (experimental).
   FindEmailActivityArgs,
