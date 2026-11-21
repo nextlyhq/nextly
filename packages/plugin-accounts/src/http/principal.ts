@@ -1,8 +1,10 @@
-import type {
-  PrincipalKindDefinition,
-  PrincipalRecord,
+import {
+  pluginAdminSlug,
+  type PrincipalKindDefinition,
+  type PrincipalRecord,
 } from "@nextlyhq/plugin-sdk";
 
+import { PLUGIN_NAME } from "../admin-contract";
 import type { FlowDeps } from "../flows/deps";
 import { sessionAccount } from "../flows/sessions";
 import { accountById } from "../storage/accounts";
@@ -14,6 +16,13 @@ type AccountAttributes = { verified: boolean };
 
 /** The kind's name; core makes it `<plugin>:account`. */
 export const ACCOUNT_KIND = "account";
+
+/**
+ * The plugin's kind of signed-in person, as a route or an audit row names
+ * it: `<plugin>:account`. Declared beside the kind rather than with the
+ * routes, so what names a person needs none of the routes' handlers.
+ */
+export const ACCOUNT_PRINCIPAL: string = `${pluginAdminSlug(PLUGIN_NAME)}:${ACCOUNT_KIND}`;
 
 /**
  * The plugin's kind of signed-in person, as core asks for it wherever a

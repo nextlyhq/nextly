@@ -6,7 +6,7 @@ import type { AccountPrincipals, FlowDeps } from "../flows/deps";
 import type { AccountsEmail } from "../flows/mail";
 import type { PasswordPacer } from "../flows/pacer";
 import { sweepUnverifiedAccounts } from "../flows/sweep-unverified";
-import { ACCOUNT_PRINCIPAL } from "../http/routes";
+import { ACCOUNT_PRINCIPAL } from "../http/principal";
 import type { AccountsSettings } from "../settings";
 import { sweepKnownBrowsers } from "../storage/known-browsers";
 import { sweepPendingChanges } from "../storage/pending-changes";
@@ -47,6 +47,7 @@ export function flowDepsFor(
     },
     events: { emit: (name, payload) => ctx.events.emit(name, payload) },
     principals: accountPrincipals(ctx),
+    ...(ctx.audit === undefined ? {} : { audit: ctx.audit }),
     pacer,
     logger: { warn: (message, context) => ctx.logger.warn(message, context) },
     now: () => new Date(),

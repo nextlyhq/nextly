@@ -61,6 +61,11 @@ interface ForVisitor {
   readonly visitor: AccountVisitor;
 }
 
+/** The account the site's own code acts on, by its id. */
+interface ForAccount {
+  readonly accountId: string;
+}
+
 /** A link's token from an email, spent by the function it is handed to. */
 interface WithToken {
   readonly token: string;
@@ -156,6 +161,35 @@ export interface AccountsServer {
   ): Promise<AccountOutcome>;
   /** The signed-in account, or null. */
   currentAccount(input: ForVisitor): Promise<SignedInAccount | null>;
+
+  /**
+   * For the site's own code, never a visitor's request: ends every session
+   * of the account, as staff's action of the same name does, so its next
+   * request is signed out. Links and codes already sent keep working.
+   * Recorded in core's audit log.
+   *
+   * @throws `ACCOUNTS_NOT_FOUND`
+   */
+  endAccountSessions(input: ForAccount): Promise<AccountOutcome>;
+  /**
+   * For the site's own code: deactivates the account, as staff's action of
+   * the same name does. Every session ends, every link and code is voided,
+   * and it signs in nowhere until reactivated. Recorded in core's audit
+   * log; other plugins hear of it.
+   *
+   * @throws `ACCOUNTS_NOT_FOUND`, and `ACCOUNTS_NOT_APPLICABLE` with
+   *   `data.reason` `"already-deactivated"`
+   */
+  deactivateAccount(input: ForAccount): Promise<AccountOutcome>;
+  /**
+   * For the site's own code: reactivates a deactivated account, as staff's
+   * action of the same name does. Its holder signs in again. Recorded in
+   * core's audit log; other plugins hear of it.
+   *
+   * @throws `ACCOUNTS_NOT_FOUND`, and `ACCOUNTS_NOT_APPLICABLE` with
+   *   `data.reason` `"already-active"`
+   */
+  reactivateAccount(input: ForAccount): Promise<AccountOutcome>;
 
   /**
    * The visitor a request carries: its network key and the plugin's

@@ -30,6 +30,7 @@ import {
   withKnownToken,
 } from "../http/cookies";
 import { assertSameOrigin, safeReturnPath } from "../http/guard";
+import { appAccountAction } from "../http/staff";
 
 import type {
   AccountCookie,
@@ -230,6 +231,27 @@ export function accountsService(deps: () => FlowDeps): AccountsServer {
       if (visitor.sessionToken === null) return null;
 
       return sessionAccount(deps(), { sessionToken: visitor.sessionToken });
+    },
+
+    async endAccountSessions({ accountId }) {
+      return {
+        message: await appAccountAction(deps(), "end-sessions", accountId),
+        cookies: [],
+      };
+    },
+
+    async deactivateAccount({ accountId }) {
+      return {
+        message: await appAccountAction(deps(), "deactivate", accountId),
+        cookies: [],
+      };
+    },
+
+    async reactivateAccount({ accountId }) {
+      return {
+        message: await appAccountAction(deps(), "reactivate", accountId),
+        cookies: [],
+      };
     },
 
     visitorFrom(from) {

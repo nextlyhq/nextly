@@ -96,6 +96,8 @@ type AccountsOptionsShape = {
    * each shows what its link will do and asks the visitor to confirm.
    */
   pages: z.ZodDefault<z.ZodObject<PagesShape, z.core.$strict>>;
+  /** Whether visitors may make their own accounts, or the site lets people in only another way. */
+  signUp: z.ZodDefault<z.ZodEnum<{ open: "open"; closed: "closed" }>>;
   /** Whether an address must be verified before its account signs in. */
   verificationRequired: z.ZodDefault<z.ZodBoolean>;
   session: z.ZodDefault<z.ZodObject<SessionShape, z.core.$strict>>;
@@ -140,6 +142,13 @@ const accountsOptionsSchema: z.ZodObject<AccountsOptionsShape, z.core.$strict> =
           ),
         })
         .default(DEFAULT_PAGES),
+      /**
+       * Whether visitors may make their own accounts. Open by default, so a
+       * site that never sets it keeps signing people up; closed, every
+       * sign-up is refused alike, whatever address it names, and accounts
+       * come only from the site's own code.
+       */
+      signUp: z.enum(["open", "closed"]).default("open"),
       /** Whether an address must be verified before its account signs in. */
       verificationRequired: z.boolean().default(true),
       session: z
