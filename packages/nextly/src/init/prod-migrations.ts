@@ -73,6 +73,8 @@ interface MigrateCoreLike {
     refuseUnrecognisedBuilderFiles?: boolean;
     /** See `MigrateCoreDeps.refuseUnwrittenChanges`. */
     refuseUnwrittenChanges?: () => Promise<void>;
+    /** See `MigrateCoreDeps.recheckSaveRecords`. */
+    recheckSaveRecords?: () => Promise<void>;
     /** See `MigrateCoreDeps.refuseDatabaseBehind`. */
     refuseDatabaseBehind?: boolean;
     /** See `MigrateCoreDeps.declared`. */
@@ -390,6 +392,17 @@ async function applyBootMigrations(
     logger: { warn: m => logger.warn(m) },
   });
   const { applied, ran } = await run.core({
+    // A Builder save left part-way refuses the start before its first file. A production start
+    // settles nothing: it removes no file and rewrites no definition. `nextly migrate`, or a
+    // development start, settles the save.
+    recheckSaveRecords: async () => {
+      const { refuseWhileSaveInProgress } = await import(
+        "../domains/schema/builder-save/save-in-progress"
+      );
+      await refuseWhileSaveInProgress(adapter as never, {
+        notice: line => logger.warn(`[Nextly] ${line}`),
+      });
+    },
     extensionSchema,
     dialect: adapter.dialect,
     db: adapter.getDrizzle(),
@@ -528,6 +541,16 @@ function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   // table, what holds it and what to do. So is a busy-table bound set out of its range, refused
   // before anything was read or changed.
   if (err.code === "NEXTLY_TABLE_BUSY") return err;
+  // A Builder save left part-way, refused as itself: the database may hold part of a change no
+  // file finished recording, so serving would answer from a schema that cannot be told. Its
+  // message names each save and what settles it.
+  if (
+    err.code === "CONFLICT" &&
+    (err.logContext as { reason?: unknown } | undefined)?.reason ===
+      "builder-save-left-part-way"
+  ) {
+    return err;
+  }
   // A configuration ahead of its migrations, or a database that lacks what they made, refused as
   // itself: serving would answer from a schema the database does not hold. Each message names
   // every change and what to run.
