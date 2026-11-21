@@ -23,6 +23,52 @@ not check where a request came from, so code acting on a browser's request
 calls `checkOrigin` first. The REST endpoints are these same functions behind
 the plugin's origin and CSRF checks.
 
+## Closing sign-up
+
+Sign-up is open by default. A site where only the people it chooses may have
+an account closes it:
+
+```ts
+accounts({ origin: "https://example.com", signUp: "closed" });
+```
+
+Closed, every sign-up is refused with `ACCOUNTS_SIGN_UP_CLOSED` (403), through
+the server function, the REST endpoint, the server action and another
+plugin's service alike. The refusal comes before anything the visitor sent is
+read, so a free address and one that has an account are answered the same,
+and nothing is counted, hashed or emailed. Accounts made before sign-up
+closed keep signing in.
+
+## Ending someone's access
+
+Staff end an account's sessions, deactivate it and reactivate it from its
+page in the admin. A site's own server code does the same through three
+server functions, for when its own records say someone's access has ended:
+
+```ts
+const server = await accountsServer();
+await server.endAccountSessions({ accountId });
+await server.deactivateAccount({ accountId });
+await server.reactivateAccount({ accountId });
+```
+
+Each has the effect of staff's action of the same name.
+`endAccountSessions` signs the account out everywhere, so its next request
+has no account; links and codes already emailed keep working.
+`deactivateAccount` also voids every link and code, cancels a pending change
+of address, and keeps the account from signing in until
+`reactivateAccount`. Other plugins hear of a deactivation and a reactivation
+through the plugin's events.
+
+Each is recorded in core's audit log, under
+`nextlyhq-plugin-accounts.app.sessions-ended`, `.app.deactivated` or
+`.app.reactivated`, naming the account and no staff member. An id that names
+no account is refused with `ACCOUNTS_NOT_FOUND`; deactivating a deactivated
+account, or reactivating an active one, with `ACCOUNTS_NOT_APPLICABLE` and
+`data.reason` `"already-deactivated"` or `"already-active"`. None of these
+take a visitor, so never reach them from a visitor's request without the
+site's own check that its caller may.
+
 ## Next.js
 
 `@nextlyhq/plugin-accounts/next` is the only entry that imports Next.js, which

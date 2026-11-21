@@ -1,4 +1,5 @@
 import type {
+  PluginAuditApi,
   PluginContext,
   PluginDatabase,
   PluginTransaction,
@@ -22,6 +23,12 @@ export interface FlowDeps {
   readonly events: AccountsEvents;
   /** Core's record of the plugin's people, told of each account deleted. */
   readonly principals: AccountPrincipals;
+  /**
+   * Core's audit log, where the site's own code's actions on an account are
+   * recorded; absent on a core that lends the plugin none, which refuses
+   * those actions rather than take them unrecorded.
+   */
+  readonly audit?: PluginAuditApi;
   /** Password checks, timed, and waits as long as one takes. */
   readonly pacer: PasswordPacer;
   readonly logger: {
@@ -37,9 +44,9 @@ export interface FlowDeps {
 export interface AccountsEventPayloads {
   /** An account is gone: other plugins remove or anonymise what they hold for it. */
   "nextlyhq-plugin-accounts.account.deleted": { accountId: string };
-  /** Staff deactivated an account: it signs in nowhere until reactivated. */
+  /** Staff, or the site's own code, deactivated an account: it signs in nowhere until reactivated. */
   "nextlyhq-plugin-accounts.account.deactivated": { accountId: string };
-  /** Staff reactivated a deactivated account. */
+  /** Staff, or the site's own code, reactivated a deactivated account. */
   "nextlyhq-plugin-accounts.account.reactivated": { accountId: string };
 }
 

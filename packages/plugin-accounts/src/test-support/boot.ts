@@ -6,6 +6,7 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 
 import { accounts } from "../plugin";
+import type { AccountsOptions } from "../settings";
 import { accountsWithCore } from "../testing";
 import type { FakeAccountsCore } from "../testing/fake-core";
 
@@ -15,23 +16,30 @@ export const TEST_ORIGIN = "https://shop.example.com";
 /**
  * Boots Nextly on `dialect` with the accounts plugin, for an integration
  * test, and hands back the plugin's own context. The plugin starts as a
- * site's does, built on `core` when one is given, beside the site's own
- * `collections` when some are given. Destroy `nextly` after each test.
+ * site's does, with the site's `settings` beside the test origin, built on
+ * `core` when one is given, beside the site's own `collections` when some
+ * are given. Destroy `nextly` after each test.
  */
 export async function bootAccounts(
   dialect: TestDialect,
   options: {
     core?: FakeAccountsCore;
+    /** The site's options beside the test origin. */
+    settings?: Omit<AccountsOptions, "origin">;
     /** The site's own collections, booted beside the plugin. */
     collections?: NonNullable<
       Parameters<typeof createTestNextly>[0]
     >["collections"];
   } = {}
 ): Promise<{ ctx: PluginContext; nextly: TestNextly }> {
+  const settings: AccountsOptions = {
+    ...options.settings,
+    origin: TEST_ORIGIN,
+  };
   const plugin =
     options.core === undefined
-      ? accounts({ origin: TEST_ORIGIN })
-      : accountsWithCore({ origin: TEST_ORIGIN }, options.core);
+      ? accounts(settings)
+      : accountsWithCore(settings, options.core);
   let captured: PluginContext | undefined;
   const nextly = await createTestNextly({
     dialect,
