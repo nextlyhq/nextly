@@ -6,7 +6,7 @@
  * question two ways.
  *
  * @module domains/workflows/stranded-stage-condition
- * @experimental Read by the `_strandedStage` list filter, which may change until the
+ * Read by the `_strandedStage` list filter, which may change until the
  *   dashboard's Needs attention card is complete.
  */
 import type {
@@ -74,8 +74,6 @@ function shapeCondition(
  * the read's access rules were judged for, as the pending-change condition takes it, so a part
  * in a language withheld from the read keeps no entry; `null` considers every language. A
  * collection no workflow is attached to has no stranded part, and keeps no entry.
- *
- * @experimental
  */
 export function strandedStageCondition(args: {
   dialect: SupportedDialect;

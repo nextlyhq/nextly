@@ -5,7 +5,6 @@
  * the label every surface shows.
  *
  * @module domains/workflows/stage-presentation
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -18,7 +17,7 @@ import {
   type WorkflowSettings,
 } from "./workflow-settings-repository";
 
-/** A stage as a reader is shown it. @experimental */
+/** A stage as a reader is shown it. */
 export interface StagePresentation {
   label: string;
   /** The colour saved for it, a hex value; null where none is, never a guessed one. */
@@ -61,8 +60,6 @@ export async function readStagePresentation(
  * The workflow a collection or Single is attached to, as its schema read names it
  * (`attachedWorkflowSummary`), each stage under the label every other surface shows it by: the
  * one saved in Settings, else the code's. Null where none is attached.
- *
- * @experimental
  */
 export async function shownWorkflowSummary(
   kind: "collection" | "single",

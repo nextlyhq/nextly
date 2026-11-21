@@ -10,7 +10,6 @@
  * registry's.
  *
  * @module domains/workflows/registry
- * @experimental
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
@@ -30,8 +29,6 @@ import type { Workflow, WorkflowStepKind } from "./types";
 
 /**
  * A workflow as the install registered it.
- *
- * @experimental
  */
 export interface RegisteredWorkflow {
   workflow: Workflow;
@@ -65,8 +62,6 @@ const NOT_ELIGIBLE: Record<
 /**
  * A component as the configuration defines it: what the draft split reads of
  * one before, or instead of, the registry.
- *
- * @experimental
  */
 export interface ConfiguredComponent {
   slug: string;
@@ -76,8 +71,6 @@ export interface ConfiguredComponent {
 
 /**
  * Where an attachment's components are read from.
- *
- * @experimental
  */
 export interface WorkflowComponentSource {
   /**
@@ -182,8 +175,6 @@ async function serverProblems(
  * attachment cannot keep drafts or two definitions share a slug. Reads
  * nothing but the registry, so a caller can judge a configuration before it
  * writes any of it.
- *
- * @experimental
  */
 export async function buildWorkflowRegistry(
   config: {
@@ -222,8 +213,6 @@ const published = processGlobal("workflows", () => ({
 /**
  * Make `next` the install's registry, and answer the one it replaces, so a
  * hot reload that is rolled back can put it back.
- *
- * @experimental
  */
 export function publishWorkflows(
   next: ReadonlyMap<string, RegisteredWorkflow>
@@ -235,8 +224,6 @@ export function publishWorkflows(
 
 /**
  * The registry in force, so a hot reload can put it back if it does not land.
- *
- * @experimental
  */
 export function publishedWorkflows(): ReadonlyMap<string, RegisteredWorkflow> {
   return published.registered;
@@ -244,8 +231,6 @@ export function publishedWorkflows(): ReadonlyMap<string, RegisteredWorkflow> {
 
 /**
  * Every registered workflow.
- *
- * @experimental
  */
 export function registeredWorkflows(): RegisteredWorkflow[] {
   return [...published.registered.values()];
@@ -253,8 +238,6 @@ export function registeredWorkflows(): RegisteredWorkflow[] {
 
 /**
  * The workflow a collection or Single is attached to, or `undefined`.
- *
- * @experimental
  */
 export function workflowAttachedTo(
   kind: "collection" | "single",
@@ -271,8 +254,6 @@ export function workflowAttachedTo(
  * and kind, or `null` where none is attached. A list filters by its stages. The editor reads it to know, before a document exists, that it
  * cannot be created as published; a list reads its steps to take the
  * workflow's one step of a kind over several documents (never an approval).
- *
- * @experimental
  */
 export function attachedWorkflowSummary(
   kind: "collection" | "single",

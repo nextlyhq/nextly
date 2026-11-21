@@ -17,7 +17,6 @@
  * two moves the document's version, which a step's compare-and-set refuses as stale.
  *
  * @module domains/workflows/implicit-stage
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
@@ -51,8 +50,6 @@ function implicitStage(
 /**
  * The stage a part is in: its review state's, read as the first stage when the workflow no longer
  * has it, and otherwise where its content puts it. Null for a part with nothing to review.
- *
- * @experimental
  */
 export function partStage(
   workflow: Workflow,
@@ -83,8 +80,6 @@ export async function entityOf(
 /**
  * Whether each of `parts` of a document is live, read on the pool before a transaction opens. A
  * document whose collection or Single is gone is live nowhere.
- *
- * @experimental
  */
 export async function livePartsOf(
   adapter: DrizzleAdapter,
@@ -115,8 +110,6 @@ export async function livePartsOf(
  * working draft, and the shared part where a working draft's slot holds it (`draftSlotParts`): the
  * shared draft kept apart, or, where drafts are not kept by part, any language's draft, which
  * holds the whole document.
- *
- * @experimental
  */
 export async function pendingPartsOn(
   tx: TransactionContext,
@@ -137,8 +130,6 @@ export async function pendingPartsOn(
  * a language whose own draft is pending, and the shared part where a draft's slot holds it
  * (`draftSlotParts`). The one reading of a pending set, so the publish gate and a release's
  * check of the same drafts never disagree about the shared part.
- *
- * @experimental
  */
 export function pendingPartsOf(
   slots: ReadonlySet<string | null>

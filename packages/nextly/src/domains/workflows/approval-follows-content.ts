@@ -20,7 +20,6 @@
  * language's content is its own newest version with the shared values the save wrote.
  *
  * @module domains/workflows/approval-follows-content
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
@@ -115,8 +114,6 @@ const MAX_WITHDRAW_ATTEMPTS = 3;
 
 /**
  * A save that recorded a version, as its write path knows it.
- *
- * @experimental
  */
 export interface RecordedSave {
   document: ReviewDocument;
@@ -352,8 +349,6 @@ async function approvedParts(
  * Withdraws each approval a save left behind, in the save's transaction `tx`: see the module.
  * Does nothing for a save that recorded no version, a document no workflow is attached to, or one
  * with no approved part.
- *
- * @experimental
  */
 export async function withdrawApprovalsOnSave(
   tx: TransactionContext,
@@ -500,8 +495,6 @@ function publishes(move: StatusMove, write: { isCreate?: boolean }): boolean {
  * a publish closes the part's review cycle. A language's publish releases that language's slots;
  * the document's own status published releases every part's. Decided by the rule that decides a
  * publish everywhere else (`statusEventsFor`), so history and these pins never disagree.
- *
- * @experimental
  */
 export async function releaseWorkflowPinsOnPublish(
   tx: TransactionContext,
@@ -644,8 +637,6 @@ async function reviewStatesTableExists(
  * the person accountable it had, and a `workflow-approval-withdrawn-by-definition` event records
  * it as the system's act. A workflow that keeps approvals keeps them as they are. Nothing is read
  * on a database the review states table is not on yet (before its migrations), which holds none.
- *
- * @experimental
  */
 export async function withdrawApprovalsUnderEarlierDefinitions(
   adapter: DrizzleAdapter,

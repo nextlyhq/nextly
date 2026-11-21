@@ -324,7 +324,7 @@ export class Nextly implements NextlyContext {
   public readonly versions: VersionsNamespace;
   /** A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
-  /** @experimental Review state under a workflow: read it, take steps, assign, what waits. */
+  /** Review state under a workflow: read it, take steps, assign, what waits. */
   public readonly workflows: WorkflowsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;

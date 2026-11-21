@@ -17,8 +17,10 @@
  *   back through the API and its state asserted, so a schema change fails
  *   here, loudly, instead of seeding something the list then misreads.
  *
- * Revisit once the runner's early stop can stop a release for a real hard
- * problem: "stopped" should then be produced through it rather than written.
+ * A real hard problem can now stop a release early: `workflow-release-stopped`
+ * produces "stopped" that way, through an edit that withdraws an approval. The
+ * specs here need a stopped release of posts with no workflow attached, which
+ * nothing stops early, so they still write it.
  *
  * @module e2e/tests/support/release-states
  */

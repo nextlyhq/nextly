@@ -98,6 +98,14 @@ export interface DocumentAction {
 export interface EditorDocumentAction
   extends Omit<DocumentAction, "placement"> {
   placement: EditorActionPlacement;
+  /**
+   * Set on a Publish the workflow holds until the document is approved, and
+   * on nothing else. Its reason is the review's, not a permission's, so the
+   * header keeps it focusable and lets it open "Choose what to publish…",
+   * where what holds it and who can unblock it are listed; a Publish refused
+   * for any other reason stays a disabled control.
+   */
+  heldForReview?: true;
 }
 
 /**
@@ -310,7 +318,16 @@ function primaryAction(
   const reviewLead = reviewPrimary(state);
   if (reviewLead !== undefined) {
     return withReason(
-      { id: reviewLead.id, label: reviewLead.label, placement: "primary" },
+      {
+        id: reviewLead.id,
+        label: reviewLead.label,
+        placement: "primary",
+        // Held for review only while nothing else holds it: a past version's
+        // reason is not one "Choose what to publish…" can answer.
+        ...(reviewLead.heldForReview && blocked === undefined
+          ? { heldForReview: true as const }
+          : {}),
+      },
       blocked ?? reviewLead.reason
     );
   }
@@ -667,6 +684,15 @@ function needsApprovalReason(review: ReviewActionState): string {
 }
 
 /**
+ * Whether Publish is held for an approval, as opposed to held while the
+ * review state is not known (`publishReason`): only the first opens "Choose
+ * what to publish…", which lists what an approval waits on.
+ */
+function awaitsApproval(review: ReviewActionState): boolean {
+  return review.publishReason === undefined;
+}
+
+/**
  * What leads where a workflow holds publishing, or undefined to leave the
  * choice to the rules every document follows:
  *
@@ -679,15 +705,22 @@ function needsApprovalReason(review: ReviewActionState): string {
  * In a stage that allows publishing the workflow says nothing, and Publish
  * leads exactly as it does without one.
  */
-function reviewPrimary(
-  state: DocumentActionState
-): { id: string; label: string; reason: string | undefined } | undefined {
+function reviewPrimary(state: DocumentActionState):
+  | {
+      id: string;
+      label: string;
+      reason: string | undefined;
+      /** Whether it is a Publish the review holds, as opposed to a step. */
+      heldForReview: boolean;
+    }
+  | undefined {
   const step = stepThatLeads(state);
   if (step !== undefined) {
     return {
       id: reviewStepActionId(step.name),
       label: step.label,
       reason: state.review?.stepReason,
+      heldForReview: false,
     };
   }
   if (heldByReview(state) && state.canPublish && hasSomethingToPublish(state)) {
@@ -695,6 +728,9 @@ function reviewPrimary(
       id: "publish",
       label: publishLabel(state),
       reason: needsApprovalReason(state.review),
+      // Held for an approval only once the review state is read: while it is
+      // being read, or could not be, the hold is no approval's to explain.
+      heldForReview: awaitsApproval(state.review),
     };
   }
   return undefined;
@@ -719,43 +755,81 @@ function reviewActions(
     return [];
   }
   const leading = stepThatLeads(state);
-  const rows: EditorDocumentAction[] = [];
-  if (leading !== undefined && state.canEdit && !builtInToolbarSave(state)) {
-    rows.push(
+  const beside =
+    leading === undefined
+      ? []
+      : [
+          reviewSaveRow(state, blocked),
+          reviewPublishRow(state, review, blocked),
+        ];
+  return [
+    ...beside.filter(row => row !== undefined),
+    ...otherStepRows(review, leading, blocked),
+  ];
+}
+
+/**
+ * Save beside a leading step, where the person may edit and no built-in rule
+ * already offers it in the toolbar: the work still needs a Save.
+ */
+function reviewSaveRow(
+  state: DocumentActionState,
+  blocked: string | undefined
+): EditorDocumentAction | undefined {
+  if (!state.canEdit || builtInToolbarSave(state)) return undefined;
+  return withReason(
+    { id: "save", label: saveLabel(state), placement: "toolbar" },
+    blocked
+  );
+}
+
+/**
+ * Publish beside a leading step, held with why, for a person who may publish
+ * while there is something to publish.
+ */
+function reviewPublishRow(
+  state: DocumentActionState,
+  review: ReviewActionState,
+  blocked: string | undefined
+): EditorDocumentAction | undefined {
+  if (!state.canPublish || !hasSomethingToPublish(state)) return undefined;
+  return withReason(
+    {
+      id: "publish",
+      label: publishLabel(state),
+      placement: "toolbar",
+      // The review's hold, unless a past version holds it first, or the
+      // review state is not read yet.
+      ...(blocked === undefined && awaitsApproval(review)
+        ? { heldForReview: true as const }
+        : {}),
+    },
+    blocked ?? needsApprovalReason(review)
+  );
+}
+
+/**
+ * Every step the person holds other than the leading one: in the toolbar
+ * while the stage holds publishing (Request changes beside Approve), and in
+ * the menu once the stage allows it, where asking for changes is the rarer
+ * act.
+ */
+function otherStepRows(
+  review: ReviewActionState,
+  leading: ReviewStepState | undefined,
+  blocked: string | undefined
+): EditorDocumentAction[] {
+  const placement = review.publishable
+    ? { placement: "menu" as const, group: "document" as const }
+    : { placement: "toolbar" as const };
+  return review.steps
+    .filter(step => step.held && step !== leading)
+    .map(step =>
       withReason(
-        { id: "save", label: saveLabel(state), placement: "toolbar" },
-        blocked
-      )
-    );
-  }
-  if (
-    leading !== undefined &&
-    state.canPublish &&
-    hasSomethingToPublish(state)
-  ) {
-    rows.push(
-      withReason(
-        { id: "publish", label: publishLabel(state), placement: "toolbar" },
-        blocked ?? needsApprovalReason(review)
-      )
-    );
-  }
-  for (const step of review.steps) {
-    if (!step.held || step === leading) continue;
-    rows.push(
-      withReason(
-        {
-          id: reviewStepActionId(step.name),
-          label: step.label,
-          ...(review.publishable
-            ? { placement: "menu" as const, group: "document" as const }
-            : { placement: "toolbar" as const }),
-        },
+        { id: reviewStepActionId(step.name), label: step.label, ...placement },
         blocked ?? review.stepReason
       )
     );
-  }
-  return rows;
 }
 
 /** Whether a built-in rule already offers Save in the toolbar. */

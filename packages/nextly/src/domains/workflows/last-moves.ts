@@ -9,7 +9,6 @@
  * statements for the whole document: the latest event's id for each part, then those events.
  *
  * @module domains/workflows/last-moves
- * @experimental
  */
 import type {
   SupportedDialect,
@@ -30,8 +29,6 @@ import { workflowEventKind } from "./steps";
 /**
  * A part's last move: the kind it was recorded as (`workflow-submit`), who made it and when, the
  * stages it moved from and to, and the comment given with it.
- *
- * @experimental
  */
 export interface LastMove {
   kind: string;
@@ -83,8 +80,6 @@ interface MovesDb {
 /**
  * The last move of each part of `document` that has one, keyed by part (null for the shared
  * part), read on `tx`.
- *
- * @experimental
  */
 export async function lastMovesOn(
   tx: TransactionContext,

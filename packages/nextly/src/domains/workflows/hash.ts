@@ -3,7 +3,6 @@
  * tell the definition it was given under.
  *
  * @module domains/workflows/hash
- * @experimental
  */
 
 import { createHash } from "node:crypto";
@@ -54,8 +53,6 @@ function structureOf(workflow: Workflow): unknown {
 /**
  * The definition hash: sha256 of the canonical JSON of the workflow's
  * structure, in hex.
- *
- * @experimental
  */
 export function workflowDefinitionHash(workflow: Workflow): string {
   return createHash("sha256")
@@ -109,8 +106,6 @@ function beforeRenames(workflow: Workflow): Workflow {
  * whose only change is a rename finds those states by it, and keeps their
  * approvals, since a rename moves no part from one stage to another. The
  * workflow's own hash when nothing is renamed.
- *
- * @experimental
  */
 export function definitionHashBeforeRenames(workflow: Workflow): string {
   return workflowDefinitionHash(beforeRenames(workflow));

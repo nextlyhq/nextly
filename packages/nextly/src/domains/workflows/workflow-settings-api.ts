@@ -14,7 +14,6 @@
  * Who may read or write is asked by the door, before anything here runs.
  *
  * @module domains/workflows/workflow-settings-api
- * @experimental
  */
 import { isAbsolute, relative, sep } from "node:path";
 
@@ -74,8 +73,6 @@ import {
  * The activity-log `collection` a workflow's settings changes are filed under: the settings one a
  * plugin's settings use, which the feed shows to a reader holding `read-settings`. Each entry is
  * the workflow's {@link workflowActivityEntry}.
- *
- * @experimental
  */
 export const WORKFLOW_SETTINGS_ACTIVITY_COLLECTION =
   PLUGIN_SETTINGS_ACTIVITY_COLLECTION;
@@ -83,13 +80,11 @@ export const WORKFLOW_SETTINGS_ACTIVITY_COLLECTION =
 /**
  * The activity-log entry a workflow's settings changes are filed as: prefixed, so a workflow and a
  * plugin of the same name never share one in the settings namespace.
- *
- * @experimental
  */
 export const workflowActivityEntry = (slug: string): string =>
   `workflow:${slug}`;
 
-/** Error codes a settings write refuses with, each a validation problem's own code. @experimental */
+/** Error codes a settings write refuses with, each a validation problem's own code. */
 export const WORKFLOW_SETTINGS_ERROR_CODES = {
   /** A write named a part of the definition, which only the code changes. */
   definitionReadOnly: "WORKFLOW_DEFINITION_READ_ONLY",
@@ -107,8 +102,6 @@ export const WORKFLOW_SETTINGS_ERROR_CODES = {
 /**
  * The keys that name a part of a workflow's definition. A settings write naming one, at its top
  * level or inside a stage's label entry, is refused.
- *
- * @experimental
  */
 export const WORKFLOW_DEFINITION_KEYS: readonly string[] = [
   "stages",
@@ -125,8 +118,6 @@ export const WORKFLOW_DEFINITION_KEYS: readonly string[] = [
 /**
  * A registered workflow, as a reader of its settings is told it: everything a diagram of it
  * draws, and how many documents are recorded in each stage.
- *
- * @experimental
  */
 export interface WorkflowSummary {
   slug: string;
@@ -180,20 +171,20 @@ export interface WorkflowSummary {
   singles: string[];
 }
 
-/** Whether each notification also sends an email. @experimental */
+/** Whether each notification also sends an email. */
 export interface WorkflowEmailSettings {
   assigned: boolean;
   approved: boolean;
   changesRequested: boolean;
 }
 
-/** A stage's label and colour shown over the code's. @experimental */
+/** A stage's label and colour shown over the code's. */
 export interface WorkflowStageLabel {
   label?: string;
   colour?: string;
 }
 
-/** A workflow's settings, as they read now. @experimental */
+/** A workflow's settings, as they read now. */
 export interface WorkflowSettingsView {
   workflow: string;
   /** What a write says it read; 0 for a workflow whose settings were never changed. */
@@ -229,8 +220,6 @@ export interface WorkflowSettingsView {
 
 /**
  * A grantable step's permission as it stands, beyond the roles holding it everywhere.
- *
- * @experimental
  */
 export interface GrantableStepView {
   /** The action it needs, held as `<permission>-<slug>` on each attachment. */
@@ -248,8 +237,6 @@ export interface GrantableStepView {
  * A change to a workflow's settings, made over the revision the caller read. Each part is merged
  * into what is stored: a stage named with `null` loses its default reviewer or labels, and a
  * step named in `grants` is held by exactly the roles listed.
- *
- * @experimental
  */
 export interface WorkflowSettingsChange {
   revision: number;
@@ -472,8 +459,6 @@ async function stageCountsOf(
 /**
  * Every registered workflow: its stages and steps as a diagram draws them, where it is
  * registered, its attachments, and how many documents are recorded in each stage.
- *
- * @experimental
  */
 export async function listWorkflowSummaries(
   adapter: DrizzleAdapter
@@ -521,8 +506,6 @@ export async function listWorkflowSummaries(
  * the code defines them. Not its settings (who holds a step, default reviewers, label overrides,
  * emails) and not the other collections and Singles it is attached to, which a reader of this one
  * may not be allowed to know of.
- *
- * @experimental
  */
 export interface WorkflowDefinition {
   slug: string;
@@ -536,8 +519,6 @@ export interface WorkflowDefinition {
  * is: the stages and steps its summary is built on (`definedStages`, `definedSteps`), so the two
  * tell one definition alike. Whether the caller may read the collection or Single is the caller's
  * door to ask first.
- *
- * @experimental
  */
 export function workflowDefinitionOf(
   kind: "collection" | "single",
@@ -571,8 +552,6 @@ function registeredWorkflow(slug: string): RegisteredWorkflow {
  * Refuses `input` when it names a part of the definition: at its top level, or inside a stage's
  * label entry. Asked of the raw input, before it is parsed, so a definition key is named as one
  * rather than as an unknown key.
- *
- * @experimental
  */
 export function refuseDefinitionKeys(input: unknown): void {
   if (!isObject(input)) return;
@@ -879,7 +858,7 @@ async function viewOf(
   };
 }
 
-/** A workflow's settings, as they read now. @experimental */
+/** A workflow's settings, as they read now. */
 export async function readWorkflowSettingsView(
   adapter: DrizzleAdapter,
   slug: string
@@ -1236,7 +1215,6 @@ const staleSettings = (workflow: string): NextlyError =>
  *
  * @throws NextlyError `VALIDATION_ERROR` naming each problem; `CONFLICT` for a stale revision;
  *   `NOT_FOUND` for a workflow no one registered
- * @experimental
  */
 export async function updateWorkflowSettings(
   adapter: DrizzleAdapter,

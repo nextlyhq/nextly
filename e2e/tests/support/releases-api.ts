@@ -34,11 +34,15 @@ export async function post(page: Requester, stamp: string): Promise<string> {
   return item.id;
 }
 
-/** A release holding one post, created as a draft. */
+/**
+ * A release holding one post, created as a draft. `scopeSlug` names another
+ * collection the document belongs to, for a release of something else.
+ */
 export async function release(
   page: Requester,
   title: string,
-  postId: string
+  postId: string,
+  scopeSlug = "posts"
 ): Promise<string> {
   const { item } = await ok<{ item: { id: string } }>(
     await page.request.post(`${API}/releases`, { data: { title } })
@@ -47,7 +51,7 @@ export async function release(
     await page.request.post(`${API}/releases/${item.id}/members`, {
       data: {
         scopeKind: "collection",
-        scopeSlug: "posts",
+        scopeSlug,
         entryId: postId,
         action: "publish",
       },

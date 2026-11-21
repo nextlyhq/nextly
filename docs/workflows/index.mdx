@@ -1,0 +1,344 @@
+---
+title: Workflows
+description: Review before publishing. A workflow moves each part of a document through stages, such as Drafting, In review and Approved, and holds publishing until the content is approved.
+---
+
+A workflow says what has to happen before a document may go live. You define its **stages**
+(Drafting, In review, Approved) and the **steps** people take between them (Submit for review,
+Approve, Request changes), in code, and attach it to a collection or Single. From then on a
+document is published only from a stage that allows it, and an approval covers exactly the
+content that was approved.
+
+Nothing changes until a workflow is attached: collections and Singles without one publish as
+they always have.
+
+## Availability
+
+|            |                                                                                                                                                                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Built in   | No plugin required. `defineWorkflow` and `reviewWorkflow` come from `nextly/config`                                                                                                                                  |
+| Needs      | Drafts on the collection or Single: `status: true` and `versions: { drafts: true }`                                                                                                                                  |
+| Admin      | The editor leads with each person's next step, says where the document stands under its title, lists each part's review in the side panel, and holds Publish until the document is approved                        |
+| Permission | One per step that names its own (`approve-posts`), the collection's edit or publish permission for the others, and `publish-without-review-<slug>` to publish past the workflow with a reason (see [Permissions](#permissions)) |
+
+## Define a workflow
+
+```ts
+import { defineCollection, defineWorkflow, text } from "nextly/config";
+
+export const editorial = defineWorkflow({
+  slug: "editorial",
+  label: "Editorial review",
+  stages: [
+    { name: "drafting", label: "Drafting" },
+    { name: "inReview", label: "In review" },
+    { name: "approved", label: "Approved", allowsPublish: true },
+  ],
+  steps: [
+    {
+      name: "submit",
+      label: "Submit for review",
+      kind: "submit",
+      from: "drafting",
+      to: "inReview",
+    },
+    {
+      name: "approve",
+      label: "Approve",
+      kind: "approve",
+      from: "inReview",
+      to: "approved",
+      permission: "approve",
+      primary: true,
+    },
+    {
+      name: "requestChanges",
+      label: "Request changes",
+      kind: "request-changes",
+      from: ["inReview", "approved"],
+      to: "drafting",
+      permission: "approve",
+    },
+  ],
+});
+
+export const Posts = defineCollection({
+  slug: "posts",
+  status: true,
+  versions: { drafts: true },
+  workflow: editorial,
+  fields: [text({ name: "title" })],
+});
+```
+
+A Single takes the same `workflow` option.
+
+**Stages** are listed in order, and the first is where every part starts. Each has a `name`
+(used in code, the API and the record) and a `label` (what the admin shows). `allowsPublish: true`
+marks a stage whose content may be published; at least one stage must allow it, and the first
+stage may not.
+
+**Steps** move a part from one stage (`from`, one stage or a list) to another (`to`). Each has a
+`kind`, and the system's rules follow the kind, never the step's name:
+
+| Kind              | What it is                                                                                         |
+| ----------------- | -------------------------------------------------------------------------------------------------- |
+| `submit`          | Hands the work on for review                                                                       |
+| `approve`         | Approves the content. It must lead into a stage that allows publishing, and only it may            |
+| `request-changes` | Sends the work back. It always needs a comment: leaving `commentRequired` out means required       |
+| `move`            | Any other move between stages                                                                      |
+
+A step may also say:
+
+- **`permission`:** the action the person taking it needs, in kebab-case. `approve` on Posts is
+  held as `approve-posts`. Without one, a step needs `update-<slug>`, or `publish-<slug>` where it
+  leads into a stage that allows publishing.
+- **`commentRequired`:** whether it is taken only with a comment.
+- **`primary`:** the stage's main step, which the editor leads with. A stage with more than one
+  step out of it marks exactly one.
+- **`refusesSelfApproval`:** refuse this step to the person who brought the part into its stage.
+  Allowed unless the step says so.
+
+`defineWorkflow` checks the whole definition when your configuration loads, and lists every
+problem at its place, so one run shows them all: an unknown stage, a stage from which no path of
+steps leads to one that allows publishing, a stage with several steps out and no `primary`, an
+`approve` step that does not lead into a publishable stage, a name that is not valid, and so on.
+Attaching a workflow where it cannot run (a collection without drafts) stops the boot and the
+CLI with [`WORKFLOW_CANNOT_ATTACH`](/docs/cli/errors/workflow-cannot-attach).
+
+### The preset
+
+For the common case, `reviewWorkflow()` is the workflow above in one line:
+
+```ts
+import { defineCollection, reviewWorkflow } from "nextly/config";
+
+export const Posts = defineCollection({
+  slug: "posts",
+  status: true,
+  versions: { drafts: true },
+  workflow: reviewWorkflow(),
+  fields: [],
+});
+```
+
+Drafting → In review → Approved. Submitting needs the collection's edit permission; approving
+and requesting changes need `approve-<slug>`. Changes can be requested from In review and from
+Approved, and send the work back to Drafting. The person who submitted may approve, so a team of
+one is never stuck. An edit to approved content sends it back to In review, and once a part is
+published its next draft starts at Drafting. Its slug is `review` and its label "Review" unless
+you pass `reviewWorkflow({ slug, label })`.
+
+## Parts: the shared fields, and each language
+
+A workflow holds a document part by part. A document that is not translated has one part. A
+translated one has a part for each language and one for the fields every language shares, and
+each stands in a stage of its own: Spanish can be approved while French is still in review.
+
+- **Steps name their parts.** A step is taken on the parts it names, or on every part with
+  `parts: "all"` over the API, and moves them together.
+- **The editor speaks for the language on screen.** Its header moves that language, and the
+  shared fields with it where they wait in the same stage. The side panel's **Review** section
+  lists the language and the shared fields each on its own, with their steps, so shared fields
+  waiting in another stage can still be moved.
+- **The Languages panel** says each language's stage beside its status.
+- **Publishing chosen languages** ("Choose what to publish…") lists what holds each part back
+  before anything goes live. See [Publishing one language at a time](/docs/localization#publishing-one-language-at-a-time).
+- **Reading follows the language rule.** A part in a language the caller may not read the
+  document in is left out of every answer.
+
+## In the admin
+
+- **The header** leads with the step this person may take next: Submit for review for a writer,
+  Approve for a reviewer, with Request changes beside it. A person who may publish sees Publish,
+  held with why ("Needs approval: In review, waiting for Editors") until the content is approved.
+  The held Publish stays reachable by keyboard and opens "Choose what to publish…", which lists
+  what holds each part and who can unblock it.
+- **The line under the title** says where the document stands: "Draft · In review · waiting for
+  Editors", or "Published · Changes in review" for a live page whose changes wait. Each stage is
+  drawn as its words with a shape for its kind, never as a button. A live page whose changes
+  wait says that readers see the published version until they are approved and published.
+- **A step needing a comment** asks for it first, and sends nothing while it is empty.
+- **The Review section** of the side panel shows each part's stage, who it is assigned to or
+  waits for, when it is due and its last move, with its steps and a way to assign it.
+- **A person who may approve but not edit** opens the document read-only and can still approve
+  it or ask for changes.
+
+## Permissions
+
+Attaching a workflow adds permissions to each collection and Single it is attached to:
+
+- each action its steps name beyond the built-in ones, as `<action>-<slug>` (`approve-posts`);
+- `publish-without-review-<slug>`, which publishes past the workflow with a reason.
+
+`nextly migrate` adds them as it adds every collection's permissions, and you grant them on the
+Roles screen like any other. Who may take a step is decided on the
+server, step by step:
+
+- **The step's permission**, or `update-<slug>` (`publish-<slug>` into a stage that allows
+  publishing) where it names none.
+- **Approvals come from people.** An API key may never approve or request changes, whatever it
+  holds, so whatever acts through a key cannot approve its own work. Trusted server code may take
+  every other step, and may not approve or request changes either.
+- **Self-approval** is allowed unless the step says `refusesSelfApproval: true`.
+- **Reading comes first.** A caller who may not read the document is answered as if it did not
+  exist, whatever step permission they hold.
+
+## What admins may change
+
+The definition, its stages, steps and rules, lives in code. What a site's admins may change is
+each workflow's **settings**, through `GET` and `PATCH /admin/api/workflows/{slug}/settings`
+(or `nextly.workflows.settings`):
+
+- **Default reviewers:** a person or role for a stage, who is waited for when nothing is assigned.
+  They must be able to take the stage's primary step.
+- **Labels and colours:** a label and a colour kept for each stage, beside the definition's own.
+- **Emails:** whether being assigned, an approval and a request for changes also send an email.
+- **Grants:** which roles hold each step that names a permission of its own, on every attached
+  collection and Single at once. Changing grants also needs `update-roles`.
+
+Reading the settings needs `read-settings` or `update-settings`, changing them `update-settings`.
+Naming any part of the definition in a write is refused with `WORKFLOW_DEFINITION_READ_ONLY`.
+The details: [Settings](/docs/api-reference/rest-api#settings).
+
+## An edit after approval
+
+An approval covers exactly the content that was approved. When a part that holds one is saved
+with different content, the approval is withdrawn and the part moves back to review:
+
+- **Where it goes:** `onEdit.to`, by default the first review stage (the first stage with an
+  `approve` step out of it). The person who saved becomes the one accountable for that stage.
+- **What counts:** the part's content, with the fields `onEdit.exemptFields` names left out, so
+  an edit to only those keeps the approval:
+
+  ```ts
+  defineWorkflow({
+    // …
+    onEdit: { to: "inReview", exemptFields: ["internalNotes"] },
+  });
+  ```
+
+- **A save that changes nothing** records no version and keeps the approval.
+- **The history says so:** a `workflow-approval-withdrawn` event naming who edited, in the
+  document's history, and a `workflow.stage_changed` webhook event with `cause: "edit"`.
+
+A deploy that changes a workflow's definition withdraws the approvals given under the earlier
+one, moving those parts to `approvalsWithdrawnTo` (by default the first stage), unless the
+definition says `keepApprovals: true`.
+
+## Publishing without review
+
+For an emergency, a person holding `publish-without-review-<slug>` may publish a document the
+workflow holds, with a reason:
+
+- **In the admin:** "Choose what to publish…" offers **Publish without review…** to them alone.
+  It asks for a reason, and publishes nothing while the reason is empty.
+- **Over REST:** a publish of chosen parts takes `withoutReview: { reason }`
+  (`POST /admin/api/collections/{slug}/entries/{id}/publish`), and a save that publishes takes
+  `_withoutReview: { reason }` beside its values.
+- **From the Direct API:** `nextly.publish({ …, withoutReview: { reason } })`.
+
+The reason is required, and kept with the publish in the document's history, as the note of its
+`workflow-published-without-review` event. Trusted server code may publish without review too, and needs a reason like anyone
+else: under a workflow, code publishing with the Direct API's default trust needs an approval or
+an explicit reason. An API key may never publish without review, whatever it holds, nor may a
+release.
+
+## Releases
+
+A [release](/docs/releases) waits for approval. Each document a release would publish is
+checked like any other publish:
+
+- **Before its moment.** A member going live whose parts are not approved is a hard problem,
+  "Not approved", naming the stage and who it waits for. A release holding one cannot be
+  scheduled.
+- **When an approval goes.** A save that withdraws an approval, or a step that moves approved
+  content away, has the scheduled releases holding that document checked again as it commits, and
+  any with a hard problem is stopped then, not at its moment. A stopped release asks its owner to
+  fix it, in the Releases page's Needs attention and in their bell.
+- **At its moment.** The run asks the same question again before it publishes anything.
+
+A member coming down is never held, and a document no workflow is attached to is never held.
+
+## The APIs
+
+The same operations answer over REST and from the Direct API, through one implementation:
+
+- **Review state:** where each part stands, its steps (with whether the caller may take each),
+  who it waits for and its last move.
+- **Steps:** one step on one document's parts, or one step across several documents, each
+  refusal named. An approval over several documents at once is refused: an approval is for the
+  one version a reviewer was shown.
+- **Assignments:** to a person or a role, with a due date, all or nothing or one by one.
+- **What waits:** the parts waiting for the caller, a page at a time.
+- **Workflows and settings:** the registered workflows and what each is attached to, and each
+  one's settings.
+
+Every write names what it saw (each part's `revision` and `version`), so a part that moved
+since is refused rather than moved twice. See
+[REST: Workflows](/docs/api-reference/rest-api#workflows) and
+[Direct API: Workflows](/docs/api-reference/direct-api#workflows).
+
+## Events
+
+- **The history.** Each step is recorded in the document's history with who took it and its
+  comment: `workflow-submit`, `workflow-approve`, `workflow-request-changes`, `workflow-move` and
+  `workflow-assign`, and also `workflow-approval-withdrawn` (an edit),
+  `workflow-approval-withdrawn-by-definition` (a deploy), `workflow-stage-renamed`,
+  `workflow-stage-removed`, `workflow-detached`, `workflow-discarded`, `workflow-published`,
+  `workflow-published-without-review` (with its reason) and `workflow-stranded-moved`.
+- **Webhooks.** Every change of a part's stage or approval is a `workflow.stage_changed` event,
+  recorded with the move and delivered after it commits. Its data names the `document`
+  (`kind`, `slug`, `id`), the `part` (a language, or `null` for the shared fields), `from` and
+  `to` (`to` is `null` where the review state was removed), the `cause` (`step`, `edit`,
+  `definition`, `rename`, `redirect`, `detach`, `discard`, `recovery` or `publish`),
+  `approvalWithdrawn` and the definition's `definitionHash`. See [Webhooks](/docs/webhooks).
+- **Notices.** A person is told in their bell when a part is assigned to them (or they are the
+  default reviewer of the stage it entered), when a part they were accountable for is approved,
+  and when changes are requested on it. Each can also send an email, as the workflow's settings
+  say. See [Notices](/docs/notices).
+
+## When a stage is removed
+
+Parts are recorded under their stage's name, so renaming or removing a stage is a change to
+existing documents, and the definition says what happens to them:
+
+- **A rename** keeps its parts and their approvals: give the stage its new name and
+  `renamedFrom: "<old name>"`. A deploy moves the parts recorded under the old name and records
+  each move. A stage that allows publishing cannot record a rename.
+- **A removal** names where its parts go: `removedStages: { legal: "inReview" }`. A deploy moves
+  them there, withdrawing any approval they held, and records each move.
+
+```ts
+defineWorkflow({
+  // …
+  stages: [
+    { name: "drafting", label: "Drafting" },
+    { name: "inReview", label: "In review", renamedFrom: "review" },
+    { name: "approved", label: "Approved", allowsPublish: true },
+  ],
+  removedStages: { legal: "inReview" },
+});
+```
+
+A part left in a stage the workflow no longer has, and that the definition names nowhere for,
+is **stranded**: it reads as the workflow's first stage until a person moves it. The CLI lists
+such parts ("Stage 'legal' no longer exists") and moves them:
+
+```bash
+# List them, for every workflow or one collection or Single
+nextly workflow:stranded --collection posts
+
+# Move them to a stage, recorded as a person, with why; --dry-run writes nothing
+nextly workflow:move-stranded --to drafting --as editor@example.com --comment "Legal check was retired" --dry-run
+```
+
+`workflow:move-stranded` moves every part it lists in one transaction and records one event per
+document as the person `--as` names, with `--comment` as its note.
+
+## Related
+
+- [Content Releases](/docs/releases): scheduling, and how a release waits for approval
+- [Publishing one language at a time](/docs/localization#publishing-one-language-at-a-time)
+- [Version History](/docs/versions): where the workflow's events are kept
+- [Permissions](/docs/permissions)

@@ -13,7 +13,6 @@
  * never collide with a language's.
  *
  * @module domains/workflows/workflow-pins
- * @experimental
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
@@ -23,15 +22,11 @@ import type { VersionRef } from "../versions/versions-repository";
 /**
  * The name workflows' pins are recorded under: the one spelling the holder registers with and a
  * list filter reading the pins table matches.
- *
- * @experimental
  */
 export const WORKFLOW_PIN_HOLDER = "workflows";
 
 /**
  * The workflows holder: the one handle its slots are pinned, moved and released through.
- *
- * @experimental
  */
 export const workflowPins = registerVersionPinHolder({
   name: WORKFLOW_PIN_HOLDER,
@@ -45,8 +40,6 @@ function partToken(part: string | null): string {
 
 /**
  * The slot holding the version a part's last approval named.
- *
- * @experimental
  */
 export function approvedSlot(part: string | null): string {
   return `approved:${partToken(part)}`;
@@ -54,8 +47,6 @@ export function approvedSlot(part: string | null): string {
 
 /**
  * The slot holding the version a part was in when it last entered review.
- *
- * @experimental
  */
 export function enteredReviewSlot(part: string | null): string {
   return `entered-review:${partToken(part)}`;
@@ -74,8 +65,6 @@ export function pinPart(
 /**
  * Releases both of a part's slots, on the caller's transaction: what a publish of the part does,
  * closing its review cycle.
- *
- * @experimental
  */
 export async function releasePartPins(
   tx: TransactionContext,

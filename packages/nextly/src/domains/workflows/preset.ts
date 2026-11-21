@@ -2,7 +2,6 @@
  * The one-line preset for the common case: Drafting, In review, Approved.
  *
  * @module domains/workflows/preset
- * @experimental
  */
 
 import { defineWorkflow } from "./define-workflow";
@@ -22,8 +21,6 @@ export interface ReviewWorkflowOptions {
  * a comment, which sends it back to drafting. The person who submitted may
  * approve, so a team of one is never stuck. An edit to approved content sends
  * it back to review, and after publishing the next draft starts at drafting.
- *
- * @experimental
  */
 export function reviewWorkflow(
   options: ReviewWorkflowOptions = {}

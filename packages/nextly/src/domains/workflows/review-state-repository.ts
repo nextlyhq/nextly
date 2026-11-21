@@ -219,8 +219,6 @@ const ENTRY_IDS_PER_READ = 500;
 /**
  * Every part with a review state of each of `entryIds`, documents of one collection or Single:
  * a page of a list read at once, a statement per 500 documents, never one per document.
- *
- * @experimental
  */
 export async function readReviewStatesOfDocuments(
   db: ReviewStatesDb,
@@ -261,8 +259,6 @@ export interface ScopedStageFilter {
  * waits for them only where the part itself says so: its assignee, or its stage's default reviewer,
  * may not take it on that part (lost the step, or brought the part in where the step refuses
  * that).
- *
- * @experimental
  */
 export interface WaitingStageTerms extends ScopedStageFilter {
   unassigned: boolean;
@@ -271,8 +267,6 @@ export interface WaitingStageTerms extends ScopedStageFilter {
 /**
  * A caller's waiting list's terms: who they stand for (`mine`, the same in every stage, so named
  * once) and each stage they take a step out of.
- *
- * @experimental
  */
 export interface WaitingTerms {
   mine: readonly ReviewAssignee[];
@@ -382,8 +376,6 @@ function pastPosition(after: WaitingPosition): WhereClause {
  * Read a stage at a time, each read in the waiting index's order within its one stage (so its limit
  * stops the index scan, where an OR across stages would sort every match first), and merged: the
  * first `limit` of all of them are the first `limit` of the share.
- *
- * @experimental
  */
 export async function readWaitingReviewStates(
   db: ReviewStatesDb,
@@ -418,8 +410,6 @@ export async function readWaitingReviewStates(
 
 /**
  * Where `state` stands in the waiting list's order: its entry into the stage and its key.
- *
- * @experimental
  */
 export function waitingPosition(state: ReviewState): WaitingPosition {
   return { enteredAt: state.enteredAt, partKey: orderKey(state) };
@@ -428,8 +418,6 @@ export function waitingPosition(state: ReviewState): WaitingPosition {
 /**
  * Orders review states as a waiting read does: entry into the stage, then the row's own key (a
  * lowercase hex digest, so the database's order and this one agree).
- *
- * @experimental
  */
 export function waitingOrder(a: ReviewState, b: ReviewState): number {
   const at = a.enteredAt.getTime() - b.enteredAt.getTime();

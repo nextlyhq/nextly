@@ -19,7 +19,7 @@
  * workflows' own slug, its message made from the notice's own text and its link.
  *
  * @module domains/workflows/workflow-notices
- * @experimental Until the notices feature is complete.
+ * Until the notices feature is complete.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { z } from "zod";
@@ -102,7 +102,6 @@ const withoutCommentData = workflowNoticeData.refine(
   { message: "Only a request for changes keeps a comment." }
 );
 
-/** @experimental */
 export type WorkflowNoticeData = z.infer<typeof workflowNoticeData>;
 
 /** What a workflow notice is about: a document. */
@@ -111,8 +110,6 @@ const DOCUMENT_SUBJECT = "document";
 /**
  * A document as a notice's subject: its kind, its collection and its id, joined. Neither the kind
  * nor a slug holds a colon, so the id is everything after the second.
- *
- * @experimental
  */
 export function documentSubjectId(document: ReviewDocument): string {
   return `${document.scopeKind}:${document.scopeSlug}:${document.entryId}`;
@@ -484,7 +481,6 @@ function workflowNoticeKind(
   });
 }
 
-/** @experimental */
 export const WORKFLOW_ASSIGNED_NOTICE = workflowNoticeKind(
   "workflows.assigned",
   withoutCommentData,
@@ -494,7 +490,6 @@ export const WORKFLOW_ASSIGNED_NOTICE = workflowNoticeKind(
   })
 );
 
-/** @experimental */
 export const WORKFLOW_APPROVED_NOTICE = workflowNoticeKind(
   "workflows.approved",
   withoutCommentData,
@@ -504,7 +499,6 @@ export const WORKFLOW_APPROVED_NOTICE = workflowNoticeKind(
   })
 );
 
-/** @experimental */
 export const WORKFLOW_CHANGES_REQUESTED_NOTICE = workflowNoticeKind(
   "workflows.changes-requested",
   changesRequestedData,
@@ -514,7 +508,7 @@ export const WORKFLOW_CHANGES_REQUESTED_NOTICE = workflowNoticeKind(
   })
 );
 
-/** Every workflow notice kind, as the registration registers them. @experimental */
+/** Every workflow notice kind, as the registration registers them. */
 export const WORKFLOW_NOTICE_KINDS: readonly NoticeKind<WorkflowNoticeData>[] =
   [
     WORKFLOW_ASSIGNED_NOTICE,
@@ -562,8 +556,6 @@ function emailOf(text: NoticeText, url: string | null): NoticeEmailMessage {
 /**
  * The job that sends a workflow notice's email: the shared notice email job, under the workflows'
  * slug, with its dependencies resolved per run.
- *
- * @experimental
  */
 export function createWorkflowNoticeEmailJob(
   deps: () => NoticeEmailDeps

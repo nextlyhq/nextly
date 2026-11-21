@@ -9,7 +9,6 @@
  * over JSON.
  *
  * @module types/workflows
- * @experimental
  */
 
 /** What a step does, which decides where the editor draws it. */
@@ -148,7 +147,7 @@ export interface AssignmentPayload {
   dueAt?: string | null;
 }
 
-/** A part waiting for the caller, as `GET /api/workflows/waiting` names it. @experimental */
+/** A part waiting for the caller, as `GET /api/workflows/waiting` names it. */
 export interface WaitingItem {
   document: {
     scopeKind: "collection" | "single";

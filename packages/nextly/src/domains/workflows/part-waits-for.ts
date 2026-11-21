@@ -12,7 +12,6 @@
  * asked once per action, and every name is read in one statement per kind.
  *
  * @module domains/workflows/part-waits-for
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -27,7 +26,7 @@ import {
   type WorkflowSettings,
 } from "./workflow-settings-repository";
 
-/** A role a part waits for, by id and name. @experimental */
+/** A role a part waits for, by id and name. */
 export interface WaitingRole {
   id: string;
   /** Null for a role assigned and since removed. */
@@ -37,8 +36,6 @@ export interface WaitingRole {
 /**
  * Who a part waits for: one person (`user`, as an assignee names a person), or anyone holding one
  * of some roles. Null for a part that waits for no one.
- *
- * @experimental
  */
 export type PartWaitingFor =
   | { kind: "user"; id: string; name: string | null }
@@ -56,8 +53,6 @@ export interface WaitingPartInput {
  * Whom one part waits for, by id: one person or role (its assignee or its stage's default
  * reviewer), everyone who may take a step needing `action`, or, in a stage with no step out of it,
  * no one.
- *
- * @experimental
  */
 export type PartWaits =
   | { kind: "one"; who: ReviewAssignee }
@@ -86,8 +81,6 @@ function waitsFor(args: {
 
 /**
  * Decides whom the parts of one collection or Single wait for, by `waitsFor`, part by part.
- *
- * @experimental
  */
 export interface PartWaitsDecider {
   /**
@@ -106,8 +99,6 @@ export interface PartWaitsDecider {
  * when they hold its permission and, a person, the step does not refuse them as the one who brought
  * this part into the stage. Each person or role is asked the permission once per action, in
  * batches where the parts are primed, and the workflow's settings are read once.
- *
- * @experimental
  */
 export function partWaitsDecider(
   adapter: DrizzleAdapter,
@@ -214,8 +205,6 @@ function takesAsPerson(
 /**
  * Who each of `parts` waits for, in order, for a document of the collection or Single `slug` under
  * `registered`'s workflow: {@link nameWaits} of each part's decided answer.
- *
- * @experimental
  */
 export async function partsWaitingFor(
   adapter: DrizzleAdapter,
@@ -240,8 +229,6 @@ export async function partsWaitingFor(
  * The holders are found once per collection or Single and action, and every name is read in one
  * statement per kind, however many answers: the read of one document and the waiting list's page
  * both name through it.
- *
- * @experimental
  */
 export async function nameWaits(
   adapter: DrizzleAdapter,

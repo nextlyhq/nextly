@@ -116,9 +116,12 @@ export function useDocumentActions(): DocumentActions | null {
  * menu by group still finds it.
  */
 function publishedAction(action: EditorDocumentAction): DocumentAction {
-  return action.placement === "publish-menu"
-    ? { ...action, placement: "menu", group: "document" }
-    : { ...action, placement: action.placement };
+  // How the header draws a Publish the workflow holds is the header's own
+  // concern; a surface reading the actions gets its reason, as for any other.
+  const { heldForReview: _heldForReview, ...shown } = action;
+  return shown.placement === "publish-menu"
+    ? { ...shown, placement: "menu", group: "document" }
+    : { ...shown, placement: shown.placement };
 }
 
 /**

@@ -314,8 +314,6 @@ function logger(): Logger {
  * The ids of the roles `slugs` name, as a caller's scope names its roles (a scope speaks in slugs,
  * the way role rules read it), in the spelling assignments store (ids). A slug naming no role is
  * left out.
- *
- * @experimental
  */
 export async function roleIdsOfSlugs(
   adapter: DrizzleAdapter,
@@ -336,8 +334,6 @@ export async function roleIdsOfSlugs(
  * its owner in person: work assigned to the owner by name is the owner's to see, as an approval is
  * a person's to give. Its roles are those its scope names, or, where it names none, its owner's,
  * as its permissions are judged. The waiting list and a list's "assigned to me" filter both ask it.
- *
- * @experimental
  */
 export async function holdersOf(
   adapter: DrizzleAdapter,

@@ -30,8 +30,10 @@ export function StepRefusalNote({
   return (
     <div
       role="alert"
+      // The status text colour, which reads at AA on the page in both schemes;
+      // the destructive action's red is lighter than text may be.
       className={cn(
-        "mt-2 flex items-start gap-2 text-sm text-destructive",
+        "mt-2 flex items-start gap-2 text-sm text-danger-text",
         className
       )}
     >

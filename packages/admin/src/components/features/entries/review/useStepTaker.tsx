@@ -9,7 +9,6 @@
  * and reported alike.
  *
  * @module components/features/entries/review/useStepTaker
- * @experimental
  */
 
 import { useState, type ReactNode } from "react";

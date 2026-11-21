@@ -9,7 +9,6 @@
  * transaction opens (`resolvedCallerGrants`), so the evaluation reads nothing beside it.
  *
  * @module domains/workflows/hidden-changes
- * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -41,8 +40,6 @@ const MAX_PEOPLE_ASKED = 200;
 
 /**
  * Someone who could approve what a reviewer was refused.
- *
- * @experimental
  */
 export interface PossibleApprover {
   kind: "user";
