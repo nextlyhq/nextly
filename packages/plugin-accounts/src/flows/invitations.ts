@@ -219,6 +219,10 @@ export async function acceptInvitation(
   const invited = INVITED.safeParse(peeked.data);
   if (!invited.success) return { status: "refused", reason: "invalid" };
   const { address, name } = invited.data;
+  // Read before anything is written, so the account is never made with
+  // data that cannot be handed back.
+  const data = appDataOf(invited.data.data);
+  if (data === undefined) return { status: "refused", reason: "invalid" };
   if (
     input.address !== undefined &&
     normaliseAddress(input.address) !== normaliseAddress(address)
@@ -274,7 +278,6 @@ export async function acceptInvitation(
     throw error;
   }
 
-  const data = appDataOf(invited.data.data);
   deps.events.emit("nextlyhq-plugin-accounts.invitation.accepted", {
     accountId: made.account.id,
     data,
@@ -296,10 +299,19 @@ export async function acceptInvitation(
   };
 }
 
-/** The site's data as it was kept, or null where it kept none. */
-function appDataOf(kept: string | null): InvitationData | null {
+/**
+ * The site's data as it was kept: null where it kept none, undefined where
+ * what is kept is not data the plugin wrote.
+ */
+function appDataOf(kept: string | null): InvitationData | null | undefined {
   if (kept === null) return null;
-  const parsed = APP_DATA.safeParse(JSON.parse(kept));
+  let value: unknown;
+  try {
+    value = JSON.parse(kept);
+  } catch {
+    return undefined;
+  }
+  const parsed = APP_DATA.safeParse(value);
 
-  return parsed.success ? parsed.data : null;
+  return parsed.success ? parsed.data : undefined;
 }
