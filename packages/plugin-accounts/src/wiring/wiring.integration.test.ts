@@ -81,6 +81,7 @@ describe.each(getConfiguredTestDialects())(
         { name: "nextlyhq-plugin-accounts.account.deleted" },
         { name: "nextlyhq-plugin-accounts.account.deactivated" },
         { name: "nextlyhq-plugin-accounts.account.reactivated" },
+        { name: "nextlyhq-plugin-accounts.invitation.accepted" },
       ]);
       expect(plugin.contributes?.emailTemplates?.length).toBeGreaterThan(0);
     });

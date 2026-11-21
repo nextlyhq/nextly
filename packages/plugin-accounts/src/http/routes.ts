@@ -3,6 +3,7 @@ import type { PluginRoute } from "@nextlyhq/plugin-sdk";
 import type { FlowDeps } from "../flows/deps";
 
 import {
+  acceptInvitationEndpoint,
   cancelAddressEndpoint,
   changeAddressEndpoint,
   changePasswordEndpoint,
@@ -56,6 +57,7 @@ export function accountsRoutes(deps: () => FlowDeps): PluginRoute[] {
     route("POST", "/reset/request", resetRequestEndpoint),
     route("POST", "/reset", resetEndpoint),
     route("POST", "/address/cancel", cancelAddressEndpoint),
+    route("POST", "/invitation/accept", acceptInvitationEndpoint),
     route("GET", "/me", meEndpoint),
     route("POST", "/sign-out/everywhere", signOutEverywhereEndpoint, true),
     route("POST", "/password", changePasswordEndpoint, true),
