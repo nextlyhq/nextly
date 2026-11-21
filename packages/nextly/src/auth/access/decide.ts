@@ -363,18 +363,49 @@ export function decidePermission(
 ): Decision {
   if (actor.kind === "system") return ALLOW;
   if (actor.kind === "principal") return refuse("principal-without-rule");
-  if (isSuperAdmin(actor)) return ALLOW;
-  // A retired `manage-` permission, asked by a gate written before it was
-  // retired, is answered by the plain four it stood for, each held as stored:
-  // a role still holding the retired one itself holds none of them.
+  return decideHolderPermission(
+    {
+      superAdmin: isSuperAdmin(actor),
+      holds: each => holdsPermission(actor, each, resource),
+    },
+    action,
+    resource
+  );
+}
+
+/**
+ * What the permission decision knows of one holder: whether they hold
+ * super-admin authority, and whether they hold an action on the resource as
+ * stored.
+ *
+ * @experimental
+ */
+export interface PermissionHolder {
+  readonly superAdmin: boolean;
+  readonly holds: (action: string) => boolean;
+}
+
+/**
+ * The permission decision for a holder whose facts are in hand, written once:
+ * {@link decidePermission} answers a person or key through it, and so does a
+ * batch that reads the same facts for many people at once, so the two never
+ * decide differently. A super-admin is allowed. A retired `manage-`
+ * permission, asked by a gate written before it was retired, is answered by
+ * the plain four it stood for, each held as stored: a role still holding the
+ * retired one itself holds none of them. Anyone else needs the permission.
+ *
+ * @experimental
+ */
+export function decideHolderPermission(
+  holder: PermissionHolder,
+  action: string,
+  resource: string
+): Decision {
+  if (holder.superAdmin) return ALLOW;
   if (isRetiredManage(action, resource)) {
-    return RETIRED_MANAGE_PLAIN_ACTIONS.every(
-      plain => decidePermission(actor, plain, resource).allowed
-    )
+    return RETIRED_MANAGE_PLAIN_ACTIONS.every(plain => holder.holds(plain))
       ? ALLOW
       : refuse("no-permission");
   }
-  return holdsPermission(actor, action, resource)
-    ? ALLOW
-    : refuse("no-permission");
+  return holder.holds(action) ? ALLOW : refuse("no-permission");
 }

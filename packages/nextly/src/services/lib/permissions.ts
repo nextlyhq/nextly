@@ -27,6 +27,10 @@ import {
 import type { GrantedPermission } from "../../auth/authenticated-scope";
 import { isDatabaseBusy } from "../../database/errors";
 import { getDialectTables } from "../../database/index";
+import {
+  comparesIdsWithoutCase,
+  rowsByRequestedId,
+} from "../../database/rows-by-requested-id";
 import { container } from "../../di/container";
 import {
   PUBLIC_ROLE_SLUG,
@@ -38,6 +42,7 @@ import {
 } from "../../domains/auth/services/role-graph";
 import { NextlyError } from "../../errors/nextly-error";
 import { emptyRetiredPermissionAnswers } from "../../init/retired-permission-answers";
+import { env } from "../../lib/env";
 import { getAuthLogger } from "../../lib/logger";
 import { coalesce } from "../../shared/lib/coalesce";
 import { consoleLogger } from "../../shared/types";
@@ -121,12 +126,17 @@ class PermissionChecker {
   // request's memo of the configured database must never serve.
   private readonly ownDatabase: boolean;
 
+  // The dialect the reads run on, as the tables are chosen: it decides how a
+  // returned row's id answers the id it was asked by.
+  private readonly dialect: string | undefined;
+
   constructor(dialect?: string) {
     // The tables of the dialect the reads run on: the caller's, when it reads
     // through a database of its own, whose dialect the process's setting need
     // not name; the configured one otherwise.
     this.t = dialect ? getDialectTables(dialect) : getTablesLazy();
     this.ownDatabase = dialect !== undefined;
+    this.dialect = dialect || env.DB_DIALECT;
   }
 
   async hasPermission(
@@ -309,8 +319,17 @@ class PermissionChecker {
       .where(
         usersRoleAssignmentsInForce(userRoles, userIds, new Date())
       )) as Array<{ userId: string; roleId: string; expiresAt: Date | null }>;
+    // Each row back to the id it was asked by, as the database matched it:
+    // MySQL matches an id in another case to the stored one, so a row's own
+    // spelling may differ from the id asked.
+    const asked = rowsByRequestedId(
+      userIds,
+      rows,
+      row => String(row.userId),
+      comparesIdsWithoutCase(this.dialect)
+    );
     for (const userId of new Set(userIds)) {
-      const own = rows.filter(row => String(row.userId) === userId);
+      const own = asked.get(userId) ?? [];
       byUser.set(userId, {
         roleIds: new Set(own.map(row => String(row.roleId))),
         validUntil: soonestExpiry(own),
