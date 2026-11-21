@@ -551,6 +551,11 @@ import {
   entryStillReferenced,
   referrersHolding,
 } from "./entry-still-referenced";
+import {
+  type ExpectedRegistryRow,
+  expectedRegistryRowOf,
+  holdEntityForWrite,
+} from "./entry-write-hold";
 import { publishCallerOf, publishGate, type PublishPart } from "./publish-gate";
 import { type PartsState, publishValueIssues } from "./publish-parts";
 import { requiresEveryLanguage } from "./require-every-language";
@@ -6365,8 +6370,8 @@ export class CollectionMutationService extends BaseService {
     // Set by a refusal inside the transaction, answered once it rolls back.
     const staleWrite: StaleWriteHolder = {};
     // The drafts it removed, counted by the delete made under the lock.
-    return this.adapter
-      .transaction(async tx => {
+    return this
+      .entryTransaction(params.collectionName, async tx => {
         // Serialize with concurrent draft-save upserts, which lock this same parent
         // row before writing the sidecar.
         await tx.lockRow(tableName, params.entryId);
@@ -6623,7 +6628,7 @@ export class CollectionMutationService extends BaseService {
       );
       judging = await this.pendingChangeJudging(params, collection);
       const judged = judging;
-      const took = await this.adapter.transaction(tx =>
+      const took = await this.entryTransaction(params.collectionName, tx =>
         this.takeLiveInTx(tx, collection, params, grants, {
           judging: judged,
           holder: staleWrite,
@@ -6915,7 +6920,7 @@ export class CollectionMutationService extends BaseService {
         params.authenticatedScope
       );
       const actor = actorForWrite(call.actor, params.user);
-      const done = await this.adapter.transaction(tx =>
+      const done = await this.entryTransaction(params.collectionName, tx =>
         this.rewriteFieldInTx(tx, {
           call,
           params,
@@ -9472,7 +9477,7 @@ export class CollectionMutationService extends BaseService {
       const transactionOptions = this.writeTransactionOptions(
         inTransactionHandlers
       );
-      await this.adapter.transaction(async tx => {
+      await this.entryTransaction(params.collectionName, async tx => {
         const rawEntry = await tx.insert<unknown>(tableName, entryData, {
           returning: "*",
         });
@@ -11366,7 +11371,7 @@ export class CollectionMutationService extends BaseService {
       const valueRulesApply =
         direction.nextStatus === "published" &&
         (await this.valueRulesCanRefuse(params.collectionName));
-      await this.adapter.transaction(async tx => {
+      await this.entryTransaction(params.collectionName, async tx => {
         // Lock the main row up front. One read serves three needs: it is the
         // liveness check (a row deleted between the pre-transaction read and
         // this lock is gone here, so the publish writes and records nothing);
@@ -17893,7 +17898,7 @@ export class CollectionMutationService extends BaseService {
         inTransactionHandlers,
         versionConflictRetries()
       );
-      await this.adapter.transaction(async tx => {
+      await this.entryTransaction(params.collectionName, async tx => {
         recorded = false;
         // Reset the payloads the promote fold rebinds, so a retried attempt
         // re-decides the split from the caller's input; and clear the pending
@@ -21737,7 +21742,7 @@ export class CollectionMutationService extends BaseService {
       const transactionOptions = this.writeTransactionOptions(
         inTransactionHandlers
       );
-      await this.adapter.transaction(async tx => {
+      await this.entryTransaction(params.collectionName, async tx => {
         // Lock and re-read the committed row inside the transaction. `entry`
         // above was read before the hooks ran and outside this transaction, so a
         // concurrent write may have changed or removed it; the event must
@@ -22582,6 +22587,10 @@ export class CollectionMutationService extends BaseService {
       // nothing but the whole transaction can take the row back: a failure once
       // it is written is marked a write-integrity failure, so a batch aborts and
       // rolls back rather than carrying on and committing it.
+      // Held for the write before its row is written, on MySQL, against a Builder save deleting
+      // the collection's field values (`holdEntityForWrite`); nothing where the caller's
+      // transaction already holds it.
+      await this.holdForEntryWrite(tx, params.collectionName);
       const undoesAlone = takesSavepoints(tx);
       const { entry, createEffects } = await underSavepoint(tx, async () => {
         // Insert using transaction context
@@ -22865,6 +22874,50 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * An entry write's own transaction on collection `collectionName`, holding the collection first
+   * (`holdForEntryWrite`): on MySQL a Builder save deleting the collection's field values waits for
+   * it to commit, and it waits for such a save to finish. Every transaction that writes entries
+   * opens through this, the batch writes included, so none is left without the hold.
+   */
+  async entryTransaction<T>(
+    collectionName: string,
+    work: (tx: TransactionContext) => Promise<T>,
+    options?: TransactionOptions
+  ): Promise<T> {
+    // The registry row the write is made for, read before its transaction opens, so the hold can
+    // refuse a write whose collection was replaced while it waited (`expectedRegistryRowOf`).
+    const expected = await expectedRegistryRowOf(
+      this.collectionService,
+      collectionName,
+      this.adapter,
+      this.dialect
+    );
+    return this.adapter.transaction(async tx => {
+      await this.holdForEntryWrite(tx, collectionName, expected);
+      return work(tx);
+    }, options);
+  }
+
+  /**
+   * Holds collection `collectionName` for an entry write in `tx` (`holdEntityForWrite`): before
+   * the write's first row statement, once per transaction.
+   */
+  private holdForEntryWrite(
+    tx: TransactionContext,
+    collectionName: string,
+    /** The registry row the write is made for, where it was read (`expectedRegistryRowOf`). */
+    expected?: ExpectedRegistryRow
+  ): Promise<void> {
+    return holdEntityForWrite(
+      tx,
+      collectionName,
+      this.collectionService,
+      this.dialect,
+      expected
+    );
+  }
+
+  /**
    * The in-transaction phase for one write, run last on the write's own
    * transaction (see `hooks/in-transaction-phase`), with the handlers the
    * write took ({@link inTransactionHandlersFor}).
@@ -23096,6 +23149,15 @@ export class CollectionMutationService extends BaseService {
       // than per row, so the fetch is by id alone and the access service holds
       // the whole verdict.
       const fetchWhere = this.whereEq("id", entryId);
+
+      // Held for the write before its row is locked, on MySQL, against a Builder save deleting
+      // the collection's field values (`holdEntityForWrite`); nothing where the caller's
+      // transaction already holds it. Before the row lock, so before the before-hooks too: they,
+      // the workflow's publish gate and the rule withdrawing an approval on an edit read the
+      // locked current row, and the hold comes before the entry's row in every write. The share
+      // side holds up no other entry write; while the hooks run it can only lengthen a deleting
+      // save's wait, which ends at the hold's 30 seconds.
+      await this.holdForEntryWrite(tx, params.collectionName);
 
       // Fetch existing entry first (needed for owner checks and hooks). Lock the
       // row (`forUpdate`, a no-op on SQLite, which already serializes writers) so
@@ -24950,6 +25012,10 @@ export class CollectionMutationService extends BaseService {
       // make the event describe values other than the row this delete removes.
       // The adapter no-ops the lock where row locking is unavailable (SQLite,
       // itself serialized).
+      // Held for the write before its row is locked, on MySQL, against a Builder save deleting
+      // the collection's field values (`holdEntityForWrite`); nothing where the caller's
+      // transaction already holds it.
+      await this.holdForEntryWrite(tx, params.collectionName);
       await tx.lockRow(tableName, entryId);
       const freshEntry = await tx.selectOne<Record<string, unknown>>(
         tableName,
