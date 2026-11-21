@@ -205,9 +205,13 @@ function builtInSubmissionFields(formSlug: string): FieldConfig[] {
     // taken from a caller, and empty when the form allows several responses
     // or the submission is spam. Unique per form (see `indexes`), so two
     // submissions with the same value cannot both be stored.
+    // Shared by every language: the unique index above is built on the main
+    // table, and one person's response is one response whatever language
+    // they answered in.
     text({
       name: "responseKey",
       label: "One-response key",
+      localized: false,
       admin: { hidden: true },
     }),
 
