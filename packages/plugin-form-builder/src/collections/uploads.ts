@@ -51,13 +51,15 @@ export function formUploadsCollection(): CollectionConfig {
       delete: nobody,
     },
     fields: [
-      // The media item's id, as a file answer names it.
-      text({ name: "media", required: true }),
+      // The media item's id, as a file answer names it. It, the form's id
+      // and the submission's id are indexed, and an index is built on the
+      // main table, so they are kept once for every language.
+      text({ name: "media", required: true, localized: false }),
       // The form's id and the file field's name it was uploaded for.
-      text({ name: "form", required: true }),
+      text({ name: "form", required: true, localized: false }),
       text({ name: "field", required: true }),
       // The submission's id once one claims it; empty until then.
-      text({ name: "submission" }),
+      text({ name: "submission", localized: false }),
       // When it stopped being claimable, its file to be deleted.
       date({ name: "releasedAt" }),
     ],
