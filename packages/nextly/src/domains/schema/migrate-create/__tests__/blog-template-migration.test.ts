@@ -254,7 +254,7 @@ async function visualEntities(): Promise<{
     migrationsDir: fileURLToPath(new URL("migrations", TEMPLATE)),
   });
   const minimal = (
-    entries: ReturnType<typeof newestApplied>
+    entries: { slug: string; tableName: string; status?: boolean }[]
   ): MinimalConfigEntity[] => {
     const tables = new Map(entries.map(e => [e.slug, e.tableName]));
     return toMinimalEntities(entries, e => tables.get(e.slug) ?? "").map(
