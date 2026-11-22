@@ -79,15 +79,15 @@ import {
 import { canPrompt } from "../../domains/schema/migrate/can-prompt";
 import { seedAccessOnCommandConnection } from "../../domains/schema/migrate/command-access";
 import {
-  planCoreDeletions,
-  planCoreReconcile,
-  reconcileCore,
-} from "../../domains/schema/migrate/core-reconcile";
-import {
   checkCompanionFiles,
   judgeCompanionFiles,
   warnOfSnapshotlessFile,
 } from "../../domains/schema/migrate/companion-drift";
+import {
+  planCoreDeletions,
+  planCoreReconcile,
+  reconcileCore,
+} from "../../domains/schema/migrate/core-reconcile";
 import {
   consentToCover,
   countDeletions,
@@ -344,12 +344,12 @@ import {
 } from "./clear-plaintext-passwords";
 import { runPluginsOnMigrate } from "./migrate-hooks";
 import { storedDataOfRun } from "./stored-data-of-run";
-import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 import {
   CORE_UPGRADE_LABEL,
   coreUpgradeSource,
   judgeCoreDeletions,
 } from "./upgrade-steps/core-upgrade-consent";
+import { upgradeSiteOf } from "./upgrade-steps/localisation-site";
 // Re-exported for the callers that import it from this command. Other
 // commands import it from cli/utils, which does not pull this one in.
 export { installRegistryResolver };
