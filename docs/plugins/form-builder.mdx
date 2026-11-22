@@ -141,6 +141,10 @@ matching permission on the Roles screen: `read-form-submissions` to read submiss
 `update-forms` to edit a form, `delete-form-submissions` to delete one. An override narrows
 from there; check the permission in it rather than a role's name.
 
+The plugin's collections are open to the built-in Admin, Editor, Author and Viewer roles, each
+by its own rule (an Author does not delete, a Viewer reads); `grants` in an override, or
+[`presetGrants`](/docs/permissions#the-preset-roles-reach-a-collection-only-once-it-is-opened-to-them) in the config, changes that.
+
 **Function style** -- full control over the field list:
 
 ```typescript

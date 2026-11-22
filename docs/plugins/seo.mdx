@@ -2078,6 +2078,9 @@ Which built-in roles hold what:
   other than Admin never pick up a permission a plugin declares. Editors and Authors change a
   page's SEO with the page while `pagePermissions` is off, and none of them reaches site-wide SEO
   or the check. Give the people who should a role of your own holding the permissions above.
+- The plugin's collections (redirects, the not-found log, the problems found and its other
+  records) are open to Admin, Editor, Author and Viewer, each by its own rule;
+  [`presetGrants`](/docs/permissions#the-preset-roles-reach-a-collection-only-once-it-is-opened-to-them) in the config changes that.
 
 The sitemap, robots.txt and each page's head are public. Making a [share image](#share-images-of-the-right-size)
 is a change to the media library, asked as `create-media` and `read-media`.
