@@ -6548,16 +6548,22 @@ export class SingleMutationService extends BaseService {
           });
           // After the in-transaction phase, whose writes go through this `tx`
           // too, so the after-hooks see what the transaction commits; read
-          // only where there are after-hooks to hand it to.
+          // only where there are after-hooks to hand it to. Decoded as the
+          // document is: a group or other JSON value comes back from the
+          // translations table as stored, and laid over the decoded document
+          // as such it would reach the hooks and the answer as text.
           writtenTranslation = this.hookRegistry.hasHooks(
             "afterUpdate",
             hookCollection
           )
-            ? await this.translationIn(
-                existingDoc.id,
-                companion,
-                writeLocale,
-                tx
+            ? this.queryService.deserializeJsonFields(
+                await this.translationIn(
+                  existingDoc.id,
+                  companion,
+                  writeLocale,
+                  tx
+                ),
+                fieldConfigs
               )
             : {};
 
