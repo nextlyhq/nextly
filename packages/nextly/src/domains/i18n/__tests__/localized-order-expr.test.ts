@@ -24,9 +24,30 @@ const render = (
     })
   ).sql;
 
-/** How many times `needle` appears in `haystack`. */
-const count = (haystack: string, needle: string): number =>
-  haystack.split(needle).length - 1;
+/**
+ * The expression's shape, each language's read named by its language:
+ * `NULLIF(fr)` reads French text, `fr` French as stored, in the order the
+ * database tries them.
+ */
+const shape = (
+  localeChain: string[],
+  options: { blankIsValue?: boolean; nonText?: boolean } = {}
+): string => {
+  const query = new PgDialect().sqlToQuery(
+    buildLocalizedOrderExpr({
+      companionTableName: "dc_posts_locales",
+      mainIdColumn: posts.id,
+      column: "title",
+      localeChain,
+      ...options,
+    })
+  );
+  return query.sql
+    .replace(/\(SELECT [^()]*?\$(\d+)\)/g, (_, n: string) =>
+      String(query.params[Number(n) - 1])
+    )
+    .replace(/, ''\)/g, ")");
+};
 
 describe("buildLocalizedOrderExpr", () => {
   it("reads one language without COALESCE", () => {
@@ -40,21 +61,20 @@ describe("buildLocalizedOrderExpr", () => {
   });
 
   it("orders an untranslated entity's empty string as a value, after any language's text", () => {
-    // Text first in every language, then each language's own value, so an
-    // empty string is ordered by rather than read as a missing translation.
-    const one = render(["en"], { blankIsValue: true });
-    expect(one.startsWith("COALESCE(NULLIF(")).toBe(true);
-    expect(count(one, "NULLIF(")).toBe(1);
-    expect(count(one, "SELECT")).toBe(2);
-    const two = render(["fr", "en"], { blankIsValue: true });
-    expect(count(two, "NULLIF(")).toBe(2);
-    expect(count(two, "SELECT")).toBe(4);
+    // Text in every language first, so French '' never comes before English
+    // text; only where no language holds text does the empty string order.
+    expect(shape(["en"], { blankIsValue: true })).toBe(
+      "COALESCE(NULLIF(en), en)"
+    );
+    expect(shape(["fr", "en"], { blankIsValue: true })).toBe(
+      "COALESCE(NULLIF(fr), NULLIF(en), fr, en)"
+    );
   });
 
   it("CONTROL: a translated entity's empty string falls back, and a non-text value is never blank", () => {
-    expect(count(render(["fr", "en"]), "SELECT")).toBe(2);
-    const nonText = render(["fr", "en"], { nonText: true, blankIsValue: true });
-    expect(nonText).not.toContain("NULLIF(");
-    expect(count(nonText, "SELECT")).toBe(2);
+    expect(shape(["fr", "en"])).toBe("COALESCE(NULLIF(fr), NULLIF(en))");
+    expect(shape(["fr", "en"], { nonText: true, blankIsValue: true })).toBe(
+      "COALESCE(fr, en)"
+    );
   });
 });
