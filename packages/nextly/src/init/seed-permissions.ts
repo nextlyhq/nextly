@@ -18,6 +18,7 @@ import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import { inArray } from "drizzle-orm";
 
 import type { AccessTarget } from "../auth/access/decide";
+import type { PresetDeclarationSource } from "../auth/preset-reach";
 import { getDialectTables } from "../database";
 import {
   ROLE_PRESETS,
@@ -182,7 +183,7 @@ export async function seedPermissionsRolesAndPresets(args: {
   logger: Logger;
   /** The configuration the command loaded; `roles` only where a caller has them. */
   config: PermissionSeeding["config"] &
-    Pick<NextlyServiceConfig, "roles"> &
+    Pick<NextlyServiceConfig, "roles" | "presetGrants"> &
     RuleContextConfig;
   /**
    * Whether the Public role's plugin grants that `config.plugins` no longer
@@ -191,6 +192,13 @@ export async function seedPermissionsRolesAndPresets(args: {
    * plugin's install, so another plugin's grant is never taken from visitors.
    */
   takeBackUndeclared?: boolean;
+  /**
+   * What opens collections and permissions to the preset roles, where
+   * `config` declares only part of the configuration (a plugin's install):
+   * the preset grants are set over every stored permission, so every opening
+   * must be read. `config` by default.
+   */
+  presetsDeclaredBy?: PresetDeclarationSource;
 }): Promise<void> {
   const { adapter, logger, config, takeBackUndeclared = true } = args;
   // Loaded here, where a command needs them, rather than with this module,
@@ -205,7 +213,7 @@ export async function seedPermissionsRolesAndPresets(args: {
     permissionSeedService: new PermissionSeedService(adapter, logger),
     config,
   });
-  await seedRolePresets(adapter, logger);
+  await seedRolePresets(adapter, logger, args.presetsDeclaredBy ?? config);
   const made = await publicRole.make();
   if (made.made) {
     await withRuleContextOf(adapter, config, () =>
@@ -530,7 +538,11 @@ async function seedEverything(): Promise<void> {
     seedAllPermissions
   );
   await seedingStep("role presets", () =>
-    seedRolePresets(getService("adapter"), getService("logger"))
+    seedRolePresets(
+      getService("adapter"),
+      getService("logger"),
+      getService("config")
+    )
   );
   // The role visitors are judged by. Made once and then left to the owner,
   // unlike a preset: only its permissions change after it exists.
