@@ -13,6 +13,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { consoleLogger } from "../../../shared/types";
 import {
   readIndexUniqueness,
   uniqueIndexNames,
@@ -129,4 +130,39 @@ export async function reconcileCompanionUniqueIndexes(
   } catch (error) {
     onError?.(error);
   }
+}
+
+/**
+ * {@link reconcileCompanionUniqueIndexes} for a translations table a start has just made or
+ * completed (`ensureCompanionTable`), so a unique translated field is enforced in each language
+ * on a database a start provisioned, as it is on one `nextly migrate` or the development reload
+ * provisioned. Every installation keeps its text fields in that table, a slug included, and a
+ * start that made the table without its indexes accepted a value twice.
+ *
+ * Never throws, so a start goes on: a field whose rule cannot hold (a value a language already
+ * holds twice, or a column this server cannot key) is left without its index and named in a
+ * warning, with the documents that hold the value, as the development reload names it.
+ */
+export async function reconcileCompanionUniquesAtStart(
+  adapter: CompanionUniqueAdapter,
+  args: {
+    builtBy: ColumnOrigin;
+    /** The entity, as the warning names it. */
+    slug: string;
+    tableName: string;
+    fields: readonly UniqueFieldLike[];
+  },
+  warn: (message: string) => void = message => consoleLogger.warn(message)
+): Promise<void> {
+  await reconcileCompanionUniqueIndexes(
+    adapter,
+    { builtBy: args.builtBy, tableName: args.tableName, fields: args.fields },
+    error => {
+      warn(
+        `[nextly] Could not index the translations table for "${args.slug}". ` +
+          `Unique translated fields are not enforced in each language until it is: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  );
 }

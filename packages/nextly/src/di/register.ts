@@ -2637,7 +2637,25 @@ async function addMissingCompanionColumns(
       reconcileFailure = error;
     }
   );
-  if (inStep) return;
+  if (inStep) {
+    // Its per-language unique indexes once its columns are in step, as the
+    // development reload makes them: a plugin's unique translatable field is
+    // enforced in each language.
+    const { reconcileCompanionUniquesAtStart } = await import(
+      "../domains/i18n/runtime/companion-unique-reconcile"
+    );
+    await reconcileCompanionUniquesAtStart(
+      ctx.adapter,
+      {
+        builtBy: entity.builtBy,
+        slug: entity.slug,
+        tableName: entity.tableName,
+        fields: entity.fields as { name: string; type: string }[],
+      },
+      message => ctx.logger.warn?.(message)
+    );
+    return;
+  }
   throw NextlyError.internal({
     ...(reconcileFailure instanceof Error ? { cause: reconcileFailure } : {}),
     logContext: {
@@ -4965,7 +4983,7 @@ async function syncCodeFirstCollections(
             const { ensureCompanionTable } = await import(
               "../domains/i18n/runtime/companion-io"
             );
-            await ensureCompanionTable(adapter, {
+            const created = await ensureCompanionTable(adapter, {
               // This branch boots entities declared in nextly.config.ts.
               builtBy: "codeFirst" as const,
               slug,
@@ -4974,6 +4992,19 @@ async function syncCodeFirstCollections(
               dialect: syncDialect,
               status: publishesPerLanguage(desired),
             });
+            // A table made here gets its per-language unique indexes, as
+            // `nextly migrate` makes them: the table alone would accept a
+            // unique value twice.
+            if (created) {
+              const { reconcileCompanionUniquesAtStart } = await import(
+                "../domains/i18n/runtime/companion-unique-reconcile"
+              );
+              await reconcileCompanionUniquesAtStart(
+                adapter,
+                { builtBy: "codeFirst" as const, slug, tableName, fields },
+                message => logger.warn?.(message)
+              );
+            }
             const { buildCompanionRuntimeTable } = await import(
               "../domains/i18n/runtime/companion-registration"
             );
@@ -5181,7 +5212,7 @@ async function syncCodeFirstComponents(
             const { ensureCompanionTable } = await import(
               "../domains/i18n/runtime/companion-io"
             );
-            await ensureCompanionTable(adapter, {
+            const created = await ensureCompanionTable(adapter, {
               // A code-first component's companion, created on a fresh boot.
               builtBy: "codeFirst" as const,
               slug,
@@ -5190,6 +5221,23 @@ async function syncCodeFirstComponents(
               dialect,
               status: false,
             });
+            // A table made here gets its per-language unique indexes, as
+            // `nextly migrate` makes them.
+            if (created) {
+              const { reconcileCompanionUniquesAtStart } = await import(
+                "../domains/i18n/runtime/companion-unique-reconcile"
+              );
+              await reconcileCompanionUniquesAtStart(
+                adapter,
+                {
+                  builtBy: "codeFirst" as const,
+                  slug,
+                  tableName,
+                  fields: compConfig.fields as { name: string; type: string }[],
+                },
+                message => logger.warn?.(message)
+              );
+            }
             const { buildCompanionRuntimeTable } = await import(
               "../domains/i18n/runtime/companion-registration"
             );
@@ -5398,7 +5446,7 @@ async function reconcileSingleTablesForBoot(
             const { ensureCompanionTable } = await import(
               "../domains/i18n/runtime/companion-io"
             );
-            await ensureCompanionTable(adapter, {
+            const created = await ensureCompanionTable(adapter, {
               // From codeFirstConfig, so the pipeline owns this table.
               builtBy: "codeFirst" as const,
               slug: single.slug,
@@ -5410,6 +5458,23 @@ async function reconcileSingleTablesForBoot(
                 status: hasStatus,
               }),
             });
+            // A table made here gets its per-language unique indexes, as
+            // `nextly migrate` makes them.
+            if (created) {
+              const { reconcileCompanionUniquesAtStart } = await import(
+                "../domains/i18n/runtime/companion-unique-reconcile"
+              );
+              await reconcileCompanionUniquesAtStart(
+                adapter,
+                {
+                  builtBy: "codeFirst" as const,
+                  slug: single.slug,
+                  tableName: single.tableName,
+                  fields,
+                },
+                message => logger.warn?.(message)
+              );
+            }
             const { buildCompanionRuntimeTable } = await import(
               "../domains/i18n/runtime/companion-registration"
             );
