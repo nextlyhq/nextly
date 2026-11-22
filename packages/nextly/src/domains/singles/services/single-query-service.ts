@@ -1957,8 +1957,11 @@ export class SingleQueryService extends BaseService {
   ) {
     if (!doc || typeof doc.id !== "string") return undefined;
     const table = `${singleMeta.tableName}_locales`;
+    // Where its translatable values live, as the read takes them
+    // (`languageReadParts`): every Single's, once the site keeps each one
+    // per language, not only one marked translated.
     const translated =
-      this.localization !== undefined && singleMeta.localized === true;
+      this.localization !== undefined && storesPerLanguage(singleMeta);
     return languageCountersBeforeContent(
       this.adapter.getDrizzle<SelectsRows>(),
       {

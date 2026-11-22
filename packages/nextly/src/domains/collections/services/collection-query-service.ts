@@ -4459,6 +4459,9 @@ export class CollectionQueryService extends BaseService {
                 nonText: companion.localizedFields.some(
                   field => field.column === named.column && field.nonText
                 ),
+                // An untranslated collection's empty string is its value,
+                // as it was on the collection's own row.
+                blankIsValue: collection.localized !== true,
               }),
               // A missing translation reads as NULL.
               nullable: true,
