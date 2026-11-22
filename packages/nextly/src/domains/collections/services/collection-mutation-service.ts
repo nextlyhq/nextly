@@ -22635,12 +22635,16 @@ export class CollectionMutationService extends BaseService {
         // it rolls back with the main row. A brand-new parent has no row to
         // conflict with, which is why this inserts where the update path upserts.
         if (localizedWrite) {
-          // A failure here is a write-integrity failure: the parent row is
-          // already written. Reported as a soft per-item failure, a batch under
-          // `stopOnError: false` would carry on and commit a document whose
-          // translations never landed — the row would exist with no content in
-          // any language. Marked, the batch loop aborts and the transaction
-          // rolls back, exactly as a failed component save does.
+          // A failure here is a write-integrity failure where nothing but the
+          // whole transaction can take the parent row back: reported as a soft
+          // per-item failure, a batch under `stopOnError: false` would carry on
+          // and commit a document whose translations never landed — the row
+          // would exist with no content in any language. Marked, the batch loop
+          // aborts and the transaction rolls back, exactly as a failed component
+          // save does. Under a savepoint the failure takes the parent row back
+          // with it, so it is answered as what it is: a translated value held
+          // by another entry of a unique field, for one, is a duplicate the
+          // caller can tell apart, not an unexpected error.
           try {
             await this.insertCompanionRow(
               tx,
@@ -22653,7 +22657,7 @@ export class CollectionMutationService extends BaseService {
               }
             );
           } catch (error: unknown) {
-            throw markWriteIntegrityFailure(error);
+            throw undoesAlone ? error : markWriteIntegrityFailure(error);
           }
           // Split out of the insert, so the returned row lacks them: merge them
           // back for the hooks, the event and the response. Under the FIELD's

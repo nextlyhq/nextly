@@ -98,13 +98,9 @@ const STORE_OR_PAGES =
 
 /**
  * The most statements of the store and the pages an unchanged start makes,
- * whatever the number of pages. Every installation keeps a document's
- * translatable fields in its per-language table, and the pages' titles and
- * slugs and the claims' keys and paths are such fields: so each pass reads
- * its rows' translated values from that table too, and the boot checks each
- * of the two tables is there and which languages it holds.
+ * whatever the number of pages, the timed reads left out (`countedTrip`).
  */
-const MOST_STORE_READS = 15;
+const MOST_STORE_READS = 12;
 
 /**
  * The reads the server makes at most once per interval rather than once per
@@ -123,9 +119,19 @@ const TIMED_READS =
  */
 const CONNECTION_SETUP = /^SET SESSION /i;
 
+/**
+ * Whether a translations table is there, asked of the table itself. The answer
+ * is kept for thirty seconds (`companion-readiness`), so whether a start asks
+ * again, and for which table, depends on how long the start and the setup
+ * before it ran: a timed read too.
+ */
+const READINESS_PROBE = /^SELECT 1 FROM [`"]?\w+_locales[`"]? LIMIT 0$/i;
+
 /** Whether `text` is a statement the comparison counts. */
 const countedTrip = (text: string): boolean =>
-  !TIMED_READS.test(text) && !CONNECTION_SETUP.test(text.trim());
+  !TIMED_READS.test(text) &&
+  !CONNECTION_SETUP.test(text.trim()) &&
+  !READINESS_PROBE.test(text.trim());
 
 describe.each(getConfiguredTestDialects())(
   "the address store at start (%s)",
@@ -234,7 +240,9 @@ describe.each(getConfiguredTestDialects())(
         // reads on a timer and a new connection's setup: they are the same
         // whatever the site holds, so any difference is the passes'.
         trips: calls.filter(call => countedTrip(call.text)).length,
-        store: calls.filter(call => STORE_OR_PAGES.test(call.text)).length,
+        store: calls.filter(
+          call => STORE_OR_PAGES.test(call.text) && countedTrip(call.text)
+        ).length,
       };
       await current?.destroy();
       current = undefined;
