@@ -60,6 +60,7 @@ import { consoleLogger, type Logger } from "../shared/types";
 
 import { runBoundedDiagnostic } from "./bounded-diagnostic";
 import type { RuleContextConfig } from "./code-rule-context";
+import { recordDeclaredClosedMarks } from "./record-declared-closed-marks";
 
 /**
  * Seed system, collection, single and plugin-declared permissions, then grant
@@ -214,6 +215,12 @@ export async function seedPermissionsRolesAndPresets(args: {
     config,
   });
   await seedRolePresets(adapter, logger, args.presetsDeclaredBy ?? config);
+  await recordDeclaredClosedMarks(
+    adapter,
+    logger,
+    config.collections ?? [],
+    () => adapter
+  );
   const made = await publicRole.make();
   if (made.made) {
     await withRuleContextOf(adapter, config, () =>
@@ -542,6 +549,14 @@ async function seedEverything(): Promise<void> {
       getService("adapter"),
       getService("logger"),
       getService("config")
+    )
+  );
+  await seedingStep("collections closed to super-admin", () =>
+    recordDeclaredClosedMarks(
+      getService("adapter"),
+      getService("logger"),
+      getService("config").collections ?? [],
+      () => getService("adapter")
     )
   );
   // The role visitors are judged by. Made once and then left to the owner,

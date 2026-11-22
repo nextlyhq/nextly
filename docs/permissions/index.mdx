@@ -502,6 +502,45 @@ A filter names fields of its own collection: it can't follow a relationship
 of your own. What else a filter may hold is in
 [A read rule that answers with a filter](#a-read-rule-that-answers-with-a-filter-experimental).
 
+## Collections closed to super-admin (experimental)
+
+A super-admin passes every collection rule. A collection holding data the site's
+administrators must not read through the admin, such as health or pay records, can be closed
+to super-admin: its entries are then refused to every super-admin person and to every
+full-access API key carrying its maker's super-admin authority, at every way in (the REST API
+and the admin, the Direct API as that person, related rows, counts and search), whatever other
+permissions they hold. Other roles keep the collection's own grants and rules, and trusted
+server code (`overrideAccess: true`) is not a caller, so your app's own code still reads it.
+
+Close one in code:
+
+```ts
+import { defineCollection, text } from "nextly/config";
+
+export const PayRecords = defineCollection({
+  slug: "pay-records",
+  fields: [text({ name: "summary" })],
+  closedToSuperAdmin: true,
+});
+```
+
+A collection whose code says nothing, one made in the Schema Builder for instance, is closed
+or opened again from the super-admin role's page under **Roles**, which lists each
+collection's mark. Changing one asks the super-admin to enter their password again before it
+is saved, and a session left open or a stolen session cookie cannot change it. A collection
+whose code sets the mark shows it there and cannot be changed there. The same change is
+`PATCH /admin/api/roles/screen/closed-to-super-admin` with `{ collection, closed, password }`,
+from a super-admin's session on the site's own origin.
+
+Every change is written to the audit log as `collection-super-admin-access-changed`, with who
+made it, when, the collection, and its value before and after (`"open"` or `"closed"`). A
+change made in code is recorded, with no person, by the first `nextly migrate` or development
+start that applies it. A change made on one server reaches the others within five seconds.
+
+The mark is a deterrent with a trail, not a wall against a determined super-admin: one can
+open the collection again, and the audit log shows it. Data that must never be reachable from
+the admin belongs out of its reach by other means.
+
 ## Related rows
 
 A populated relationship is read with the same check as reading the related collection

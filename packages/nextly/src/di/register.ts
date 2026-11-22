@@ -32,6 +32,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
 import type { AnyRelations, Table } from "drizzle-orm";
 
+import {
+  declareClosedToSuperAdmin,
+  useStoredClosedMarks,
+} from "../auth/access/closed-to-super-admin";
 import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
   buildAuthRouterDeps,
@@ -108,6 +112,7 @@ import { limitsInMemoryWarning } from "../domains/limits/limits-in-memory-warnin
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import { stopDeleteWindowTimers } from "../domains/media/delete-window-timers";
 import type { MetaService } from "../domains/meta";
+import { readStoredClosedMarks } from "../domains/meta/closed-to-super-admin-marks";
 import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
@@ -4496,6 +4501,13 @@ function registerCodeDefinedAccess(
 ): void {
   const rbacService = container.get<RBACAccessControlService>(
     "rbacAccessControlService"
+  );
+  // Which collections the configuration closes to super-admin, and how the
+  // marks set in the admin are read: registered with the rules, so every way
+  // in that asks the rules asks these too.
+  declareClosedToSuperAdmin(transformedConfig.collections ?? []);
+  useStoredClosedMarks(executor =>
+    readStoredClosedMarks(container.get<MetaService>("metaService"), executor)
   );
   // The targets a command asks the same rules through (`codeDefinedAccessTargets`).
   for (const target of codeDefinedAccessTargets(transformedConfig)) {
