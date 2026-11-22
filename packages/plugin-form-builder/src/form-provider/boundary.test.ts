@@ -29,9 +29,10 @@ describe("the forms plugin's import boundary", () => {
   it("imports nothing of the page builder's", () => {
     const files = sources(SRC);
     // Must-be-found: the walk read the plugin, its provider among it.
-    expect(files.some(file => file.endsWith("form-provider/provider.ts"))).toBe(
-      true
-    );
+    // Joined with the platform's separator, as `sources` builds each path.
+    expect(
+      files.some(file => file.endsWith(join("form-provider", "provider.ts")))
+    ).toBe(true);
     const self = fileURLToPath(import.meta.url);
     const crossing = files.filter(
       file => file !== self && PAGE_BUILDER.test(readFileSync(file, "utf8"))

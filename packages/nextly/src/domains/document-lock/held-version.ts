@@ -13,7 +13,10 @@
  * @experimental
  */
 import { getService } from "../../di";
-import { changesSinceStartedFrom } from "../versions/recovery-point-changes";
+import {
+  changesSinceStartedFrom,
+  soleLanguageOf,
+} from "../versions/recovery-point-changes";
 import {
   givenVersionOf,
   type ChangeSinceArgs,
@@ -40,17 +43,6 @@ export function heldVersionOf(
 }
 
 /**
- * The copy's language: the one language its version names. An editor's copy
- * is read in one language, so its version names that one (`7.es:3`) or none
- * (`7`, a document without translations); a version naming several came from
- * a read of every language, and only the document's own row is judged.
- */
-function languageOf(held: DecodedVersion): string | null {
-  const named = Object.keys(held.languages);
-  return named.length === 1 ? named[0] : null;
-}
-
-/**
  * What someone else changed in `ref` since `held`, in the parts it covers;
  * undefined when nothing moved or the document is gone.
  */
@@ -64,7 +56,7 @@ export async function changeSinceHeldVersion(
     slug: ref.slug,
     entryId: ref.entryId,
     given: held,
-    locale: languageOf(held),
+    locale: soleLanguageOf(held),
     reader,
   });
 }

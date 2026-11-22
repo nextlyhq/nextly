@@ -14,6 +14,7 @@
  */
 import { getService } from "../../di";
 import type { StaleVersionPublicData } from "../../errors/public-data";
+import { storesPerLanguage } from "../i18n/per-language-storage";
 import type { CompanionIntrospectAdapter } from "../i18n/runtime/companion-io";
 import { isCompanionReady } from "../i18n/runtime/companion-readiness";
 
@@ -34,20 +35,40 @@ export type RecoveryPointChanges =
   | { startingVersionUnknown: true };
 
 /**
- * The document's own table and whether it keeps translations, from the
- * registry; null when the collection or Single is gone.
+ * The document's own table and whether its translatable values live in its
+ * translations table (`storesPerLanguage`), from the registry; null when the
+ * collection or Single is gone.
+ *
+ * Where the values live, not whether the entity is marked translated: every
+ * installation keeps them per language, so a save of an untranslated
+ * collection's text field moves its default language's row alone, and a
+ * judge reading the own row only would miss it.
  */
 export async function documentShape(
   scopeKind: "collection" | "single",
   slug: string
-): Promise<{ table: string; localized: boolean } | null> {
+): Promise<{ table: string; perLanguage: boolean } | null> {
   const record: unknown =
     scopeKind === "single"
       ? await getService("singleRegistryService").getSingleBySlug(slug)
       : await getService("collectionRegistryService").getCollectionBySlug(slug);
   const shape = record as { tableName?: unknown; localized?: unknown } | null;
   if (!shape || typeof shape.tableName !== "string") return null;
-  return { table: shape.tableName, localized: shape.localized === true };
+  return { table: shape.tableName, perLanguage: storesPerLanguage(shape) };
+}
+
+/**
+ * The language a copy was read in: the one language its version names. An
+ * editor's copy is read in one language, so its version names that one
+ * (`7.es:3`) or none (`7`, a document without translations); a version naming
+ * several came from a read of every language, and only the document's own row
+ * is judged.
+ *
+ * @experimental
+ */
+export function soleLanguageOf(version: DecodedVersion): string | null {
+  const named = Object.keys(version.languages);
+  return named.length === 1 ? named[0] : null;
 }
 
 /**
@@ -81,7 +102,7 @@ export async function changesSinceStartedFrom(
   if (!shape) return undefined;
   const languagesTable = `${shape.table}_locales`;
   const locale =
-    shape.localized &&
+    shape.perLanguage &&
     args.locale !== null &&
     Object.hasOwn(args.given.languages, args.locale) &&
     (await isCompanionReady(adapter, languagesTable))
@@ -135,7 +156,10 @@ export async function changesSinceRecoveryPoint(
     slug: args.slug,
     entryId: args.entryId,
     given,
-    locale: args.locale,
+    // A point saved in no language is one of a document not marked
+    // translated; its text is still kept per language, in the language its
+    // starting version names, so that row is judged as a save would judge it.
+    locale: args.locale ?? soleLanguageOf(given),
     reader: args.reader,
   });
   return changedSince ? { changedSince } : undefined;
