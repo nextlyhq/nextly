@@ -116,6 +116,17 @@ const MOST_STORE_READS = 15;
 const TIMED_READS =
   /\b[`"]?(nextly_languages|nextly_meta|nextly_rbac_epoch)[`"]?/;
 
+/**
+ * The statement MySQL's adapter sends each new pooled connection before its
+ * first query. Whether a start opens one more connection depends on the pool,
+ * not on the site, so it is left out of the comparison too.
+ */
+const CONNECTION_SETUP = /^SET SESSION /i;
+
+/** Whether `text` is a statement the comparison counts. */
+const countedTrip = (text: string): boolean =>
+  !TIMED_READS.test(text) && !CONNECTION_SETUP.test(text.trim());
+
 describe.each(getConfiguredTestDialects())(
   "the address store at start (%s)",
   (dialect: TestDialect) => {
@@ -220,9 +231,9 @@ describe.each(getConfiguredTestDialects())(
           )
           .map(call => call.text),
         // Every statement of the start, the boot's own included, but for the
-        // reads on a timer: they are the same whatever the site holds, so any
-        // difference is the passes'.
-        trips: calls.filter(call => !TIMED_READS.test(call.text)).length,
+        // reads on a timer and a new connection's setup: they are the same
+        // whatever the site holds, so any difference is the passes'.
+        trips: calls.filter(call => countedTrip(call.text)).length,
         store: calls.filter(call => STORE_OR_PAGES.test(call.text)).length,
       };
       await current?.destroy();

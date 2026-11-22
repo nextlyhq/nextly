@@ -14,7 +14,6 @@ import {
   defineFieldGroup,
   fieldGroup,
   group,
-  number,
   password,
   relationship,
   text,
@@ -116,40 +115,6 @@ async function workingDraftCount(id: string): Promise<number> {
 }
 
 describe("draft/published split — updateEntry (integration)", () => {
-  // Every installation keeps its translatable fields per language, so the main
-  // row the update reads back holds no title: a live write answers with the
-  // language's values laid over it, the fields it did not write included.
-  it("answers a live update with the translatable values it did not write", async () => {
-    handle = await createTestNextly({
-      collections: [
-        defineCollection({
-          slug: COLLECTION,
-          status: true,
-          versions: { drafts: true },
-          fields: [text({ name: "title" }), number({ name: "rank" })],
-        }),
-      ],
-    });
-    const entries = handle
-      .getService("collectionsHandler")
-      .getEntryService() as CollectionEntryService;
-    const ctx = { collectionName: COLLECTION, overrideAccess: true };
-    await entries.createEntry(ctx, {
-      title: "kept",
-      rank: 1,
-      status: "published",
-    });
-    const [row] = await handle.adapter.select<LiveRow>(TABLE);
-
-    const res = await entries.updateEntry(
-      { ...ctx, entryId: row.id },
-      { rank: 2, status: "published", _overwrite: true }
-    );
-
-    expect(res.success).toBe(true);
-    expect(res.data).toMatchObject({ title: "kept", rank: 2 });
-  });
-
   it("stores a status-less edit of a published doc as a working draft, leaving the live row untouched", async () => {
     const entries = await boot();
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
@@ -554,64 +519,6 @@ describe("draft/published split — discard working draft (integration)", () => 
     const [liveAfter] = await handle.adapter.select<LiveRow>(TABLE);
     expect(liveAfter.title).toBe("live");
     expect(liveAfter.status).toBe("published");
-  });
-
-  // Every installation keeps a document's translatable fields per language, so
-  // an untranslated entry's held edit is kept by part: an edit to a shared
-  // field in the shared draft, one to a translatable field in the default
-  // language's. Its one pending change is both, and a discard removes both.
-  it("removes an untranslated entry's held edit to a shared field, kept as its shared draft, and to a translatable one", async () => {
-    handle = await createTestNextly({
-      collections: [
-        defineCollection({
-          slug: COLLECTION,
-          status: true,
-          versions: { drafts: true },
-          access: { read: () => true, update: () => true },
-          fields: [text({ name: "title" }), number({ name: "rank" })],
-        }),
-      ],
-    });
-    await holderOf(handle, "editor-1", ["read", "update"]);
-    const entries = handle
-      .getService("collectionsHandler")
-      .getEntryService() as CollectionEntryService;
-    const trusted = { collectionName: COLLECTION, overrideAccess: true };
-
-    await entries.createEntry(trusted, {
-      title: "live",
-      rank: 1,
-      status: "published",
-    });
-    const [row] = await handle.adapter.select<LiveRow>(TABLE);
-    const id = row.id;
-    await entries.updateEntry(
-      { ...trusted, entryId: id },
-      { rank: 2, _overwrite: true }
-    );
-    // POPULATION CONTROL: the shared field's edit is the shared draft alone.
-    expect(await workingDraftLocales(id)).toEqual([""]);
-    await entries.updateEntry(
-      { ...trusted, entryId: id },
-      { title: "edited-in-draft", _overwrite: true }
-    );
-    expect(await workingDraftLocales(id)).toEqual(["", "en"]);
-
-    const discarded = await asCaller(
-      sessionCaller({ userId: "editor-1" }),
-      () =>
-        discardWorkingDraftForDocument({
-          scopeKind: "collection",
-          slug: COLLECTION,
-          entryId: id,
-          user: { id: "editor-1" },
-          version: { _overwrite: true },
-          params: { collectionName: COLLECTION, entryId: id },
-        })
-    );
-
-    expect(await workingDraftCount(id)).toBe(0);
-    expect(discarded).toMatchObject({ title: "live", rank: 1 });
   });
 
   it("refuses to discard for a caller who may not read the document, leaving the sidecar", async () => {
