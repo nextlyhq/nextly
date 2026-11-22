@@ -2858,7 +2858,10 @@ export class SingleMutationService extends BaseService {
         data,
         "single",
         singleMeta.fields,
-        singleMeta.tableName
+        singleMeta.tableName,
+        // A field the running configuration declares is the Single's, served over a registry
+        // row that predates it, as the not-migrated answer reads it (`singleNotMigrated`).
+        this.singleRegistryService.getCodeFirstFields(slug)
       );
 
       // 2. Resolve the document to write against. When the Single has never been

@@ -117,7 +117,10 @@ import { clearParticipants } from "../domains/public-addresses/participants";
 import type { ReleasesService } from "../domains/releases/services/releases-service";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
-import { compileAndPublishExtensionSchema } from "../domains/schema/extension/publish";
+import {
+  compileAndPublishExtensionSchema,
+  declaresExtensionSchema,
+} from "../domains/schema/extension/publish";
 import { registerExtensionTables } from "../domains/schema/extension/register-tables";
 import {
   clearFieldTypes,
@@ -2043,14 +2046,18 @@ async function prepareBootSchema(
   // had just filled one. Passing the value makes the boot path independent of
   // how the two modules happen to be resolved.
   // Each field group's stored table, so a contribution to a group attaches to the table the group
-  // is in: `fg_<slug>` on a site whose field-group storage was migrated.
+  // is in: `fg_<slug>` on a site whose field-group storage was migrated. Read only where a plugin
+  // or the app declares an extension schema: with none, the compile below reads no seed, and the
+  // three catalog and registry reads would be waits the start makes for nothing.
   const { declaredFieldGroupStorage } = await import(
     "../domains/field-groups/services/field-group-stored-tables"
   );
-  const fieldGroups = await declaredFieldGroupStorage(
-    adapter,
-    transformedConfig.fieldGroups
-  );
+  const fieldGroups = declaresExtensionSchema({
+    plugins: transformedPlugins,
+    config: transformedConfig,
+  })
+    ? await declaredFieldGroupStorage(adapter, transformedConfig.fieldGroups)
+    : undefined;
   return compileAndPublishExtensionSchema({
     ...(fieldGroups === undefined
       ? {}
@@ -6586,9 +6593,15 @@ async function refuseOlderCodesStillStored(
   const {
     OLDER_CODES_CHECKED_KEY,
     olderCodesCheckedFor,
+    olderSpellingsOf,
     storedOlderSpellings,
     tablesHoldingCode,
   } = await import("../domains/i18n/older-codes");
+  // An older spelling is the underscore form of a configured code with a part after its language
+  // (`olderSpellingsOf`, which the scan matches stored codes against). Where no configured code
+  // has one, and the configuration names no older spelling, no row can be under one: nothing is
+  // scanned for and nothing recorded, so the start reads and writes no `nextly_meta` row for it.
+  if (olderCodes.length === 0 && olderSpellingsOf(codes).size === 0) return;
   const { MetaService } = await import("../domains/meta/services/meta-service");
   const meta = new MetaService(adapter, logger);
   const checked = olderCodesCheckedFor(codes);
@@ -6596,7 +6609,11 @@ async function refuseOlderCodesStillStored(
     .get<string>(OLDER_CODES_CHECKED_KEY)
     .catch(() => null);
   if (olderCodes.length === 0 && recorded === checked) return;
-  const declared = await declaredLaidOutEntitiesAsStored(adapter, config);
+  const declared = await declaredLaidOutEntitiesAsStored(
+    adapter,
+    config,
+    startRegistryNow()
+  );
   const entities = [
     ...declared,
     ...(await readLayoutScanEntities(
@@ -6652,7 +6669,11 @@ async function refuseMixedStorageInConfig(
   );
   // Each declared field group under its stored table, so it is matched with its own registry row
   // and the undeclared-languages check reads its real translation table.
-  const entities = await declaredLaidOutEntitiesAsStored(adapter, config);
+  const entities = await declaredLaidOutEntitiesAsStored(
+    adapter,
+    config,
+    startRegistryNow()
+  );
   const declaredTables = new Set(entities.map(entity => entity.tableName));
   // At a development start, an entity whose declaration a start already brought in line under the
   // same settings is not read again: nothing about its layout can have changed since.
