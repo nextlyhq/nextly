@@ -8,9 +8,10 @@
  * @experimental
  */
 
-import { Button } from "@nextlyhq/ui";
+import { Button, PageHeader } from "@nextlyhq/ui";
 import { useState, type JSX } from "react";
 
+import { PageContainer } from "@admin/components/layout/page-container";
 import { Link } from "@admin/components/ui/link";
 import { useWaitingForMe } from "@admin/hooks/queries/useWaitingForMe";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
@@ -37,109 +38,108 @@ export function WaitingForMyReview(): JSX.Element {
     useWaitingForMe({ page, limit: PAGE_SIZE });
 
   return (
-    <div className="space-y-4 p-6">
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">
-          Waiting for my review
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Waiting for you or for one of your roles, where you can take the next
-          step, across collections and Singles.
-        </p>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="Waiting for my review"
+        description="Waiting for you or for one of your roles, where you can take the next step, across collections and Singles."
+      />
 
-      {/* A list that could not be read says so, never that nothing waits. */}
-      {error ? (
-        <p role="alert" className="text-sm text-destructive">
-          {apiErrorMessage(
-            error,
-            "What waits for your review couldn't be read."
-          )}
-        </p>
-      ) : !isLoading && rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          Nothing waits for your review.
-        </p>
-      ) : (
-        <>
-          <p className="text-sm text-muted-foreground">
-            {total}
-            {totalCapped ? "+" : ""} waiting
+      <div className="space-y-4">
+        {/* A list that could not be read says so, never that nothing waits. */}
+        {error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {apiErrorMessage(
+              error,
+              "What waits for your review couldn't be read."
+            )}
           </p>
-          <div className="overflow-x-auto rounded-md border border-border">
-            <table className="w-full text-sm">
-              <caption className="sr-only">Waiting for my review</caption>
-              <thead className="bg-muted text-left text-muted-foreground">
-                <tr>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    Title
-                  </th>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    Collection
-                  </th>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    Review
-                  </th>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    Waiting for
-                  </th>
-                  <th scope="col" className="px-3 py-2 font-medium">
-                    Submitted
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map(row => (
-                  <tr key={row.key} className="border-t border-border">
-                    <td className="px-3 py-2">
-                      <Link
-                        href={row.href}
-                        className="font-medium text-foreground underline-offset-4 hover:underline"
-                      >
-                        {row.title}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-2 text-muted-foreground">
-                      {row.where}
-                    </td>
-                    <td className="px-3 py-2">{row.stage}</td>
-                    <td className="px-3 py-2">{row.waitingFor}</td>
-                    <td className="px-3 py-2 text-muted-foreground">
-                      {submittedOn(row.submitted)}
-                    </td>
+        ) : !isLoading && rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Nothing waits for your review.
+          </p>
+        ) : (
+          <>
+            <p className="text-sm text-muted-foreground">
+              {total}
+              {totalCapped ? "+" : ""} waiting
+            </p>
+            <div className="overflow-x-auto rounded-md border border-border">
+              <table className="w-full text-sm">
+                <caption className="sr-only">Waiting for my review</caption>
+                <thead className="bg-muted text-left text-muted-foreground">
+                  <tr>
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      Title
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      Collection
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      Review
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      Waiting for
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-medium">
+                      Submitted
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {hasPrev || hasNext ? (
-            <nav
-              aria-label="Waiting pages"
-              className="flex items-center justify-between"
-            >
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={!hasPrev}
-                onClick={() => setPage(current => Math.max(1, current - 1))}
+                </thead>
+                <tbody>
+                  {rows.map(row => (
+                    <tr key={row.key} className="border-t border-border">
+                      <td className="px-3 py-2">
+                        <Link
+                          href={row.href}
+                          className="font-medium text-foreground underline-offset-4 hover:underline"
+                        >
+                          {row.title}
+                        </Link>
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground">
+                        {row.where}
+                      </td>
+                      <td className="px-3 py-2">{row.stage}</td>
+                      <td className="px-3 py-2">{row.waitingFor}</td>
+                      <td className="px-3 py-2 text-muted-foreground">
+                        {submittedOn(row.submitted)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {hasPrev || hasNext ? (
+              <nav
+                aria-label="Waiting pages"
+                className="flex items-center justify-between"
               >
-                Previous
-              </Button>
-              <span className="text-sm text-muted-foreground">Page {page}</span>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={!hasNext}
-                onClick={() => setPage(current => current + 1)}
-              >
-                Next
-              </Button>
-            </nav>
-          ) : null}
-        </>
-      )}
-    </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!hasPrev}
+                  onClick={() => setPage(current => Math.max(1, current - 1))}
+                >
+                  Previous
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Page {page}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!hasNext}
+                  onClick={() => setPage(current => current + 1)}
+                >
+                  Next
+                </Button>
+              </nav>
+            ) : null}
+          </>
+        )}
+      </div>
+    </PageContainer>
   );
 }
