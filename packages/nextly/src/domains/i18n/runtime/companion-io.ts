@@ -2224,8 +2224,7 @@ async function createOrCompleteCompanionTable(
       );
       return false;
     }
-    // Ordered ahead of every statement below. See `recordTransition`.
-    claimToken = await args.recordTransition?.();
+    // Planned before anything is recorded: planning only reads the database.
     const statements =
       (await buildSeedingCreateStatements(adapter, args, newLocalized)) ??
       buildCompanionReconcileStatements({
@@ -2238,6 +2237,13 @@ async function createOrCompleteCompanionTable(
         status: args.status === true,
         companionExists: false,
       });
+    // An entity with nothing to keep per language (no translatable field, no per-language
+    // status) has no translations table to make, so there is no transition to record. A
+    // finished one recorded for it would never match a table, and the next run, finding the
+    // table still absent, would try to begin it again and be refused.
+    if (statements.length === 0) return false;
+    // Ordered ahead of every statement below. See `recordTransition`.
+    claimToken = await args.recordTransition?.();
     await runStatementsInOrder(adapter, statements, () => {
       created = true;
     });
