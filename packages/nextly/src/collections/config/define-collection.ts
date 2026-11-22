@@ -1039,6 +1039,23 @@ export interface CollectionConfig {
   access?: CollectionAccessControl;
 
   /**
+   * Refuses this collection's entries to every caller holding super-admin
+   * authority: a super-admin person, and a full-access API key carrying its
+   * maker's super-admin authority, at every way in, whatever other
+   * permissions they hold. For data the site's administrators must not read
+   * through the admin, such as health or pay records. Trusted server code
+   * (`overrideAccess: true`) is not a caller and is unaffected.
+   *
+   * Set here, it is shown in the admin and cannot be changed there; left
+   * out, a super-admin can set it in the admin, entering their password
+   * again, and every change is written to the audit log.
+   *
+   * @default undefined (open to super-admin)
+   * @experimental
+   */
+  closedToSuperAdmin?: boolean;
+
+  /**
    * Collection-level lifecycle hooks.
    * Custom logic that runs during document operations.
    */

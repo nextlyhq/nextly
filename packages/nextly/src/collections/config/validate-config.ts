@@ -156,6 +156,8 @@ export type ValidationErrorCode =
   | "ACCESS_INVALID_TYPE"
   | "ACCESS_FUNCTION_INVALID"
   | "ACCESS_KEY_UNKNOWN"
+  // A `closedToSuperAdmin` that is not `true` or `false`.
+  | "CLOSED_TO_SUPER_ADMIN_INVALID"
   // Index errors
   | "INDEX_INVALID_TYPE"
   | "INDEX_FIELDS_REQUIRED"
@@ -858,6 +860,18 @@ export function validateCollectionConfig(
   );
 
   validateAccess(config.access, errors);
+
+  // A value other than a boolean would leave the collection open while the
+  // config reads as closing it.
+  const closed = (config as { closedToSuperAdmin?: unknown })
+    .closedToSuperAdmin;
+  if (closed !== undefined && typeof closed !== "boolean") {
+    errors.push({
+      path: "closedToSuperAdmin",
+      code: "CLOSED_TO_SUPER_ADMIN_INVALID",
+      message: "closedToSuperAdmin must be true or false.",
+    });
+  }
 
   validateDbOptions(config.db, errors);
 

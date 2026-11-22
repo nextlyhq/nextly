@@ -25,6 +25,7 @@ import type { RoleFormProps } from "@admin/types/ui/form";
 import { RoleBasicInfo } from "./RoleBasicInfo";
 import { RoleInheritance } from "./RoleInheritance";
 import { RolePermissionsSection } from "./RolePermissionsSection";
+import { SuperAdminClosedCollections } from "./SuperAdminClosedCollections";
 
 /**
  * Form id used by external buttons (e.g. page-header actions)
@@ -232,12 +233,9 @@ function RolePermissionsArea({
   children: ReactNode;
 }): JSX.Element {
   if (screenMode === "super-admin") {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Super-admins have every permission, including new collections and
-        plugins. This role can&apos;t be edited.
-      </p>
-    );
+    // The line names the collections closed to super-admin, and each
+    // collection's mark is shown and changed beside it.
+    return <SuperAdminClosedCollections />;
   }
   return (
     <div className="-mx-6">
