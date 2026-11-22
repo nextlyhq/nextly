@@ -103,39 +103,39 @@ function createdTables(sql: string): Map<string, SqlColumn[]> {
 }
 
 /**
- * The parts of a `CREATE INDEX` statement's key, from what follows the table
- * name: split at its top-level commas, up to a partial index's `WHERE`. A part
- * may be an expression (PostgreSQL's `NULLIF("slug", '')`, MySQL's hash of
- * it), which keys a value of the column it names rather than the column.
+ * The key list of a `CREATE INDEX` statement, from what follows the table
+ * name: the text inside its first parentheses, so a partial index's `WHERE`
+ * is left out. Each inner pair of parentheses (an expression's arguments) is
+ * spelled with brackets and its commas as `;`, innermost first, so the list
+ * splits at its own commas alone.
+ */
+function indexKeyList(rest: string): string {
+  let list = rest.slice(rest.indexOf("(") + 1);
+  const inner = /\(([^()]*)\)/;
+  while (inner.test(list))
+    list = list.replace(
+      inner,
+      (_, args: string) => `[${args.replaceAll(",", ";")}]`
+    );
+  return list.slice(0, list.indexOf(")"));
+}
+
+/**
+ * The parts of a `CREATE INDEX` statement's key, each with the column it
+ * names. A part may be an expression (PostgreSQL's `NULLIF("slug", '')`,
+ * MySQL's hash of it), which keys a value of that column rather than the
+ * column itself, so it is not `plain`.
  */
 function indexKeyParts(rest: string): { column: string; plain: boolean }[] {
-  const open = rest.indexOf("(");
-  const parts: string[] = [];
-  let depth = 0;
-  let quoted = false;
-  let part = "";
-  for (const ch of rest.slice(open + 1)) {
-    if (ch === "'") quoted = !quoted;
-    if (!quoted && ch === "(") depth++;
-    if (!quoted && ch === ")") {
-      if (depth === 0) break;
-      depth--;
-    }
-    if (!quoted && depth === 0 && ch === ",") {
-      parts.push(part.trim());
-      part = "";
-      continue;
-    }
-    part += ch;
-  }
-  parts.push(part.trim());
-  return parts.flatMap(p => {
-    const names = [...p.matchAll(/[`"]([^`"]+)[`"]/g)].map(m => m[1]);
-    if (names.length !== 1) return [];
-    return [
-      { column: names[0], plain: /^[`"][^`"]+[`"](\s+(ASC|DESC))?$/i.test(p) },
-    ];
-  });
+  return indexKeyList(rest)
+    .split(",")
+    .map(part => part.trim())
+    .flatMap(part => {
+      const names = [...part.matchAll(/[`"]([^`"]+)[`"]/g)].map(m => m[1]);
+      if (names.length !== 1) return [];
+      const plain = /^[`"][^`"]+[`"](\s+(ASC|DESC))?$/i.test(part);
+      return [{ column: names[0], plain }];
+    });
 }
 
 /**
